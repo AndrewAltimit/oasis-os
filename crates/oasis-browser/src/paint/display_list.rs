@@ -328,15 +328,23 @@ impl DisplayList {
     /// correct compositing for the common single-layer case. True offscreen
     /// compositing for overlapping children within a layer requires render
     /// target support in the backend (future GPU override path).
+    /// Replay all display items against the backend.
+    ///
+    /// `base_clip` is the outer clip rectangle (browser window content area)
+    /// that should be restored when `PopClip` empties the clip stack. This
+    /// prevents content from rendering outside the browser window when the
+    /// scroll buffer zone extends the recorded area beyond the viewport.
     pub fn replay(
         &self,
         backend: &mut dyn SdiBackend,
         scroll_dx: i32,
         scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
+        let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
 
         for item in &self.items {
             match item {
@@ -492,10 +500,19 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::PushClip { x, y, w, h } => {
+                    clip_stack.push((x + scroll_dx, y + scroll_dy, *w, *h));
                     backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
                 },
                 DisplayItem::PopClip => {
-                    backend.reset_clip_rect()?;
+                    clip_stack.pop();
+                    // Restore to parent clip or base clip (browser window).
+                    if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
+                        backend.set_clip_rect(cx, cy, cw, ch)?;
+                    } else if let Some((bx, by, bw, bh)) = base_clip {
+                        backend.set_clip_rect(bx, by, bw, bh)?;
+                    } else {
+                        backend.reset_clip_rect()?;
+                    }
                 },
                 // Already handled above the match.
                 DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => {},
@@ -520,20 +537,30 @@ impl DisplayList {
         dirty: &Rect,
         scroll_dx: i32,
         scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
+        let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
 
         for item in &self.items {
             // Clip and layer items must always be replayed.
             match item {
                 DisplayItem::PushClip { x, y, w, h } => {
+                    clip_stack.push((x + scroll_dx, y + scroll_dy, *w, *h));
                     backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
                     continue;
                 },
                 DisplayItem::PopClip => {
-                    backend.reset_clip_rect()?;
+                    clip_stack.pop();
+                    if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
+                        backend.set_clip_rect(cx, cy, cw, ch)?;
+                    } else if let Some((bx, by, bw, bh)) = base_clip {
+                        backend.set_clip_rect(bx, by, bw, bh)?;
+                    } else {
+                        backend.reset_clip_rect()?;
+                    }
                     continue;
                 },
                 DisplayItem::PushLayer { opacity } => {
@@ -868,7 +895,7 @@ mod tests {
         });
 
         let mut backend = MockBackend::new();
-        dl.replay(&mut backend, 5, -10).unwrap();
+        dl.replay(&mut backend, 5, -10, None).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         // The fill_rect should be at (10+5, 20-10) = (15, 10).
@@ -1087,7 +1114,7 @@ mod tests {
         };
 
         let mut backend = MockBackend::new();
-        dl.replay_dirty(&mut backend, &dirty, 0, 0).unwrap();
+        dl.replay_dirty(&mut backend, &dirty, 0, 0, None).unwrap();
 
         // Only the first item should have been drawn.
         assert_eq!(backend.fill_rect_count(), 1);
@@ -1113,7 +1140,7 @@ mod tests {
         dl.push(DisplayItem::PopLayer);
 
         let mut backend = MockBackend::new();
-        dl.replay(&mut backend, 0, 0).unwrap();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
@@ -1141,7 +1168,7 @@ mod tests {
         dl.push(DisplayItem::PopLayer);
 
         let mut backend = MockBackend::new();
-        dl.replay(&mut backend, 0, 0).unwrap();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
@@ -1164,7 +1191,7 @@ mod tests {
         });
 
         let mut backend = MockBackend::new();
-        dl.replay(&mut backend, 0, 0).unwrap();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
 
         if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
             assert_eq!(color.a, 200);
@@ -1189,7 +1216,7 @@ mod tests {
         dl.push(DisplayItem::PopLayer);
 
         let mut backend = MockBackend::new();
-        dl.replay(&mut backend, 0, 0).unwrap();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
 
         assert_eq!(backend.draw_text_count(), 1);
         if let DrawCall::DrawText { color, .. } = &backend.calls[0] {
@@ -1237,7 +1264,7 @@ mod tests {
         };
 
         let mut backend = MockBackend::new();
-        dl.replay_dirty(&mut backend, &dirty, 0, 0).unwrap();
+        dl.replay_dirty(&mut backend, &dirty, 0, 0, None).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         if let DrawCall::FillRect { color, .. } = &backend.calls[0] {

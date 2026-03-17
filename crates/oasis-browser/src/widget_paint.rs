@@ -149,7 +149,12 @@ impl BrowserWidget {
                 }
 
                 // Replay from the freshly built display list.
-                self.display_list.replay(backend, 0, 0)?;
+                self.display_list.replay(
+                    backend,
+                    0,
+                    0,
+                    Some((self.window_x, content_y, self.window_w, content_h)),
+                )?;
                 self.dirty_rects.clear();
                 self.full_repaint_needed = false;
             } else if has_dirty_rects {
@@ -174,7 +179,13 @@ impl BrowserWidget {
 
                 // Replay only items intersecting the dirty rectangles.
                 for dirty in &self.dirty_rects {
-                    self.display_list.replay_dirty(backend, dirty, 0, 0)?;
+                    self.display_list.replay_dirty(
+                        backend,
+                        dirty,
+                        0,
+                        0,
+                        Some((self.window_x, content_y, self.window_w, content_h)),
+                    )?;
                 }
                 self.dirty_rects.clear();
             } else {
@@ -218,10 +229,20 @@ impl BrowserWidget {
                         }
                     }
 
-                    self.display_list.replay(backend, 0, 0)?;
+                    self.display_list.replay(
+                        backend,
+                        0,
+                        0,
+                        Some((self.window_x, content_y, self.window_w, content_h)),
+                    )?;
                 } else {
                     // Same scroll, same layout — replay cached display list.
-                    self.display_list.replay(backend, 0, 0)?;
+                    self.display_list.replay(
+                        backend,
+                        0,
+                        0,
+                        Some((self.window_x, content_y, self.window_w, content_h)),
+                    )?;
                 }
             }
         }
