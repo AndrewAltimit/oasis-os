@@ -39,13 +39,64 @@ mod tests;
 
 use std::collections::HashSet;
 
+#[cfg(feature = "parallel-style")]
+use std::cell::UnsafeCell;
+
 use rustc_hash::FxHashMap;
+
+#[cfg(feature = "parallel-style")]
+use rayon::prelude::*;
 
 use super::parser::{Declaration, Stylesheet};
 use super::values::ComputedStyle;
 use crate::html::dom::{Document, NodeId, NodeKind};
 
 pub use index::SelectorIndex;
+
+// -----------------------------------------------------------------------
+// Parallel style computation support
+// -----------------------------------------------------------------------
+
+/// Wrapper around the styles vector that allows disjoint mutable access
+/// from parallel threads.  Safety invariant: each `NodeId` is unique in
+/// the DOM tree, so two threads never write to the same index.
+#[cfg(feature = "parallel-style")]
+struct ParallelStyles {
+    inner: UnsafeCell<Vec<Option<ComputedStyle>>>,
+}
+
+#[cfg(feature = "parallel-style")]
+// SAFETY: Each thread writes to a disjoint index (unique NodeId).
+// Reads only access the parent's index which is already written
+// before any child processing begins.
+unsafe impl Sync for ParallelStyles {}
+
+#[cfg(feature = "parallel-style")]
+impl ParallelStyles {
+    fn new(styles: Vec<Option<ComputedStyle>>) -> Self {
+        Self {
+            inner: UnsafeCell::new(styles),
+        }
+    }
+
+    fn set(&self, idx: usize, style: ComputedStyle) {
+        // SAFETY: Only one thread ever writes to a given `idx` because
+        // node IDs are unique in the tree and subtrees are disjoint.
+        unsafe {
+            (*self.inner.get())[idx] = Some(style);
+        }
+    }
+
+    fn get(&self, idx: usize) -> Option<&ComputedStyle> {
+        // SAFETY: The parent node's style is fully written before any
+        // child subtree begins processing, so this read is race-free.
+        unsafe { (*self.inner.get())[idx].as_ref() }
+    }
+
+    fn into_inner(self) -> Vec<Option<ComputedStyle>> {
+        self.inner.into_inner()
+    }
+}
 
 // -----------------------------------------------------------------------
 // Cascade context (stateful pseudo-class state)
@@ -90,27 +141,50 @@ pub fn style_tree(
         .iter()
         .map(|(nid, decls)| (*nid, decls.as_slice()))
         .collect();
-    let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
+    // --- Parallel path (feature = "parallel-style") ---
+    #[cfg(feature = "parallel-style")]
+    {
+        let styles_vec: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
+        let par_styles = ParallelStyles::new(styles_vec);
 
-    // Cache for lowercased tag names to avoid repeated allocations
-    // during selector index lookups.
-    let mut tag_cache = FxHashMap::<String, String>::default();
+        style_subtree_parallel(
+            doc,
+            doc.root,
+            stylesheets,
+            &index,
+            &inline_map,
+            &par_styles,
+            ctx,
+        );
+        return par_styles.into_inner();
+    }
 
-    style_subtree(
-        doc,
-        doc.root,
-        stylesheets,
-        &index,
-        &inline_map,
-        &mut styles,
-        ctx,
-        &mut tag_cache,
-    );
-    styles
+    // --- Sequential path (default) ---
+    #[cfg(not(feature = "parallel-style"))]
+    {
+        let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
+
+        // Cache for lowercased tag names to avoid repeated allocations
+        // during selector index lookups.
+        let mut tag_cache = FxHashMap::<String, String>::default();
+
+        style_subtree(
+            doc,
+            doc.root,
+            stylesheets,
+            &index,
+            &inline_map,
+            &mut styles,
+            ctx,
+            &mut tag_cache,
+        );
+        styles
+    }
 }
 
 /// Recursively compute styles depth-first so that children can inherit
 /// from their (already-computed) parent.
+#[cfg(not(feature = "parallel-style"))]
 #[allow(clippy::too_many_arguments)]
 fn style_subtree(
     doc: &Document,
@@ -154,6 +228,61 @@ fn style_subtree(
             ctx,
             tag_cache,
         );
+    }
+}
+
+/// Recursively compute styles in parallel using rayon.
+///
+/// Sibling subtrees are independent: each child inherits from the
+/// already-computed parent style and writes only to its own `NodeId`
+/// slots.  We use [`ParallelStyles`] to provide disjoint mutable
+/// access without runtime locking.
+///
+/// Each thread maintains its own `tag_cache` (cheap `FxHashMap` of
+/// lowercased tag names) to avoid contention on a shared cache.
+#[cfg(feature = "parallel-style")]
+#[allow(clippy::too_many_arguments)]
+fn style_subtree_parallel(
+    doc: &Document,
+    node_id: NodeId,
+    stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
+    inline_map: &FxHashMap<NodeId, &[Declaration]>,
+    styles: &ParallelStyles,
+    ctx: &CascadeContext<'_>,
+) {
+    let node = &doc.nodes[node_id];
+
+    // Only elements get computed styles.
+    if let NodeKind::Element(_) = &node.kind {
+        let parent_style = node.parent.and_then(|pid| styles.get(pid));
+        let mut tag_cache = FxHashMap::<String, String>::default();
+        let style = compute_style(
+            doc,
+            node_id,
+            parent_style,
+            stylesheets,
+            index,
+            inline_map,
+            ctx,
+            &mut tag_cache,
+        );
+        styles.set(node_id, style);
+    }
+
+    let children = &doc.nodes[node_id].children;
+
+    // Use rayon parallel iteration for children with enough siblings
+    // to amortise the scheduling overhead.
+    const PAR_THRESHOLD: usize = 4;
+    if children.len() >= PAR_THRESHOLD {
+        children.par_iter().for_each(|&child_id| {
+            style_subtree_parallel(doc, child_id, stylesheets, index, inline_map, styles, ctx);
+        });
+    } else {
+        for &child_id in children {
+            style_subtree_parallel(doc, child_id, stylesheets, index, inline_map, styles, ctx);
+        }
     }
 }
 

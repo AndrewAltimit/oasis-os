@@ -116,6 +116,13 @@ pub enum DisplayItem {
     PushClip { x: i32, y: i32, w: u32, h: u32 },
     /// Pop the most recent clip rectangle.
     PopClip,
+    /// Begin a compositing layer. All subsequent items until `PopLayer`
+    /// should ideally be rendered to an offscreen buffer and composited
+    /// with the given opacity. Backends without render target support
+    /// fall back to per-item opacity application (current behavior).
+    PushLayer { opacity: f32 },
+    /// End a compositing layer and composite it back.
+    PopLayer,
 }
 
 impl DisplayItem {
@@ -170,7 +177,7 @@ impl DisplayItem {
                     height: text_h as f32,
                 })
             },
-            DisplayItem::PopClip => None,
+            DisplayItem::PopClip | DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => None,
         }
     }
 }
@@ -253,7 +260,7 @@ impl DisplayList {
             | DisplayItem::PushClip { w, h, .. } => *w > 0 && *h > 0,
             DisplayItem::BlitSub { dst_w, dst_h, .. } => *dst_w > 0 && *dst_h > 0,
             DisplayItem::Shadow { w, h, .. } => *w > 0 && *h > 0,
-            // DrawText, PopClip — always keep.
+            // DrawText, PopClip, PushLayer, PopLayer — always keep.
             _ => true,
         });
 
@@ -307,6 +314,12 @@ impl DisplayList {
     ///
     /// This is the main rendering path. The `scroll_dx` and `scroll_dy`
     /// offsets are applied to all items, enabling scroll without rebuild.
+    ///
+    /// `PushLayer`/`PopLayer` items maintain an opacity stack. Colors of
+    /// draw items are multiplied by the cumulative layer opacity, providing
+    /// correct compositing for the common single-layer case. True offscreen
+    /// compositing for overlapping children within a layer requires render
+    /// target support in the backend (future GPU override path).
     pub fn replay(
         &self,
         backend: &mut dyn SdiBackend,
@@ -315,10 +328,27 @@ impl DisplayList {
     ) -> Result<()> {
         backend.begin_batch()?;
 
+        let mut opacity_stack: Vec<f32> = Vec::new();
+
         for item in &self.items {
             match item {
+                DisplayItem::PushLayer { opacity } => {
+                    opacity_stack.push(*opacity);
+                    continue;
+                },
+                DisplayItem::PopLayer => {
+                    opacity_stack.pop();
+                    continue;
+                },
+                _ => {},
+            }
+
+            let layer_opacity = layer_opacity_product(&opacity_stack);
+
+            match item {
                 DisplayItem::FillRect { x, y, w, h, color } => {
-                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, *color)?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
                 },
                 DisplayItem::FillRoundedRect {
                     x,
@@ -328,14 +358,8 @@ impl DisplayList {
                     radius,
                     color,
                 } => {
-                    backend.fill_rounded_rect(
-                        x + scroll_dx,
-                        y + scroll_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *color,
-                    )?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,
@@ -346,6 +370,7 @@ impl DisplayList {
                     stroke_width,
                     color,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.stroke_rounded_rect(
                         x + scroll_dx,
                         y + scroll_dy,
@@ -353,7 +378,7 @@ impl DisplayList {
                         *h,
                         *radius,
                         *stroke_width,
-                        *color,
+                        c,
                     )?;
                 },
                 DisplayItem::DrawText {
@@ -365,12 +390,13 @@ impl DisplayList {
                     bold,
                     italic,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.draw_text_styled(
                         text,
                         x + scroll_dx,
                         y + scroll_dy,
                         *font_size,
-                        *color,
+                        c,
                         *bold,
                         *italic,
                     )?;
@@ -419,13 +445,14 @@ impl DisplayList {
                     style,
                     horizontal,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
                         y + scroll_dy,
                         *w,
                         *h,
-                        *color,
+                        c,
                         *style,
                         *horizontal,
                     )?;
@@ -442,6 +469,7 @@ impl DisplayList {
                     color,
                     radius,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_shadow(
                         x + scroll_dx,
                         y + scroll_dy,
@@ -451,7 +479,7 @@ impl DisplayList {
                         *spread,
                         *offset_x,
                         *offset_y,
-                        *color,
+                        c,
                         *radius,
                     )?;
                 },
@@ -461,6 +489,8 @@ impl DisplayList {
                 DisplayItem::PopClip => {
                     backend.reset_clip_rect()?;
                 },
+                // Already handled above the match.
+                DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => {},
             }
         }
 
@@ -471,8 +501,8 @@ impl DisplayList {
     /// Replay only items that intersect the given dirty rectangle.
     ///
     /// `dirty` is in screen coordinates. Items fully outside `dirty`
-    /// are skipped. Clip push/pop items are always replayed to maintain
-    /// correct GPU clip state.
+    /// are skipped. Clip push/pop and layer push/pop items are always
+    /// replayed to maintain correct compositing and clip state.
     pub fn replay_dirty(
         &self,
         backend: &mut dyn SdiBackend,
@@ -482,8 +512,10 @@ impl DisplayList {
     ) -> Result<()> {
         backend.begin_batch()?;
 
+        let mut opacity_stack: Vec<f32> = Vec::new();
+
         for item in &self.items {
-            // Clip items must always be replayed.
+            // Clip and layer items must always be replayed.
             match item {
                 DisplayItem::PushClip { x, y, w, h } => {
                     backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
@@ -491,6 +523,14 @@ impl DisplayList {
                 },
                 DisplayItem::PopClip => {
                     backend.reset_clip_rect()?;
+                    continue;
+                },
+                DisplayItem::PushLayer { opacity } => {
+                    opacity_stack.push(*opacity);
+                    continue;
+                },
+                DisplayItem::PopLayer => {
+                    opacity_stack.pop();
                     continue;
                 },
                 _ => {},
@@ -509,10 +549,13 @@ impl DisplayList {
                 }
             }
 
+            let layer_opacity = layer_opacity_product(&opacity_stack);
+
             // Replay the item.
             match item {
                 DisplayItem::FillRect { x, y, w, h, color } => {
-                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, *color)?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
                 },
                 DisplayItem::FillRoundedRect {
                     x,
@@ -522,14 +565,8 @@ impl DisplayList {
                     radius,
                     color,
                 } => {
-                    backend.fill_rounded_rect(
-                        x + scroll_dx,
-                        y + scroll_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *color,
-                    )?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,
@@ -540,6 +577,7 @@ impl DisplayList {
                     stroke_width,
                     color,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.stroke_rounded_rect(
                         x + scroll_dx,
                         y + scroll_dy,
@@ -547,7 +585,7 @@ impl DisplayList {
                         *h,
                         *radius,
                         *stroke_width,
-                        *color,
+                        c,
                     )?;
                 },
                 DisplayItem::DrawText {
@@ -559,12 +597,13 @@ impl DisplayList {
                     bold,
                     italic,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.draw_text_styled(
                         text,
                         x + scroll_dx,
                         y + scroll_dy,
                         *font_size,
-                        *color,
+                        c,
                         *bold,
                         *italic,
                     )?;
@@ -613,13 +652,14 @@ impl DisplayList {
                     style,
                     horizontal,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
                         y + scroll_dy,
                         *w,
                         *h,
-                        *color,
+                        c,
                         *style,
                         *horizontal,
                     )?;
@@ -636,6 +676,7 @@ impl DisplayList {
                     color,
                     radius,
                 } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_shadow(
                         x + scroll_dx,
                         y + scroll_dy,
@@ -645,11 +686,14 @@ impl DisplayList {
                         *spread,
                         *offset_x,
                         *offset_y,
-                        *color,
+                        c,
                         *radius,
                     )?;
                 },
-                DisplayItem::PushClip { .. } | DisplayItem::PopClip => {
+                DisplayItem::PushClip { .. }
+                | DisplayItem::PopClip
+                | DisplayItem::PushLayer { .. }
+                | DisplayItem::PopLayer => {
                     // Already handled above.
                 },
             }
@@ -669,6 +713,29 @@ impl Default for DisplayList {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Compute the product of all opacities in the layer stack.
+///
+/// Returns `1.0` when the stack is empty (no layers active), meaning
+/// colors are passed through unmodified.
+fn layer_opacity_product(stack: &[f32]) -> f32 {
+    if stack.is_empty() {
+        return 1.0;
+    }
+    stack.iter().copied().fold(1.0f32, |acc, o| acc * o)
+}
+
+/// Apply the cumulative layer opacity to a color's alpha channel.
+///
+/// When `opacity` is `1.0` this is a no-op (the compiler can often
+/// elide the multiplication entirely).
+fn apply_layer_opacity(color: Color, opacity: f32) -> Color {
+    if (opacity - 1.0).abs() < f32::EPSILON {
+        return color;
+    }
+    let a = (color.a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
+    Color::rgba(color.r, color.g, color.b, a)
+}
 
 /// Test whether two rectangles overlap.
 fn rects_intersect(a: &Rect, b: &Rect) -> bool {
@@ -748,7 +815,7 @@ fn replay_border_edge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::{DrawCall, MockBackend};
 
     #[test]
     fn display_list_new_is_empty() {
@@ -1011,5 +1078,160 @@ mod tests {
 
         // Only the first item should have been drawn.
         assert_eq!(backend.fill_rect_count(), 1);
+    }
+
+    #[test]
+    fn push_pop_layer_bounds_is_none() {
+        assert!(DisplayItem::PushLayer { opacity: 0.5 }.bounds().is_none());
+        assert!(DisplayItem::PopLayer.bounds().is_none());
+    }
+
+    #[test]
+    fn replay_applies_layer_opacity_to_fill_rect() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgba(255, 0, 0, 200),
+        });
+        dl.push(DisplayItem::PopLayer);
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 1);
+        if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
+            // 200 * 0.5 = 100
+            assert_eq!(color.a, 100);
+            assert_eq!(color.r, 255);
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn replay_applies_nested_layer_opacity() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgba(255, 0, 0, 200),
+        });
+        dl.push(DisplayItem::PopLayer);
+        dl.push(DisplayItem::PopLayer);
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 1);
+        if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
+            // 200 * 0.5 * 0.5 = 50
+            assert_eq!(color.a, 50);
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn replay_no_layer_passes_color_through() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgba(255, 0, 0, 200),
+        });
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0).unwrap();
+
+        if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
+            assert_eq!(color.a, 200);
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn replay_layer_opacity_applies_to_text() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::DrawText {
+            text: "hello".into(),
+            x: 0,
+            y: 0,
+            font_size: 12,
+            color: Color::rgba(0, 0, 0, 254),
+            bold: false,
+            italic: false,
+        });
+        dl.push(DisplayItem::PopLayer);
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0).unwrap();
+
+        assert_eq!(backend.draw_text_count(), 1);
+        if let DrawCall::DrawText { color, .. } = &backend.calls[0] {
+            // 254 * 0.5 = 127
+            assert_eq!(color.a, 127);
+        } else {
+            panic!("expected DrawText");
+        }
+    }
+
+    #[test]
+    fn compact_preserves_push_pop_layer() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgb(255, 0, 0),
+        });
+        dl.push(DisplayItem::PopLayer);
+        dl.compact();
+        assert_eq!(dl.len(), 3);
+    }
+
+    #[test]
+    fn replay_dirty_applies_layer_opacity() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+            color: Color::rgba(0, 255, 0, 100),
+        });
+        dl.push(DisplayItem::PopLayer);
+
+        let dirty = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+
+        let mut backend = MockBackend::new();
+        dl.replay_dirty(&mut backend, &dirty, 0, 0).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 1);
+        if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
+            // 100 * 0.5 = 50
+            assert_eq!(color.a, 50);
+        } else {
+            panic!("expected FillRect");
+        }
     }
 }

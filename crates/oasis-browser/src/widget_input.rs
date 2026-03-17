@@ -720,9 +720,44 @@ impl BrowserWidget {
         if any_changed && geometry_changed {
             // Geometry changed: need full relayout.
             self.layout_dirty = true;
+        } else if any_changed {
+            // Only visual properties changed (color, background, opacity, etc.).
+            // Mark affected nodes' rects as dirty so paint rebuilds the
+            // display list and uses replay_dirty() for partial repaint.
+            self.mark_hover_focus_dirty(&affected);
         }
-        // If only visual properties changed, styles are updated but
-        // layout_dirty remains false -- next paint uses existing layout.
+    }
+
+    /// Push dirty rectangles for a set of affected DOM nodes.
+    ///
+    /// Looks up each node's border-box in the layout tree and adds it
+    /// to `dirty_rects`. If any node's rect cannot be found, falls back
+    /// to a full repaint.
+    fn mark_hover_focus_dirty(&mut self, affected: &[NodeId]) {
+        let Some(layout) = &self.layout_root else {
+            self.full_repaint_needed = true;
+            return;
+        };
+
+        for &nid in affected {
+            if let Some(rect) = Self::find_node_rect(layout, nid) {
+                // Convert layout-space rect to screen-space by applying
+                // scroll offset and window position.
+                let content_y = self.window_y + self.config.url_bar_height as i32;
+                let screen_rect = crate::layout::box_model::Rect {
+                    x: rect.x - self.scroll.scroll_x as f32 + self.window_x as f32,
+                    y: rect.y - self.scroll.scroll_y as f32 + content_y as f32,
+                    width: rect.width,
+                    height: rect.height,
+                };
+                self.dirty_rects.push(screen_rect);
+            }
+        }
+
+        if self.dirty_rects.is_empty() {
+            // Could not find rects for any affected node — force full repaint.
+            self.full_repaint_needed = true;
+        }
     }
 
     /// Navigate to a URL, resolving relative references against

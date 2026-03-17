@@ -121,6 +121,17 @@ fn record_box(
         false
     };
 
+    // Emit a compositing layer for elements with sub-unit opacity.
+    // The PushLayer/PopLayer pair tells the replay path to multiply all
+    // enclosed colors' alpha by this opacity, providing correct stacking
+    // context compositing for the common case (per-item fallback).
+    let needs_layer = layout_box.style.opacity < 1.0;
+    if needs_layer {
+        dl.push(DisplayItem::PushLayer {
+            opacity: layout_box.style.opacity,
+        });
+    }
+
     if is_visible {
         // 0. Box shadow.
         record_box_shadow(layout_box, dl, offset_x, offset_y, ctx);
@@ -234,6 +245,12 @@ fn record_box(
                 record_replaced(replaced, layout_box, dl, tx_offset_x, tx_offset_y, ctx);
             }
         },
+    }
+
+    // Close the compositing layer (must be before clip restore so clip
+    // state is still correct for any future render-target compositing).
+    if needs_layer {
+        dl.push(DisplayItem::PopLayer);
     }
 
     // Restore clip.

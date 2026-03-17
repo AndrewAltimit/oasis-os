@@ -107,7 +107,11 @@ impl BrowserWidget {
         if let Some(layout) = &self.layout_root {
             // Rebuild display list when layout changed or on first paint.
             // The display list is also cleared by load_html on navigation.
-            let needs_rebuild = layout_changed || self.display_list.is_empty();
+            let needs_rebuild =
+                layout_changed || self.display_list.is_empty() || self.full_repaint_needed;
+
+            // Capture dirty rects before clearing them.
+            let has_dirty_rects = !self.dirty_rects.is_empty();
 
             if needs_rebuild {
                 let viewport = paint::PaintViewport {
@@ -132,6 +136,32 @@ impl BrowserWidget {
 
                 // Replay from the freshly built display list.
                 self.display_list.replay(backend, 0, 0)?;
+                self.dirty_rects.clear();
+                self.full_repaint_needed = false;
+            } else if has_dirty_rects {
+                // Visual-only change (e.g. hover color) with known dirty rects.
+                // Rebuild display list (colors are baked in) and replay only
+                // the dirty regions to reduce backend draw calls.
+                let viewport = paint::PaintViewport {
+                    scroll_y: self.scroll.scroll_y as f32,
+                    scroll_x: self.scroll.scroll_x as f32,
+                    x: self.window_x,
+                    y: content_y,
+                    width: self.window_w as f32,
+                    height: content_h as f32,
+                };
+                let links =
+                    paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
+                self.display_list.compact();
+                self.link_map = links;
+                self.display_list_scroll_y = self.scroll.scroll_y;
+                self.display_list_scroll_x = self.scroll.scroll_x;
+
+                // Replay only items intersecting the dirty rectangles.
+                for dirty in &self.dirty_rects {
+                    self.display_list.replay_dirty(backend, dirty, 0, 0)?;
+                }
+                self.dirty_rects.clear();
             } else {
                 // Scroll changed but layout didn't — replay with scroll delta.
                 let dy = self.display_list_scroll_y - self.scroll.scroll_y;
@@ -500,7 +530,7 @@ impl BrowserWidget {
     }
 
     /// Find the border-box rectangle of a layout box associated with a DOM node.
-    fn find_node_rect(layout_box: &LayoutBox, node_id: NodeId) -> Option<Rect> {
+    pub(crate) fn find_node_rect(layout_box: &LayoutBox, node_id: NodeId) -> Option<Rect> {
         if layout_box.node == Some(node_id) {
             return Some(layout_box.dimensions.border_box());
         }

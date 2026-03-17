@@ -383,6 +383,16 @@ pub struct BrowserWidget {
 
     /// Scroll X position at which the display list was last recorded.
     display_list_scroll_x: i32,
+
+    /// Dirty rectangles that need repainting (e.g. hover/focus changes).
+    /// When non-empty and no layout change occurred, only these regions
+    /// are replayed via `replay_dirty()` instead of a full `replay()`.
+    dirty_rects: Vec<layout::box_model::Rect>,
+
+    /// When true, the entire viewport needs repainting even though
+    /// the layout may not have changed (e.g. visual-only style change
+    /// without known dirty rects).
+    full_repaint_needed: bool,
 }
 
 impl BrowserWidget {
@@ -468,6 +478,8 @@ impl BrowserWidget {
             display_list: paint::display_list::DisplayList::new(),
             display_list_scroll_y: 0,
             display_list_scroll_x: 0,
+            dirty_rects: Vec::new(),
+            full_repaint_needed: true,
         }
     }
 
@@ -496,6 +508,15 @@ impl BrowserWidget {
     /// Returns whether the layout tree needs rebuilding.
     pub fn is_layout_dirty(&self) -> bool {
         self.layout_dirty
+    }
+
+    /// Mark a screen-space rectangle as needing repaint.
+    ///
+    /// On the next `paint()` call, only display items intersecting
+    /// dirty rectangles will be replayed (via `replay_dirty()`),
+    /// skipping items outside the dirty region.
+    pub fn mark_dirty(&mut self, rect: layout::box_model::Rect) {
+        self.dirty_rects.push(rect);
     }
 
     /// Rebuild layout from cached DOM/styles if the viewport changed.
