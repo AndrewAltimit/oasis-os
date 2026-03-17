@@ -28,7 +28,7 @@ mod text;
 use std::collections::HashMap;
 
 use crate::css::values::{
-    Dimension, Overflow, Position, TextOverflow, TransformFunction, Visibility,
+    BackgroundImage, Dimension, Overflow, Position, TextOverflow, TransformFunction, Visibility,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
@@ -270,8 +270,11 @@ pub(super) fn paint_box(
             return Err(e);
         }
 
-        // 1. Background
-        if let Err(e) = paint_background(layout_box, backend, offset_x, offset_y, ctx) {
+        // 1. Background — skip if fully transparent with no image/texture.
+        let has_bg = layout_box.style.background_color.a != 0
+            || !matches!(layout_box.style.background_image, BackgroundImage::None)
+            || layout_box.background_texture.is_some();
+        if has_bg && let Err(e) = paint_background(layout_box, backend, offset_x, offset_y, ctx) {
             let b = layout_box.dimensions.border_box();
             log::debug!(
                 "paint background failed at ({}, {}) {}x{}: {e}",
@@ -283,8 +286,10 @@ pub(super) fn paint_box(
             return Err(e);
         }
 
-        // 2. Borders
-        if let Err(e) = paint_borders(layout_box, backend, offset_x, offset_y, ctx) {
+        // 2. Borders — skip if all four border widths are zero.
+        let bd = &layout_box.dimensions.border;
+        let has_borders = bd.top != 0.0 || bd.right != 0.0 || bd.bottom != 0.0 || bd.left != 0.0;
+        if has_borders && let Err(e) = paint_borders(layout_box, backend, offset_x, offset_y, ctx) {
             let b = layout_box.dimensions.border_box();
             log::debug!(
                 "paint borders failed at ({}, {}) {}x{}: {e}",
@@ -296,8 +301,10 @@ pub(super) fn paint_box(
             return Err(e);
         }
 
-        // 2b. Outline (outside border box, after borders).
-        if let Err(e) = paint_outline(layout_box, backend, offset_x, offset_y, ctx) {
+        // 2b. Outline (outside border box, after borders) — skip if zero width.
+        if layout_box.style.outline_width > 0.0
+            && let Err(e) = paint_outline(layout_box, backend, offset_x, offset_y, ctx)
+        {
             let b = layout_box.dimensions.border_box();
             log::debug!(
                 "paint outline failed at ({}, {}) {}x{}: {e}",
@@ -325,6 +332,22 @@ pub(super) fn paint_box(
         });
         ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
     }
+
+    // Push hardware clip rect to GPU when an overflow clip is active.
+    let did_push_hw_clip = if ctx.clip_rect != prev_clip {
+        if let Some(cr) = ctx.clip_rect {
+            let cx = (cr.x - ctx.scroll_x) as i32 + offset_x;
+            let cy = (cr.y - ctx.scroll_y) as i32 + offset_y;
+            let cw = cr.width.max(0.0) as u32;
+            let ch = cr.height.max(0.0) as u32;
+            backend.set_clip_rect(cx, cy, cw, ch)?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
 
     // Compute transform offset adjustments for children.
     // Translate: add dx/dy to offset. Scale: shift from center.
@@ -445,6 +468,18 @@ pub(super) fn paint_box(
                 return Err(e);
             }
         },
+    }
+
+    // Restore hardware clip rect before restoring software clip.
+    if did_push_hw_clip {
+        backend.reset_clip_rect()?;
+        if let Some(cr) = prev_clip {
+            let cx = (cr.x - ctx.scroll_x) as i32 + offset_x;
+            let cy = (cr.y - ctx.scroll_y) as i32 + offset_y;
+            let cw = cr.width.max(0.0) as u32;
+            let ch = cr.height.max(0.0) as u32;
+            backend.set_clip_rect(cx, cy, cw, ch)?;
+        }
     }
 
     // Restore previous clip rect and ellipsis flag.
