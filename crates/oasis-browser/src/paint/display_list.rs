@@ -141,13 +141,31 @@ impl DisplayItem {
             | DisplayItem::Blit { x, y, w, h, .. }
             | DisplayItem::Gradient { x, y, w, h, .. }
             | DisplayItem::BorderEdge { x, y, w, h, .. }
-            | DisplayItem::Shadow { x, y, w, h, .. }
             | DisplayItem::PushClip { x, y, w, h } => Some(Rect {
                 x: *x as f32,
                 y: *y as f32,
                 width: *w as f32,
                 height: *h as f32,
             }),
+            DisplayItem::Shadow {
+                x,
+                y,
+                w,
+                h,
+                blur,
+                spread,
+                offset_x,
+                offset_y,
+                ..
+            } => {
+                let expand = *spread + *blur;
+                Some(Rect {
+                    x: *x as f32 + *offset_x - expand,
+                    y: *y as f32 + *offset_y - expand,
+                    width: *w as f32 + expand * 2.0,
+                    height: *h as f32 + expand * 2.0,
+                })
+            },
             DisplayItem::BlitSub {
                 dst_x: x,
                 dst_y: y,
