@@ -355,6 +355,18 @@ pub struct BrowserWidget {
 
     /// Form state manager for HTML `<form>` elements on the current page.
     form_manager: forms::FormManager,
+
+    /// Cached display list for the current page content.
+    /// Rebuilt only when layout changes; replayed on each frame.
+    display_list: paint::display_list::DisplayList,
+
+    /// Scroll Y position at which the display list was last recorded.
+    /// When scroll changes, we replay with adjusted offsets instead of
+    /// rebuilding. A full rebuild is forced when layout changes.
+    display_list_scroll_y: i32,
+
+    /// Scroll X position at which the display list was last recorded.
+    display_list_scroll_x: i32,
 }
 
 impl BrowserWidget {
@@ -430,6 +442,9 @@ impl BrowserWidget {
             last_effective_font_size: effective_font,
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),
+            display_list: paint::display_list::DisplayList::new(),
+            display_list_scroll_y: 0,
+            display_list_scroll_x: 0,
         }
     }
 

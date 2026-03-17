@@ -65,6 +65,17 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
+///
+/// Exposed as `pub(crate)` for the display list recorder.
+pub(crate) fn sample_gradient_pub(
+    stops: &[crate::css::values::GradientStop],
+    t: f32,
+    opacity: f32,
+) -> Color {
+    sample_gradient(stops, t, opacity)
+}
+
+/// Sample the gradient color at a normalized position `t` (0.0..=1.0).
 fn sample_gradient(stops: &[crate::css::values::GradientStop], t: f32, opacity: f32) -> Color {
     if stops.is_empty() {
         return Color::rgba(0, 0, 0, 0);

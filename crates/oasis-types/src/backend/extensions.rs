@@ -696,3 +696,116 @@ pub trait SdiBatch: SdiCore {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// SdiRenderTarget
+// ---------------------------------------------------------------------------
+
+/// Offscreen render target operations for compositing and tile caching.
+///
+/// Backends that support GPU render targets (SDL3, WebGL) should override
+/// these methods. The default implementation is a no-op that renders
+/// directly to the screen, preserving current behavior for backends
+/// without render target support (PSP, UE5 software).
+pub trait SdiRenderTarget: SdiCore {
+    /// Create an offscreen render target texture of the given size.
+    ///
+    /// Returns a [`TextureId`] that can be passed to
+    /// [`SdiRenderTarget::set_render_target`] and later blitted to the
+    /// screen with [`blit`](SdiCore::blit).
+    fn create_render_target(&mut self, _w: u32, _h: u32) -> Result<TextureId> {
+        Err(crate::error::OasisError::Backend(
+            "render targets not supported".into(),
+        ))
+    }
+
+    /// Redirect all subsequent draw calls to the given render target.
+    ///
+    /// Pass `None` to restore drawing to the default screen target.
+    fn set_render_target(&mut self, _target: Option<TextureId>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Query whether this backend supports offscreen render targets.
+    fn supports_render_targets(&self) -> bool {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SdiGeometry
+// ---------------------------------------------------------------------------
+
+/// Raw geometry submission for GPU-accelerated rendering.
+///
+/// Enables arbitrary textured/colored triangles for diagonal gradients,
+/// CSS transforms, and custom shapes. Maps to `SDL_RenderGeometry` on
+/// SDL3 backends.
+pub trait SdiGeometry: SdiCore {
+    /// Submit raw triangle geometry to the GPU.
+    ///
+    /// `vertices` contains position + color + optional UV data.
+    /// `indices` indexes into `vertices` to form triangles (3 per tri).
+    /// `texture` is an optional texture to sample; `None` uses vertex colors.
+    fn render_geometry(
+        &mut self,
+        _vertices: &[GeometryVertex],
+        _indices: &[u32],
+        _texture: Option<TextureId>,
+    ) -> Result<()> {
+        // Default: no-op. Backends without geometry support fall back to
+        // fill_rect-based approximations in the caller.
+        Ok(())
+    }
+
+    /// Query whether this backend supports raw geometry submission.
+    fn supports_geometry(&self) -> bool {
+        false
+    }
+}
+
+/// A vertex for [`SdiGeometry::render_geometry`].
+#[derive(Debug, Clone, Copy)]
+pub struct GeometryVertex {
+    /// X position in screen pixels.
+    pub x: f32,
+    /// Y position in screen pixels.
+    pub y: f32,
+    /// Texture U coordinate (0.0..1.0). Ignored if no texture.
+    pub u: f32,
+    /// Texture V coordinate (0.0..1.0). Ignored if no texture.
+    pub v: f32,
+    /// Vertex color (premultiplied alpha).
+    pub color: Color,
+}
+
+// ---------------------------------------------------------------------------
+// SdiBlendMode
+// ---------------------------------------------------------------------------
+
+/// Alpha blending mode control for compositing layers.
+pub trait SdiBlendMode: SdiCore {
+    /// Set the active blend mode for subsequent draw operations.
+    fn set_blend_mode(&mut self, _mode: BlendMode) -> Result<()> {
+        Ok(())
+    }
+
+    /// Query the current blend mode.
+    fn current_blend_mode(&self) -> BlendMode {
+        BlendMode::Blend
+    }
+}
+
+/// Blend modes for compositing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlendMode {
+    /// No blending — source overwrites destination.
+    None,
+    /// Standard alpha blending (src * alpha + dst * (1 - alpha)).
+    #[default]
+    Blend,
+    /// Additive blending (src + dst).
+    Add,
+    /// Multiplicative blending (src * dst).
+    Multiply,
+}

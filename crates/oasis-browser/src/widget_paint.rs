@@ -73,7 +73,7 @@ impl BrowserWidget {
 
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         // Rebuild layout if the viewport was resized since last paint.
-        self.relayout_if_dirty();
+        let layout_changed = self.relayout_if_dirty();
 
         // Set clip to our window area.
         backend.set_clip_rect(self.window_x, self.window_y, self.window_w, self.window_h)?;
@@ -103,23 +103,65 @@ impl BrowserWidget {
         // nodes (first paint after navigation).
         self.ensure_image_textures(backend);
 
-        // Paint layout tree if available.
+        // Paint layout tree via cached display list.
         if let Some(layout) = &self.layout_root {
-            let result = paint::paint(
-                layout,
-                backend,
-                paint::PaintViewport {
+            // Rebuild display list when layout changed or on first paint.
+            // The display list is also cleared by load_html on navigation.
+            let needs_rebuild = layout_changed || self.display_list.is_empty();
+
+            if needs_rebuild {
+                let viewport = paint::PaintViewport {
                     scroll_y: self.scroll.scroll_y as f32,
                     scroll_x: self.scroll.scroll_x as f32,
                     x: self.window_x,
                     y: content_y,
                     width: self.window_w as f32,
                     height: content_h as f32,
-                },
-                &self.href_map,
-            )?;
-            self.link_map = result.links;
-            self.scroll.set_content_height(result.content_height as i32);
+                };
+
+                // Record to display list (no draw calls emitted).
+                let links =
+                    paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
+                self.link_map = links;
+                self.scroll
+                    .set_content_height(layout.dimensions.margin_box().height as i32);
+                self.display_list_scroll_y = self.scroll.scroll_y;
+                self.display_list_scroll_x = self.scroll.scroll_x;
+
+                // Replay from the freshly built display list.
+                self.display_list.replay(backend, 0, 0)?;
+            } else {
+                // Scroll changed but layout didn't — replay with scroll delta.
+                let dy = self.display_list_scroll_y - self.scroll.scroll_y;
+                let dx = self.display_list_scroll_x - self.scroll.scroll_x;
+
+                if dx != 0 || dy != 0 {
+                    // Scroll moved: rebuild display list with new scroll offsets.
+                    // (True scroll-only optimization with dirty rects comes in
+                    // Phase 2 — for now, rebuild so link regions are correct.)
+                    let viewport = paint::PaintViewport {
+                        scroll_y: self.scroll.scroll_y as f32,
+                        scroll_x: self.scroll.scroll_x as f32,
+                        x: self.window_x,
+                        y: content_y,
+                        width: self.window_w as f32,
+                        height: content_h as f32,
+                    };
+                    let links = paint::record::record(
+                        layout,
+                        viewport,
+                        &self.href_map,
+                        &mut self.display_list,
+                    );
+                    self.link_map = links;
+                    self.display_list_scroll_y = self.scroll.scroll_y;
+                    self.display_list_scroll_x = self.scroll.scroll_x;
+                    self.display_list.replay(backend, 0, 0)?;
+                } else {
+                    // Same scroll, same layout — replay cached display list.
+                    self.display_list.replay(backend, 0, 0)?;
+                }
+            }
         }
 
         // Paint link highlight if a link is selected.

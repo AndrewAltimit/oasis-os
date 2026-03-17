@@ -220,6 +220,21 @@ pub(super) fn paint_replaced(
 
 /// Compute blit position and size for a given `object-fit` mode.
 ///
+/// Exposed as `pub(crate)` for the display list recorder.
+pub(crate) fn compute_object_fit_pub(
+    fit: ObjectFit,
+    img_w: u32,
+    img_h: u32,
+    box_w: u32,
+    box_h: u32,
+    box_x: i32,
+    box_y: i32,
+) -> (i32, i32, u32, u32) {
+    compute_object_fit(fit, img_w, img_h, box_w, box_h, box_x, box_y)
+}
+
+/// Compute blit position and size for a given `object-fit` mode.
+///
 /// Returns `(x, y, width, height)` in screen pixels.
 fn compute_object_fit(
     fit: ObjectFit,

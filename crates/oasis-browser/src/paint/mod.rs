@@ -15,8 +15,12 @@
 
 mod background;
 mod borders;
+#[allow(dead_code)]
+pub(crate) mod display_list;
 pub(crate) mod filters;
 mod markers;
+#[allow(clippy::too_many_arguments, clippy::collapsible_if)]
+pub(crate) mod record;
 mod replaced;
 mod shadow;
 mod text;
@@ -516,7 +520,7 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
 /// Scale adjusts the offset from the element's center so children are
 /// painted at the scaled position. Rotate is a no-op (requires backend
 /// rotation support).
-fn compute_transform_offsets(
+pub(crate) fn compute_transform_offsets(
     transforms: &[TransformFunction],
     content: &Rect,
     base_x: i32,
@@ -612,7 +616,7 @@ fn compute_transform_offsets(
 /// - Positioned elements (non-static) with a non-zero z-index
 /// - Elements with opacity < 1.0
 /// - Elements with CSS transforms
-fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
+pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
     let style = &layout_box.style;
 
     // Positioned + non-zero z-index.

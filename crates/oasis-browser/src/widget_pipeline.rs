@@ -450,6 +450,8 @@ impl BrowserWidget {
         self.state = LoadingState::Idle;
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;
+        // Invalidate the cached display list so it gets rebuilt on next paint.
+        self.display_list.clear();
 
         // 8. Update navigation (skip if restoring from history).
         if !self.skip_nav_push {
