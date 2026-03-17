@@ -13,7 +13,26 @@ pub const BITMAP_GLYPH_HEIGHT: u32 = 8;
 /// Sums per-character advance widths derived from the actual glyph ink bounds,
 /// then scales by the font-size multiplier. This produces tighter text than
 /// the old fixed `8 * len` calculation.
+///
+/// Uses a fast path for ASCII-only text that avoids per-char function call
+/// overhead by summing raw advance values from the metrics table directly.
 pub fn bitmap_measure_text(text: &str, font_size: u16) -> u32 {
+    let fs = font_size.max(1) as u32;
+
+    // Fast path: ASCII-only text (common for English, URLs, code).
+    // Sum scaled advance widths directly from bytes, avoiding char
+    // decoding and per-char function call overhead. Each advance is
+    // scaled individually to match the rounding behavior of glyph_advance_scaled.
+    if text.is_ascii() {
+        let mut total: u32 = 0;
+        for &b in text.as_bytes() {
+            let advance = crate::bitmap_font::glyph_metrics_ascii(b).1 as u32;
+            total += advance * fs / 8;
+        }
+        return total;
+    }
+
+    // Slow path: mixed Unicode text.
     text.chars()
         .map(|ch| crate::bitmap_font::glyph_advance_scaled(ch, font_size))
         .sum()
