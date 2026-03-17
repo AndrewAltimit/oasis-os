@@ -265,13 +265,13 @@ impl BrowserWidget {
             if self.decoded_images.contains_key(&url) {
                 continue;
             }
-            let img_bytes = (decoded.width * decoded.height * 4) as usize;
+            let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
             // Evict oldest decoded images if over budget.
             while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
                 if let Some(evict_url) = self.decoded_image_lru.pop_back() {
                     if let Some(evicted) = self.decoded_images.remove(&evict_url) {
-                        let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                        let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
                         self.decoded_image_bytes -= evicted_bytes;
                         self.image_info_dirty = true;
                     }
@@ -353,12 +353,12 @@ impl BrowserWidget {
                 // On WASM, decode synchronously (no threads available).
                 #[cfg(target_arch = "wasm32")]
                 if let Some(decoded) = image::decode_image(&loaded.response.body) {
-                    let img_bytes = (decoded.width * decoded.height * 4) as usize;
+                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
                     while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
                         if let Some(evict_url) = self.decoded_image_lru.pop_back() {
                             if let Some(evicted) = self.decoded_images.remove(&evict_url) {
-                                let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                                let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
                                 self.decoded_image_bytes -= evicted_bytes;
                                 self.image_info_dirty = true;
                             }
@@ -402,13 +402,13 @@ impl BrowserWidget {
                         if self.decoded_images.contains_key(&url) {
                             continue;
                         }
-                        let img_bytes = (decoded.width * decoded.height * 4) as usize;
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
                         while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
                             if let Some(evict_url) = self.decoded_image_lru.pop_back() {
                                 if let Some(evicted) = self.decoded_images.remove(&evict_url) {
                                     let evicted_bytes =
-                                        (evicted.width * evicted.height * 4) as usize;
+                                        evicted.width as usize * evicted.height as usize * 4;
                                     self.decoded_image_bytes -= evicted_bytes;
                                     self.image_info_dirty = true;
                                 }

@@ -185,8 +185,8 @@ fn record_box(
         ctx.clip_rect = Some(clipped);
         ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
         dl.push(DisplayItem::PushClip {
-            x: (clipped.x + offset_x as f32) as i32,
-            y: (clipped.y + offset_y as f32) as i32,
+            x: (clipped.x - ctx.scroll_x + offset_x as f32) as i32,
+            y: (clipped.y - ctx.scroll_y + offset_y as f32) as i32,
             w: clipped.width as u32,
             h: clipped.height as u32,
         });
