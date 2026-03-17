@@ -282,8 +282,7 @@ impl DisplayList {
             | DisplayItem::StrokeRoundedRect { w, h, .. }
             | DisplayItem::Blit { w, h, .. }
             | DisplayItem::Gradient { w, h, .. }
-            | DisplayItem::BorderEdge { w, h, .. }
-            => *w > 0 && *h > 0,
+            | DisplayItem::BorderEdge { w, h, .. } => *w > 0 && *h > 0,
             // PushClip must never be removed — its PopClip is always
             // retained, and removing one without the other corrupts the
             // clip stack.  Zero-size clips are harmless (they just clip
