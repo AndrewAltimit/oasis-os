@@ -24,6 +24,8 @@ pub(crate) mod record;
 mod replaced;
 mod shadow;
 mod text;
+#[allow(dead_code)]
+pub(crate) mod tiling;
 
 use std::collections::HashMap;
 

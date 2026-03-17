@@ -123,6 +123,11 @@ pub enum DisplayItem {
     PushLayer { opacity: f32 },
     /// End a compositing layer and composite it back.
     PopLayer,
+    /// Hint that subsequent items in this layer should be blurred.
+    /// Software fallback applies per-color approximation (desaturation +
+    /// dimming) via [`super::filters::apply_filters`].
+    /// GPU backends can override with actual Gaussian blur via render targets.
+    BlurHint { radius: f32 },
 }
 
 impl DisplayItem {
@@ -177,7 +182,10 @@ impl DisplayItem {
                     height: text_h as f32,
                 })
             },
-            DisplayItem::PopClip | DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => None,
+            DisplayItem::PopClip
+            | DisplayItem::PushLayer { .. }
+            | DisplayItem::PopLayer
+            | DisplayItem::BlurHint { .. } => None,
         }
     }
 }
@@ -491,6 +499,9 @@ impl DisplayList {
                 },
                 // Already handled above the match.
                 DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => {},
+                // BlurHint is metadata for GPU backends; software fallback
+                // applies per-color approximation during recording.
+                DisplayItem::BlurHint { .. } => {},
             }
         }
 
@@ -696,6 +707,8 @@ impl DisplayList {
                 | DisplayItem::PopLayer => {
                     // Already handled above.
                 },
+                // BlurHint is metadata for GPU backends; no-op here.
+                DisplayItem::BlurHint { .. } => {},
             }
         }
 

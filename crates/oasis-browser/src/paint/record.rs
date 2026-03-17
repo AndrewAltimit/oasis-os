@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{BorderStyle, Dimension, Overflow, Position, TextOverflow, Visibility};
+use crate::css::values::{
+    BorderStyle, Dimension, FilterFunction, Overflow, Position, TextOverflow, Visibility,
+};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
 use oasis_types::backend::Color;
@@ -94,6 +96,15 @@ fn record_box(
     let sticky_dy = compute_sticky_dy(layout_box, offset_y, ctx);
     let offset_y = offset_y + sticky_dy;
 
+    // Sticky elements get their own compositing layer so the display list
+    // isolates them from surrounding content. With GPU render targets this
+    // layer could be translated on the GPU during scroll instead of
+    // re-recording the entire sticky subtree.
+    let is_sticky = layout_box.style.position == Position::Sticky;
+    if is_sticky {
+        dl.push(DisplayItem::PushLayer { opacity: 1.0 });
+    }
+
     // Screen-space culling.
     let screen_y = layout_box.dimensions.content.y - ctx.scroll_y + sticky_dy as f32;
     let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
@@ -130,6 +141,19 @@ fn record_box(
         dl.push(DisplayItem::PushLayer {
             opacity: layout_box.style.opacity,
         });
+    }
+
+    // Emit a blur hint for GPU backends that support render-target blur.
+    // The software path already applies per-color approximation via
+    // `apply_filters` during color recording below.
+    let blur_radius = layout_box.style.filters.iter().find_map(|f| match f {
+        FilterFunction::Blur(r) => Some(*r),
+        _ => None,
+    });
+    if let Some(radius) = blur_radius {
+        if radius > 0.0 {
+            dl.push(DisplayItem::BlurHint { radius });
+        }
     }
 
     if is_visible {
@@ -262,6 +286,11 @@ fn record_box(
     }
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
+
+    // Close the sticky compositing layer (outermost, pushed before opacity).
+    if is_sticky {
+        dl.push(DisplayItem::PopLayer);
+    }
 
     // Record link hit region.
     if let Some((ref href, link_node)) = ctx.current_link {

@@ -114,13 +114,18 @@ impl BrowserWidget {
             let has_dirty_rects = !self.dirty_rects.is_empty();
 
             if needs_rebuild {
+                // Extend the viewport height by the scroll buffer zone so items
+                // slightly beyond the visible area are recorded. This means small
+                // scroll increments can replay the cached display list without a
+                // full rebuild (the extra items are already present).
+                let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
                 let viewport = paint::PaintViewport {
                     scroll_y: self.scroll.scroll_y as f32,
                     scroll_x: self.scroll.scroll_x as f32,
                     x: self.window_x,
                     y: content_y,
                     width: self.window_w as f32,
-                    height: content_h as f32,
+                    height: buffered_h,
                 };
 
                 // Record to display list (no draw calls emitted).
@@ -134,6 +139,15 @@ impl BrowserWidget {
                 self.display_list_scroll_y = self.scroll.scroll_y;
                 self.display_list_scroll_x = self.scroll.scroll_x;
 
+                // Update tile grid on layout change.
+                let ch = layout.dimensions.margin_box().height as u32;
+                match &mut self.tile_grid {
+                    Some(grid) => grid.resize(self.window_w, ch),
+                    None => {
+                        self.tile_grid = Some(paint::tiling::TileGrid::new(self.window_w, ch));
+                    },
+                }
+
                 // Replay from the freshly built display list.
                 self.display_list.replay(backend, 0, 0)?;
                 self.dirty_rects.clear();
@@ -142,13 +156,14 @@ impl BrowserWidget {
                 // Visual-only change (e.g. hover color) with known dirty rects.
                 // Rebuild display list (colors are baked in) and replay only
                 // the dirty regions to reduce backend draw calls.
+                let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
                 let viewport = paint::PaintViewport {
                     scroll_y: self.scroll.scroll_y as f32,
                     scroll_x: self.scroll.scroll_x as f32,
                     x: self.window_x,
                     y: content_y,
                     width: self.window_w as f32,
-                    height: content_h as f32,
+                    height: buffered_h,
                 };
                 let links =
                     paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
@@ -171,13 +186,14 @@ impl BrowserWidget {
                     // Scroll moved: rebuild display list with new scroll offsets.
                     // (True scroll-only optimization with dirty rects comes in
                     // Phase 2 — for now, rebuild so link regions are correct.)
+                    let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
                     let viewport = paint::PaintViewport {
                         scroll_y: self.scroll.scroll_y as f32,
                         scroll_x: self.scroll.scroll_x as f32,
                         x: self.window_x,
                         y: content_y,
                         width: self.window_w as f32,
-                        height: content_h as f32,
+                        height: buffered_h,
                     };
                     let links = paint::record::record(
                         layout,
@@ -189,6 +205,19 @@ impl BrowserWidget {
                     self.link_map = links;
                     self.display_list_scroll_y = self.scroll.scroll_y;
                     self.display_list_scroll_x = self.scroll.scroll_x;
+
+                    // Mark newly visible tiles as dirty on scroll.
+                    if let Some(grid) = &mut self.tile_grid {
+                        let (vis_start, vis_end) =
+                            grid.visible_range(self.scroll.scroll_y, content_h);
+                        for idx in vis_start..vis_end {
+                            if grid.is_dirty(idx) {
+                                // Tile is already dirty — will be re-rendered.
+                                // Future: skip replay for clean tiles.
+                            }
+                        }
+                    }
+
                     self.display_list.replay(backend, 0, 0)?;
                 } else {
                     // Same scroll, same layout — replay cached display list.

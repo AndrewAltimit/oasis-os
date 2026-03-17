@@ -36,6 +36,13 @@ pub struct ScrollState {
     pub content_width: i32,
     /// Visible viewport width (from window content area).
     pub viewport_width: i32,
+    /// Pre-render buffer zone beyond the visible viewport (pixels).
+    ///
+    /// When recording the display list, items within this many pixels
+    /// beyond the viewport edges are included so that small scroll
+    /// increments can replay the cached list without a rebuild.
+    /// Defaults to 1x the viewport height.
+    pub buffer_zone: i32,
 }
 
 impl ScrollState {
@@ -51,6 +58,7 @@ impl ScrollState {
             velocity_x: 0.0,
             content_width: 0,
             viewport_width: 0,
+            buffer_zone: viewport_height,
         }
     }
 
@@ -191,6 +199,7 @@ impl ScrollState {
     /// Update viewport height (after window resize).
     pub fn set_viewport_height(&mut self, height: i32) {
         self.viewport_height = height;
+        self.buffer_zone = height;
         self.clamp();
     }
 
@@ -293,6 +302,7 @@ impl ScrollState {
         self.velocity_x = 0.0;
         self.target_scroll_x = 0.0;
         self.content_width = 0;
+        // buffer_zone is intentionally preserved across resets.
     }
 }
 

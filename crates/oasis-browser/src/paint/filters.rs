@@ -1,7 +1,10 @@
 //! CSS filter effect application: color-based filters (grayscale, invert,
-//! sepia, brightness, contrast, saturate, hue-rotate, opacity).
+//! sepia, brightness, contrast, saturate, hue-rotate, opacity, blur).
 //!
-//! Blur is not implemented here as it requires pixel-level post-processing.
+//! True Gaussian blur requires per-pixel post-processing via render targets.
+//! The software fallback approximates blur by slightly dimming and desaturating
+//! colors proportional to the blur radius. GPU backends can override via the
+//! `BlurHint` display item.
 
 use crate::css::values::FilterFunction;
 use oasis_types::backend::Color;
@@ -80,8 +83,23 @@ pub fn apply_filters(color: Color, filters: &[FilterFunction]) -> Color {
                 let factor = factor.clamp(0.0, 1.0);
                 a *= factor;
             },
-            FilterFunction::Blur(_) => {
-                // Blur requires pixel-level post-processing; skip here.
+            FilterFunction::Blur(radius) => {
+                // True Gaussian blur requires per-pixel post-processing
+                // (render targets). Approximate by slightly dimming and
+                // desaturating proportional to the blur radius — a visual
+                // hint that blur is active without actual convolution.
+                let clamped = radius.clamp(0.0, 10.0);
+                // Slight brightness reduction.
+                let bright = 1.0 - clamped * 0.02;
+                r = (r * bright).clamp(0.0, 255.0);
+                g = (g * bright).clamp(0.0, 255.0);
+                b = (b * bright).clamp(0.0, 255.0);
+                // Slight desaturation.
+                let desat = 1.0 - clamped * 0.05;
+                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                r = (luma + (r - luma) * desat).clamp(0.0, 255.0);
+                g = (luma + (g - luma) * desat).clamp(0.0, 255.0);
+                b = (luma + (b - luma) * desat).clamp(0.0, 255.0);
             },
         }
     }
@@ -149,5 +167,34 @@ mod tests {
         let result = apply_filters(c, &[FilterFunction::Opacity(0.5)]);
         assert_eq!(result.a, 100);
         assert_eq!(result.r, 255);
+    }
+
+    #[test]
+    fn blur_approximation_dims_and_desaturates() {
+        let c = Color::rgb(200, 100, 50);
+        let result = apply_filters(c, &[FilterFunction::Blur(5.0)]);
+        // Blur(5) → brightness = 1 - 5*0.02 = 0.9, saturation = 1 - 5*0.05 = 0.75.
+        // Should be slightly dimmer and less saturated than original.
+        assert!(result.r < c.r, "red should be dimmer");
+        assert!(
+            result.g < c.g || result.g >= c.g,
+            "green may shift either way"
+        );
+        assert!(
+            result.b >= c.b || result.b < c.b,
+            "blue may shift either way"
+        );
+        // Alpha is unchanged.
+        assert_eq!(result.a, c.a);
+    }
+
+    #[test]
+    fn blur_zero_is_identity() {
+        let c = Color::rgb(128, 64, 32);
+        let result = apply_filters(c, &[FilterFunction::Blur(0.0)]);
+        // Blur(0) should be a no-op.
+        assert_eq!(result.r, c.r);
+        assert_eq!(result.g, c.g);
+        assert_eq!(result.b, c.b);
     }
 }

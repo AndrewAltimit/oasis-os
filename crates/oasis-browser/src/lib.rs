@@ -393,6 +393,12 @@ pub struct BrowserWidget {
     /// the layout may not have changed (e.g. visual-only style change
     /// without known dirty rects).
     full_repaint_needed: bool,
+
+    /// Tile grid for tracking visible/dirty regions of the page.
+    /// Infrastructure for future GPU tile caching (render tiles as
+    /// GPU textures, only re-render newly visible tiles on scroll).
+    #[allow(dead_code)]
+    tile_grid: Option<paint::tiling::TileGrid>,
 }
 
 impl BrowserWidget {
@@ -480,6 +486,7 @@ impl BrowserWidget {
             display_list_scroll_x: 0,
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
+            tile_grid: None,
         }
     }
 
