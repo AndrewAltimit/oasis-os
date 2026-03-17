@@ -968,6 +968,16 @@ fn record_text(
         display_text = std::borrow::Cow::Borrowed(text);
     }
 
+    // Pre-compute text width including letter-spacing for bounds and decorations.
+    let mut text_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size) as f32;
+    if style.letter_spacing != 0.0 {
+        let chars = display_text.chars().count();
+        if chars > 1 {
+            text_w += style.letter_spacing * (chars - 1) as f32;
+        }
+    }
+    let text_width = text_w.max(0.0) as u32;
+
     // Text shadow.
     if let Some(ref shadow) = style.text_shadow {
         let shadow_color = apply_opacity(shadow.color, 1.0);
@@ -979,6 +989,7 @@ fn record_text(
             color: shadow_color,
             bold,
             italic,
+            width: text_width,
         });
     }
 
@@ -990,17 +1001,8 @@ fn record_text(
         color,
         bold,
         italic,
+        width: text_width,
     });
-
-    // Text decorations.
-    let mut text_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size) as f32;
-    if style.letter_spacing != 0.0 {
-        let chars = display_text.chars().count();
-        if chars > 1 {
-            text_w += style.letter_spacing * (chars - 1) as f32;
-        }
-    }
-    let text_width = text_w.max(0.0) as u32;
 
     if style.text_decoration == crate::css::values::TextDecoration::Underline {
         let underline_y = sy + (style.font_size * 0.85) as i32;
@@ -1066,6 +1068,7 @@ fn record_list_marker(
         color,
         bold: false,
         italic: false,
+        width: marker_w,
     });
 }
 
@@ -1157,6 +1160,7 @@ fn record_replaced(
                 color,
             });
             let label = if alt.is_empty() { "\u{00D7}" } else { alt };
+            let label_w = oasis_types::backend::bitmap_measure_text(label, 8);
             dl.push(DisplayItem::DrawText {
                 text: label.to_string(),
                 x: x + 2,
@@ -1165,6 +1169,7 @@ fn record_replaced(
                 color,
                 bold: false,
                 italic: false,
+                width: label_w,
             });
         },
         ReplacedContent::HorizontalRule => {
@@ -1315,6 +1320,7 @@ fn record_text_input(
     let pad = style.padding_left.max(3.0) as i32;
     let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
     if !value.is_empty() {
+        let value_w = oasis_types::backend::bitmap_measure_text(value, font_size);
         dl.push(DisplayItem::DrawText {
             text: value.to_string(),
             x: x + pad,
@@ -1323,8 +1329,10 @@ fn record_text_input(
             color: style.color,
             bold: false,
             italic: false,
+            width: value_w,
         });
     } else if !placeholder.is_empty() {
+        let ph_w = oasis_types::backend::bitmap_measure_text(placeholder, font_size);
         dl.push(DisplayItem::DrawText {
             text: placeholder.to_string(),
             x: x + pad,
@@ -1333,6 +1341,7 @@ fn record_text_input(
             color: Color::rgb(160, 160, 160),
             bold: false,
             italic: false,
+            width: ph_w,
         });
     }
 }
@@ -1384,6 +1393,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
     });
     let font_size = style.font_size as u16;
     let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+    let label_w = oasis_types::backend::bitmap_measure_text(label, font_size);
     dl.push(DisplayItem::DrawText {
         text: label.to_string(),
         x: x + 3,
@@ -1392,7 +1402,9 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         color: style.color,
         bold: false,
         italic: false,
+        width: label_w,
     });
+    let arrow_w = oasis_types::backend::bitmap_measure_text("v", font_size);
     dl.push(DisplayItem::DrawText {
         text: "v".to_string(),
         x: x + w as i32 - 10,
@@ -1401,6 +1413,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         color: style.color,
         bold: false,
         italic: false,
+        width: arrow_w,
     });
 }
 
@@ -1506,6 +1519,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
         color: style.color,
         bold: false,
         italic: false,
+        width: text_w,
     });
 }
 

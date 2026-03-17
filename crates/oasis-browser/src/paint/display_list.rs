@@ -60,6 +60,9 @@ pub enum DisplayItem {
         color: Color,
         bold: bool,
         italic: bool,
+        /// Pre-computed width in pixels (includes letter-spacing).
+        /// Used for dirty-rect culling to avoid expensive re-measurement.
+        width: u32,
     },
     /// Texture blit.
     Blit {
@@ -188,10 +191,10 @@ impl DisplayItem {
                 x,
                 y,
                 font_size,
-                text,
+                width,
                 ..
             } => {
-                let text_w = oasis_types::backend::bitmap_measure_text(text, *font_size);
+                let text_w = *width;
                 let text_h = (*font_size as f32 * 1.2) as u32;
                 Some(Rect {
                     x: *x as f32,
@@ -290,7 +293,8 @@ impl DisplayList {
             DisplayItem::PushClip { .. } => true,
             DisplayItem::BlitSub { dst_w, dst_h, .. } => *dst_w > 0 && *dst_h > 0,
             DisplayItem::Shadow { w, h, .. } => *w > 0 && *h > 0,
-            // DrawText, PopClip, PushLayer, PopLayer — always keep.
+            DisplayItem::DrawText { text, width, .. } => !text.is_empty() && *width > 0,
+            // PopClip, PushLayer, PopLayer, BlurHint — always keep.
             _ => true,
         });
 
@@ -427,6 +431,7 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.draw_text_styled(
@@ -656,6 +661,7 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.draw_text_styled(
@@ -1102,6 +1108,7 @@ mod tests {
             color: Color::rgb(0, 0, 0),
             bold: false,
             italic: false,
+            width: 1,
         });
         dl.push(DisplayItem::PopClip);
         dl.compact();
@@ -1234,6 +1241,7 @@ mod tests {
             color: Color::rgba(0, 0, 0, 254),
             bold: false,
             italic: false,
+            width: 0,
         });
         dl.push(DisplayItem::PopLayer);
 
