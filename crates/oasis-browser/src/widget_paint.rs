@@ -610,6 +610,10 @@ impl BrowserWidget {
     /// complex internal drawing pipelines that can't be represented as
     /// display items. This method walks the layout tree after display list
     /// replay to paint them directly to the backend.
+    ///
+    /// Note: this post-pass means SVG/Canvas always render on top of
+    /// display-list content. For correct z-ordering, these elements would
+    /// need dedicated `DisplayItem` variants (future work).
     fn paint_svg_canvas_elements(
         layout_box: &LayoutBox,
         backend: &mut dyn SdiBackend,
@@ -618,10 +622,37 @@ impl BrowserWidget {
         offset_x: i32,
         offset_y: i32,
     ) -> Result<()> {
+        use crate::css::values::{Dimension, Position};
+
+        // Compute sticky offset (same logic as paint_box / record_box).
+        let sticky_dy = if layout_box.style.position == Position::Sticky {
+            if let Dimension::Px(top) = layout_box.style.top {
+                let natural = layout_box.dimensions.content.y - scroll_y + offset_y as f32;
+                if natural < top {
+                    (top - natural) as i32
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let offset_y = offset_y + sticky_dy;
+
+        // Compute transform offsets (translate, scale, rotate, skew).
+        let (tx_x, tx_y) = paint::compute_transform_offsets(
+            &layout_box.style.transforms,
+            &layout_box.dimensions.content,
+            offset_x,
+            offset_y,
+        );
+
         if let BoxType::Replaced(replaced) = &layout_box.box_type {
             let content = &layout_box.dimensions.content;
-            let x = (content.x - scroll_x + offset_x as f32) as i32;
-            let y = (content.y - scroll_y + offset_y as f32) as i32;
+            let x = (content.x - scroll_x + tx_x as f32) as i32;
+            let y = (content.y - scroll_y + tx_y as f32) as i32;
             match replaced {
                 ReplacedContent::Svg { element } => {
                     crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;
@@ -641,9 +672,7 @@ impl BrowserWidget {
             }
         }
         for child in &layout_box.children {
-            Self::paint_svg_canvas_elements(
-                child, backend, scroll_x, scroll_y, offset_x, offset_y,
-            )?;
+            Self::paint_svg_canvas_elements(child, backend, scroll_x, scroll_y, tx_x, tx_y)?;
         }
         Ok(())
     }
