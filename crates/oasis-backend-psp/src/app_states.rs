@@ -209,9 +209,7 @@ impl BrowserState {
             let mut widget = oasis_browser::BrowserWidget::new(config);
             widget.set_window(0, 14, 480, 244);
             // Attach TLS provider for HTTPS.
-            widget.set_tls_provider(Box::new(
-                oasis_backend_psp::PspTlsProvider::new(),
-            ));
+            widget.set_tls_provider(Box::new(oasis_backend_psp::PspTlsProvider::new()));
             self.widget = Some(widget);
         }
         self.widget.as_mut().expect("just initialized above")

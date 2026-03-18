@@ -204,9 +204,7 @@ pub(crate) fn render_classic(
         },
         ClassicView::Browser => {
             if let Some(ref mut w) = br.widget {
-                if br.loading
-                    || w.loading_state() == oasis_browser::LoadingState::Loading
-                {
+                if br.loading || w.loading_state() == oasis_browser::LoadingState::Loading {
                     desktop::draw_loading_indicator(backend, "Loading page...");
                 } else if w.loading_state() == oasis_browser::LoadingState::Error {
                     // Show error as simple text (avoid paint crash on PSP).

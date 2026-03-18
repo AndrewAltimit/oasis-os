@@ -1,6 +1,6 @@
 //! SDI view: Photo Browser + Photo full-screen view.
 
-use oasis_backend_psp::{Color, FileEntry, TextureId, SCREEN_WIDTH};
+use oasis_backend_psp::{Color, FileEntry, SCREEN_WIDTH, TextureId};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::sdi::SdiRegistry;
 
@@ -8,7 +8,7 @@ use crate::theme::*;
 
 use super::helpers::{ensure, set_text};
 use super::list_view::{
-    hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar, LIST_ROWS,
+    LIST_ROWS, hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar,
 };
 
 // ---- Photo Browser (list view) ----

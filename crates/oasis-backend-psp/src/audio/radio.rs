@@ -5,7 +5,7 @@ use psp::audiocodec::{AudiocodecDecoder, CodecType};
 use psp::mp3::find_sync;
 
 use super::player::AudioPlayer;
-use super::{load_av_modules_once, MP3_FRAME_SAMPLES};
+use super::{MP3_FRAME_SAMPLES, load_av_modules_once};
 
 /// Internet radio streamer that reads MP3 data from a connected TCP socket.
 ///
@@ -296,7 +296,9 @@ impl RadioStreamer {
             *s = 0;
         }
 
-        let Some(decoder) = player.decoder.as_mut() else { return };
+        let Some(decoder) = player.decoder.as_mut() else {
+            return;
+        };
         let buf_pos = self.buf_pos;
         let buf_valid = self.buf_valid;
         let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut player.pcm_buf);
@@ -310,7 +312,9 @@ impl RadioStreamer {
                 }
                 self.error_count = 0;
                 self.buf_pos += consumed;
-                let Some(channel) = player.channel.as_ref() else { return };
+                let Some(channel) = player.channel.as_ref() else {
+                    return;
+                };
                 let _ = channel.output_blocking(self.hw_volume, &player.pcm_buf);
             },
             Err(e) => {

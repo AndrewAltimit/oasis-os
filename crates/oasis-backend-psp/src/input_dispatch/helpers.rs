@@ -1,11 +1,11 @@
 //! Helper functions for input dispatch: dashboard confirm, terminal confirm,
 //! TV Guide confirm.
 
+use oasis_backend_psp::SdiRegistry;
+use oasis_backend_psp::threading::IoHandle;
 use oasis_backend_psp::{
     AudioCmd, AudioHandle, IoCmd, PspBackend, SfxId, TvCatalogRequest, WindowManager,
 };
-use oasis_backend_psp::threading::IoHandle;
-use oasis_backend_psp::SdiRegistry;
 
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::dashboard::{DashboardConfig, DashboardState};

@@ -6,7 +6,7 @@ use oasis_core::sdi::SdiRegistry;
 
 use crate::theme::*;
 
-use super::helpers::{ensure, set_text, sdi_key};
+use super::helpers::{ensure, sdi_key, set_text};
 
 /// Maximum rows visible in a list view.
 pub(crate) const LIST_ROWS: usize = FM_VISIBLE_ROWS;

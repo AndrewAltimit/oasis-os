@@ -270,7 +270,12 @@ pub(crate) fn draw_music_windowed(
         let mut buf = [0u8; 64];
         let info = stack_fmt(
             &mut buf,
-            format_args!("{}Hz {}kbps {}ch", audio.sample_rate(), audio.bitrate(), audio.channels()),
+            format_args!(
+                "{}Hz {}kbps {}ch",
+                audio.sample_rate(),
+                audio.bitrate(),
+                audio.channels()
+            ),
         );
         let info_x = center_x - (info.len() as i32 * 8) / 2;
         be.draw_text(info, info_x, cy + 18, 8, Color::rgb(180, 180, 180))?;
@@ -319,11 +324,23 @@ pub(crate) fn draw_settings_windowed(
     let mut buf = [0u8; 64];
 
     be.draw_text("CPU Clock:", cx + 4, y, 8, lbl)?;
-    be.draw_text(stack_fmt(&mut buf, format_args!("{} MHz", clock_mhz)), vx, y, 8, val)?;
+    be.draw_text(
+        stack_fmt(&mut buf, format_args!("{} MHz", clock_mhz)),
+        vx,
+        y,
+        8,
+        val,
+    )?;
     y += 10;
 
     be.draw_text("Bus Clock:", cx + 4, y, 8, lbl)?;
-    be.draw_text(stack_fmt(&mut buf, format_args!("{} MHz", bus_mhz)), vx, y, 8, val)?;
+    be.draw_text(
+        stack_fmt(&mut buf, format_args!("{} MHz", bus_mhz)),
+        vx,
+        y,
+        8,
+        val,
+    )?;
     y += 10;
 
     let profile = match clock_mhz {
@@ -346,7 +363,10 @@ pub(crate) fn draw_settings_windowed(
         be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
         be.draw_text(
             stack_fmt(&mut buf, format_args!("{}/{} KB", used_kb, total_kb)),
-            vx, y, 8, val,
+            vx,
+            y,
+            8,
+            val,
         )?;
     } else {
         be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
@@ -634,7 +654,10 @@ fn stack_fmt<'a>(buf: &'a mut [u8; 64], args: core::fmt::Arguments<'_>) -> &'a s
             Ok(())
         }
     }
-    let mut w = BufWriter { buf: &mut buf[..], pos: 0 };
+    let mut w = BufWriter {
+        buf: &mut buf[..],
+        pos: 0,
+    };
     let _ = w.write_fmt(args);
     let n = w.pos;
     core::str::from_utf8(&buf[..n]).unwrap_or("???")

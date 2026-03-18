@@ -5,7 +5,7 @@ use psp::audiocodec::{AudiocodecDecoder, CodecType};
 use psp::mp3::{find_sync, skip_id3v2};
 
 use super::frame_parser::parse_mp3_header;
-use super::{load_av_modules_once, MP3_FRAME_SAMPLES, READ_BUF_SIZE};
+use super::{MP3_FRAME_SAMPLES, READ_BUF_SIZE, load_av_modules_once};
 
 /// MP3 playback engine using sceAudiocodec with file streaming.
 ///
@@ -345,7 +345,9 @@ impl AudioPlayer {
             *s = 0;
         }
 
-        let Some(decoder) = self.decoder.as_mut() else { return };
+        let Some(decoder) = self.decoder.as_mut() else {
+            return;
+        };
         let buf_pos = self.buf_pos;
         let buf_valid = self.buf_valid;
         let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut self.pcm_buf);
@@ -364,7 +366,9 @@ impl AudioPlayer {
                 self.error_count = 0;
                 self.buf_pos += consumed;
                 self.frames_decoded += 1;
-                let Some(channel) = self.channel.as_ref() else { return };
+                let Some(channel) = self.channel.as_ref() else {
+                    return;
+                };
                 let _ = channel.output_blocking(self.hw_volume, &self.pcm_buf);
             },
             Err(e) => {

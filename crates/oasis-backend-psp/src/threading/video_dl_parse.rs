@@ -1,7 +1,7 @@
 //! MP4 parsing and stream demux helpers for video downloads: moov atom
 //! detection, sample table traversal, and interleaved sample extraction.
 
-use super::{AudioCmd, AUDIO_QUEUE};
+use super::{AUDIO_QUEUE, AudioCmd};
 
 // ---------------------------------------------------------------------------
 // MP4 box parsing

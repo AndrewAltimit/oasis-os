@@ -12,21 +12,21 @@
 //! backend appears with the same pattern, consider a shared
 //! `InputDispatcher` trait in `oasis-types`.
 
+use oasis_backend_psp::threading::IoHandle;
 use oasis_backend_psp::{
     AudioCmd, AudioHandle, Button, InputEvent, IoCmd, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH,
     SdiRegistry, SfxId, Trigger, WindowManager,
 };
-use oasis_backend_psp::threading::IoHandle;
 
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
-use crate::desktop;
 use crate::app_states::{
     BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TerminalState,
     TvGuideState,
 };
+use crate::desktop;
 use crate::skins;
 use crate::theme::*;
 use crate::types::*;

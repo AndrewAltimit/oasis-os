@@ -6,8 +6,8 @@ use oasis_core::sdi::SdiRegistry;
 
 use crate::theme::*;
 
-use super::helpers::{ensure, set_text, sdi_key};
-use super::list_view::{setup_list_bg, update_list_bg, LIST_ROWS, LIST_Y};
+use super::helpers::{ensure, sdi_key, set_text};
+use super::list_view::{LIST_ROWS, LIST_Y, setup_list_bg, update_list_bg};
 
 pub(crate) fn setup_browser(sdi: &mut SdiRegistry) {
     setup_list_bg(sdi, "browser_");

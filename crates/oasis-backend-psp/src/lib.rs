@@ -732,13 +732,7 @@ impl SdiText for PspBackend {}
 impl SdiTextures for PspBackend {}
 
 impl SdiClipTransform for PspBackend {
-    fn push_clip_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) -> OasisResult<()> {
+    fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
         let (tx, ty) = self.translate_stack.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
         match self.clip_stack.push(new_clip) {

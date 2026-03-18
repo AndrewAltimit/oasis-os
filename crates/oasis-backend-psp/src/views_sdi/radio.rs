@@ -8,7 +8,7 @@ use crate::types::RADIO_STATIONS;
 
 use super::helpers::sdi_key;
 use super::list_view::{
-    hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar, LIST_ROWS,
+    LIST_ROWS, hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar,
 };
 
 /// Create SDI objects for the radio stations list.
