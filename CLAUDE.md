@@ -131,8 +131,7 @@ The PSP GU (Graphics Unit) has a fixed-size command buffer (`DISPLAY_LIST`, 1 MB
 
 **Critical rules:**
 - **Never call `reinit_gu_frame()` after `swap_buffers_inner()`** — `swap_buffers_inner` already starts a new GU frame via `sceGuStart`. A second `sceGuStart` without `sceGuFinish` corrupts the command buffer and hangs `sceGuSync` on the next frame. Only use `reinit_gu_frame()` after utility dialogs (OSK, `psp::dialog`) which run their own GU frames.
-- **`std::time::Instant` crashes on PSP Allegrex** — the Rust std implementation uses clock sources unavailable on PSP. Browser `tick()` is disabled; image loading uses a PSP-specific synchronous path without time budgeting.
-- **Browser `tick()` is not called on PSP** — image loading happens synchronously during `navigate_vfs`. CSS animations/transitions are not active.
+- **`std::time::Instant` crashes on PSP Allegrex** (confirmed by testing) — browser `tick()` is not called on PSP. Image loading happens synchronously during `navigate_vfs` instead of progressively per-frame.
 
 ### PSP TLS 1.3
 

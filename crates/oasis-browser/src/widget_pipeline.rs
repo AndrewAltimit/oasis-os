@@ -228,13 +228,11 @@ impl BrowserWidget {
         // Collect image requests for time-sliced loading across frames.
         self.collect_page_image_requests();
 
-        // On PSP, tick() is never called (std::time::Instant crashes),
-        // so load all images synchronously here before returning.
-        // Without this, the loading state stays Loading forever and
-        // the PSP render code shows "Loading page..." instead of content.
+        // On PSP, tick() is not called (std::time::Instant crashes on
+        // Allegrex -- confirmed by testing), so load all images
+        // synchronously here before returning.
         #[cfg(feature = "psp")]
         if !self.pending_images.is_empty() {
-            // Use a generous budget (5 seconds) to load all images.
             self.load_next_image_batch(vfs, 5000);
         }
 

@@ -394,8 +394,8 @@ impl BrowserWidget {
             return;
         }
 
-        // std::time::Instant crashes on PSP, so skip time budgeting
-        // and process all pending images in one pass.
+        // std::time::Instant crashes on PSP Allegrex (confirmed).
+        // Skip time budgeting and process all images in one pass.
         #[cfg(not(feature = "psp"))]
         let start = std::time::Instant::now();
         #[cfg(not(feature = "psp"))]
@@ -481,7 +481,6 @@ impl BrowserWidget {
             }
 
             // Check time budget after each image (not on PSP --
-            // std::time::Instant crashes on Allegrex).
             #[cfg(not(feature = "psp"))]
             if start.elapsed() >= budget {
                 break;

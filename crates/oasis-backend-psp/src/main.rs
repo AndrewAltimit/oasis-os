@@ -280,9 +280,9 @@ fn psp_main() {
             &dbg_log,
         );
 
-        // Browser tick disabled on PSP -- std::time::Instant may crash.
-        // Image loading happens synchronously during navigate_vfs.
-        // CSS animations/transitions are not needed on PSP.
+        // Browser tick disabled on PSP -- std::time::Instant crashes
+        // on Allegrex (confirmed by testing). Image loading happens
+        // synchronously during navigate_vfs instead.
 
         // Poll radio streaming state from audio thread atomics.
         if radio.status == RadioStatus::Buffering || radio.status == RadioStatus::Playing {
