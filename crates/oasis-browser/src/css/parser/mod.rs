@@ -13,7 +13,7 @@ pub(crate) use declarations::parse_value_list;
 #[allow(unused_imports)]
 pub use types::{
     AttrOp, Combinator, CompoundSelector, CssColor, CssValue, Declaration, KeyframeStop,
-    KeyframesRule, LengthUnit, Rule, Selector, SimpleSelector, Specificity, Stylesheet,
+    KeyframesRule, LengthUnit, PropertyId, Rule, Selector, SimpleSelector, Specificity, Stylesheet,
 };
 
 pub(crate) use types::SelectorList;

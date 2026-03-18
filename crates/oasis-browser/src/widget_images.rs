@@ -10,8 +10,10 @@ use crate::html;
 use crate::html::dom::{NodeKind, TagName};
 use crate::image;
 use crate::layout;
-use crate::loader::{self, ResourceRequest, ResourceSource, load_resource};
-use crate::{BrowserWidget, ImageInfoMap, LoadingState, SimpleTextMeasurer};
+#[cfg(any(target_arch = "wasm32", feature = "psp"))]
+use crate::loader::load_resource;
+use crate::loader::{self, ResourceRequest, ResourceSource};
+use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 
 /// Parse an HTML `srcset` attribute into a list of `(url, descriptor)` pairs.
 ///
@@ -95,6 +97,64 @@ fn effective_img_src(elem: &html::dom::ElementData, viewport_w: u32) -> Option<S
         .and_then(|ss| select_best_src(ss, viewport_w))
         .filter(|url| !url.is_empty() && !url.starts_with("data:"));
     srcset_url.or_else(|| elem.src().map(String::from))
+}
+
+/// Update image dimensions in an existing layout tree from decoded image info.
+///
+/// Walks the layout tree recursively. For each `ReplacedContent::Image`
+/// box with a DOM `node` reference, resolves the image source URL against
+/// `base_url` and looks up intrinsic dimensions in `image_info`. If the
+/// dimensions differ from the current values, updates the box and marks
+/// it (and its ancestors) as dirty for incremental relayout.
+///
+/// Returns `true` if any image dimensions were updated.
+fn update_image_dimensions(
+    layout_box: &mut layout::box_model::LayoutBox,
+    doc: &html::dom::Document,
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
+) -> bool {
+    let mut updated = false;
+
+    // Check if this box is a replaced image with a DOM node reference.
+    if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+        ref mut width,
+        ref mut height,
+        ..
+    }) = layout_box.box_type
+        && let Some(node_id) = layout_box.node
+        && let NodeKind::Element(ref elem) = doc.get(node_id).kind
+        && elem.tag == TagName::Img
+        && let Some(src) = elem.src()
+    {
+        let resolved = match base_url {
+            Some(base) => loader::Url::parse(base)
+                .and_then(|u| u.resolve(src))
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| src.to_string()),
+            None => src.to_string(),
+        };
+        if let Some(&(iw, ih)) = image_info.get(&resolved)
+            && (*width != iw || *height != ih)
+            && (*width == 0 || *height == 0)
+        {
+            *width = iw;
+            *height = ih;
+            layout_box.dirty = true;
+            updated = true;
+        }
+    }
+
+    // Recurse into children.
+    for child in &mut layout_box.children {
+        if update_image_dimensions(child, doc, base_url, image_info) {
+            // Propagate dirty flag to ancestors.
+            layout_box.dirty = true;
+            updated = true;
+        }
+    }
+
+    updated
 }
 
 /// Find the Y position of a layout box whose image src resolves to `url`.
@@ -212,7 +272,7 @@ impl BrowserWidget {
     /// Lazily spawns a daemon thread on first call. The thread receives
     /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-    fn ensure_decode_thread(&mut self) {
+    pub(crate) fn ensure_decode_thread(&mut self) {
         if self.image_decode_tx.is_some() {
             return;
         }
@@ -313,8 +373,15 @@ impl BrowserWidget {
 
         if self.pending_images.is_empty() {
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-            if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
-                self.state = LoadingState::Idle;
+            {
+                let io_images_done = self.pending_io_images.is_empty();
+                if self.image_decode_in_flight == 0
+                    && io_images_done
+                    && self.pending_page_load.is_none()
+                    && self.state == LoadingState::Loading
+                {
+                    self.state = LoadingState::Idle;
+                }
             }
             #[cfg(any(target_arch = "wasm32", feature = "psp"))]
             if self.state == LoadingState::Loading {
@@ -327,7 +394,11 @@ impl BrowserWidget {
             return;
         }
 
+        // std::time::Instant crashes on PSP, so skip time budgeting
+        // and process all pending images in one pass.
+        #[cfg(not(feature = "psp"))]
         let start = std::time::Instant::now();
+        #[cfg(not(feature = "psp"))]
         let budget = std::time::Duration::from_millis(budget_ms as u64);
 
         while let Some((resolved, request)) = self.pending_images.pop() {
@@ -342,30 +413,31 @@ impl BrowserWidget {
                 continue;
             }
 
-            if let Ok(loaded) = load_resource(
-                vfs,
-                &request,
-                self.tls.as_deref(),
-                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-                Some(&mut self.cookie_jar),
-                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-                Some(&self.cache),
-            ) {
-                // On non-WASM, dispatch to background decode thread.
-                // Falls back to synchronous decode if the channel is unavailable.
-                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-                {
+            // On desktop, offload network image requests to the I/O thread.
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            {
+                let is_network = matches!(
+                    request.source,
+                    loader::ResourceSource::Network | loader::ResourceSource::VfsThenNetwork
+                );
+                // For VfsThenNetwork, try VFS first (fast).
+                let vfs_hit = if request.source == loader::ResourceSource::VfsThenNetwork {
+                    loader::vfs::load_from_vfs(vfs, &request).ok()
+                } else {
+                    None
+                };
+
+                if let Some(vfs_resp) = vfs_hit {
+                    // VFS hit -- decode directly.
                     self.ensure_decode_thread();
                     let sent = if let Some(ref tx) = self.image_decode_tx {
-                        tx.send((resolved.clone(), loaded.response.body.clone()))
-                            .is_ok()
+                        tx.send((resolved.clone(), vfs_resp.body.clone())).is_ok()
                     } else {
                         false
                     };
                     if sent {
                         self.image_decode_in_flight += 1;
-                    } else if let Some(decoded) = image::decode_image(&loaded.response.body) {
-                        // Sync fallback: channel unavailable or send failed.
+                    } else if let Some(decoded) = image::decode_image(&vfs_resp.body) {
                         let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                         self.decoded_image_bytes += img_bytes;
                         self.decoded_image_lru.push_front(resolved.clone());
@@ -373,10 +445,17 @@ impl BrowserWidget {
                         self.image_info_dirty = true;
                         any_decoded = true;
                     }
+                } else if is_network {
+                    // Network request -- submit to IO thread (non-blocking).
+                    self.submit_image_to_io_thread(resolved, request);
+                } else {
+                    // VFS-only request that failed -- skip.
                 }
+            }
 
-                // On WASM/PSP, decode synchronously (no threads available).
-                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            // On WASM/PSP, load and decode synchronously (no threads).
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            if let Ok(loaded) = load_resource(vfs, &request, self.tls.as_deref()) {
                 if let Some(decoded) = image::decode_image(&loaded.response.body) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
@@ -401,7 +480,9 @@ impl BrowserWidget {
                 }
             }
 
-            // Check time budget after each image.
+            // Check time budget after each image (not on PSP --
+            // std::time::Instant crashes on Allegrex).
+            #[cfg(not(feature = "psp"))]
             if start.elapsed() >= budget {
                 break;
             }
@@ -462,7 +543,12 @@ impl BrowserWidget {
         if self.pending_images.is_empty() {
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             {
-                if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
+                let io_images_done = self.pending_io_images.is_empty();
+                if self.image_decode_in_flight == 0
+                    && io_images_done
+                    && self.pending_page_load.is_none()
+                    && self.state == LoadingState::Loading
+                {
                     self.state = LoadingState::Idle;
                 }
             }
@@ -519,8 +605,9 @@ impl BrowserWidget {
         }
     }
 
-    /// Get the cached image info map, rebuilding it if dirty.
-    pub(crate) fn build_image_info_map(&mut self) -> ImageInfoMap {
+    /// Ensure the cached image info map is up to date. Call this before
+    /// accessing `self.cached_image_info` directly.
+    pub(crate) fn refresh_image_info(&mut self) {
         if self.image_info_dirty {
             self.cached_image_info = self
                 .decoded_images
@@ -529,7 +616,6 @@ impl BrowserWidget {
                 .collect();
             self.image_info_dirty = false;
         }
-        self.cached_image_info.clone()
     }
 
     /// Upload decoded images as GPU textures and assign them to
@@ -545,8 +631,11 @@ impl BrowserWidget {
         };
         let base_url = self.nav.current_url().map(String::from);
 
-        // Collect URLs that need texture creation.
+        // Collect URLs that need texture creation. Use a HashSet for O(1)
+        // dedup instead of Vec::contains O(n) which was O(n^2) for pages
+        // with many images.
         let mut pending: Vec<String> = Vec::new();
+        let mut pending_set = std::collections::HashSet::new();
         for node in &doc.nodes {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
@@ -558,7 +647,7 @@ impl BrowserWidget {
                 if !self.image_textures.contains_key(&resolved)
                     && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
-                    && !pending.contains(&resolved)
+                    && pending_set.insert(resolved.clone())
                 {
                     pending.push(resolved);
                 }
@@ -569,6 +658,7 @@ impl BrowserWidget {
         // individual textures (not atlas-packed) because background images
         // are typically tiled/stretched to arbitrary sizes.
         let mut bg_pending: Vec<String> = Vec::new();
+        let mut bg_set = std::collections::HashSet::new();
         for style_opt in &self.styles {
             if let Some(style) = style_opt
                 && let css::values::BackgroundImage::Url(ref url) = style.background_image
@@ -576,7 +666,7 @@ impl BrowserWidget {
                 let resolved = Self::resolve_src(&base_url, url);
                 if !self.image_textures.contains_key(&resolved)
                     && self.decoded_images.contains_key(&resolved)
-                    && !bg_pending.contains(&resolved)
+                    && bg_set.insert(resolved.clone())
                 {
                     bg_pending.push(resolved);
                 }
@@ -685,34 +775,69 @@ impl BrowserWidget {
 
     /// Rebuild the layout tree with image dimensions after images have
     /// been decoded (second layout pass).
+    ///
+    /// When an existing layout tree is available, attempts incremental
+    /// relayout: walks the tree, updates `ReplacedContent::Image`
+    /// dimensions from `cached_image_info`, marks affected subtrees
+    /// dirty, and runs `layout_block_incremental`. Falls back to a
+    /// full rebuild when no existing layout tree is present.
     fn rebuild_layout_with_images(&mut self) {
-        let image_info = self.build_image_info_map();
-        if let Some(doc) = &self.document {
-            let content_h = self.config.content_height(self.window_h);
-            let base_url = self.nav.current_url().map(String::from);
-            let shared = std::rc::Rc::clone(&self.text_cache);
-            let measurer =
-                layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
-            let viewport_w = self.window_w as f32 / self.config.zoom_level;
-            let viewport_h = content_h as f32 / self.config.zoom_level;
-            let layout_root = layout::block::build_layout_tree(
-                doc,
-                &self.styles,
-                &measurer,
-                viewport_w,
-                viewport_h,
-                base_url.as_deref(),
-                &image_info,
-            );
-            #[cfg(feature = "javascript")]
-            {
-                self.canvas_states.borrow_mut().clear();
-                crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
-            }
+        self.refresh_image_info();
+        let Some(doc) = &self.document else { return };
+        let content_h = self.config.content_height(self.window_h);
+        let base_url = self.nav.current_url().map(String::from);
+        let viewport_w = self.window_w as f32 / self.config.zoom_level;
+        let viewport_h = content_h as f32 / self.config.zoom_level;
 
-            self.layout_root = Some(layout_root);
-            self.link_map.clear();
+        // Try incremental relayout: update image dimensions in the
+        // existing layout tree and relayout only affected subtrees.
+        if let Some(layout_root) = &mut self.layout_root {
+            let updated = update_image_dimensions(
+                layout_root,
+                doc,
+                base_url.as_deref(),
+                &self.cached_image_info,
+            );
+            if updated {
+                let shared = std::rc::Rc::clone(&self.text_cache);
+                let measurer =
+                    layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+                let mut cache = layout::block::StyleCache::new();
+                layout::block::layout_block_incremental(
+                    layout_root,
+                    viewport_w,
+                    &measurer,
+                    &mut cache,
+                );
+                // Re-apply positioning after relayout.
+                let viewport_rect = layout::box_model::Rect::new(0.0, 0.0, viewport_w, viewport_h);
+                layout::positioning::apply_positioning(layout_root, viewport_rect);
+                self.link_map.clear();
+            }
+            return;
         }
+
+        // Full rebuild (always used on PSP/WASM, fallback on desktop).
+        let shared = std::rc::Rc::clone(&self.text_cache);
+        let measurer =
+            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        let layout_root = layout::block::build_layout_tree(
+            doc,
+            &self.styles,
+            &measurer,
+            viewport_w,
+            viewport_h,
+            base_url.as_deref(),
+            &self.cached_image_info,
+        );
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
+
+        self.layout_root = Some(layout_root);
+        self.link_map.clear();
     }
 
     /// Resolve an img `src` attribute against a base URL.

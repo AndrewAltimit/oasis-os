@@ -12,6 +12,7 @@ use super::super::shorthand::{
 };
 use super::super::tokenizer::CssToken;
 use super::CssParser;
+use super::types::PropertyId;
 use super::types::{CssValue, Declaration};
 
 impl CssParser {
@@ -86,6 +87,7 @@ impl CssParser {
             property: property.to_ascii_lowercase(),
             value,
             important,
+            property_id: PropertyId::from_name(&property.to_ascii_lowercase()),
         })
     }
 

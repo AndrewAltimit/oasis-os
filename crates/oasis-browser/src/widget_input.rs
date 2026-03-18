@@ -98,6 +98,39 @@ pub(crate) fn styles_geometry_equal(a: &ComputedStyle, b: &ComputedStyle) -> boo
         && a.margin_right_pct == b.margin_right_pct
         && a.margin_bottom_pct == b.margin_bottom_pct
         && a.margin_left_pct == b.margin_left_pct
+        // Positioning offsets
+        && a.top == b.top
+        && a.right == b.right
+        && a.bottom == b.bottom
+        && a.left == b.left
+        // Vertical alignment (affects inline/table-cell layout)
+        && a.vertical_align == b.vertical_align
+        // Table layout
+        && a.border_collapse == b.border_collapse
+        && (a.border_spacing - b.border_spacing).abs() < f32::EPSILON
+        && a.table_layout_fixed == b.table_layout_fixed
+        // List markers (affect layout)
+        && a.list_style_type == b.list_style_type
+        && a.list_style_position == b.list_style_position
+        // Text transform (can change measured text width)
+        && a.text_transform == b.text_transform
+        // Generated content (affects layout when present)
+        && a.content == b.content
+        && a.before_content == b.before_content
+        && a.after_content == b.after_content
+        // Multi-column
+        && a.column_count == b.column_count
+        && (a.column_width - b.column_width).abs() < f32::EPSILON
+        // Tab size (affects preformatted text width)
+        && a.tab_size == b.tab_size
+        // Replaced element sizing
+        && a.object_fit == b.object_fit
+        // Grid extensions
+        && a.grid_auto_flow_column == b.grid_auto_flow_column
+        && a.grid_template_areas == b.grid_template_areas
+        && a.grid_area == b.grid_area
+        && a.grid_auto_rows == b.grid_auto_rows
+        && a.grid_auto_columns == b.grid_auto_columns
 }
 
 impl BrowserWidget {
@@ -358,13 +391,11 @@ impl BrowserWidget {
     fn restyle_focus_affected(&mut self, old_focus: Option<NodeId>) {
         let Some(doc) = &self.document else { return };
 
-        let mut affected: Vec<NodeId> = Vec::new();
+        let mut affected = rustc_hash::FxHashSet::default();
         for start in [old_focus, self.focused_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
-                if !affected.contains(&nid) {
-                    affected.push(nid);
-                }
+                affected.insert(nid);
                 cur = doc.nodes[nid].parent;
             }
         }
@@ -374,12 +405,19 @@ impl BrowserWidget {
         }
 
         let ua_sheet = css::default::default_stylesheet();
-        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
         for sheet in &self.cached_author_sheets {
             all_sheets.push(sheet);
         }
 
-        let index = css::cascade::SelectorIndex::build(&all_sheets);
+        // Reuse cached selector index if available, otherwise build fresh.
+        let fresh_index;
+        let index = if let Some(ref cached) = self.cached_selector_index {
+            cached
+        } else {
+            fresh_index = css::cascade::SelectorIndex::build(&all_sheets);
+            &fresh_index
+        };
         let inline_map: FxHashMap<NodeId, &[css::parser::Declaration]> = self
             .cached_inline_styles
             .iter()
@@ -404,7 +442,7 @@ impl BrowserWidget {
                 nid,
                 parent_style,
                 &all_sheets,
-                &index,
+                index,
                 &inline_map,
                 &ctx,
                 &mut tag_cache,
@@ -650,13 +688,12 @@ impl BrowserWidget {
         let Some(doc) = &self.document else { return };
 
         // Build the set of affected nodes: ancestors of old + new hover.
-        let mut affected: Vec<NodeId> = Vec::new();
+        // Using FxHashSet for O(1) dedup instead of Vec::contains O(n).
+        let mut affected = rustc_hash::FxHashSet::default();
         for start in [old_hover, self.hover_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
-                if !affected.contains(&nid) {
-                    affected.push(nid);
-                }
+                affected.insert(nid);
                 cur = doc.nodes[nid].parent;
             }
         }
@@ -667,12 +704,19 @@ impl BrowserWidget {
 
         // Build sheet references from cache (no re-parsing).
         let ua_sheet = css::default::default_stylesheet();
-        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
         for sheet in &self.cached_author_sheets {
             all_sheets.push(sheet);
         }
 
-        let index = css::cascade::SelectorIndex::build(&all_sheets);
+        // Reuse cached selector index if available, otherwise build fresh.
+        let fresh_index;
+        let index = if let Some(ref cached) = self.cached_selector_index {
+            cached
+        } else {
+            fresh_index = css::cascade::SelectorIndex::build(&all_sheets);
+            &fresh_index
+        };
         let inline_map: FxHashMap<NodeId, &[css::parser::Declaration]> = self
             .cached_inline_styles
             .iter()
@@ -698,7 +742,7 @@ impl BrowserWidget {
                 nid,
                 parent_style,
                 &all_sheets,
-                &index,
+                index,
                 &inline_map,
                 &ctx,
                 &mut tag_cache,
@@ -724,7 +768,8 @@ impl BrowserWidget {
             // Only visual properties changed (color, background, opacity, etc.).
             // Mark affected nodes' rects as dirty so paint rebuilds the
             // display list and uses replay_dirty() for partial repaint.
-            self.mark_hover_focus_dirty(&affected);
+            let affected_vec: Vec<NodeId> = affected.into_iter().collect();
+            self.mark_hover_focus_dirty(&affected_vec);
         }
     }
 

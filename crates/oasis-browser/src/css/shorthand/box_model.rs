@@ -1,6 +1,6 @@
 //! Box-model shorthand expansion (margin, padding).
 
-use crate::css::parser::{CssValue, Declaration};
+use crate::css::parser::{CssValue, Declaration, PropertyId};
 
 pub(super) fn expand_box_shorthand(
     prefix: &str,
@@ -36,24 +36,32 @@ pub(super) fn expand_box_shorthand(
         ),
     };
 
+    let top_prop = format!("{}-top", prefix);
+    let right_prop = format!("{}-right", prefix);
+    let bottom_prop = format!("{}-bottom", prefix);
+    let left_prop = format!("{}-left", prefix);
     vec![
         Declaration {
-            property: format!("{}-top", prefix),
+            property_id: PropertyId::from_name(&top_prop),
+            property: top_prop,
             value: top,
             important,
         },
         Declaration {
-            property: format!("{}-right", prefix),
+            property_id: PropertyId::from_name(&right_prop),
+            property: right_prop,
             value: right,
             important,
         },
         Declaration {
-            property: format!("{}-bottom", prefix),
+            property_id: PropertyId::from_name(&bottom_prop),
+            property: bottom_prop,
             value: bottom,
             important,
         },
         Declaration {
-            property: format!("{}-left", prefix),
+            property_id: PropertyId::from_name(&left_prop),
+            property: left_prop,
             value: left,
             important,
         },

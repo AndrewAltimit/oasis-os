@@ -18,6 +18,42 @@ use crate::loader::{
 use crate::reader;
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+use crate::loader::io_thread::{IoRequestKind, IoThread};
+
+/// Wrapper to share a `TlsProvider` reference with the I/O thread.
+///
+/// # Safety
+///
+/// The raw pointer is valid for the lifetime of the `BrowserWidget` that
+/// owns the original `Box<dyn TlsProvider>`. The I/O thread is dropped
+/// before the widget (it is a field that is dropped in declaration order,
+/// and `io_thread` is declared before `tls` would need to outlive it --
+/// but we actually drop the IoThread explicitly or let it be dropped
+/// with the widget). The IoThread's worker exits when its sender channel
+/// is dropped, which happens when IoThread is dropped.
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+struct SharedTlsProvider(*const dyn oasis_net::tls::TlsProvider);
+
+// SAFETY: TlsProvider is Send + Sync, and the pointer is valid for the
+// lifetime of the BrowserWidget. The I/O thread never outlives the widget.
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+unsafe impl Send for SharedTlsProvider {}
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+unsafe impl Sync for SharedTlsProvider {}
+
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+impl oasis_net::tls::TlsProvider for SharedTlsProvider {
+    fn connect_tls(
+        &self,
+        stream: Box<dyn oasis_types::backend::NetworkStream>,
+        server_name: &str,
+    ) -> oasis_types::error::Result<Box<dyn oasis_types::backend::NetworkStream>> {
+        // SAFETY: pointer is valid for our lifetime (see above).
+        unsafe { &*self.0 }.connect_tls(stream, server_name)
+    }
+}
+
 impl BrowserWidget {
     /// Navigate via HTTP POST to a URL with the given body.
     ///
@@ -25,21 +61,7 @@ impl BrowserWidget {
     /// data is sent as the request body with
     /// `Content-Type: application/x-www-form-urlencoded`.
     pub fn navigate_post(&mut self, url: &str, body: Vec<u8>, vfs: &dyn Vfs) {
-        self.state = LoadingState::Loading;
-        self.selected_link = -1;
-        self.reader_mode = false;
-        self.reader_html = None;
-        self.error_message = None;
-        self.page_csp = None;
-        self.page_errors.clear();
-        self.decoded_images.clear();
-        self.image_textures.clear();
-        self.image_atlas.clear_without_destroy();
-        self.pending_images.clear();
-        self.decoded_image_bytes = 0;
-        self.decoded_image_lru.clear();
-        self.cached_image_info.clear();
-        self.image_info_dirty = false;
+        self.reset_for_navigation();
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -57,37 +79,17 @@ impl BrowserWidget {
             referrer,
         };
 
-        match load_resource(
-            vfs,
-            &request,
-            self.tls.as_deref(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-            Some(&mut self.cookie_jar),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-            Some(&self.cache),
-        ) {
-            Ok(loaded) => {
-                let url_str = loaded.response.url.clone();
-                let etag = loaded.etag.clone();
-                let last_modified = loaded.last_modified.clone();
-                self.page_csp = loaded.csp;
-                self.process_response(loaded.response);
-                self.cache.set_validators(&url_str, etag, last_modified);
-            },
-            Err(e) => {
-                let err_msg = e.to_string();
-                let err_resp = loader::vfs::error_page(url, &err_msg);
-                self.process_response(err_resp);
-                self.state = LoadingState::Error;
-                self.error_message = Some(err_msg.clone());
-                self.record_error(crate::BrowserErrorKind::Network, err_msg);
-            },
+        // POST requests always go to the network, so offload to IO thread.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        {
+            if self.should_use_io_thread(&request, vfs) {
+                self.submit_page_load_to_io_thread(request);
+                return;
+            }
         }
 
-        self.collect_page_image_requests();
-        if !self.pending_images.is_empty() {
-            self.state = LoadingState::Loading;
-        }
+        // Synchronous fallback (VFS-only or WASM/PSP).
+        self.execute_sync_load(url, vfs, request);
     }
 
     /// Navigate using the in-memory cache if available, otherwise fetch.
@@ -137,8 +139,8 @@ impl BrowserWidget {
         self.navigate_vfs(url, vfs);
     }
 
-    /// Navigate to a URL using the VFS as the resource source.
-    pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+    /// Reset browser state in preparation for a new navigation.
+    fn reset_for_navigation(&mut self) {
         self.state = LoadingState::Loading;
         self.selected_link = -1;
         self.reader_mode = false;
@@ -154,6 +156,16 @@ impl BrowserWidget {
         self.decoded_image_lru.clear();
         self.cached_image_info.clear();
         self.image_info_dirty = false;
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        {
+            self.pending_page_load = None;
+            self.pending_io_images.clear();
+        }
+    }
+
+    /// Navigate to a URL using the VFS as the resource source.
+    pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+        self.reset_for_navigation();
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -171,6 +183,21 @@ impl BrowserWidget {
             referrer,
         };
 
+        // Determine if this is a network request that can be offloaded.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        {
+            if self.should_use_io_thread(&request, vfs) {
+                self.submit_page_load_to_io_thread(request);
+                return;
+            }
+        }
+
+        // Synchronous path: VFS-only or fallback.
+        self.execute_sync_load(url, vfs, request);
+    }
+
+    /// Synchronous resource load and processing (VFS or fallback).
+    fn execute_sync_load(&mut self, url: &str, vfs: &dyn Vfs, request: ResourceRequest) {
         match load_resource(
             vfs,
             &request,
@@ -199,11 +226,223 @@ impl BrowserWidget {
         }
 
         // Collect image requests for time-sliced loading across frames.
-        // Page text renders immediately; images stream in via
-        // `load_next_image_batch()` called from `paint()`.
         self.collect_page_image_requests();
+
+        // On PSP, tick() is never called (std::time::Instant crashes),
+        // so load all images synchronously here before returning.
+        // Without this, the loading state stays Loading forever and
+        // the PSP render code shows "Loading page..." instead of content.
+        #[cfg(feature = "psp")]
+        if !self.pending_images.is_empty() {
+            // Use a generous budget (5 seconds) to load all images.
+            self.load_next_image_batch(vfs, 5000);
+        }
+
+        // On desktop/WASM, images stream in via `load_next_image_batch()`
+        // called from `tick()` each frame.
+        #[cfg(not(feature = "psp"))]
         if !self.pending_images.is_empty() {
             self.state = LoadingState::Loading;
+        }
+    }
+
+    /// Check if a request should be offloaded to the I/O thread.
+    ///
+    /// Returns `true` for network-only requests (no VFS fallback needed
+    /// for the initial attempt). For `VfsThenNetwork`, we try VFS first
+    /// synchronously and only offload to the IO thread on VFS miss.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn should_use_io_thread(&self, request: &ResourceRequest, vfs: &dyn Vfs) -> bool {
+        // VFS-only URLs (vfs://) are always local reads.
+        if request.url.starts_with("vfs://") {
+            return false;
+        }
+
+        // If no TLS provider is configured, handle HTTPS/Gemini URLs
+        // synchronously so error pages render immediately.
+        if self.tls.is_none() {
+            let url_lower = request.url.to_ascii_lowercase();
+            if url_lower.starts_with("https://") || url_lower.starts_with("gemini://") {
+                return false;
+            }
+        }
+
+        match request.source {
+            ResourceSource::Network => true,
+            ResourceSource::VfsThenNetwork => {
+                // If VFS has the resource, no need for the IO thread.
+                loader::vfs::load_from_vfs(vfs, request).is_err()
+            },
+            ResourceSource::Vfs => false,
+        }
+    }
+
+    /// Ensure the I/O thread is running and return a mutable reference.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn ensure_io_thread(&mut self) {
+        if self.io_thread.is_some() {
+            return;
+        }
+        let tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>> =
+            self.tls.as_ref().map(|t| {
+                // Share the TLS provider with the IO thread via a raw
+                // pointer wrapper (SharedTlsProvider). See its SAFETY
+                // documentation above.
+                std::sync::Arc::from(Self::clone_tls_provider_to_arc(t.as_ref()))
+            });
+
+        let cookie_jar = self.cookie_jar.clone();
+        self.io_thread = Some(IoThread::spawn(tls, cookie_jar));
+    }
+
+    /// Clone a `Box<dyn TlsProvider>` reference into a boxed trait object
+    /// suitable for wrapping in `Arc`.
+    ///
+    /// Since `TlsProvider` doesn't require `Clone`, we use a wrapper
+    /// that shares the original provider via a raw pointer. This is safe
+    /// because the IO thread lifetime is bounded by `BrowserWidget`'s
+    /// lifetime (the thread is joined/dropped when BrowserWidget drops).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn clone_tls_provider_to_arc(
+        provider: &dyn oasis_net::tls::TlsProvider,
+    ) -> Box<dyn oasis_net::tls::TlsProvider + 'static> {
+        // We use a SharedTlsProvider that holds a raw pointer.
+        // SAFETY: The IoThread is dropped before BrowserWidget (which
+        // owns the TLS provider), so the pointer remains valid.
+        let ptr = provider as *const dyn oasis_net::tls::TlsProvider;
+        // SAFETY: We are erasing the lifetime. The IoThread is destroyed
+        // before the BrowserWidget (and thus before the TLS provider).
+        let ptr: *const dyn oasis_net::tls::TlsProvider = unsafe { std::mem::transmute(ptr) };
+        Box::new(SharedTlsProvider(ptr))
+    }
+
+    /// Submit a page load request to the I/O thread.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn submit_page_load_to_io_thread(&mut self, request: ResourceRequest) {
+        self.ensure_io_thread();
+
+        // Extract cache validators before sending.
+        let validators = self.cache.peek_validators(&request.url);
+
+        if let Some(ref mut io) = self.io_thread {
+            let id = io.send(IoRequestKind::PageLoad, request, validators, None);
+            self.pending_page_load = Some(id);
+        }
+    }
+
+    /// Submit an image load request to the I/O thread.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pub(crate) fn submit_image_to_io_thread(
+        &mut self,
+        resolved_url: String,
+        request: ResourceRequest,
+    ) {
+        self.ensure_io_thread();
+
+        let validators = self.cache.peek_validators(&request.url);
+
+        if let Some(ref mut io) = self.io_thread {
+            let id = io.send(
+                IoRequestKind::Image,
+                request,
+                validators,
+                Some(resolved_url.clone()),
+            );
+            self.pending_io_images.insert(id, resolved_url);
+        }
+    }
+
+    /// Poll the I/O thread for completed requests and process results.
+    ///
+    /// Called from `tick()` each frame. Handles both page load and image
+    /// load completions.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pub(crate) fn poll_io_thread(&mut self) {
+        let io = match &mut self.io_thread {
+            Some(io) => io,
+            None => return,
+        };
+
+        // Drain all available results.
+        let mut page_results = Vec::new();
+        let mut image_results = Vec::new();
+
+        while let Some(result) = io.poll() {
+            // Apply cookie updates to the main-thread jar.
+            for (url_str, headers) in &result.cookie_updates {
+                if let Some(url) = loader::Url::parse(url_str) {
+                    self.cookie_jar.set_cookies(&url, headers);
+                }
+            }
+
+            match result.kind {
+                IoRequestKind::PageLoad => page_results.push(result),
+                IoRequestKind::Image => image_results.push(result),
+            }
+        }
+
+        // Process page load results.
+        for result in page_results {
+            if self.pending_page_load == Some(result.id) {
+                self.pending_page_load = None;
+                match result.result {
+                    Ok(loaded) => {
+                        let url_str = loaded.response.url.clone();
+                        let etag = loaded.etag.clone();
+                        let last_modified = loaded.last_modified.clone();
+                        self.page_csp = loaded.csp;
+                        self.process_response(loaded.response);
+                        self.cache.set_validators(&url_str, etag, last_modified);
+                    },
+                    Err(e) => {
+                        let err_msg = e.to_string();
+                        let url = "about:error";
+                        let err_resp = loader::vfs::error_page(url, &err_msg);
+                        self.process_response(err_resp);
+                        self.state = LoadingState::Error;
+                        self.error_message = Some(err_msg.clone());
+                        self.record_error(crate::BrowserErrorKind::Network, err_msg);
+                    },
+                }
+
+                self.collect_page_image_requests();
+                if !self.pending_images.is_empty() {
+                    self.state = LoadingState::Loading;
+                }
+            }
+        }
+
+        // Process image load results.
+        for result in image_results {
+            let resolved_url = result
+                .image_key
+                .or_else(|| self.pending_io_images.remove(&result.id));
+            let Some(resolved) = resolved_url else {
+                continue;
+            };
+            self.pending_io_images.remove(&result.id);
+
+            if let Ok(loaded) = result.result {
+                let body = loaded.response.body;
+                // Dispatch to the background decode thread.
+                self.ensure_decode_thread();
+                let sent = if let Some(ref tx) = self.image_decode_tx {
+                    tx.send((resolved.clone(), body.clone())).is_ok()
+                } else {
+                    false
+                };
+                if sent {
+                    self.image_decode_in_flight += 1;
+                } else if let Some(decoded) = crate::image::decode_image(&body) {
+                    // Sync fallback.
+                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, decoded);
+                    self.image_info_dirty = true;
+                    self.layout_dirty = true;
+                }
+            }
         }
     }
 
@@ -212,7 +451,7 @@ impl BrowserWidget {
         let url = response.url.clone();
         let content_type = response.content_type;
 
-        // Cache the response.
+        // Cache the response first (clone on PSP, move-after-borrow on desktop).
         self.cache.insert(
             url.clone(),
             CacheEntry {
@@ -233,7 +472,6 @@ impl BrowserWidget {
                 self.load_gemini(&body, &url);
             },
             ContentType::Css => {
-                // CSS files are not directly renderable.
                 let wrapped = format!(
                     "<html><body><pre>{}</pre></body></html>",
                     String::from_utf8_lossy(&response.body)
@@ -241,7 +479,6 @@ impl BrowserWidget {
                 self.load_html(&wrapped, &url);
             },
             _ if content_type.is_image() => {
-                // Wrap image in a simple HTML page.
                 let wrapped = format!(
                     "<html><body>\
                      <img src=\"{}\"></body></html>",
@@ -278,9 +515,14 @@ impl BrowserWidget {
             html_source
         };
 
-        // 1. Tokenize and build DOM.
+        // 1. Tokenize and build DOM, reusing the previous document's
+        //    arena allocation when available to avoid reallocations.
         let tokens = html::tokenizer::Tokenizer::new(source).tokenize();
-        let doc = html::tree_builder::TreeBuilder::build(tokens);
+        let doc = if let Some(old_doc) = self.document.take() {
+            html::tree_builder::TreeBuilder::build_reuse(tokens, old_doc)
+        } else {
+            html::tree_builder::TreeBuilder::build(tokens)
+        };
 
         // 1b. Execute inline <script> blocks (if JS enabled).
         //
@@ -296,7 +538,8 @@ impl BrowserWidget {
         }
         #[cfg(feature = "javascript")]
         let doc = {
-            let scripts = Self::collect_scripts(&doc);
+            let (scripts, deferred) = Self::collect_scripts(&doc);
+            self.deferred_scripts = deferred;
             let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
             match oasis_js::JsEngine::new(8 * 1024 * 1024) {
                 Ok(engine) => {
@@ -355,8 +598,13 @@ impl BrowserWidget {
                     );
                 },
             }
-            // Clone the (possibly mutated) document for layout/paint.
-            shared.borrow().clone()
+            // Try to take ownership without cloning. This succeeds when
+            // no JS engine was retained (init failure or no scripts).
+            // When the engine holds a clone via js_doc, fall back to clone.
+            match std::rc::Rc::try_unwrap(shared) {
+                Ok(cell) => cell.into_inner(),
+                Err(shared) => shared.borrow().clone(),
+            }
         };
 
         // 2. Extract page title.
@@ -369,16 +617,21 @@ impl BrowserWidget {
 
         // 4. CSS cascade: user-agent + author stylesheets + inline styles.
         let ua_sheet = css::default::default_stylesheet();
-        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
-        for sheet in &author_sheets {
-            all_sheets.push(sheet);
-        }
-        let ctx = css::cascade::CascadeContext {
-            hover_node: self.hover_node,
-            visited_urls: Some(&self.visited_urls),
-            focused_node: None,
+        let (styles, selector_index) = {
+            let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
+            for sheet in &author_sheets {
+                all_sheets.push(sheet);
+            }
+            let ctx = css::cascade::CascadeContext {
+                hover_node: self.hover_node,
+                visited_urls: Some(&self.visited_urls),
+                focused_node: None,
+            };
+            let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+            // Build selector index while all_sheets is alive.
+            let idx = css::cascade::SelectorIndex::build(&all_sheets);
+            (styles, idx)
         };
-        let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
 
         // Update shared computed styles for JS getComputedStyle().
         #[cfg(feature = "javascript")]
@@ -386,9 +639,10 @@ impl BrowserWidget {
             *self.js_styles.borrow_mut() = styles.clone();
         }
 
-        // Cache parsed sheets for hover restyles.
+        // Cache parsed sheets and selector index for hover restyles.
         self.cached_author_sheets = author_sheets;
         self.cached_inline_styles = inline_styles;
+        self.cached_selector_index = Some(selector_index);
 
         // 4b. Register CSS animations with the animation engine.
         //     Collect @keyframes from all stylesheets, then register any
@@ -420,7 +674,7 @@ impl BrowserWidget {
 
         // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
-        let image_info = self.build_image_info_map();
+        self.refresh_image_info();
         let shared = std::rc::Rc::clone(&self.text_cache);
         let measurer =
             layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
@@ -433,7 +687,7 @@ impl BrowserWidget {
             viewport_w,
             viewport_h,
             Some(url),
-            &image_info,
+            &self.cached_image_info,
         );
 
         // 7a. Collect canvas states from layout tree.
@@ -518,9 +772,14 @@ impl BrowserWidget {
     /// Walk the DOM to collect inline `<script>` text in document order.
     /// External scripts (`<script src="...">`) and non-JavaScript types
     /// (e.g. `application/ld+json`) are skipped.
+    ///
+    /// Returns `(immediate, deferred)` where `deferred` contains scripts
+    /// with the `defer` or `async` attribute, to be executed after the
+    /// first paint.
     #[cfg(feature = "javascript")]
-    fn collect_scripts(doc: &html::dom::Document) -> Vec<String> {
-        let mut scripts = Vec::new();
+    fn collect_scripts(doc: &html::dom::Document) -> (Vec<String>, Vec<String>) {
+        let mut immediate = Vec::new();
+        let mut deferred = Vec::new();
         for (id, node) in doc.nodes.iter().enumerate() {
             if let html::dom::NodeKind::Element(elem) = &node.kind
                 && elem.tag == html::dom::TagName::Script
@@ -529,11 +788,17 @@ impl BrowserWidget {
             {
                 let text = doc.text_content(id);
                 if !text.is_empty() {
-                    scripts.push(text);
+                    let is_deferred = elem.get_attribute("defer").is_some()
+                        || elem.get_attribute("async").is_some();
+                    if is_deferred {
+                        deferred.push(text);
+                    } else {
+                        immediate.push(text);
+                    }
                 }
             }
         }
-        scripts
+        (immediate, deferred)
     }
 
     /// Returns `true` if the script `type` attribute indicates JavaScript
@@ -553,6 +818,28 @@ impl BrowserWidget {
                         | "module"
                 )
             },
+        }
+    }
+
+    /// Execute deferred scripts (those with `defer` or `async` attributes).
+    ///
+    /// Should be called after the first paint so that initial rendering is
+    /// not blocked by script execution.
+    #[cfg(feature = "javascript")]
+    pub fn execute_deferred_scripts(&mut self) {
+        if self.deferred_scripts.is_empty() {
+            return;
+        }
+        let scripts = std::mem::take(&mut self.deferred_scripts);
+        if let Some(engine) = &self.js_engine {
+            let refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
+            engine.eval_all(&refs);
+            // Check if deferred scripts triggered any DOM mutations that
+            // require relayout.
+            let fired = engine.tick_timers(0.0);
+            if fired > 0 {
+                self.layout_dirty = true;
+            }
         }
     }
 
@@ -600,7 +887,7 @@ impl BrowserWidget {
                     visited_urls: Some(&self.visited_urls),
                     focused_node: None,
                 };
-                let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[], &reader_ctx);
+                let styles = css::cascade::style_tree(&reader_doc, &[ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);
                 self.cached_author_sheets = Vec::new();
                 self.cached_inline_styles = Vec::new();

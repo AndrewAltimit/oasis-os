@@ -22,7 +22,7 @@ use font::expand_font;
 pub use gradient::{parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient};
 use list::expand_list_style;
 
-use super::parser::{CssValue, Declaration};
+use super::parser::{CssValue, Declaration, PropertyId};
 
 pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
     let mut out = Vec::new();
@@ -91,6 +91,7 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                         property: prop.into(),
                         value: val,
                         important: decl.important,
+                        property_id: PropertyId::from_name(prop),
                     });
                 }
             },
@@ -135,6 +136,7 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                         property: prop.into(),
                         value: val,
                         important: decl.important,
+                        property_id: PropertyId::from_name(prop),
                     });
                 }
             },
@@ -179,6 +181,7 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                         property: prop.into(),
                         value: val,
                         important: decl.important,
+                        property_id: PropertyId::from_name(prop),
                     });
                 }
             },
@@ -209,6 +212,7 @@ mod tests {
 
     fn decl(property: &str, value: CssValue) -> Declaration {
         Declaration {
+            property_id: PropertyId::from_name(property),
             property: property.into(),
             value,
             important: false,
@@ -217,6 +221,7 @@ mod tests {
 
     fn decl_important(property: &str, value: CssValue) -> Declaration {
         Declaration {
+            property_id: PropertyId::from_name(property),
             property: property.into(),
             value,
             important: true,

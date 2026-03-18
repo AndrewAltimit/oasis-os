@@ -251,6 +251,20 @@ pub struct BrowserWidget {
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
+    /// Background I/O thread for non-blocking HTTP requests.
+    /// Lazily created on first network request.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    io_thread: Option<loader::io_thread::IoThread>,
+
+    /// Pending page load request ID (in-flight on the I/O thread).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_page_load: Option<loader::io_thread::IoRequestId>,
+
+    /// In-flight image requests on the I/O thread, keyed by request ID
+    /// mapped to the resolved image URL.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_io_images: std::collections::HashMap<loader::io_thread::IoRequestId, String>,
+
     /// Channel to send `(url, raw_bytes)` to the background decode thread.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
@@ -297,6 +311,11 @@ pub struct BrowserWidget {
     /// Cached inline `style=""` declarations. Re-parsed only on navigation.
     cached_inline_styles: Vec<(NodeId, Vec<css::parser::Declaration>)>,
 
+    /// Cached selector index built from UA + author sheets. Reused
+    /// across hover/focus restyles to avoid rebuilding per mouse move.
+    /// Invalidated on navigation when stylesheets change.
+    cached_selector_index: Option<css::cascade::SelectorIndex>,
+
     /// Last time a hover restyle was performed (for throttling).
     last_hover_time: Option<std::time::Instant>,
 
@@ -312,6 +331,11 @@ pub struct BrowserWidget {
     /// Kept alive so the engine can access the DOM for event handlers.
     #[cfg(feature = "javascript")]
     js_doc: Option<js_dom::SharedDoc>,
+
+    /// Scripts with the `defer` attribute, executed after the first paint
+    /// rather than blocking the initial render.
+    #[cfg(feature = "javascript")]
+    deferred_scripts: Vec<String>,
 
     /// Shared computed styles for `getComputedStyle()` in JS.
     /// Updated after CSS cascade so event handlers see current values.
@@ -384,6 +408,14 @@ pub struct BrowserWidget {
     /// Scroll X position at which the display list was last recorded.
     display_list_scroll_x: i32,
 
+    /// Scroll Y position that link_map regions are currently adjusted to.
+    /// Used to compute per-frame deltas when shifting link regions during
+    /// scroll-only replay (without re-recording the display list).
+    link_map_scroll_y: i32,
+
+    /// Scroll X position that link_map regions are currently adjusted to.
+    link_map_scroll_x: i32,
+
     /// Dirty rectangles that need repainting (e.g. hover/focus changes).
     /// When non-empty and no layout change occurred, only these regions
     /// are replayed via `replay_dirty()` instead of a full `replay()`.
@@ -441,6 +473,12 @@ impl BrowserWidget {
             focused_node: None,
             decoded_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            io_thread: None,
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_page_load: None,
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_io_images: HashMap::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             image_decode_tx: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             image_decode_rx: None,
@@ -456,6 +494,7 @@ impl BrowserWidget {
             image_info_dirty: false,
             cached_author_sheets: Vec::new(),
             cached_inline_styles: Vec::new(),
+            cached_selector_index: None,
             last_hover_time: None,
             #[cfg(feature = "javascript")]
             console_output: Vec::new(),
@@ -463,6 +502,8 @@ impl BrowserWidget {
             js_engine: None,
             #[cfg(feature = "javascript")]
             js_doc: None,
+            #[cfg(feature = "javascript")]
+            deferred_scripts: Vec::new(),
             #[cfg(feature = "javascript")]
             js_styles: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
@@ -484,6 +525,8 @@ impl BrowserWidget {
             display_list: paint::display_list::DisplayList::new(),
             display_list_scroll_y: 0,
             display_list_scroll_x: 0,
+            link_map_scroll_y: 0,
+            link_map_scroll_x: 0,
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
             tile_grid: None,
@@ -537,7 +580,7 @@ impl BrowserWidget {
             return false;
         }
 
-        let image_info = self.build_image_info_map();
+        self.refresh_image_info();
         let doc = self
             .document
             .as_ref()
@@ -556,7 +599,7 @@ impl BrowserWidget {
             viewport_w,
             viewport_h,
             base_url.as_deref(),
-            &image_info,
+            &self.cached_image_info,
         );
 
         #[cfg(feature = "javascript")]

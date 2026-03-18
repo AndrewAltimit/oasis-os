@@ -93,6 +93,32 @@ impl TreeBuilder {
         builder.finish()
     }
 
+    /// Build a DOM tree, reusing a previous document's arena allocation.
+    ///
+    /// The old document is cleared via [`Document::clear()`] so its
+    /// `Vec<Node>` capacity is preserved, avoiding reallocations for
+    /// pages of similar size.
+    pub fn build_reuse(tokens: Vec<Token>, mut old_doc: Document) -> Document {
+        old_doc.clear();
+        let mut builder = Self {
+            doc: old_doc,
+            mode: InsertionMode::Initial,
+            open_elements: Vec::new(),
+            active_formatting: Vec::new(),
+            head_element: None,
+            form_element: None,
+            frameset_ok: true,
+            original_mode: InsertionMode::InBody,
+        };
+        for token in tokens {
+            if builder.doc.nodes.len() >= MAX_DOM_NODES {
+                break;
+            }
+            builder.process_token(token);
+        }
+        builder.finish()
+    }
+
     // =============================================================
     // Token dispatch
     // =============================================================

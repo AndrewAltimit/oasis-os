@@ -24,6 +24,10 @@ impl BrowserWidget {
     /// Call this once per frame before `paint()`. Images stream in
     /// progressively so the page is never blocked waiting for all images.
     pub fn tick(&mut self, vfs: &dyn Vfs) {
+        // Poll the I/O thread for completed network requests.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        self.poll_io_thread();
+
         self.load_next_image_batch(vfs, 8);
 
         // Compute frame delta for animations/transitions.
@@ -48,6 +52,12 @@ impl BrowserWidget {
             if fired > 0 {
                 self.layout_dirty = true;
             }
+        }
+
+        // Execute deferred scripts after first paint.
+        #[cfg(feature = "javascript")]
+        if !self.deferred_scripts.is_empty() && !self.display_list.is_empty() {
+            self.execute_deferred_scripts();
         }
 
         // Process pending JS navigation actions.
@@ -139,6 +149,8 @@ impl BrowserWidget {
                     .set_content_height(layout.dimensions.margin_box().height as i32);
                 self.display_list_scroll_y = self.scroll.scroll_y;
                 self.display_list_scroll_x = self.scroll.scroll_x;
+                self.link_map_scroll_y = self.scroll.scroll_y;
+                self.link_map_scroll_x = self.scroll.scroll_x;
 
                 // Update tile grid on layout change.
                 let ch = layout.dimensions.margin_box().height as u32;
@@ -160,45 +172,38 @@ impl BrowserWidget {
                 self.full_repaint_needed = false;
             } else if has_dirty_rects {
                 // Visual-only change (e.g. hover color) with known dirty rects.
-                // Rebuild display list (colors are baked in) and replay only
-                // the dirty regions to reduce backend draw calls.
-                let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
-                let viewport = paint::PaintViewport {
-                    scroll_y: self.scroll.scroll_y as f32,
-                    scroll_x: self.scroll.scroll_x as f32,
-                    x: self.window_x,
-                    y: content_y,
-                    width: self.window_w as f32,
-                    height: buffered_h,
-                    visible_height: content_h as f32,
-                };
-                let links =
-                    paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
-                self.display_list.compact();
-                self.link_map = links;
-                self.display_list_scroll_y = self.scroll.scroll_y;
-                self.display_list_scroll_x = self.scroll.scroll_x;
+                // If the display list already has items, patch colors in-place
+                // for affected nodes instead of rebuilding the entire list.
+                if !self.display_list.is_empty() {
+                    // Patch colors for affected nodes from their updated styles.
+                    for dirty_rect in &self.dirty_rects {
+                        // Find nodes whose layout boxes overlap this dirty rect.
+                        if let Some(layout_root) = &self.layout_root {
+                            let affected = Self::find_nodes_in_rect(layout_root, dirty_rect);
+                            for nid in affected {
+                                if let Some(Some(style)) = self.styles.get(nid) {
+                                    self.display_list.patch_node_colors(
+                                        nid,
+                                        style.background_color,
+                                        style.color,
+                                    );
+                                }
+                            }
+                        }
+                    }
 
-                // Replay only items intersecting the dirty rectangles.
-                for dirty in &self.dirty_rects {
-                    self.display_list.replay_dirty(
-                        backend,
-                        dirty,
-                        0,
-                        0,
-                        Some((self.window_x, content_y, self.window_w, content_h)),
-                    )?;
-                }
-                self.dirty_rects.clear();
-            } else {
-                // Scroll changed but layout didn't — replay with scroll delta.
-                let dy = self.display_list_scroll_y - self.scroll.scroll_y;
-                let dx = self.display_list_scroll_x - self.scroll.scroll_x;
-
-                if dx != 0 || dy != 0 {
-                    // Scroll moved: rebuild display list with new scroll offsets.
-                    // (True scroll-only optimization with dirty rects comes in
-                    // Phase 2 — for now, rebuild so link regions are correct.)
+                    // Replay only items intersecting the dirty rectangles.
+                    for dirty in &self.dirty_rects {
+                        self.display_list.replay_dirty(
+                            backend,
+                            dirty,
+                            self.display_list_scroll_y - self.scroll.scroll_y,
+                            self.display_list_scroll_x - self.scroll.scroll_x,
+                            Some((self.window_x, content_y, self.window_w, content_h)),
+                        )?;
+                    }
+                } else {
+                    // First paint: no display list yet, do a full record.
                     let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
                     let viewport = paint::PaintViewport {
                         scroll_y: self.scroll.scroll_y as f32,
@@ -219,6 +224,101 @@ impl BrowserWidget {
                     self.link_map = links;
                     self.display_list_scroll_y = self.scroll.scroll_y;
                     self.display_list_scroll_x = self.scroll.scroll_x;
+                    self.link_map_scroll_y = self.scroll.scroll_y;
+                    self.link_map_scroll_x = self.scroll.scroll_x;
+
+                    for dirty in &self.dirty_rects {
+                        self.display_list.replay_dirty(
+                            backend,
+                            dirty,
+                            0,
+                            0,
+                            Some((self.window_x, content_y, self.window_w, content_h)),
+                        )?;
+                    }
+                }
+                self.dirty_rects.clear();
+            } else {
+                // Scroll changed but layout didn't — replay with scroll delta.
+                let dy = self.display_list_scroll_y - self.scroll.scroll_y;
+                let dx = self.display_list_scroll_x - self.scroll.scroll_x;
+
+                if dx != 0 || dy != 0 {
+                    // Check if we can reuse the cached display list by replaying
+                    // with a translation offset instead of re-recording.
+                    //
+                    // This is safe when:
+                    // 1. The scroll delta is within the buffer zone (items beyond
+                    //    the visible area were already recorded)
+                    // 2. No sticky-positioned elements (they move independently
+                    //    of normal scroll translation)
+                    let abs_dy = dy.unsigned_abs() as f32;
+                    let abs_dx = dx.unsigned_abs() as f32;
+                    let can_reuse = !self.display_list.has_sticky()
+                        && abs_dy <= self.scroll.buffer_zone as f32
+                        && abs_dx <= self.window_w as f32;
+
+                    if can_reuse {
+                        // Shift link_map regions by the per-frame scroll delta
+                        // so hit testing remains accurate without re-recording.
+                        // link_map_scroll_y/x tracks what the link positions
+                        // are currently adjusted to; the per-frame delta is the
+                        // difference between the current scroll and that value.
+                        let link_dy = self.link_map_scroll_y - self.scroll.scroll_y;
+                        let link_dx = self.link_map_scroll_x - self.scroll.scroll_x;
+                        if link_dx != 0 || link_dy != 0 {
+                            for link in &mut self.link_map {
+                                link.rect.x += link_dx as f32;
+                                link.rect.y += link_dy as f32;
+                            }
+                            self.link_map_scroll_y = self.scroll.scroll_y;
+                            self.link_map_scroll_x = self.scroll.scroll_x;
+                        }
+
+                        // Replay the cached display list with the TOTAL scroll
+                        // delta from recording time applied as a translation
+                        // offset. display_list_scroll_y/x is NOT updated here
+                        // — it stays at the recording-time value so the
+                        // cumulative offset remains correct across frames.
+                        self.display_list.replay(
+                            backend,
+                            dx,
+                            dy,
+                            Some((self.window_x, content_y, self.window_w, content_h)),
+                        )?;
+                    } else {
+                        // Scroll exceeded the buffer zone or page has sticky
+                        // elements — must rebuild the display list.
+                        let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
+                        let viewport = paint::PaintViewport {
+                            scroll_y: self.scroll.scroll_y as f32,
+                            scroll_x: self.scroll.scroll_x as f32,
+                            x: self.window_x,
+                            y: content_y,
+                            width: self.window_w as f32,
+                            height: buffered_h,
+                            visible_height: content_h as f32,
+                        };
+                        let links = paint::record::record(
+                            layout,
+                            viewport,
+                            &self.href_map,
+                            &mut self.display_list,
+                        );
+                        self.display_list.compact();
+                        self.link_map = links;
+                        self.display_list_scroll_y = self.scroll.scroll_y;
+                        self.display_list_scroll_x = self.scroll.scroll_x;
+                        self.link_map_scroll_y = self.scroll.scroll_y;
+                        self.link_map_scroll_x = self.scroll.scroll_x;
+
+                        self.display_list.replay(
+                            backend,
+                            0,
+                            0,
+                            Some((self.window_x, content_y, self.window_w, content_h)),
+                        )?;
+                    }
 
                     // Mark newly visible tiles as dirty on scroll.
                     if let Some(grid) = &mut self.tile_grid {
@@ -231,13 +331,6 @@ impl BrowserWidget {
                             }
                         }
                     }
-
-                    self.display_list.replay(
-                        backend,
-                        0,
-                        0,
-                        Some((self.window_x, content_y, self.window_w, content_h)),
-                    )?;
                 } else {
                     // Same scroll, same layout — replay cached display list.
                     self.display_list.replay(
@@ -593,6 +686,31 @@ impl BrowserWidget {
         backend.fill_rect(x + w as i32, y, thickness, h + thickness, focus_color)?;
 
         Ok(())
+    }
+
+    /// Find all DOM node IDs whose layout boxes overlap the given rectangle.
+    fn find_nodes_in_rect(layout_box: &LayoutBox, rect: &Rect) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        Self::collect_nodes_in_rect(layout_box, rect, &mut result);
+        result
+    }
+
+    /// Recursive helper for `find_nodes_in_rect`.
+    fn collect_nodes_in_rect(layout_box: &LayoutBox, rect: &Rect, result: &mut Vec<NodeId>) {
+        let border = layout_box.dimensions.border_box();
+        // Check overlap.
+        if border.x + border.width >= rect.x
+            && border.x <= rect.x + rect.width
+            && border.y + border.height >= rect.y
+            && border.y <= rect.y + rect.height
+        {
+            if let Some(nid) = layout_box.node {
+                result.push(nid);
+            }
+            for child in &layout_box.children {
+                Self::collect_nodes_in_rect(child, rect, result);
+            }
+        }
     }
 
     /// Find the border-box rectangle of a layout box associated with a DOM node.

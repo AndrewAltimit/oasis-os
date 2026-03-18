@@ -1,8 +1,8 @@
 //! Tests for the CSS cascade module.
 
 use super::super::parser::{
-    AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, Selector, SelectorList,
-    SimpleSelector, Stylesheet,
+    AttrOp, Combinator, CompoundSelector, CssValue, Declaration, PropertyId, Rule, Selector,
+    SelectorList, SimpleSelector, Stylesheet,
 };
 use super::super::values::{Display, FontWeight};
 use super::*;
@@ -60,7 +60,7 @@ fn make_doc(body_children: Vec<(TagName, Vec<Attribute>)>) -> Document {
         });
     }
 
-    Document { nodes, root: 0 }
+    Document::from_nodes(nodes, 0)
 }
 
 fn make_rule(selectors: Vec<Selector>, declarations: Vec<Declaration>) -> Rule {
@@ -129,6 +129,7 @@ fn descendant_selector(ancestor_tag: &str, descendant_tag: &str) -> Selector {
 
 fn decl(property: &str, value: CssValue, important: bool) -> Declaration {
     Declaration {
+        property_id: PropertyId::from_name(property),
         property: property.to_string(),
         value,
         important,
@@ -136,8 +137,8 @@ fn decl(property: &str, value: CssValue, important: bool) -> Declaration {
 }
 
 /// Return the built-in user-agent stylesheet (test helper).
-fn default_stylesheet() -> Stylesheet {
-    super::super::default::parse_ua_stylesheet()
+fn default_stylesheet() -> &'static Stylesheet {
+    super::super::default::default_stylesheet()
 }
 
 // -- Tests ----------------------------------------------------------
@@ -375,7 +376,7 @@ fn element_defaults_applied() {
         (TagName::A, vec![]),
     ]);
     let ua = default_stylesheet();
-    let styles = style_tree(&doc, &[&ua], &[], &ctx());
+    let styles = style_tree(&doc, &[ua], &[], &ctx());
 
     let p_style = styles[3].as_ref().unwrap();
     assert_eq!(p_style.display, Display::Block);
@@ -416,7 +417,7 @@ fn non_element_nodes_get_no_style() {
         children: vec![],
     });
 
-    let doc = Document { nodes, root: 0 };
+    let doc = Document::from_nodes(nodes, 0);
     let sheet = Stylesheet {
         rules: vec![],
         keyframes: vec![],
@@ -1211,7 +1212,7 @@ fn test_body_has_default_margin() {
     let doc = make_doc(vec![]);
     let body_id = 2; // body is node 2 in make_doc
     let ctx = ctx();
-    let index = SelectorIndex::build(&[&ua]);
+    let index = SelectorIndex::build(&[ua]);
     let inline_map = rustc_hash::FxHashMap::default();
     let mut tag_cache = rustc_hash::FxHashMap::default();
     let style = compute_style(
@@ -1688,8 +1689,8 @@ mod prop_tests {
     use proptest::prelude::*;
 
     use super::super::super::parser::{
-        CompoundSelector, CssValue, Declaration, Rule, Selector, SelectorList, SimpleSelector,
-        Specificity, Stylesheet,
+        CompoundSelector, CssValue, Declaration, PropertyId, Rule, Selector, SelectorList,
+        SimpleSelector, Specificity, Stylesheet,
     };
     use super::style_tree;
     use crate::html::dom::{Attribute, TagName};
@@ -1862,6 +1863,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword("black".to_string()),
                             important: false,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                     Rule {
@@ -1872,6 +1874,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword(String::from(color_name)),
                             important: false,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                 ],
@@ -1922,6 +1925,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword(String::from(parent_color)),
                             important: false,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                     Rule {
@@ -1932,6 +1936,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword("white".to_string()),
                             important: false,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                 ],
@@ -1980,6 +1985,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword("red".to_string()),
                             important: false,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                     Rule {
@@ -1990,6 +1996,7 @@ mod prop_tests {
                             property: "color".to_string(),
                             value: CssValue::Keyword("blue".to_string()),
                             important: true,
+                            property_id: PropertyId::from_name("color"),
                         }],
                     },
                 ],

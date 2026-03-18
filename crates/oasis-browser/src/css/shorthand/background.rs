@@ -1,7 +1,7 @@
 //! Background shorthand expansion.
 
 use crate::css::helpers::named_color;
-use crate::css::parser::{CssColor, CssValue, Declaration};
+use crate::css::parser::{CssColor, CssValue, Declaration, PropertyId};
 
 pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
     // Simple heuristic: if the value is a color, set background-color.
@@ -12,6 +12,7 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                 property: "background-image".into(),
                 value: value.clone(),
                 important,
+                property_id: PropertyId::from_name("background-image"),
             }]
         },
         CssValue::Color(_) | CssValue::Var(..) => {
@@ -19,6 +20,7 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                 property: "background-color".into(),
                 value: value.clone(),
                 important,
+                property_id: PropertyId::from_name("background-color"),
             }]
         },
         CssValue::Multiple(vs) => {
@@ -32,12 +34,14 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                         property: "background-image".into(),
                         value: v.clone(),
                         important,
+                        property_id: PropertyId::from_name("background-image"),
                     });
                 } else if matches!(v, CssValue::Color(_) | CssValue::Var(..)) {
                     decls.push(Declaration {
                         property: "background-color".into(),
                         value: v.clone(),
                         important,
+                        property_id: PropertyId::from_name("background-color"),
                     });
                 }
             }
@@ -46,6 +50,7 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                     property: "background".into(),
                     value: value.clone(),
                     important,
+                    property_id: PropertyId::from_name("background"),
                 });
             }
             decls
@@ -56,18 +61,21 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                     property: "background-color".into(),
                     value: CssValue::Color(CssColor::new(0, 0, 0, 0)),
                     important,
+                    property_id: PropertyId::from_name("background-color"),
                 }]
             } else if let Some(c) = named_color(name) {
                 vec![Declaration {
                     property: "background-color".into(),
                     value: CssValue::Color(c),
                     important,
+                    property_id: PropertyId::from_name("background-color"),
                 }]
             } else {
                 vec![Declaration {
                     property: "background".into(),
                     value: value.clone(),
                     important,
+                    property_id: PropertyId::from_name("background"),
                 }]
             }
         },
@@ -76,6 +84,7 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
                 property: "background".into(),
                 value: value.clone(),
                 important,
+                property_id: PropertyId::from_name("background"),
             }]
         },
     }
