@@ -473,10 +473,7 @@ pub(crate) fn dispatch_classic(
                     backend.swap_buffers_inner();
                     backend.reinit_gu_frame();
                     dbg_log(&format!("[Browser] navigating to: {text}"));
-                    br.ensure_widget();
-                    if let Some(ref mut w) = br.widget {
-                        w.navigate_vfs(&text, &br.vfs);
-                    }
+                    br.ensure_widget().navigate_vfs(&text, &br.vfs);
                     dbg_log("[Browser] navigate_vfs returned");
                     br.loading = false;
                     let url_display = br.url().to_string();
@@ -501,12 +498,9 @@ pub(crate) fn dispatch_classic(
                 backend.reinit_gu_frame();
             }
             // Forward X press to BrowserWidget (follows focused link).
-            br.ensure_widget();
             let input_event =
                 oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Confirm);
-            if let Some(ref mut w) = br.widget {
-                w.handle_input(&input_event, &br.vfs);
-            }
+            br.ensure_widget().handle_input(&input_event, &br.vfs);
         },
         InputEvent::ButtonPress(Button::Up) if *classic_view == ClassicView::Browser => {
             if let Some(ref mut w) = br.widget {

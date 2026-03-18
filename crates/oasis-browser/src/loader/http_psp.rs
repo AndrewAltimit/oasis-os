@@ -219,8 +219,22 @@ fn do_request(
                                 expected_body_len = Some(cl);
                             }
                         }
-                    } else if find_subsequence(&buf, b"\n\n").is_some() {
-                        body_start = Some(buf.len());
+                    } else if let Some(pos) = find_subsequence(&buf, b"\n\n") {
+                        let hdr_end = pos + 2;
+                        body_start = Some(hdr_end);
+                        let hdr = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                        let hdr_lower = hdr.to_ascii_lowercase();
+                        if hdr_lower.contains("transfer-encoding")
+                            && hdr_lower.contains("chunked")
+                        {
+                            is_chunked = true;
+                        } else if let Some(cl_start) = hdr_lower.find("content-length:") {
+                            let after = &hdr_lower[cl_start + 15..];
+                            let line_end = after.find('\n').unwrap_or(after.len());
+                            if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
+                                expected_body_len = Some(cl);
+                            }
+                        }
                     } else if buf.len() > MAX_HEADER_SIZE {
                         break;
                     }
