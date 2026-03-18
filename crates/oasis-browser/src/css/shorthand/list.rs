@@ -1,6 +1,6 @@
 //! List-style shorthand expansion.
 
-use crate::css::parser::{CssValue, Declaration};
+use crate::css::parser::{CssValue, Declaration, PropertyId};
 
 pub(super) fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declaration> {
     let values = match value {
@@ -29,6 +29,7 @@ pub(super) fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declar
                         property: "list-style-type".into(),
                         value: CssValue::Keyword(kw_lower),
                         important,
+                        property_id: PropertyId::from_name("list-style-type"),
                     });
                 },
                 "inside" | "outside" => {
@@ -36,6 +37,7 @@ pub(super) fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declar
                         property: "list-style-position".into(),
                         value: CssValue::Keyword(kw_lower),
                         important,
+                        property_id: PropertyId::from_name("list-style-position"),
                     });
                 },
                 _ => {},
@@ -49,6 +51,7 @@ pub(super) fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declar
             property: "list-style-type".into(),
             value: CssValue::Keyword("none".into()),
             important,
+            property_id: PropertyId::from_name("list-style-type"),
         });
     }
 

@@ -31,6 +31,8 @@ pub enum DisplayItem {
         w: u32,
         h: u32,
         color: Color,
+        /// Source DOM node for hover color patching.
+        node_id: Option<usize>,
     },
     /// Filled rectangle with rounded corners.
     FillRoundedRect {
@@ -40,6 +42,8 @@ pub enum DisplayItem {
         h: u32,
         radius: u16,
         color: Color,
+        /// Source DOM node for hover color patching.
+        node_id: Option<usize>,
     },
     /// Stroked rectangle outline.
     StrokeRoundedRect {
@@ -63,6 +67,8 @@ pub enum DisplayItem {
         /// Pre-computed width in pixels (includes letter-spacing).
         /// Used for dirty-rect culling to avoid expensive re-measurement.
         width: u32,
+        /// Source DOM node for hover color patching.
+        node_id: Option<usize>,
     },
     /// Texture blit.
     Blit {
@@ -227,6 +233,11 @@ pub struct DisplayList {
     /// Generation counter — incremented on each rebuild so caches
     /// can detect staleness.
     generation: u64,
+    /// Whether the display list contains items from sticky-positioned
+    /// elements. When true, scroll-only replay with delta offsets is
+    /// not safe because sticky elements change their visual position
+    /// relative to scroll independently of normal content flow.
+    has_sticky: bool,
 }
 
 impl DisplayList {
@@ -235,6 +246,7 @@ impl DisplayList {
         Self {
             items: Vec::with_capacity(256),
             generation: 0,
+            has_sticky: false,
         }
     }
 
@@ -242,6 +254,17 @@ impl DisplayList {
     pub fn clear(&mut self) {
         self.items.clear();
         self.generation += 1;
+        self.has_sticky = false;
+    }
+
+    /// Whether the display list contains sticky-positioned elements.
+    pub fn has_sticky(&self) -> bool {
+        self.has_sticky
+    }
+
+    /// Mark the display list as containing sticky-positioned elements.
+    pub fn set_has_sticky(&mut self) {
+        self.has_sticky = true;
     }
 
     /// Push a display item onto the list.
@@ -268,6 +291,34 @@ impl DisplayList {
     /// Access the items slice.
     pub fn items(&self) -> &[DisplayItem] {
         &self.items
+    }
+
+    /// Patch colors for all display items tagged with `target_node_id`.
+    ///
+    /// `bg` replaces the color of `FillRect`/`FillRoundedRect` items
+    /// tagged with the node. `fg` replaces the color of `DrawText`
+    /// items tagged with the node. Returns the number of items patched.
+    pub fn patch_node_colors(&mut self, target_node_id: usize, bg: Color, fg: Color) -> usize {
+        let mut count = 0;
+        for item in &mut self.items {
+            match item {
+                DisplayItem::FillRect { color, node_id, .. }
+                | DisplayItem::FillRoundedRect { color, node_id, .. } => {
+                    if *node_id == Some(target_node_id) {
+                        *color = bg;
+                        count += 1;
+                    }
+                },
+                DisplayItem::DrawText { color, node_id, .. } => {
+                    if *node_id == Some(target_node_id) {
+                        *color = fg;
+                        count += 1;
+                    }
+                },
+                _ => {},
+            }
+        }
+        count
     }
 
     /// Compact the display list by removing degenerate items and merging
@@ -317,6 +368,7 @@ impl DisplayList {
                     w: cw,
                     h: ch,
                     color: cc,
+                    ..
                 },
                 DisplayItem::FillRect {
                     x: nx,
@@ -324,10 +376,15 @@ impl DisplayList {
                     w: nw,
                     h: nh,
                     color: nc,
+                    ..
                 },
             ) = (&current, &next)
             {
-                // Same color, same y, same height, and horizontally abutting?
+                // Same color, same y, same height, horizontally abutting?
+                // Note: node_id is intentionally NOT compared here so that
+                // adjacent rects from different DOM nodes still merge.
+                // This keeps the display list compact, which is critical on
+                // PSP where the GU command buffer is limited.
                 if cc == nc && cy == ny && ch == nh && cx + *cw as i32 == *nx {
                     current = DisplayItem::FillRect {
                         x: *cx,
@@ -335,6 +392,9 @@ impl DisplayList {
                         w: cw + nw,
                         h: *ch,
                         color: *cc,
+                        // Merged rects lose their node association since they
+                        // span multiple nodes. patch_node_colors will skip them.
+                        node_id: None,
                     };
                     continue;
                 }
@@ -390,7 +450,9 @@ impl DisplayList {
             let layer_opacity = layer_opacity_product(&opacity_stack);
 
             match item {
-                DisplayItem::FillRect { x, y, w, h, color } => {
+                DisplayItem::FillRect {
+                    x, y, w, h, color, ..
+                } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
                 },
@@ -401,6 +463,7 @@ impl DisplayList {
                     h,
                     radius,
                     color,
+                    ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
@@ -620,7 +683,9 @@ impl DisplayList {
 
             // Replay the item.
             match item {
-                DisplayItem::FillRect { x, y, w, h, color } => {
+                DisplayItem::FillRect {
+                    x, y, w, h, color, ..
+                } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
                 },
@@ -631,6 +696,7 @@ impl DisplayList {
                     h,
                     radius,
                     color,
+                    ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
@@ -904,6 +970,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         assert_eq!(dl.len(), 1);
         assert_eq!(dl.generation(), 0);
@@ -922,6 +989,7 @@ mod tests {
             w: 100,
             h: 50,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
 
         let mut backend = MockBackend::new();
@@ -987,6 +1055,7 @@ mod tests {
             w: 0,
             h: 10,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 0,
@@ -994,6 +1063,7 @@ mod tests {
             w: 10,
             h: 0,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 0,
@@ -1001,6 +1071,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgb(0, 255, 0),
+            node_id: None,
         });
         assert_eq!(dl.len(), 3);
         dl.compact();
@@ -1023,6 +1094,7 @@ mod tests {
             w: 10,
             h: 5,
             color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 10,
@@ -1030,6 +1102,7 @@ mod tests {
             w: 10,
             h: 5,
             color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 20,
@@ -1037,6 +1110,7 @@ mod tests {
             w: 10,
             h: 5,
             color,
+            node_id: None,
         });
         dl.compact();
         assert_eq!(dl.len(), 1);
@@ -1059,6 +1133,7 @@ mod tests {
             w: 10,
             h: 5,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 10,
@@ -1066,6 +1141,7 @@ mod tests {
             w: 10,
             h: 5,
             color: Color::rgb(0, 255, 0),
+            node_id: None,
         });
         dl.compact();
         assert_eq!(dl.len(), 2);
@@ -1081,6 +1157,7 @@ mod tests {
             w: 10,
             h: 5,
             color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 15,
@@ -1088,6 +1165,7 @@ mod tests {
             w: 10,
             h: 5,
             color,
+            node_id: None,
         });
         dl.compact();
         assert_eq!(dl.len(), 2);
@@ -1111,6 +1189,7 @@ mod tests {
             bold: false,
             italic: false,
             width: 1,
+            node_id: None,
         });
         dl.push(DisplayItem::PopClip);
         dl.compact();
@@ -1127,6 +1206,7 @@ mod tests {
             w: 20,
             h: 20,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         // Item outside dirty rect.
         dl.push(DisplayItem::FillRect {
@@ -1135,6 +1215,7 @@ mod tests {
             w: 20,
             h: 20,
             color: Color::rgb(0, 255, 0),
+            node_id: None,
         });
 
         let dirty = Rect {
@@ -1167,6 +1248,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgba(255, 0, 0, 200),
+            node_id: None,
         });
         dl.push(DisplayItem::PopLayer);
 
@@ -1194,6 +1276,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgba(255, 0, 0, 200),
+            node_id: None,
         });
         dl.push(DisplayItem::PopLayer);
         dl.push(DisplayItem::PopLayer);
@@ -1219,6 +1302,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgba(255, 0, 0, 200),
+            node_id: None,
         });
 
         let mut backend = MockBackend::new();
@@ -1244,6 +1328,7 @@ mod tests {
             bold: false,
             italic: false,
             width: 0,
+            node_id: None,
         });
         dl.push(DisplayItem::PopLayer);
 
@@ -1269,6 +1354,7 @@ mod tests {
             w: 10,
             h: 10,
             color: Color::rgb(255, 0, 0),
+            node_id: None,
         });
         dl.push(DisplayItem::PopLayer);
         dl.compact();
@@ -1285,6 +1371,7 @@ mod tests {
             w: 20,
             h: 20,
             color: Color::rgba(0, 255, 0, 100),
+            node_id: None,
         });
         dl.push(DisplayItem::PopLayer);
 

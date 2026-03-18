@@ -256,7 +256,10 @@ const BUF_WIDTH: u32 = 512;
 // Display list (16-byte aligned, in BSS)
 // ---------------------------------------------------------------------------
 
-const DISPLAY_LIST_SIZE: usize = 0x40000; // 256 KB
+// 1 MB — browser pages generate thousands of GU commands (one per
+// fill_rect, per glyph, per border edge).  256 KB overflows on any
+// non-trivial HTML page, hanging sceGuSync.
+const DISPLAY_LIST_SIZE: usize = 0x100000; // 1 MB
 
 #[repr(C, align(16))]
 struct Align16<T>(T);

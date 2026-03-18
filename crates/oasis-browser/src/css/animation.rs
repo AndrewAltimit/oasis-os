@@ -348,7 +348,7 @@ mod tests {
     use super::*;
 
     fn make_keyframes(name: &str) -> KeyframesRule {
-        use super::super::parser::{CssValue, Declaration};
+        use super::super::parser::{CssValue, Declaration, PropertyId};
         KeyframesRule {
             name: name.to_string(),
             stops: vec![
@@ -358,6 +358,7 @@ mod tests {
                         property: "opacity".to_string(),
                         value: CssValue::Number(0.0),
                         important: false,
+                        property_id: PropertyId::from_name("opacity"),
                     }],
                 },
                 super::super::parser::KeyframeStop {
@@ -366,6 +367,7 @@ mod tests {
                         property: "opacity".to_string(),
                         value: CssValue::Number(1.0),
                         important: false,
+                        property_id: PropertyId::from_name("opacity"),
                     }],
                 },
             ],

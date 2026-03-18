@@ -125,6 +125,14 @@ The PSP deployment uses two binaries:
 
 The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebuffer and claims a PSP audio channel for background MP3 playback. No dependency on oasis-core -- direct framebuffer rendering only (<64KB binary).
 
+### PSP GU Rendering Constraints
+
+The PSP GU (Graphics Unit) has a fixed-size command buffer (`DISPLAY_LIST`, 1 MB in BSS). Each `fill_rect`, glyph blit, clip push/pop, and blend mode change appends commands. Browser pages with many elements can generate hundreds of KB of GU commands per frame.
+
+**Critical rules:**
+- **Never call `reinit_gu_frame()` after `swap_buffers_inner()`** — `swap_buffers_inner` already starts a new GU frame via `sceGuStart`. A second `sceGuStart` without `sceGuFinish` corrupts the command buffer and hangs `sceGuSync` on the next frame. Only use `reinit_gu_frame()` after utility dialogs (OSK, `psp::dialog`) which run their own GU frames.
+- **`std::time::Instant` crashes on PSP Allegrex** (confirmed by testing) — browser `tick()` is not called on PSP. Image loading happens synchronously during `navigate_vfs` instead of progressively per-frame.
+
 ### PSP TLS 1.3
 
 The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which cannot connect to modern HTTPS servers. The PSP backend implements native TLS 1.3 via `embedded-tls` (pure Rust, no C/asm) with `UnsecureProvider` (no certificate validation). The `alloc` feature is required to advertise RSA signature schemes (archive.org uses RSA certs). Raw TCP sockets (`sceNetInet*`) are wrapped with `embedded_io::Read + Write` adapters. RNG seeded from `sceKernelGetSystemTimeLow` (not `mfc0 $9` which is privileged on PSP Allegrex). DNS resolution via `psp::net::resolve_hostname` with `to_ne_bytes()` (network byte order fix for little-endian MIPS). HTTP→HTTPS redirect loops are detected automatically, triggering TLS fallback; HTTPS redirects (archive.org → CDN node) are followed within the TLS path. This enables HTTPS downloads for TV Guide video streaming from servers that enforce TLS.

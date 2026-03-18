@@ -17,6 +17,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+/// Maximum number of entries in the text measurement cache.
+///
+/// When this limit is exceeded, the cache is cleared entirely.
+/// It rebuilds naturally during the next layout pass.
+const MAX_TEXT_CACHE_ENTRIES: usize = 4096;
+
 /// Compute a 64-bit hash of a text string for use as a cache key.
 fn text_hash(text: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -119,7 +125,11 @@ impl TextMeasurer for CachingMeasurer<'_> {
                 return width;
             }
             let width = self.inner.measure_text(text, font_size);
-            shared.borrow_mut().insert(key, width);
+            let mut map = shared.borrow_mut();
+            if map.len() >= MAX_TEXT_CACHE_ENTRIES {
+                map.clear();
+            }
+            map.insert(key, width);
             width
         } else {
             // Local per-pass cache path.
@@ -127,7 +137,11 @@ impl TextMeasurer for CachingMeasurer<'_> {
                 return width;
             }
             let width = self.inner.measure_text(text, font_size);
-            self.cache.borrow_mut().insert(key, width);
+            let mut map = self.cache.borrow_mut();
+            if map.len() >= MAX_TEXT_CACHE_ENTRIES {
+                map.clear();
+            }
+            map.insert(key, width);
             width
         }
     }

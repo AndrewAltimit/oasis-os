@@ -4,29 +4,33 @@
 //! baseline stylesheet that all documents start with before any author
 //! or skin stylesheets are applied.
 
+use std::sync::LazyLock;
+
 use super::parser::Stylesheet;
 
-/// Get the user-agent default stylesheet.
-pub fn default_stylesheet() -> Stylesheet {
-    parse_ua_stylesheet()
-}
+/// Cached UA stylesheet for builds with JavaScript enabled.
+#[cfg(feature = "javascript")]
+static UA_SHEET_JS: LazyLock<Stylesheet> = LazyLock::new(|| Stylesheet::parse(UA_CSS));
 
-/// Parse the built-in UA stylesheet constant into a [`Stylesheet`].
+/// Cached UA stylesheet for builds without JavaScript.
+#[cfg(not(feature = "javascript"))]
+static UA_SHEET_NO_JS: LazyLock<Stylesheet> = LazyLock::new(|| {
+    let css = format!("{UA_CSS}\nnoscript {{ display: block !important; }}");
+    Stylesheet::parse(&css)
+});
+
+/// Get the user-agent default stylesheet.
 ///
-/// When the `javascript` feature is enabled, `<noscript>` is hidden
-/// (scripting is available). Without it, `<noscript>` content is
-/// rendered so users see the fallback.
-pub(crate) fn parse_ua_stylesheet() -> Stylesheet {
+/// Returns a reference to a lazily-initialized static stylesheet,
+/// avoiding re-parsing on every navigation and hover restyle.
+pub fn default_stylesheet() -> &'static Stylesheet {
     #[cfg(feature = "javascript")]
     {
-        Stylesheet::parse(UA_CSS)
+        &UA_SHEET_JS
     }
     #[cfg(not(feature = "javascript"))]
     {
-        // Without JS, show <noscript> content by appending an override
-        // rule rather than doing a brittle string replacement on UA_CSS.
-        let css = format!("{UA_CSS}\nnoscript {{ display: block !important; }}");
-        Stylesheet::parse(&css)
+        &UA_SHEET_NO_JS
     }
 }
 

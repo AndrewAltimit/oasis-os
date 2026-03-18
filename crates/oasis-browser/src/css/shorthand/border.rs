@@ -1,7 +1,7 @@
 //! Border shorthand expansion.
 
 use crate::css::helpers::named_color;
-use crate::css::parser::{CssValue, Declaration};
+use crate::css::parser::{CssValue, Declaration, PropertyId};
 
 pub(super) fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
     let values = match value {
@@ -45,16 +45,19 @@ pub(super) fn expand_border(value: &CssValue, important: bool) -> Vec<Declaratio
             property: "border-width".into(),
             value: width,
             important,
+            property_id: PropertyId::from_name("border-width"),
         },
         Declaration {
             property: "border-style".into(),
             value: style,
             important,
+            property_id: PropertyId::from_name("border-style"),
         },
         Declaration {
             property: "border-color".into(),
             value: color,
             important,
+            property_id: PropertyId::from_name("border-color"),
         },
     ]
 }
@@ -100,16 +103,19 @@ pub(super) fn expand_border_side(
             property: format!("{property}-width"),
             value: width,
             important,
+            property_id: PropertyId::Other,
         },
         Declaration {
             property: format!("{property}-style"),
             value: style,
             important,
+            property_id: PropertyId::Other,
         },
         Declaration {
             property: format!("{property}-color"),
             value: color,
             important,
+            property_id: PropertyId::Other,
         },
     ]
 }

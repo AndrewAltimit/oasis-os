@@ -43,6 +43,8 @@ struct RecordContext {
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
     text_overflow_ellipsis: bool,
+    /// Current DOM node being recorded (for hover color patching).
+    current_node: Option<NodeId>,
 }
 
 // -------------------------------------------------------------------
@@ -71,6 +73,7 @@ pub fn record(
         visible_viewport_height: viewport.visible_height,
         clip_rect: None,
         text_overflow_ellipsis: false,
+        current_node: None,
     };
 
     record_box(
@@ -107,6 +110,7 @@ fn record_box(
     // re-recording the entire sticky subtree.
     let is_sticky = layout_box.style.position == Position::Sticky;
     if is_sticky {
+        dl.set_has_sticky();
         dl.push(DisplayItem::PushLayer { opacity: 1.0 });
     }
 
@@ -131,6 +135,12 @@ fn record_box(
     }
 
     let is_visible = layout_box.style.visibility == Visibility::Visible;
+
+    // Track the current DOM node for hover color patching.
+    let prev_node = ctx.current_node;
+    if layout_box.node.is_some() {
+        ctx.current_node = layout_box.node;
+    }
 
     // Track link entry.
     let entered_link = if let Some(node_id) = layout_box.node {
@@ -312,6 +322,9 @@ fn record_box(
         dl.push(DisplayItem::PopLayer);
     }
 
+    // Restore the previous DOM node context.
+    ctx.current_node = prev_node;
+
     // Record link hit region.
     if let Some((ref href, link_node)) = ctx.current_link {
         if layout_box.node == Some(link_node) || has_text_content(layout_box) {
@@ -375,6 +388,7 @@ fn record_background(
                 h,
                 radius: layout_box.style.border_radius as u16,
                 color: bg,
+                node_id: ctx.current_node,
             });
         } else {
             dl.push(DisplayItem::FillRect {
@@ -383,6 +397,7 @@ fn record_background(
                 w,
                 h,
                 color: bg,
+                node_id: ctx.current_node,
             });
         }
     }
@@ -632,6 +647,7 @@ fn record_radial_gradient(
             h: bh,
             radius: r,
             color,
+            node_id: None,
         });
     }
 }
@@ -809,6 +825,7 @@ fn record_box_shadow(
                     w: sw,
                     h: thickness,
                     color,
+                    node_id: ctx.current_node,
                 });
                 // Bottom strip
                 dl.push(DisplayItem::FillRect {
@@ -817,6 +834,7 @@ fn record_box_shadow(
                     w: sw,
                     h: thickness,
                     color,
+                    node_id: ctx.current_node,
                 });
                 // Left strip
                 dl.push(DisplayItem::FillRect {
@@ -825,6 +843,7 @@ fn record_box_shadow(
                     w: thickness,
                     h: sh.saturating_sub(thickness * 2),
                     color,
+                    node_id: ctx.current_node,
                 });
                 // Right strip
                 dl.push(DisplayItem::FillRect {
@@ -833,6 +852,7 @@ fn record_box_shadow(
                     w: thickness,
                     h: sh.saturating_sub(thickness * 2),
                     color,
+                    node_id: ctx.current_node,
                 });
             }
         } else {
@@ -882,6 +902,7 @@ fn record_inline_content(
                 h,
                 radius: layout_box.style.border_radius as u16,
                 color: bg,
+                node_id: ctx.current_node,
             });
         } else {
             dl.push(DisplayItem::FillRect {
@@ -890,6 +911,7 @@ fn record_inline_content(
                 w,
                 h,
                 color: bg,
+                node_id: ctx.current_node,
             });
         }
     }
@@ -990,6 +1012,7 @@ fn record_text(
             bold,
             italic,
             width: text_width,
+            node_id: ctx.current_node,
         });
     }
 
@@ -1002,6 +1025,7 @@ fn record_text(
         bold,
         italic,
         width: text_width,
+        node_id: ctx.current_node,
     });
 
     if style.text_decoration == crate::css::values::TextDecoration::Underline {
@@ -1012,6 +1036,7 @@ fn record_text(
             w: text_width,
             h: 1,
             color,
+            node_id: ctx.current_node,
         });
     }
     if style.text_decoration == crate::css::values::TextDecoration::LineThrough {
@@ -1022,6 +1047,7 @@ fn record_text(
             w: text_width,
             h: 1,
             color,
+            node_id: ctx.current_node,
         });
     }
     if style.text_decoration == crate::css::values::TextDecoration::Overline {
@@ -1031,6 +1057,7 @@ fn record_text(
             w: text_width,
             h: 1,
             color,
+            node_id: ctx.current_node,
         });
     }
 }
@@ -1069,6 +1096,7 @@ fn record_list_marker(
         bold: false,
         italic: false,
         width: marker_w,
+        node_id: ctx.current_node,
     });
 }
 
@@ -1137,6 +1165,7 @@ fn record_replaced(
                 w,
                 h: 1,
                 color,
+                node_id: ctx.current_node,
             });
             dl.push(DisplayItem::FillRect {
                 x,
@@ -1144,6 +1173,7 @@ fn record_replaced(
                 w,
                 h: 1,
                 color,
+                node_id: ctx.current_node,
             });
             dl.push(DisplayItem::FillRect {
                 x,
@@ -1151,6 +1181,7 @@ fn record_replaced(
                 w: 1,
                 h,
                 color,
+                node_id: ctx.current_node,
             });
             dl.push(DisplayItem::FillRect {
                 x: x + w as i32 - 1,
@@ -1158,6 +1189,7 @@ fn record_replaced(
                 w: 1,
                 h,
                 color,
+                node_id: ctx.current_node,
             });
             let label = if alt.is_empty() { "\u{00D7}" } else { alt };
             let label_w = oasis_types::backend::bitmap_measure_text(label, 8);
@@ -1170,6 +1202,7 @@ fn record_replaced(
                 bold: false,
                 italic: false,
                 width: label_w,
+                node_id: ctx.current_node,
             });
         },
         ReplacedContent::HorizontalRule => {
@@ -1192,6 +1225,7 @@ fn record_replaced(
                     w,
                     h: 1,
                     color: Color::rgb(128, 128, 128),
+                    node_id: ctx.current_node,
                 });
             }
         },
@@ -1243,6 +1277,7 @@ fn record_text_input(
             h,
             radius: style.border_radius as u16,
             color: bg,
+            node_id: None,
         });
     } else {
         dl.push(DisplayItem::FillRect {
@@ -1251,6 +1286,7 @@ fn record_text_input(
             w,
             h,
             color: bg,
+            node_id: None,
         });
     }
     let has_css_border = style.border_top_style != BorderStyle::None;
@@ -1262,6 +1298,7 @@ fn record_text_input(
             w,
             h: bw,
             color: style.border_top_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1269,6 +1306,7 @@ fn record_text_input(
             w,
             h: bw,
             color: style.border_bottom_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1276,6 +1314,7 @@ fn record_text_input(
             w: bw,
             h,
             color: style.border_left_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: x + w as i32 - bw as i32,
@@ -1283,6 +1322,7 @@ fn record_text_input(
             w: bw,
             h,
             color: style.border_right_color,
+            node_id: None,
         });
     } else {
         let dark = Color::rgb(118, 118, 118);
@@ -1293,6 +1333,7 @@ fn record_text_input(
             w,
             h: 1,
             color: dark,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1300,6 +1341,7 @@ fn record_text_input(
             w: 1,
             h,
             color: dark,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1307,6 +1349,7 @@ fn record_text_input(
             w,
             h: 1,
             color: light,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: x + w as i32 - 1,
@@ -1314,6 +1357,7 @@ fn record_text_input(
             w: 1,
             h,
             color: light,
+            node_id: None,
         });
     }
     let font_size = style.font_size as u16;
@@ -1330,6 +1374,7 @@ fn record_text_input(
             bold: false,
             italic: false,
             width: value_w,
+            node_id: None,
         });
     } else if !placeholder.is_empty() {
         let ph_w = oasis_types::backend::bitmap_measure_text(placeholder, font_size);
@@ -1342,6 +1387,7 @@ fn record_text_input(
             bold: false,
             italic: false,
             width: ph_w,
+            node_id: None,
         });
     }
 }
@@ -1361,6 +1407,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         w,
         h,
         color: bg,
+        node_id: None,
     });
     let border_color = Color::rgb(118, 118, 118);
     dl.push(DisplayItem::FillRect {
@@ -1369,6 +1416,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         w,
         h: 1,
         color: border_color,
+        node_id: None,
     });
     dl.push(DisplayItem::FillRect {
         x,
@@ -1376,6 +1424,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         w,
         h: 1,
         color: border_color,
+        node_id: None,
     });
     dl.push(DisplayItem::FillRect {
         x,
@@ -1383,6 +1432,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         w: 1,
         h,
         color: border_color,
+        node_id: None,
     });
     dl.push(DisplayItem::FillRect {
         x: x + w as i32 - 1,
@@ -1390,6 +1440,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         w: 1,
         h,
         color: border_color,
+        node_id: None,
     });
     let font_size = style.font_size as u16;
     let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
@@ -1403,6 +1454,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         bold: false,
         italic: false,
         width: label_w,
+        node_id: None,
     });
     let arrow_w = oasis_types::backend::bitmap_measure_text("v", font_size);
     dl.push(DisplayItem::DrawText {
@@ -1414,6 +1466,7 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         bold: false,
         italic: false,
         width: arrow_w,
+        node_id: None,
     });
 }
 
@@ -1434,6 +1487,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             h,
             radius: style.border_radius as u16,
             color: bg,
+            node_id: None,
         });
     } else {
         dl.push(DisplayItem::FillRect {
@@ -1442,6 +1496,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w,
             h,
             color: bg,
+            node_id: None,
         });
     }
     let has_css_border = style.border_top_style != BorderStyle::None;
@@ -1453,6 +1508,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w,
             h: bw,
             color: style.border_top_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1460,6 +1516,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w,
             h: bw,
             color: style.border_bottom_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1467,6 +1524,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w: bw,
             h,
             color: style.border_left_color,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: x + w as i32 - bw as i32,
@@ -1474,6 +1532,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w: bw,
             h,
             color: style.border_right_color,
+            node_id: None,
         });
     } else {
         let light = Color::rgb(255, 255, 255);
@@ -1484,6 +1543,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w,
             h: 1,
             color: light,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1491,6 +1551,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w: 1,
             h,
             color: light,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x,
@@ -1498,6 +1559,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w,
             h: 1,
             color: dark,
+            node_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: x + w as i32 - 1,
@@ -1505,6 +1567,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
             w: 1,
             h,
             color: dark,
+            node_id: None,
         });
     }
     let font_size = style.font_size as u16;
@@ -1520,6 +1583,7 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
         bold: false,
         italic: false,
         width: text_w,
+        node_id: None,
     });
 }
 

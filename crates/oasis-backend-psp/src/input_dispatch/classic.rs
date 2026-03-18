@@ -467,11 +467,6 @@ pub(crate) fn dispatch_classic(
                     }
                     br.loading = true;
                     br.status_msg = String::from("Loading...");
-                    // Flush a loading frame so the user sees feedback
-                    // before the blocking network request.
-                    desktop::draw_loading_indicator(backend, "Loading page...");
-                    backend.swap_buffers_inner();
-                    backend.reinit_gu_frame();
                     dbg_log(&format!("[Browser] navigating to: {text}"));
                     br.ensure_widget();
                     if let Some(ref mut w) = br.widget {
@@ -503,9 +498,6 @@ pub(crate) fn dispatch_classic(
             // Forward X press to BrowserWidget (follows focused link).
             // Flush a loading frame first since handle_input may trigger
             // a synchronous page load when following a link.
-            desktop::draw_loading_indicator(backend, "Loading...");
-            backend.swap_buffers_inner();
-            backend.reinit_gu_frame();
             let input_event =
                 oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Confirm);
             br.ensure_widget();

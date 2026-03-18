@@ -15,6 +15,14 @@ pub type NodeId = usize;
 pub struct Document {
     pub nodes: Vec<Node>,
     pub root: NodeId,
+    /// Index from element `id` attribute to `NodeId` for O(1) lookups.
+    /// Updated on `append_child` and `set_attribute` when the `id`
+    /// attribute is set or changed.
+    id_index: std::collections::HashMap<String, NodeId>,
+    /// Free list of arena slots available for reuse after `remove_child`.
+    /// `add_node` checks this before appending to avoid unbounded arena
+    /// growth when the DOM is repeatedly mutated (e.g. by JavaScript).
+    free_list: Vec<NodeId>,
 }
 
 /// A single node in the DOM tree.
@@ -494,12 +502,78 @@ impl Document {
         Self {
             nodes: vec![root_node],
             root: 0,
+            id_index: std::collections::HashMap::new(),
+            free_list: Vec::new(),
+        }
+    }
+
+    /// Reset the document to an empty state while preserving allocated
+    /// memory.
+    ///
+    /// This clears all nodes, the ID index, and the free list, then
+    /// re-adds the root `Document` node. The underlying `Vec` capacity
+    /// is retained so the next parse avoids reallocations for documents
+    /// of similar size.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.id_index.clear();
+        self.free_list.clear();
+        self.nodes.push(Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: Vec::new(),
+        });
+        self.root = 0;
+    }
+
+    /// Create a document from a pre-built node arena.
+    ///
+    /// Rebuilds the ID index from the nodes. Useful for tests that
+    /// construct documents directly.
+    pub fn from_nodes(nodes: Vec<Node>, root: NodeId) -> Self {
+        let mut id_index = std::collections::HashMap::new();
+        for (idx, node) in nodes.iter().enumerate() {
+            if let NodeKind::Element(ref data) = node.kind
+                && let Some(id_val) = data.id()
+            {
+                id_index.insert(id_val.to_string(), idx);
+            }
+        }
+        Self {
+            nodes,
+            root,
+            id_index,
+            free_list: Vec::new(),
         }
     }
 
     /// Add a new node to the arena and return its [`NodeId`].
+    ///
+    /// If the node is an element with an `id` attribute, the ID index
+    /// is updated for O(1) `get_element_by_id` lookups.
     pub fn add_node(&mut self, kind: NodeKind) -> NodeId {
+        // Reuse a free slot if available to avoid unbounded arena growth.
+        if let Some(id) = self.free_list.pop() {
+            // Index the element's id attribute if present.
+            if let NodeKind::Element(ref data) = kind
+                && let Some(id_val) = data.id()
+            {
+                self.id_index.insert(id_val.to_string(), id);
+            }
+            self.nodes[id] = Node {
+                kind,
+                parent: None,
+                children: Vec::new(),
+            };
+            return id;
+        }
         let id = self.nodes.len();
+        // Index the element's id attribute if present.
+        if let NodeKind::Element(ref data) = kind
+            && let Some(id_val) = data.id()
+        {
+            self.id_index.insert(id_val.to_string(), id);
+        }
         self.nodes.push(Node {
             kind,
             parent: None,
@@ -556,23 +630,27 @@ impl Document {
     }
 
     /// Find the first element whose `id` attribute matches `target`.
+    ///
+    /// Uses an O(1) hash map index instead of DFS traversal.
     pub fn get_element_by_id(&self, target: &str) -> Option<NodeId> {
-        self.find_element_by_id(self.root, target)
+        self.id_index.get(target).copied()
     }
 
-    fn find_element_by_id(&self, node_id: NodeId, target: &str) -> Option<NodeId> {
-        if let NodeKind::Element(ref data) = self.nodes[node_id].kind
-            && data.id() == Some(target)
-        {
-            return Some(node_id);
-        }
-        for i in 0..self.nodes[node_id].children.len() {
-            let child = self.nodes[node_id].children[i];
-            if let Some(found) = self.find_element_by_id(child, target) {
-                return Some(found);
+    /// Update the ID index when an element's `id` attribute changes.
+    ///
+    /// Called from `set_attribute` and JS DOM mutation paths.
+    pub fn update_id_index(&mut self, node_id: NodeId, old_id: Option<&str>, new_id: Option<&str>) {
+        if let Some(old) = old_id {
+            // Only remove if this node still owns the entry.
+            if self.id_index.get(old) == Some(&node_id) {
+                self.id_index.remove(old);
             }
         }
-        None
+        if let Some(new) = new_id
+            && !new.is_empty()
+        {
+            self.id_index.insert(new.to_string(), node_id);
+        }
     }
 
     /// Find the `<body>` element.
@@ -592,12 +670,34 @@ impl Document {
         if text.is_empty() { None } else { Some(text) }
     }
 
+    /// Recursively free a node and all its descendants.
+    ///
+    /// Removes ID index entries for any elements with `id` attributes
+    /// and pushes all node slots onto the free list for reuse.
+    pub(crate) fn free_subtree(&mut self, node_id: NodeId) {
+        // Collect children first to avoid borrow conflict.
+        let children: Vec<NodeId> = self.nodes[node_id].children.clone();
+        for child in children {
+            self.free_subtree(child);
+        }
+        // Remove from ID index.
+        if let NodeKind::Element(ref data) = self.nodes[node_id].kind
+            && let Some(id) = data.id()
+            && self.id_index.get(id) == Some(&node_id)
+        {
+            self.id_index.remove(id);
+        }
+        self.nodes[node_id].parent = None;
+        self.nodes[node_id].children.clear();
+        self.free_list.push(node_id);
+    }
+
     /// Replace the children of `node_id` with a single text node.
     pub fn set_text_content(&mut self, node_id: NodeId, text: &str) {
-        // Clear parent links on old children before removing them.
+        // Recursively free old children and all their descendants.
         let old_children: Vec<NodeId> = self.nodes[node_id].children.clone();
         for child_id in old_children {
-            self.nodes[child_id].parent = None;
+            self.free_subtree(child_id);
         }
         self.nodes[node_id].children.clear();
         let text_id = self.add_node(NodeKind::Text(text.to_string()));
@@ -606,9 +706,13 @@ impl Document {
 
     /// Remove `child_id` from its parent's child list and clear its
     /// parent link. Returns the former parent if one existed.
+    ///
+    /// Recursively frees all descendants, removing their ID index
+    /// entries and adding their arena slots to the free list.
     pub fn remove_child(&mut self, child_id: NodeId) -> Option<NodeId> {
         let parent_id = self.nodes[child_id].parent.take()?;
         self.nodes[parent_id].children.retain(|&c| c != child_id);
+        self.free_subtree(child_id);
         Some(parent_id)
     }
 

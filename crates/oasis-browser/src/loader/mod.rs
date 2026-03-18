@@ -10,6 +10,8 @@ pub mod gemini_fetch;
 pub mod http;
 #[cfg(feature = "psp")]
 pub mod http_psp;
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+pub mod io_thread;
 pub mod vfs;
 
 use std::fmt;

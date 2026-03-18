@@ -166,7 +166,14 @@ fn install_document_global_full(
                 if id < doc.nodes.len()
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
-                    e.set_attribute(&name, &value);
+                    // Update the ID index when the `id` attribute changes.
+                    if name == "id" {
+                        let old_id = e.id().map(String::from);
+                        e.set_attribute(&name, &value);
+                        doc.update_id_index(id, old_id.as_deref(), Some(&value));
+                    } else {
+                        e.set_attribute(&name, &value);
+                    }
                 }
             })?,
         )?;
@@ -183,6 +190,15 @@ fn install_document_global_full(
                 if id < doc.nodes.len()
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
+                    // Update the ID index when the `id` attribute is removed.
+                    if name == "id" {
+                        let old_id = e.id().map(String::from);
+                        let removed = e.remove_attribute(&name);
+                        if removed {
+                            doc.update_id_index(id, old_id.as_deref(), None);
+                        }
+                        return removed;
+                    }
                     return e.remove_attribute(&name);
                 }
                 false
@@ -438,10 +454,11 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return;
                 }
-                // Clear existing children.
+                // Recursively free existing children and all descendants
+                // (ID index entries, arena slots).
                 let old: Vec<NodeId> = doc.nodes[id].children.clone();
                 for child_id in old {
-                    doc.nodes[child_id].parent = None;
+                    doc.free_subtree(child_id);
                 }
                 doc.nodes[id].children.clear();
 
