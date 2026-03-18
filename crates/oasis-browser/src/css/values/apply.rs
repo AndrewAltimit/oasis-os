@@ -580,6 +580,12 @@ impl ComputedStyle {
             "z-index" => {
                 if let CssValue::Number(n) = value {
                     self.z_index = *n as i32;
+                    self.z_index_auto = false;
+                } else if let Some(kw) = as_keyword(value)
+                    && kw == "auto"
+                {
+                    self.z_index = 0;
+                    self.z_index_auto = true;
                 }
             },
 

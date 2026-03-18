@@ -182,6 +182,22 @@ pub enum ReplacedContent {
         value: String,
         placeholder: String,
         size: u32,
+        is_password: bool,
+    },
+    /// A checkbox input.
+    Checkbox {
+        checked: bool,
+    },
+    /// A radio button input.
+    RadioButton {
+        checked: bool,
+    },
+    /// A multi-line text area.
+    TextArea {
+        value: String,
+        placeholder: String,
+        rows: u32,
+        cols: u32,
     },
     /// A submit/button input.
     SubmitButton {

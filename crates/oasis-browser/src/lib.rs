@@ -428,6 +428,11 @@ pub struct BrowserWidget {
     /// Scroll X position that link_map regions are currently adjusted to.
     link_map_scroll_x: i32,
 
+    /// Per-element scroll offsets for nested scroll containers.
+    /// Elements with `overflow: auto/scroll` whose content exceeds their
+    /// box dimensions get an entry here, keyed by DOM node ID.
+    nested_scroll_offsets: HashMap<NodeId, (f32, f32)>,
+
     /// Dirty rectangles that need repainting (e.g. hover/focus changes).
     /// When non-empty and no layout change occurred, only these regions
     /// are replayed via `replay_dirty()` instead of a full `replay()`.
@@ -540,6 +545,7 @@ impl BrowserWidget {
             display_list_scroll_x: 0,
             link_map_scroll_y: 0,
             link_map_scroll_x: 0,
+            nested_scroll_offsets: HashMap::new(),
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
             tile_grid: None,

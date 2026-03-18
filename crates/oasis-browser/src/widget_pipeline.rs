@@ -700,6 +700,7 @@ impl BrowserWidget {
         self.layout_root = Some(layout_root);
         self.link_map.clear();
         self.scroll.reset();
+        self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;

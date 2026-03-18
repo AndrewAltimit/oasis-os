@@ -86,7 +86,10 @@ pub(super) fn paint_replaced(
             // Nothing to paint.
         },
         ReplacedContent::TextInput {
-            value, placeholder, ..
+            value,
+            placeholder,
+            is_password,
+            ..
         } => {
             let style = &layout_box.style;
             let w = content.width as u32;
@@ -128,10 +131,110 @@ pub(super) fn paint_replaced(
             let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
             // Show value text, or placeholder if empty.
             if !value.is_empty() {
-                backend.draw_text(value, x + pad, y + pad_top, font_size, style.color)?;
+                let display_text = if *is_password {
+                    "\u{25CF}".repeat(value.chars().count())
+                } else {
+                    value.clone()
+                };
+                backend.draw_text(&display_text, x + pad, y + pad_top, font_size, style.color)?;
             } else if !placeholder.is_empty() {
                 let gray = Color::rgb(160, 160, 160);
                 backend.draw_text(placeholder, x + pad, y + pad_top, font_size, gray)?;
+            }
+        },
+        ReplacedContent::Checkbox { checked } => {
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // White background
+            backend.fill_rect(x, y, w, h, Color::rgb(255, 255, 255))?;
+            // Border
+            let border_color = Color::rgb(118, 118, 118);
+            backend.fill_rect(x, y, w, 1, border_color)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
+            backend.fill_rect(x, y, 1, h, border_color)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
+            // Checkmark when checked
+            if *checked && w >= 5 && h >= 5 {
+                let ck = Color::rgb(0, 0, 0);
+                // Short leg: going down-right
+                backend.fill_rect(x + 2, y + h as i32 - 5, 1, 1, ck)?;
+                backend.fill_rect(x + 3, y + h as i32 - 4, 1, 1, ck)?;
+                backend.fill_rect(x + 4, y + h as i32 - 3, 1, 1, ck)?;
+                // Long leg: going up-right
+                backend.fill_rect(x + 5, y + h as i32 - 4, 1, 1, ck)?;
+                backend.fill_rect(x + 6, y + h as i32 - 5, 1, 1, ck)?;
+                backend.fill_rect(x + 7, y + h as i32 - 6, 1, 1, ck)?;
+                backend.fill_rect(x + 8, y + h as i32 - 7, 1, 1, ck)?;
+                backend.fill_rect(x + 9, y + h as i32 - 8, 1, 1, ck)?;
+                backend.fill_rect(x + 10, y + h as i32 - 9, 1, 1, ck)?;
+            }
+        },
+        ReplacedContent::RadioButton { checked } => {
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // Outer circle approximation using rounded rect
+            let radius = w.min(h) as u16 / 2;
+            backend.fill_rounded_rect(x, y, w, h, radius, Color::rgb(255, 255, 255))?;
+            // Border edges for circle approximation
+            let bc = Color::rgb(118, 118, 118);
+            backend.fill_rect(x + 2, y, w - 4, 1, bc)?;
+            backend.fill_rect(x + 2, y + h as i32 - 1, w - 4, 1, bc)?;
+            backend.fill_rect(x, y + 2, 1, h - 4, bc)?;
+            backend.fill_rect(x + w as i32 - 1, y + 2, 1, h - 4, bc)?;
+            backend.fill_rect(x + 1, y + 1, 1, 1, bc)?;
+            backend.fill_rect(x + w as i32 - 2, y + 1, 1, 1, bc)?;
+            backend.fill_rect(x + 1, y + h as i32 - 2, 1, 1, bc)?;
+            backend.fill_rect(x + w as i32 - 2, y + h as i32 - 2, 1, 1, bc)?;
+            // Inner filled dot when checked
+            if *checked && w >= 7 && h >= 7 {
+                let dot = Color::rgb(0, 0, 0);
+                let inset = 4_i32;
+                let dw = w as i32 - inset * 2;
+                let dh = h as i32 - inset * 2;
+                if dw > 0 && dh > 0 {
+                    backend.fill_rect(x + inset, y + inset, dw as u32, dh as u32, dot)?;
+                }
+            }
+        },
+        ReplacedContent::TextArea {
+            value, placeholder, ..
+        } => {
+            let style = &layout_box.style;
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // Background
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(255, 255, 255)
+            };
+            backend.fill_rect(x, y, w, h, bg)?;
+            // Border: 3D inset
+            let dark = Color::rgb(118, 118, 118);
+            let light = Color::rgb(200, 200, 200);
+            backend.fill_rect(x, y, w, 1, dark)?;
+            backend.fill_rect(x, y, 1, h, dark)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, light)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, light)?;
+            // Text content
+            let font_size = style.font_size as u16;
+            let pad = 3_i32;
+            let line_height = font_size as i32 + 2;
+            let (text, color) = if !value.is_empty() {
+                (value.as_str(), style.color)
+            } else if !placeholder.is_empty() {
+                (placeholder.as_str(), Color::rgb(160, 160, 160))
+            } else {
+                ("", style.color)
+            };
+            if !text.is_empty() {
+                for (i, line) in text.lines().enumerate() {
+                    let ly = y + pad + i as i32 * line_height;
+                    if ly > y + h as i32 {
+                        break;
+                    }
+                    backend.draw_text(line, x + pad, ly, font_size, color)?;
+                }
             }
         },
         ReplacedContent::SelectBox { label } => {

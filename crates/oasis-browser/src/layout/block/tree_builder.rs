@@ -152,6 +152,29 @@ fn build_box_for_node(
                 return Some(lb);
             }
 
+            // Handle <textarea> as a replaced element.
+            if elem.tag == TagName::Textarea {
+                let value = collect_text_content(doc, node_id);
+                let placeholder = elem.get_attribute("placeholder").unwrap_or("").to_string();
+                let rows = elem
+                    .get_attribute("rows")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(2);
+                let cols = elem
+                    .get_attribute("cols")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(20);
+                let replaced = ReplacedContent::TextArea {
+                    value,
+                    placeholder,
+                    rows,
+                    cols,
+                };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
             // Handle <select> specially: find selected/first <option> text.
             if elem.tag == TagName::Select {
                 let label = find_select_label(doc, node_id);
@@ -369,8 +392,17 @@ fn replaced_content(
                         .to_string();
                     Some(ReplacedContent::SubmitButton { label })
                 },
+                "checkbox" => {
+                    let checked = elem.get_attribute("checked").is_some();
+                    Some(ReplacedContent::Checkbox { checked })
+                },
+                "radio" => {
+                    let checked = elem.get_attribute("checked").is_some();
+                    Some(ReplacedContent::RadioButton { checked })
+                },
                 _ => {
                     // text, password, search, etc.
+                    let is_password = input_type == "password";
                     let value = elem.get_attribute("value").unwrap_or("").to_string();
                     let placeholder = elem.get_attribute("placeholder").unwrap_or("").to_string();
                     let size = elem
@@ -381,6 +413,7 @@ fn replaced_content(
                         value,
                         placeholder,
                         size,
+                        is_password,
                     })
                 },
             }

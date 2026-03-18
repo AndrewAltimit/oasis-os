@@ -1229,21 +1229,42 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
 
   // -- Event listener support --
+  // Listeners stored as {fn, once, capture, passive} objects.
   var __oasis_listeners = {};
 
-  Element.prototype.addEventListener = function(type, fn) {
+  function __parse_opts(opts) {
+    var c = false, o = false, p = false;
+    if (opts === true || opts === false) { c = opts; }
+    else if (opts && typeof opts === 'object') {
+      c = !!opts.capture; o = !!opts.once; p = !!opts.passive;
+    }
+    return {capture: c, once: o, passive: p};
+  }
+
+  Element.prototype.addEventListener = function(type, fn, opts) {
+    if (!fn) return;
+    var o = __parse_opts(opts);
     var nid = this.__oasis_node_id;
     var key = nid + ":" + type;
     if (!__oasis_listeners[key]) __oasis_listeners[key] = [];
-    __oasis_listeners[key].push(fn);
+    var arr = __oasis_listeners[key];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].fn === fn && arr[i].capture === o.capture) return;
+    }
+    arr.push({fn: fn, once: o.once, capture: o.capture, passive: o.passive});
   };
-  Element.prototype.removeEventListener = function(type, fn) {
+  Element.prototype.removeEventListener = function(type, fn, opts) {
+    var cap = false;
+    if (opts === true || opts === false) cap = opts;
+    else if (opts && typeof opts === 'object') cap = !!opts.capture;
     var nid = this.__oasis_node_id;
     var key = nid + ":" + type;
     var arr = __oasis_listeners[key];
     if (!arr) return;
     for (var i = 0; i < arr.length; i++) {
-      if (arr[i] === fn) { arr.splice(i, 1); return; }
+      if (arr[i].fn === fn && arr[i].capture === cap) {
+        arr.splice(i, 1); return;
+      }
     }
   };
   Element.prototype.dispatchEvent = function(evt) {
@@ -1252,8 +1273,28 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     var arr = __oasis_listeners[key];
     if (!arr) return;
     evt.target = this;
-    for (var i = 0; i < arr.length; i++) arr[i].call(this, evt);
+    for (var i = 0; i < arr.length; i++) {
+      arr[i].fn.call(this, evt);
+      if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+    }
   };
+
+  // Helper: invoke matching listeners, handling once removal.
+  // phase: 1=capture, 2=target, 3=bubble
+  function __fire(key, el, evt, phase) {
+    var arr = __oasis_listeners[key];
+    if (!arr) return;
+    for (var i = 0; i < arr.length; i++) {
+      if (evt._stopped) break;
+      var e = arr[i];
+      if (phase === 2 || (phase === 1 && e.capture) ||
+          (phase === 3 && !e.capture)) {
+        evt.currentTarget = el;
+        e.fn.call(el, evt);
+        if (e.once) { arr.splice(i, 1); i--; }
+      }
+    }
+  }
 
   // Expose dispatch helper for Rust-side event triggering.
   globalThis.__oasis_dispatch_event =
@@ -1263,13 +1304,19 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       if (!arr || arr.length === 0) return;
       var el = new Element(nid);
       var evt = {
-        type: type, target: el, detail: detail || null
+        type: type, target: el, detail: detail || null,
+        _stopped: false,
+        stopPropagation: function() { this._stopped = true; },
+        preventDefault: function() { this._defaultPrevented = true; },
+        _defaultPrevented: false
       };
-      for (var i = 0; i < arr.length; i++)
-        arr[i].call(el, evt);
+      for (var i = 0; i < arr.length; i++) {
+        arr[i].fn.call(el, evt);
+        if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+      }
     };
 
-  // Dispatch with bubbling: walk from target up to root.
+  // Dispatch with capture, target, and bubble phases.
   globalThis.__oasis_dispatch_with_bubbling =
     function(nid, type, detail) {
       var target = new Element(nid);
@@ -1278,6 +1325,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
         detail: detail || null,
         target: target,
         currentTarget: null,
+        eventPhase: 0,
         _stopped: false,
         stopPropagation: function() {
           this._stopped = true;
@@ -1287,23 +1335,30 @@ const JS_DOM_BOOTSTRAP: &str = r#"
         },
         _defaultPrevented: false
       };
-      // Spread detail properties onto the event (clientX, clientY, key, etc.)
       if (detail && typeof detail === 'object') {
         for (var k in detail) {
           if (detail.hasOwnProperty(k)) evt[k] = detail[k];
         }
       }
-      var current = nid;
-      while (current >= 0 && !evt._stopped) {
-        var key = current + ":" + type;
-        var arr = __oasis_listeners[key];
-        if (arr) {
-          evt.currentTarget = new Element(current);
-          for (var i = 0; i < arr.length; i++) {
-            arr[i].call(evt.currentTarget, evt);
-          }
-        }
-        current = __oasis_parent(current);
+      // Build ancestor chain (excluding target), root first.
+      var ancestors = [];
+      var p = __oasis_parent(nid);
+      while (p >= 0) { ancestors.push(p); p = __oasis_parent(p); }
+      ancestors.reverse();
+      // Capture phase: root -> target (ancestors only, capture listeners).
+      evt.eventPhase = 1;
+      for (var i = 0; i < ancestors.length && !evt._stopped; i++) {
+        __fire(ancestors[i] + ":" + type, new Element(ancestors[i]), evt, 1);
+      }
+      // Target phase: all listeners on target.
+      if (!evt._stopped) {
+        evt.eventPhase = 2;
+        __fire(nid + ":" + type, target, evt, 2);
+      }
+      // Bubble phase: target -> root (ancestors only, non-capture listeners).
+      evt.eventPhase = 3;
+      for (var i = ancestors.length - 1; i >= 0 && !evt._stopped; i--) {
+        __fire(ancestors[i] + ":" + type, new Element(ancestors[i]), evt, 3);
       }
     };
 
@@ -1351,20 +1406,33 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   // Give document event listener support.
   var __doc_listeners = {};
-  document.addEventListener = function(type, fn) {
+  document.addEventListener = function(type, fn, opts) {
+    if (!fn) return;
+    var o = __parse_opts(opts);
     if (!__doc_listeners[type]) __doc_listeners[type] = [];
-    __doc_listeners[type].push(fn);
+    var arr = __doc_listeners[type];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].fn === fn && arr[i].capture === o.capture) return;
+    }
+    arr.push({fn: fn, once: o.once, capture: o.capture, passive: o.passive});
   };
-  document.removeEventListener = function(type, fn) {
+  document.removeEventListener = function(type, fn, opts) {
+    var cap = false;
+    if (opts === true || opts === false) cap = opts;
+    else if (opts && typeof opts === 'object') cap = !!opts.capture;
     if (!__doc_listeners[type]) return;
-    __doc_listeners[type] = __doc_listeners[type].filter(function(f) {
-      return f !== fn;
+    __doc_listeners[type] = __doc_listeners[type].filter(function(e) {
+      return !(e.fn === fn && e.capture === cap);
     });
   };
   document.dispatchEvent = function(evt) {
     var type = evt && evt.type ? evt.type : evt;
-    var fns = __doc_listeners[type];
-    if (fns) for (var i = 0; i < fns.length; i++) fns[i](evt);
+    var arr = __doc_listeners[type];
+    if (!arr) return;
+    for (var i = 0; i < arr.length; i++) {
+      arr[i].fn(evt);
+      if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+    }
   };
 
   // Minimal Event constructor for DOMContentLoaded etc.
@@ -2396,6 +2464,174 @@ mod tests {
             .unwrap();
         let val = engine.eval("clicked").unwrap();
         assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    // ---------------------------------------------------------------
+    // addEventListener options tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn once_option_removes_after_first_call() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { count++; }, {once: true}); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn capture_option_fires_in_capture_phase() {
+        let (engine, _doc) = setup(sample_doc());
+        // p(7) is child of div#main(6).
+        // Capture listener on div fires before bubble listener on p.
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function() { order.push('div-cap'); }, true); \
+                 p.addEventListener('click', function() { order.push('p'); }); \
+                 div.addEventListener('click', function() { order.push('div-bub'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("div-cap,p,div-bub".into()));
+    }
+
+    #[test]
+    fn remove_listener_must_match_capture_flag() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1, true); \
+                 el.removeEventListener('click', fn1, false); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        // Listener was added with capture=true, removed with capture=false,
+        // so it should NOT be removed.
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn remove_listener_with_matching_capture() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1, true); \
+                 el.removeEventListener('click', fn1, true); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(0));
+    }
+
+    #[test]
+    fn boolean_capture_arg_works() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function() { order.push('cap'); }, true); \
+                 div.addEventListener('click', function() { order.push('bub'); }, false); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("cap,bub".into()));
+    }
+
+    #[test]
+    fn once_with_bubbling() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { count++; }, {once: true}); \
+                 __oasis_dispatch_with_bubbling(\
+                     el.__oasis_node_id, 'click', null); \
+                 __oasis_dispatch_with_bubbling(\
+                     el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn document_once_listener() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 document.addEventListener('custom', function() { count++; }, {once: true}); \
+                 document.dispatchEvent({type: 'custom'}); \
+                 document.dispatchEvent({type: 'custom'})",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn duplicate_listener_prevented() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1); \
+                 el.addEventListener('click', fn1); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        // Per spec, adding the same fn+capture combo twice is a no-op.
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn stop_propagation_in_capture_phase() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function(e) { \
+                     order.push('div-cap'); e.stopPropagation(); \
+                 }, true); \
+                 p.addEventListener('click', function() { order.push('p'); }); \
+                 div.addEventListener('click', function() { order.push('div-bub'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        // Capture listener stops propagation, so target and bubble never fire.
+        assert_eq!(val, oasis_js::JsValue::String("div-cap".into()));
     }
 
     // ---------------------------------------------------------------

@@ -381,6 +381,16 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
             let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
             (text_w + 20.0, 18.0) // extra space for dropdown arrow
         },
+        ReplacedContent::Checkbox { .. } => (13.0, 13.0),
+        ReplacedContent::RadioButton { .. } => (13.0, 13.0),
+        ReplacedContent::TextArea { rows, cols, .. } => {
+            let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
+            let line_height = 14.0;
+            (
+                *cols as f32 * char_w + 8.0,
+                *rows as f32 * line_height + 4.0,
+            )
+        },
         ReplacedContent::Svg { element } => (element.width, element.height),
         ReplacedContent::Canvas { state } => {
             let s = state.borrow();

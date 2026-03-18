@@ -176,8 +176,13 @@ impl BrowserWidget {
                 };
 
                 // Record to display list (no draw calls emitted).
-                let links =
-                    paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
+                let links = paint::record::record_with_scroll(
+                    layout,
+                    viewport,
+                    &self.href_map,
+                    &mut self.display_list,
+                    &self.nested_scroll_offsets,
+                );
                 // Compact and optimize the display list.
                 self.display_list.compact();
                 self.display_list.optimize();
