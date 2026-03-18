@@ -171,14 +171,10 @@ fn do_request(
 
     request.push_str("\r\n");
 
-    stream
-        .write(request.as_bytes())
-        .map_err(|e| OasisError::Backend(format!("write request: {e}").into()))?;
+    write_all(&mut *stream, request.as_bytes())?;
 
     if let Some(data) = body {
-        stream
-            .write(data)
-            .map_err(|e| OasisError::Backend(format!("write body: {e}").into()))?;
+        write_all(&mut *stream, data)?;
     }
 
     // Flush TLS buffers -- embedded-tls buffers records internally and
@@ -211,13 +207,16 @@ fn do_request(
                     if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
                         let hdr_end = pos + 4;
                         body_start = Some(hdr_end);
-                        let hdr = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                        let hdr = String::from_utf8_lossy(&buf[..pos]);
                         let hdr_lower = hdr.to_ascii_lowercase();
-                        if hdr_lower.contains("transfer-encoding") && hdr_lower.contains("chunked")
+                        // Anchor header searches to line boundaries to
+                        // avoid matching e.g. X-Content-Length.
+                        if hdr_lower.contains("\ntransfer-encoding:")
+                            && hdr_lower.contains("chunked")
                         {
                             is_chunked = true;
-                        } else if let Some(cl_start) = hdr_lower.find("content-length:") {
-                            let after = &hdr_lower[cl_start + 15..];
+                        } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
+                            let after = &hdr_lower[cl_start + 17..];
                             let line_end = after.find('\n').unwrap_or(after.len());
                             if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
                                 expected_body_len = Some(cl);
@@ -226,13 +225,16 @@ fn do_request(
                     } else if let Some(pos) = find_subsequence(&buf, b"\n\n") {
                         let hdr_end = pos + 2;
                         body_start = Some(hdr_end);
-                        let hdr = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                        let hdr = String::from_utf8_lossy(&buf[..pos]);
                         let hdr_lower = hdr.to_ascii_lowercase();
-                        if hdr_lower.contains("transfer-encoding") && hdr_lower.contains("chunked")
+                        // Anchor header searches to line boundaries to
+                        // avoid matching e.g. X-Content-Length.
+                        if hdr_lower.contains("\ntransfer-encoding:")
+                            && hdr_lower.contains("chunked")
                         {
                             is_chunked = true;
-                        } else if let Some(cl_start) = hdr_lower.find("content-length:") {
-                            let after = &hdr_lower[cl_start + 15..];
+                        } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
+                            let after = &hdr_lower[cl_start + 17..];
                             let line_end = after.find('\n').unwrap_or(after.len());
                             if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
                                 expected_body_len = Some(cl);
@@ -312,15 +314,17 @@ fn parse_response(data: &[u8]) -> Result<HttpResponse> {
     let header_bytes = &data[..header_end];
     let body_start = header_end + separator_len;
 
-    let header_str = std::str::from_utf8(header_bytes)
-        .map_err(|_| OasisError::Backend("non-UTF-8 headers".into()))?;
+    // Use lossy conversion -- real-world servers sometimes send
+    // ISO-8859-1 in headers (RFC 7230 allows only ASCII, but we
+    // should be robust).
+    let header_str = String::from_utf8_lossy(header_bytes);
 
     let header_owned;
-    let header_normalized = if header_str.contains("\r\n") {
+    let header_normalized: &str = if header_str.contains("\r\n") {
         header_owned = header_str.replace("\r\n", "\n");
         header_owned.as_str()
     } else {
-        header_str
+        &header_str
     };
 
     let mut lines = header_normalized.split('\n');
@@ -441,4 +445,18 @@ fn is_redirect(status: u16) -> bool {
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Write all bytes, handling partial writes.
+fn write_all(stream: &mut dyn NetworkStream, mut data: &[u8]) -> Result<()> {
+    while !data.is_empty() {
+        let n = stream
+            .write(data)
+            .map_err(|e| OasisError::Backend(format!("write: {e}").into()))?;
+        if n == 0 {
+            return Err(OasisError::Backend("write returned 0 bytes".into()));
+        }
+        data = &data[n..];
+    }
+    Ok(())
 }
