@@ -30,6 +30,10 @@ pub type SharedDoc = Rc<RefCell<Document>>;
 /// Shared, interior-mutable computed styles for `getComputedStyle()`.
 pub type SharedStyles = Rc<RefCell<Vec<Option<ComputedStyle>>>>;
 
+/// Shared, interior-mutable localStorage backing store that persists
+/// across page navigations within the same `BrowserWidget` lifetime.
+pub type SharedLocalStorage = Rc<RefCell<HashMap<String, String>>>;
+
 /// Sentinel returned when a DOM lookup produces no result.
 const NO_NODE: i32 = -1;
 
@@ -64,7 +68,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav, None, None)
+    install_document_global_full(ctx, doc, "", &nav, None, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -72,7 +76,7 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav, None, None)
+    install_document_global_full(ctx, doc, url, &nav, None, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
@@ -85,11 +89,12 @@ pub fn install_document_global_with_nav(
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, None, None)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None, None)
 }
 
 /// Like [`install_document_global_with_nav`] but also accepts an
-/// optional CSP policy to enforce `connect-src` on `fetch()` calls.
+/// optional CSP policy to enforce `connect-src` on `fetch()` calls,
+/// and an optional persistent localStorage backing store.
 pub fn install_document_global_with_csp(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -97,12 +102,21 @@ pub fn install_document_global_with_csp(
     nav_actions: &SharedNavActions,
     styles: &SharedStyles,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    persistent_local_storage: Option<&SharedLocalStorage>,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, Some(styles), csp)
+    install_document_global_full(
+        ctx,
+        doc,
+        url,
+        nav_actions,
+        Some(styles),
+        csp,
+        persistent_local_storage,
+    )
 }
 
 /// Full installation: document global, location/history, nav actions,
-/// computed styles, fetch, localStorage/sessionStorage.
+/// computed styles, fetch, localStorage/sessionStorage, document.cookie.
 fn install_document_global_full(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -110,6 +124,7 @@ fn install_document_global_full(
     nav_actions: &SharedNavActions,
     styles: Option<&SharedStyles>,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    persistent_local_storage: Option<&SharedLocalStorage>,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -590,15 +605,6 @@ fn install_document_global_full(
         )?;
     }
 
-    // -- __oasis_location() -> String ---------------------------------
-    {
-        let url_owned = url.to_string();
-        globals.set(
-            "__oasis_location",
-            Function::new(ctx.clone(), move || -> String { url_owned.clone() })?,
-        )?;
-    }
-
     // -- __oasis_location_assign(url) ---------------------------------
     {
         let nav = Rc::clone(nav_actions);
@@ -699,11 +705,69 @@ fn install_document_global_full(
         )?;
     }
 
-    // -- localStorage / sessionStorage -----------------------------------
-    // Each storage type gets its own backing HashMap so that writes to
-    // localStorage do not leak into sessionStorage and vice-versa.
+    // -- __oasis_location_push(url) -- for history.pushState URL updates --
     {
-        let local_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+        let pushed_url: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let pu1 = Rc::clone(&pushed_url);
+        globals.set(
+            "__oasis_location_push",
+            Function::new(ctx.clone(), move |url: String| {
+                *pu1.borrow_mut() = Some(url);
+            })?,
+        )?;
+        // Also override __oasis_location to return the pushed URL if set.
+        let pu2 = Rc::clone(&pushed_url);
+        let orig_url = url.to_string();
+        globals.set(
+            "__oasis_location",
+            Function::new(ctx.clone(), move || -> String {
+                pu2.borrow().clone().unwrap_or_else(|| orig_url.clone())
+            })?,
+        )?;
+    }
+
+    // -- __oasis_cookie_get() / __oasis_cookie_set(raw) ------------------
+    {
+        let cookie_map: Rc<RefCell<HashMap<String, String>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let cm1 = Rc::clone(&cookie_map);
+        globals.set(
+            "__oasis_cookie_get",
+            Function::new(ctx.clone(), move || -> String {
+                let map = cm1.borrow();
+                let mut pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                pairs.sort();
+                pairs.join("; ")
+            })?,
+        )?;
+        let cm2 = Rc::clone(&cookie_map);
+        globals.set(
+            "__oasis_cookie_set",
+            Function::new(ctx.clone(), move |raw: String| {
+                // Parse "name=value; path=/; ..." — only extract the first name=value.
+                if let Some(pair) = raw.split(';').next() {
+                    let pair = pair.trim();
+                    if let Some(eq) = pair.find('=') {
+                        let name = pair[..eq].trim().to_string();
+                        let value = pair[eq + 1..].trim().to_string();
+                        if !name.is_empty() {
+                            cm2.borrow_mut().insert(name, value);
+                        }
+                    }
+                }
+            })?,
+        )?;
+    }
+
+    // -- localStorage / sessionStorage -----------------------------------
+    // localStorage uses a persistent backing store (shared across page
+    // navigations) when provided, otherwise falls back to a fresh map.
+    // sessionStorage always uses a fresh map (page-scoped).
+    {
+        let local_store = match persistent_local_storage {
+            Some(store) => Rc::clone(store),
+            None => Rc::new(RefCell::new(HashMap::<String, String>::new())),
+        };
         let session_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
 
         let l1 = Rc::clone(&local_store);
@@ -1461,6 +1525,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   // -- history object --
   globalThis.history = {
+    __state: null,
     back: function() { __oasis_history_back(); },
     forward: function() { __oasis_history_forward(); },
     go: function(delta) {
@@ -1468,6 +1533,15 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       else if (delta > 0) __oasis_history_forward();
       else __oasis_location_assign(__oasis_location());
     },
+    pushState: function(state, title, url) {
+      this.__state = state;
+      if (url) __oasis_location_push(String(url));
+    },
+    replaceState: function(state, title, url) {
+      this.__state = state;
+      if (url) __oasis_location_push(String(url));
+    },
+    get state() { return this.__state; },
     get length() { return 1; }
   };
 
@@ -1512,6 +1586,13 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
   globalThis.localStorage = __make_storage(0);
   globalThis.sessionStorage = __make_storage(1);
+
+  // -- document.cookie --
+  Object.defineProperty(document, 'cookie', {
+    get: function() { return __oasis_cookie_get(); },
+    set: function(v) { __oasis_cookie_set(String(v)); },
+    configurable: true
+  });
 })();
 "#;
 

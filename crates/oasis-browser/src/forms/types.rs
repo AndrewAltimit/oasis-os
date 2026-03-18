@@ -70,6 +70,8 @@ pub enum FormElement {
         name: String,
         options: Vec<SelectOption>,
         selected_index: Option<usize>,
+        /// Whether the dropdown overlay is currently open.
+        open: bool,
     },
     /// A multi-line text area.
     TextArea {
@@ -335,6 +337,7 @@ mod tests {
             name: "choice".into(),
             options: opts,
             selected_index: Some(0),
+            open: false,
         };
         assert_eq!(elem.name(), Some("choice"));
         assert!(elem.is_focusable());

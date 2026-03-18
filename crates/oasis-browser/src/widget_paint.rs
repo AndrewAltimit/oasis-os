@@ -4,6 +4,7 @@ use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vfs::Vfs;
 
+use crate::css::values::ComputedStyle;
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect, ReplacedContent};
 use crate::paint;
@@ -40,6 +41,19 @@ impl BrowserWidget {
         // Advance CSS animations and transitions.
         let anim_active = self.animation_engine.tick(dt_ms);
         let trans_active = self.transition_engine.tick(dt_ms);
+
+        // Apply transition overrides to styles so layout and paint see
+        // the interpolated values.
+        if trans_active {
+            for (nid, prop) in self.transition_engine.active_node_properties() {
+                if let Some(val) = self.transition_engine.get_node_value(nid, prop)
+                    && let Some(Some(style)) = self.styles.get_mut(nid)
+                {
+                    apply_transition_value(style, prop, val);
+                }
+            }
+        }
+
         if anim_active || trans_active {
             // Check if all animated properties are visual-only (color changes
             // that don't affect layout). If so, use dirty-rect repainting
@@ -880,4 +894,38 @@ fn is_visual_only_property(prop: &str) -> bool {
             | "visibility"
             | "text-decoration-color"
     )
+}
+
+/// Apply a single interpolated transition value to a [`ComputedStyle`].
+fn apply_transition_value(style: &mut ComputedStyle, property: &str, value: f32) {
+    match property {
+        "opacity" => style.opacity = value,
+        "font-size" => style.font_size = value,
+        "line-height" => style.line_height = value,
+        "letter-spacing" => style.letter_spacing = value,
+        "word-spacing" => style.word_spacing = value,
+        "margin-top" => style.margin_top = value,
+        "margin-right" => style.margin_right = value,
+        "margin-bottom" => style.margin_bottom = value,
+        "margin-left" => style.margin_left = value,
+        "padding-top" => style.padding_top = value,
+        "padding-right" => style.padding_right = value,
+        "padding-bottom" => style.padding_bottom = value,
+        "padding-left" => style.padding_left = value,
+        "border-top-width" => style.border_top_width = value,
+        "border-right-width" => style.border_right_width = value,
+        "border-bottom-width" => style.border_bottom_width = value,
+        "border-left-width" => style.border_left_width = value,
+        "border-radius" => style.border_radius = value,
+        "border-spacing" => style.border_spacing = value,
+        "outline-width" => style.outline_width = value,
+        "outline-offset" => style.outline_offset = value,
+        "text-indent" => style.text_indent = value,
+        "gap" => style.gap = value,
+        "column-gap" => style.column_gap = value,
+        "row-gap" => style.row_gap = value,
+        "flex-grow" => style.flex_grow = value,
+        "flex-shrink" => style.flex_shrink = value,
+        _ => {},
+    }
 }

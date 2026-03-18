@@ -62,6 +62,11 @@ impl FormState {
             .collect()
     }
 
+    /// Check whether this form contains an element with the given name.
+    pub fn has_element(&self, name: &str) -> bool {
+        self.index_of(name).is_some()
+    }
+
     /// Find element index by name.
     pub(super) fn index_of(&self, name: &str) -> Option<usize> {
         self.elements.iter().position(|e| match e {
@@ -105,6 +110,7 @@ impl FormState {
                     name,
                     options,
                     selected_index,
+                    ..
                 } if !name.is_empty() => {
                     if let Some(idx) = selected_index
                         && let Some(opt) = options.get(*idx)
@@ -230,6 +236,7 @@ mod tests {
             name: name.into(),
             options,
             selected_index: sel,
+            open: false,
         }
     }
 

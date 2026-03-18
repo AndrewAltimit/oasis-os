@@ -359,6 +359,10 @@ pub struct BrowserWidget {
     #[cfg(feature = "javascript")]
     js_nav_actions: js_dom::SharedNavActions,
 
+    /// Persistent localStorage data shared across page navigations.
+    #[cfg(feature = "javascript")]
+    js_local_storage: js_dom::SharedLocalStorage,
+
     /// Shared canvas states keyed by DOM `NodeId`. Populated during
     /// layout for `<canvas>` elements, accessed by JS canvas bindings.
     #[cfg(feature = "javascript")]
@@ -526,6 +530,8 @@ impl BrowserWidget {
             js_styles: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            #[cfg(feature = "javascript")]
+            js_local_storage: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             #[cfg(feature = "javascript")]
             canvas_states: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             transition_engine: css::transition::TransitionEngine::new(),

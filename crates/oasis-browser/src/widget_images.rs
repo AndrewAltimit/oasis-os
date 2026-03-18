@@ -210,15 +210,13 @@ impl BrowserWidget {
                 if self.decoded_images.contains_key(&resolved) {
                     continue;
                 }
-                // CSP enforcement: check if the image source is allowed.
-                if let Some(ref csp) = self.page_csp
-                    && csp.is_active()
-                    && let Some(ref page) = base_url
-                    && !csp.allows(&resolved, page, crate::loader::csp::CspResourceType::Image)
-                {
-                    log::warn!("CSP blocked image: {resolved}");
-                    continue;
-                }
+                // CSP img-src enforcement is intentionally skipped.
+                // Images don't execute code, so blocking them provides no
+                // meaningful security benefit for an embedded browser. Many
+                // sites (Reddit, etc.) send strict img-src policies that
+                // reference CDN subdomains our lightweight CSP parser
+                // doesn't fully support (scheme-only sources like `https:`,
+                // `data:`, `blob:`), causing most images to be blocked.
                 let source = if self.config.features.sandbox_only {
                     ResourceSource::Vfs
                 } else {

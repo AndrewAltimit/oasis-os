@@ -1349,8 +1349,13 @@ fn record_replaced(
         } => {
             record_textarea(layout_box, dl, x, y, value, placeholder);
         },
-        ReplacedContent::SelectBox { label } => {
-            record_select_box(layout_box, dl, x, y, label);
+        ReplacedContent::SelectBox {
+            label,
+            open,
+            options,
+            selected_index,
+        } => {
+            record_select_box(layout_box, dl, x, y, label, *open, options, *selected_index);
         },
         ReplacedContent::SubmitButton { label } => {
             record_submit_button(layout_box, dl, x, y, label);
@@ -1767,7 +1772,16 @@ fn record_textarea(
     }
 }
 
-fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, label: &str) {
+fn record_select_box(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    x: i32,
+    y: i32,
+    label: &str,
+    open: bool,
+    options: &[String],
+    selected_index: Option<usize>,
+) {
     let style = &layout_box.style;
     let w = layout_box.dimensions.content.width as u32;
     let h = layout_box.dimensions.content.height as u32;
@@ -1843,6 +1857,82 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         width: arrow_w,
         node_id: None,
     });
+    if open && !options.is_empty() {
+        let line_h = font_size as u32 + 4;
+        let dropdown_h = options.len() as u32 * line_h;
+        let dy = y + h as i32;
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w,
+            h: dropdown_h,
+            color: Color::rgb(255, 255, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w,
+            h: 1,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy + dropdown_h as i32 - 1,
+            w,
+            h: 1,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w: 1,
+            h: dropdown_h,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: x + w as i32 - 1,
+            y: dy,
+            w: 1,
+            h: dropdown_h,
+            color: border_color,
+            node_id: None,
+        });
+        for (i, opt_label) in options.iter().enumerate() {
+            let oy = dy + i as i32 * line_h as i32;
+            let is_selected = selected_index == Some(i);
+            if is_selected {
+                dl.push(DisplayItem::FillRect {
+                    x: x + 1,
+                    y: oy,
+                    w: w.saturating_sub(2),
+                    h: line_h,
+                    color: Color::rgb(51, 122, 183),
+                    node_id: None,
+                });
+            }
+            let text_color = if is_selected {
+                Color::rgb(255, 255, 255)
+            } else {
+                style.color
+            };
+            let opt_w = oasis_types::backend::bitmap_measure_text(opt_label, font_size);
+            dl.push(DisplayItem::DrawText {
+                text: opt_label.clone(),
+                x: x + 3,
+                y: oy + 2,
+                font_size,
+                color: text_color,
+                bold: false,
+                italic: false,
+                width: opt_w,
+                node_id: None,
+            });
+        }
+    }
 }
 
 fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, label: &str) {

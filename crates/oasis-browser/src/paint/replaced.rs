@@ -237,7 +237,12 @@ pub(super) fn paint_replaced(
                 }
             }
         },
-        ReplacedContent::SelectBox { label } => {
+        ReplacedContent::SelectBox {
+            label,
+            open,
+            options,
+            selected_index,
+        } => {
             let style = &layout_box.style;
             let w = content.width as u32;
             let h = content.height as u32;
@@ -262,6 +267,38 @@ pub(super) fn paint_replaced(
             // Dropdown arrow "v" on the right
             let arrow_x = x + w as i32 - 10;
             backend.draw_text("v", arrow_x, y + pad_top, font_size, text_color)?;
+            if *open && !options.is_empty() {
+                let line_h = font_size as i32 + 4;
+                let dropdown_h = options.len() as u32 * line_h as u32;
+                let dy = y + h as i32;
+                backend.fill_rect(x, dy, w, dropdown_h, Color::rgb(255, 255, 255))?;
+                backend.fill_rect(x, dy, w, 1, border_color)?;
+                backend.fill_rect(x, dy + dropdown_h as i32 - 1, w, 1, border_color)?;
+                backend.fill_rect(x, dy, 1, dropdown_h, border_color)?;
+                backend.fill_rect(x + w as i32 - 1, dy, 1, dropdown_h, border_color)?;
+                for (i, opt_label) in options.iter().enumerate() {
+                    let oy = dy + i as i32 * line_h;
+                    let is_selected = *selected_index == Some(i);
+                    if is_selected {
+                        backend.fill_rect(
+                            x + 1,
+                            oy,
+                            w.saturating_sub(2),
+                            line_h as u32,
+                            Color::rgb(51, 122, 183),
+                        )?;
+                        backend.draw_text(
+                            opt_label,
+                            x + 3,
+                            oy + 2,
+                            font_size,
+                            Color::rgb(255, 255, 255),
+                        )?;
+                    } else {
+                        backend.draw_text(opt_label, x + 3, oy + 2, font_size, text_color)?;
+                    }
+                }
+            }
         },
         ReplacedContent::Svg { element } => {
             crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;

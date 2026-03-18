@@ -112,8 +112,9 @@ impl TransitionEngine {
         to_value: f32,
         transition: &Transition,
     ) {
-        // Replace any existing transition on the same property.
-        self.active.retain(|a| a.property != property);
+        // Replace any existing transition on the same node + property.
+        self.active
+            .retain(|a| !(a.node_id == node_id && a.property == property));
 
         self.active.push(ActiveTransition {
             node_id,
@@ -145,6 +146,23 @@ impl TransitionEngine {
             .iter()
             .find(|t| t.property == property)
             .map(|t| t.current_value())
+    }
+
+    /// Get the current interpolated value for a specific node's property.
+    pub fn get_node_value(&self, node_id: usize, property: &str) -> Option<f32> {
+        self.active
+            .iter()
+            .find(|t| t.node_id == node_id && t.property == property)
+            .map(|t| t.current_value())
+    }
+
+    /// Returns all interpolated property overrides for a given node.
+    pub fn get_node_overrides(&self, node_id: usize) -> Vec<(&str, f32)> {
+        self.active
+            .iter()
+            .filter(|t| t.node_id == node_id)
+            .map(|t| (t.property.as_str(), t.current_value()))
+            .collect()
     }
 
     /// Returns `true` if any transitions are currently in progress.

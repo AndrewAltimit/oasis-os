@@ -206,6 +206,9 @@ pub enum ReplacedContent {
     /// A `<select>` dropdown box.
     SelectBox {
         label: String,
+        open: bool,
+        options: Vec<String>,
+        selected_index: Option<usize>,
     },
     /// An inline `<svg>` element.
     Svg {
@@ -409,6 +412,9 @@ pub enum InlineFragment {
         width: f32,
         style: ComputedStyle,
         node: Option<NodeId>,
+        /// When true, this fragment originated from a soft-hyphen split
+        /// and a visible "-" should be appended when it ends a line.
+        soft_hyphen: bool,
     },
     InlineBox {
         layout_box: LayoutBox,
@@ -580,6 +586,7 @@ mod tests {
             width: 40.0,
             style: style.clone(),
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag1));
         assert_eq!(line.used_width(), 40.0);
@@ -590,6 +597,7 @@ mod tests {
             width: 40.0,
             style: style.clone(),
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag2));
         assert_eq!(line.used_width(), 80.0);
@@ -601,6 +609,7 @@ mod tests {
             width: 30.0,
             style,
             node: None,
+            soft_hyphen: false,
         };
         assert!(!line.try_add(&frag3));
     }
@@ -617,6 +626,7 @@ mod tests {
             width: 200.0,
             style,
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag));
     }

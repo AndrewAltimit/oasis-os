@@ -39,6 +39,7 @@ pub(super) fn collect_from_elements(elements: &[FormElement]) -> Vec<(String, St
                 name,
                 options,
                 selected_index,
+                ..
             } if !name.is_empty() => {
                 if let Some(idx) = selected_index
                     && let Some(opt) = options.get(*idx)

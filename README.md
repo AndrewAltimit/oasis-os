@@ -65,8 +65,8 @@ Core code never calls platform APIs directly. All rendering, input, networking, 
 - GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
 
 **Browser & JavaScript**
-- HTML/CSS/Gemini renderer with DOM, CSS cascade, flex/grid/table layout, `calc()`, transforms, animations, `@media`/`@supports` queries, light compositor (display list batching, text batching, occlusion culling, sticky scroll caching), cookies, gzip
-- JavaScript engine (QuickJS-NG) with `console` API, DOM manipulation, event dispatch
+- HTML/CSS/Gemini renderer with DOM, CSS cascade, flex/grid/table layout, `calc()`, transforms, animations, hover-triggered CSS transitions, `@media`/`@supports` queries, light compositor (display list batching, text batching, occlusion culling, sticky scroll caching), form elements with select dropdown + label association, soft hyphens, bidi text, cookies, gzip
+- JavaScript engine (QuickJS-NG) with `console` API, DOM manipulation, event dispatch, `document.cookie`, `history.pushState`, persistent `localStorage`
 
 **Shell & Apps**
 - 90+ terminal commands across 17 modules with piping, globs, aliases, variable expansion
@@ -113,8 +113,8 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 | `oasis-vector` | Resolution-independent vector graphics, path ops, icons, animations |
 | `oasis-shader` | Shadertoy-style animated fragment shaders |
 | **Content** | |
-| `oasis-browser` | HTML/CSS/Gemini engine: DOM, CSS cascade, flex/grid layout, `calc()`, full 2D transforms, Canvas 2D path API, SVG paths/groups, light compositor (batched rects+text, occlusion culling, clip intersection, animation dirty tracking, sticky scroll caching), animations, transitions, `@media`/`@supports`, cookies, CSP, reader mode, JS bindings |
-| `oasis-js` | QuickJS-NG runtime: `console` API, DOM manipulation, event dispatch (click/key/mouse with detail properties) |
+| `oasis-browser` | HTML/CSS/Gemini engine: DOM, CSS cascade, flex/grid layout, `calc()`, full 2D transforms, Canvas 2D path API, SVG paths/groups, light compositor (batched rects+text, occlusion culling, clip intersection, animation dirty tracking, sticky scroll caching), animations, hover-triggered transitions, `@media`/`@supports`, form elements (select dropdown, label association), soft hyphens, bidi text, cookies, CSP, reader mode, JS bindings |
+| `oasis-js` | QuickJS-NG runtime: `console` API, DOM manipulation, event dispatch, `document.cookie`, `history.pushState`, persistent `localStorage` |
 | `oasis-terminal` | 90+ commands, 17 modules, shell features (variables, globs, aliases, piping) |
 | `oasis-video` | MP4/H.264+AAC decode, streaming `VideoSource` API, symphonia + openh264 |
 | `oasis-rasterize` | Software rasterizer for CPU-side rendering |

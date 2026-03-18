@@ -5,7 +5,9 @@ use oasis_vfs::Vfs;
 use rustc_hash::FxHashMap;
 
 use crate::css;
+use crate::css::transition::TransitionEngine;
 use crate::css::values::ComputedStyle;
+use crate::css::values::types::Transition;
 use crate::html;
 use crate::html::dom::NodeId;
 use crate::layout::box_model::LayoutBox;
@@ -548,6 +550,69 @@ impl BrowserWidget {
 
         // Handle <summary> click: toggle the parent <details> open state.
         self.handle_details_toggle(x, y);
+
+        // Handle <label for="..."> click: focus the associated form element.
+        self.handle_label_for_click(x, y);
+    }
+
+    /// If the click hits a `<label>` element with a `for` attribute,
+    /// focus the form element whose `id` matches.
+    fn handle_label_for_click(&mut self, x: i32, y: i32) {
+        use crate::html::dom::{NodeKind, TagName};
+
+        let node_id = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32));
+
+        let Some(nid) = node_id else { return };
+        let Some(doc) = &self.document else {
+            return;
+        };
+
+        // Walk up from the hit node to find a <label> ancestor.
+        let mut label_for = None;
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if let NodeKind::Element(ref elem) = doc.nodes[id].kind
+                && elem.tag == TagName::Label
+            {
+                if let Some(for_val) = elem.get_attribute("for") {
+                    label_for = Some(for_val.to_string());
+                }
+                break;
+            }
+            cur = doc.nodes[id].parent;
+        }
+
+        let Some(for_id) = label_for else { return };
+
+        // Find the target element by id.
+        let Some(target_nid) = doc.get_element_by_id(&for_id) else {
+            return;
+        };
+
+        // Get the target element's name attribute to match against
+        // form elements.
+        let target_name = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => elem
+                .get_attribute("name")
+                .or_else(|| elem.get_attribute("id"))
+                .map(|s| s.to_string()),
+            _ => None,
+        };
+
+        let Some(name) = target_name else { return };
+
+        // Search form_manager for a form containing this element name
+        // and focus it.
+        for (fi, form) in self.form_manager.forms.iter().enumerate() {
+            if form.has_element(&name) {
+                self.form_manager.focused_form = Some(fi);
+                self.form_manager.focused_element = Some(name);
+                return;
+            }
+        }
     }
 
     /// If the click hits a `<summary>` element, toggle the `open`
@@ -825,6 +890,15 @@ impl BrowserWidget {
                     {
                         needs_full_repaint = true;
                     }
+
+                    // Start CSS transitions for numeric properties that
+                    // changed, if the element declares transitions.
+                    start_transitions_for_change(
+                        &mut self.transition_engine,
+                        nid,
+                        old_style,
+                        &new_style,
+                    );
                 } else {
                     geometry_changed = true;
                 }
@@ -1096,5 +1170,158 @@ impl BrowserWidget {
             }
         }
         None
+    }
+}
+
+/// All CSS properties that can be smoothly transitioned as a single f32.
+const TRANSITIONABLE_PROPERTIES: &[&str] = &[
+    "opacity",
+    "font-size",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-radius",
+    "border-spacing",
+    "outline-width",
+    "outline-offset",
+    "text-indent",
+    "gap",
+    "column-gap",
+    "row-gap",
+    "flex-grow",
+    "flex-shrink",
+];
+
+/// Extract a numeric value from a [`ComputedStyle`] for a transitionable
+/// CSS property. Returns `None` for properties that are not numeric
+/// (e.g. colors, enums) or not recognized.
+fn get_style_numeric_value(style: &ComputedStyle, property: &str) -> Option<f32> {
+    match property {
+        "opacity" => Some(style.opacity),
+        "font-size" => Some(style.font_size),
+        "line-height" => Some(style.line_height),
+        "letter-spacing" => Some(style.letter_spacing),
+        "word-spacing" => Some(style.word_spacing),
+        "margin-top" => Some(style.margin_top),
+        "margin-right" => Some(style.margin_right),
+        "margin-bottom" => Some(style.margin_bottom),
+        "margin-left" => Some(style.margin_left),
+        "padding-top" => Some(style.padding_top),
+        "padding-right" => Some(style.padding_right),
+        "padding-bottom" => Some(style.padding_bottom),
+        "padding-left" => Some(style.padding_left),
+        "border-top-width" => Some(style.border_top_width),
+        "border-right-width" => Some(style.border_right_width),
+        "border-bottom-width" => Some(style.border_bottom_width),
+        "border-left-width" => Some(style.border_left_width),
+        "border-radius" => Some(style.border_radius),
+        "border-spacing" => Some(style.border_spacing),
+        "outline-width" => Some(style.outline_width),
+        "outline-offset" => Some(style.outline_offset),
+        "text-indent" => Some(style.text_indent),
+        "gap" => Some(style.gap),
+        "column-gap" => Some(style.column_gap),
+        "row-gap" => Some(style.row_gap),
+        "flex-grow" => Some(style.flex_grow),
+        "flex-shrink" => Some(style.flex_shrink),
+        _ => None,
+    }
+}
+
+/// Try to start a single transition for `prop` between `old_style` and
+/// `new_style` using the given [`Transition`] declaration.
+fn try_start_property_transition(
+    engine: &mut TransitionEngine,
+    nid: NodeId,
+    prop: &str,
+    old_style: &ComputedStyle,
+    new_style: &ComputedStyle,
+    trans: &Transition,
+) {
+    if trans.duration_ms <= 0.0 {
+        return;
+    }
+    if let (Some(from), Some(to)) = (
+        get_style_numeric_value(old_style, prop),
+        get_style_numeric_value(new_style, prop),
+    ) && (from - to).abs() > f32::EPSILON
+    {
+        engine.start_transition(nid, prop, from, to, trans);
+    }
+}
+
+/// Start CSS transitions for all numeric properties that changed between
+/// `old_style` and `new_style`, based on the transition declarations in
+/// both styles.
+///
+/// The new style's transitions are checked first (entering a state like
+/// `:hover`). The old style's transitions are also checked for properties
+/// not covered by the new style (leaving a state).
+fn start_transitions_for_change(
+    engine: &mut TransitionEngine,
+    nid: NodeId,
+    old_style: &ComputedStyle,
+    new_style: &ComputedStyle,
+) {
+    // Transitions declared on the new style (e.g. entering :hover).
+    for trans in &new_style.transitions {
+        if trans.property == "all" {
+            for &prop in TRANSITIONABLE_PROPERTIES {
+                try_start_property_transition(engine, nid, prop, old_style, new_style, trans);
+            }
+        } else {
+            try_start_property_transition(
+                engine,
+                nid,
+                &trans.property,
+                old_style,
+                new_style,
+                trans,
+            );
+        }
+    }
+
+    // Transitions declared on the old style that are not covered by the
+    // new style (e.g. leaving :hover -- the base style may not redeclare
+    // the transition, but the old hover style's transition should still
+    // animate back).
+    for trans in &old_style.transitions {
+        let prop_name = &trans.property;
+        let already_covered = if prop_name == "all" {
+            // If new_style already has an "all" transition, skip.
+            new_style.transitions.iter().any(|t| t.property == "all")
+        } else {
+            new_style
+                .transitions
+                .iter()
+                .any(|t| t.property == *prop_name || t.property == "all")
+        };
+        if already_covered {
+            continue;
+        }
+
+        if *prop_name == "all" {
+            for &prop in TRANSITIONABLE_PROPERTIES {
+                // Skip properties already started from new_style.
+                if new_style.transitions.iter().any(|t| t.property == prop) {
+                    continue;
+                }
+                try_start_property_transition(engine, nid, prop, old_style, new_style, trans);
+            }
+        } else {
+            try_start_property_transition(engine, nid, prop_name, old_style, new_style, trans);
+        }
     }
 }
