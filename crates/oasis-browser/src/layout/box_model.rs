@@ -336,8 +336,10 @@ impl LayoutBox {
         }
 
         // Check children deepest-first (later children paint on top).
+        // Pass the (possibly inverse-transformed) coordinates so children
+        // are tested in local coordinate space.
         for child in self.children.iter().rev() {
-            if let Some(nid) = child.hit_test(x, y) {
+            if let Some(nid) = child.hit_test(test_x, test_y) {
                 return Some(nid);
             }
         }

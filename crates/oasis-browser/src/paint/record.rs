@@ -258,20 +258,22 @@ fn record_box(
                 WhiteSpace::NoWrap | WhiteSpace::Pre
             );
 
-        // Apply nested scroll offset for this container.
-        if let Some(nid) = layout_box.node {
-            if let Some(&(sx, sy)) = ctx.nested_scroll_offsets.get(&nid) {
-                ctx.scroll_x += sx;
-                ctx.scroll_y += sy;
-            }
-        }
-
         dl.push(DisplayItem::PushClip {
             x: (clipped.x - ctx.scroll_x + offset_x as f32) as i32,
             y: (clipped.y - ctx.scroll_y + offset_y as f32) as i32,
             w: clipped.width as u32,
             h: clipped.height as u32,
         });
+
+        // Apply nested scroll offset for this container AFTER pushing
+        // the clip so the clip boundary uses the parent's scroll offset,
+        // not this container's own scroll.
+        if let Some(nid) = layout_box.node {
+            if let Some(&(sx, sy)) = ctx.nested_scroll_offsets.get(&nid) {
+                ctx.scroll_x += sx;
+                ctx.scroll_y += sy;
+            }
+        }
     }
 
     // Transform offsets.

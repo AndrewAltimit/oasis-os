@@ -604,6 +604,9 @@ impl BrowserWidget {
 
         let Some(name) = target_name else { return };
 
+        // Update focused_node so :focus CSS and JS keyboard events work.
+        self.focused_node = Some(target_nid);
+
         // Search form_manager for a form containing this element name
         // and focus it.
         for (fi, form) in self.form_manager.forms.iter().enumerate() {

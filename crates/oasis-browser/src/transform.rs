@@ -149,29 +149,29 @@ impl AffineTransform2D {
         let mut m = Self::identity();
 
         // Pre-translate: shift by -origin.
-        m.e -= m.a * origin_x + m.b * origin_y;
-        m.f -= m.c * origin_x + m.d * origin_y;
+        m.e -= m.a * origin_x + m.c * origin_y;
+        m.f -= m.b * origin_x + m.d * origin_y;
 
         for tf in transforms {
             match tf {
                 TransformFunction::Translate(tx, ty) => {
-                    m.e += m.a * tx + m.b * ty;
-                    m.f += m.c * tx + m.d * ty;
+                    m.e += m.a * tx + m.c * ty;
+                    m.f += m.b * tx + m.d * ty;
                 },
                 TransformFunction::Scale(sx, sy) => {
                     m.a *= sx;
-                    m.b *= sy;
-                    m.c *= sx;
+                    m.b *= sx;
+                    m.c *= sy;
                     m.d *= sy;
                 },
                 TransformFunction::Rotate(deg) => {
                     let rad = deg.to_radians();
                     let cos = rad.cos();
                     let sin = rad.sin();
-                    let na = m.a * cos + m.b * sin;
-                    let nb = -m.a * sin + m.b * cos;
-                    let nc = m.c * cos + m.d * sin;
-                    let nd = -m.c * sin + m.d * cos;
+                    let na = m.a * cos + m.c * sin;
+                    let nb = m.b * cos + m.d * sin;
+                    let nc = -m.a * sin + m.c * cos;
+                    let nd = -m.b * sin + m.d * cos;
                     m.a = na;
                     m.b = nb;
                     m.c = nc;
@@ -180,22 +180,22 @@ impl AffineTransform2D {
                 TransformFunction::Skew(ax, ay) => {
                     let tan_x = ax.to_radians().tan();
                     let tan_y = ay.to_radians().tan();
-                    let na = m.a + m.b * tan_y;
-                    let nb = m.a * tan_x + m.b;
-                    let nc = m.c + m.d * tan_y;
-                    let nd = m.c * tan_x + m.d;
+                    let na = m.a + m.c * tan_y;
+                    let nb = m.b + m.d * tan_y;
+                    let nc = m.a * tan_x + m.c;
+                    let nd = m.b * tan_x + m.d;
                     m.a = na;
                     m.b = nb;
                     m.c = nc;
                     m.d = nd;
                 },
                 TransformFunction::Matrix(ma, mb, mc, md, me, mf) => {
-                    let na = m.a * ma + m.b * mc;
-                    let nb = m.a * mb + m.b * md;
-                    let ne = m.a * me + m.b * mf + m.e;
-                    let nc = m.c * ma + m.d * mc;
-                    let nd = m.c * mb + m.d * md;
-                    let nf = m.c * me + m.d * mf + m.f;
+                    let na = m.a * ma + m.c * mb;
+                    let nb = m.b * ma + m.d * mb;
+                    let nc = m.a * mc + m.c * md;
+                    let nd = m.b * mc + m.d * md;
+                    let ne = m.a * me + m.c * mf + m.e;
+                    let nf = m.b * me + m.d * mf + m.f;
                     m.a = na;
                     m.b = nb;
                     m.c = nc;
@@ -207,8 +207,8 @@ impl AffineTransform2D {
         }
 
         // Post-translate: shift by +origin.
-        m.e += m.a * origin_x + m.b * origin_y;
-        m.f += m.c * origin_x + m.d * origin_y;
+        m.e += m.a * origin_x + m.c * origin_y;
+        m.f += m.b * origin_x + m.d * origin_y;
 
         m
     }
