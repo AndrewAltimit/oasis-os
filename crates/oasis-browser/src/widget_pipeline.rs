@@ -693,6 +693,7 @@ impl BrowserWidget {
         }
 
         // 7. Store results.
+        self.body_node_id = doc.body();
         self.document = Some(doc);
         self.styles = styles;
         self.href_map = href_map;

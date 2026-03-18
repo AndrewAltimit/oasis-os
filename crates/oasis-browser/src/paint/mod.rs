@@ -109,6 +109,8 @@ pub(super) struct PaintContext {
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
     text_overflow_ellipsis: bool,
+    /// Accumulated CSS transform from ancestor elements.
+    transform: crate::transform::AffineTransform2D,
 }
 
 // -------------------------------------------------------------------
@@ -136,6 +138,7 @@ pub fn paint(
         viewport_width: viewport.width,
         clip_rect: None,
         text_overflow_ellipsis: false,
+        transform: crate::transform::AffineTransform2D::identity(),
     };
 
     if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
@@ -354,15 +357,18 @@ pub(super) fn paint_box(
         false
     };
 
-    // Compute transform offset adjustments for children.
-    // Translate: add dx/dy to offset. Scale: shift from center.
-    // Rotate: no-op for now (requires backend rotation support).
-    let (tx_offset_x, tx_offset_y) = compute_transform_offsets(
-        &layout_box.style.transforms,
-        &layout_box.dimensions.content,
-        offset_x,
-        offset_y,
-    );
+    // Compute transform matrix for this element.
+    let child_matrix =
+        compute_transform_matrix(&layout_box.style.transforms, &layout_box.dimensions.content);
+    // Compose with parent transform.
+    let prev_transform = ctx.transform;
+    let composed = ctx.transform.multiply(&child_matrix);
+    if !child_matrix.is_translation_only() {
+        ctx.transform = composed;
+    }
+    // For child offsets, always use translation component.
+    let tx_offset_x = offset_x + child_matrix.e as i32;
+    let tx_offset_y = offset_y + child_matrix.f as i32;
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -504,9 +510,10 @@ pub(super) fn paint_box(
         }
     }
 
-    // Restore previous clip rect and ellipsis flag.
+    // Restore previous clip rect, ellipsis flag, and transform.
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
+    ctx.transform = prev_transform;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -571,12 +578,25 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     }
 }
 
+/// Compute the full 2D affine transform from CSS transforms.
+///
+/// Returns the composed matrix which callers use either as a simple
+/// translation offset (fast path) or for full geometry transformation.
+pub(crate) fn compute_transform_matrix(
+    transforms: &[TransformFunction],
+    content: &Rect,
+) -> crate::transform::AffineTransform2D {
+    let ox = content.width / 2.0;
+    let oy = content.height / 2.0;
+    crate::transform::AffineTransform2D::from_css_transforms(transforms, ox, oy)
+}
+
 /// Compute offset adjustments from CSS transforms.
 ///
-/// Applies translate and scale transforms in order. Translate adds dx/dy.
-/// Scale adjusts the offset from the element's center so children are
-/// painted at the scaled position. Rotate is a no-op (requires backend
-/// rotation support).
+/// Returns the translation component of the composed transform matrix
+/// added to the base offsets. For translation-only transforms this is
+/// exact; for rotation/scale/skew the full matrix is available via
+/// [`compute_transform_matrix`].
 pub(crate) fn compute_transform_offsets(
     transforms: &[TransformFunction],
     content: &Rect,
@@ -586,85 +606,8 @@ pub(crate) fn compute_transform_offsets(
     if transforms.is_empty() {
         return (base_x, base_y);
     }
-
-    // Use 2D affine matrix composition: [a b e; c d f; 0 0 1]
-    // Identity matrix: a=1, b=0, c=0, d=1, e=0, f=0
-    let mut a: f32 = 1.0;
-    let mut b: f32 = 0.0;
-    let mut c: f32 = 0.0;
-    let mut d: f32 = 1.0;
-    let mut e: f32 = 0.0;
-    let mut f: f32 = 0.0;
-
-    // Default transform-origin is center of the element.
-    let ox = content.width / 2.0;
-    let oy = content.height / 2.0;
-
-    // Translate to origin, apply transforms, translate back.
-    // Pre-translate: shift by -origin.
-    e -= a * ox + b * oy;
-    f -= c * ox + d * oy;
-
-    for tf in transforms {
-        match tf {
-            TransformFunction::Translate(tx, ty) => {
-                e += a * tx + b * ty;
-                f += c * tx + d * ty;
-            },
-            TransformFunction::Scale(sx, sy) => {
-                a *= sx;
-                b *= sy;
-                c *= sx;
-                d *= sy;
-            },
-            TransformFunction::Rotate(deg) => {
-                let rad = deg.to_radians();
-                let cos = rad.cos();
-                let sin = rad.sin();
-                let na = a * cos + b * sin;
-                let nb = -a * sin + b * cos;
-                let nc = c * cos + d * sin;
-                let nd = -c * sin + d * cos;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-            },
-            TransformFunction::Skew(ax, ay) => {
-                let tan_x = ax.to_radians().tan();
-                let tan_y = ay.to_radians().tan();
-                let na = a + b * tan_y;
-                let nb = a * tan_x + b;
-                let nc = c + d * tan_y;
-                let nd = c * tan_x + d;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-            },
-            TransformFunction::Matrix(ma, mb, mc, md, me, mf) => {
-                let na = a * ma + b * mc;
-                let nb = a * mb + b * md;
-                let ne = a * me + b * mf + e;
-                let nc = c * ma + d * mc;
-                let nd = c * mb + d * md;
-                let nf = c * me + d * mf + f;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-                e = ne;
-                f = nf;
-            },
-        }
-    }
-
-    // Post-translate: shift by +origin.
-    e += a * ox + b * oy;
-    f += c * ox + d * oy;
-
-    // The effective offset is (e, f) from the composed matrix.
-    (base_x + e as i32, base_y + f as i32)
+    let m = compute_transform_matrix(transforms, content);
+    (base_x + m.e as i32, base_y + m.f as i32)
 }
 
 /// Returns `true` if a layout box creates a new stacking context.

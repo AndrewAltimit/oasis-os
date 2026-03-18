@@ -22,6 +22,7 @@ pub mod scroll;
 pub mod search;
 pub mod skin;
 pub mod svg;
+pub(crate) mod transform;
 
 pub mod canvas;
 
@@ -244,6 +245,9 @@ pub struct BrowserWidget {
 
     /// DOM node that currently has keyboard/tab focus (for `:focus`).
     focused_node: Option<NodeId>,
+
+    /// DOM node ID of the `<body>` element (fallback target for key events).
+    body_node_id: Option<NodeId>,
 
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
@@ -478,6 +482,7 @@ impl BrowserWidget {
             visited_urls: HashSet::new(),
             hover_node: None,
             focused_node: None,
+            body_node_id: None,
             decoded_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             io_thread: None,

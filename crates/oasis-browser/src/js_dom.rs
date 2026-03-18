@@ -1287,6 +1287,12 @@ const JS_DOM_BOOTSTRAP: &str = r#"
         },
         _defaultPrevented: false
       };
+      // Spread detail properties onto the event (clientX, clientY, key, etc.)
+      if (detail && typeof detail === 'object') {
+        for (var k in detail) {
+          if (detail.hasOwnProperty(k)) evt[k] = detail[k];
+        }
+      }
       var current = nid;
       while (current >= 0 && !evt._stopped) {
         var key = current + ":" + type;
@@ -1680,6 +1686,200 @@ pub fn install_canvas_bindings(
         )?;
     }
 
+    // -- __oasis_canvas_begin_path(nid) ---------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_begin_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_move_to(nid, x, y) ----------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_move_to",
+            Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    let pt = (x as f32, y as f32);
+                    s.current_path.push(pt);
+                    s.path_start = Some(pt);
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_line_to(nid, x, y) ----------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_line_to",
+            Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().current_path.push((x as f32, y as f32));
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_bezier_curve_to(nid, cp1x, cp1y, cp2x, cp2y, x, y)
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_bezier_curve_to",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let (cx, cy) = s.current_path.last().copied().unwrap_or((0.0, 0.0));
+                        crate::svg::flatten_cubic(
+                            &mut s.current_path,
+                            cx,
+                            cy,
+                            cp1x as f32,
+                            cp1y as f32,
+                            cp2x as f32,
+                            cp2y as f32,
+                            x as f32,
+                            y as f32,
+                        );
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_quadratic_curve_to(nid, cpx, cpy, x, y) ------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_quadratic_curve_to",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, cpx: f64, cpy: f64, x: f64, y: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let (cx, cy) = s.current_path.last().copied().unwrap_or((0.0, 0.0));
+                        crate::svg::flatten_quad(
+                            &mut s.current_path,
+                            cx,
+                            cy,
+                            cpx as f32,
+                            cpy as f32,
+                            x as f32,
+                            y as f32,
+                        );
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_close_path(nid) -------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_close_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if let Some(start) = s.path_start {
+                        s.current_path.push(start);
+                    }
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_fill_path(nid) --------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_fill_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if s.current_path.len() >= 3 {
+                        let color = s.fill_color;
+                        let points = std::mem::take(&mut s.current_path);
+                        s.commands
+                            .push(crate::canvas::CanvasCommand::FillPath { points, color });
+                    }
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_stroke_path(nid) ------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_stroke_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if s.current_path.len() >= 2 {
+                        let color = s.stroke_color;
+                        let lw = s.line_width;
+                        let points = std::mem::take(&mut s.current_path);
+                        s.commands.push(crate::canvas::CanvasCommand::StrokePath {
+                            points,
+                            color,
+                            line_width: lw,
+                        });
+                    }
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_save(nid) / __oasis_canvas_restore(nid) -------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_save",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().save();
+                }
+            })?,
+        )?;
+    }
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_restore",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().restore();
+                }
+            })?,
+        )?;
+    }
+
     // -- JavaScript CanvasRenderingContext2D class ---------------------
     let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
 
@@ -1752,62 +1952,70 @@ const JS_CANVAS_BOOTSTRAP: &str = r##"
   };
   CanvasRenderingContext2D.prototype.strokeText = function() {};
   CanvasRenderingContext2D.prototype.beginPath = function() {
-    this._pathSegments = [];
+    __oasis_canvas_begin_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.moveTo = function(x, y) {
+    __oasis_canvas_move_to(this.__nid, +x, +y);
     this._pathX = +x;
     this._pathY = +y;
   };
   CanvasRenderingContext2D.prototype.lineTo = function(x, y) {
-    this._pathSegments.push({
-      type: "line",
-      x1: this._pathX, y1: this._pathY,
-      x2: +x, y2: +y
-    });
+    __oasis_canvas_line_to(this.__nid, +x, +y);
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.bezierCurveTo = function(cp1x, cp1y, cp2x, cp2y, x, y) {
+    __oasis_canvas_bezier_curve_to(this.__nid, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y);
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.quadraticCurveTo = function(cpx, cpy, x, y) {
+    __oasis_canvas_quadratic_curve_to(this.__nid, +cpx, +cpy, +x, +y);
     this._pathX = +x;
     this._pathY = +y;
   };
   CanvasRenderingContext2D.prototype.arc = function(cx, cy, r) {
+    // Arc is handled specially: emit as native arc command.
     this._pathSegments.push({
       type: "arc", cx: +cx, cy: +cy, r: +r
     });
   };
-  CanvasRenderingContext2D.prototype.closePath = function() {};
+  CanvasRenderingContext2D.prototype.closePath = function() {
+    __oasis_canvas_close_path(this.__nid);
+  };
   CanvasRenderingContext2D.prototype.fill = function() {
+    // First flush any arc segments (legacy path).
     for (var i = 0; i < this._pathSegments.length; i++) {
       var seg = this._pathSegments[i];
-      if (seg.type === "line") {
-        __oasis_canvas_line(
-          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, true
-        );
-      } else if (seg.type === "arc") {
-        __oasis_canvas_arc(
-          this.__nid, seg.cx, seg.cy, seg.r, true
-        );
+      if (seg.type === "arc") {
+        __oasis_canvas_arc(this.__nid, seg.cx, seg.cy, seg.r, true);
       }
     }
     this._pathSegments = [];
+    // Then emit the native path fill.
+    __oasis_canvas_fill_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.stroke = function() {
+    // First flush any arc segments (legacy path).
     for (var i = 0; i < this._pathSegments.length; i++) {
       var seg = this._pathSegments[i];
-      if (seg.type === "line") {
-        __oasis_canvas_line(
-          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, false
-        );
-      } else if (seg.type === "arc") {
-        __oasis_canvas_arc(
-          this.__nid, seg.cx, seg.cy, seg.r, false
-        );
+      if (seg.type === "arc") {
+        __oasis_canvas_arc(this.__nid, seg.cx, seg.cy, seg.r, false);
       }
     }
     this._pathSegments = [];
+    // Then emit the native path stroke.
+    __oasis_canvas_stroke_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.measureText = function(text) {
     return { width: String(text).length * 6 };
   };
-  CanvasRenderingContext2D.prototype.save = function() {};
-  CanvasRenderingContext2D.prototype.restore = function() {};
+  CanvasRenderingContext2D.prototype.save = function() {
+    __oasis_canvas_save(this.__nid);
+  };
+  CanvasRenderingContext2D.prototype.restore = function() {
+    __oasis_canvas_restore(this.__nid);
+  };
 
   var __canvas_contexts = {};
 

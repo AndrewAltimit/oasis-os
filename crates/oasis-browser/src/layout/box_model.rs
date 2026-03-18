@@ -285,6 +285,25 @@ impl LayoutBox {
     /// if the point is outside the layout tree or no box with a DOM
     /// node ID contains it.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        // If this box has CSS transforms, apply the inverse transform
+        // to the test point so AABB check works in local coordinates.
+        let (test_x, test_y) = if !self.style.transforms.is_empty() {
+            let ox = self.dimensions.content.width / 2.0;
+            let oy = self.dimensions.content.height / 2.0;
+            let m = crate::transform::AffineTransform2D::from_css_transforms(
+                &self.style.transforms,
+                self.dimensions.content.x + ox,
+                self.dimensions.content.y + oy,
+            );
+            if let Some(inv) = m.inverse() {
+                inv.apply(x, y)
+            } else {
+                (x, y) // singular matrix — fall back to untransformed
+            }
+        } else {
+            (x, y)
+        };
+
         let d = &self.dimensions;
         let bx = d.content.x - d.padding.left - d.border.left;
         let by = d.content.y - d.padding.top - d.border.top;
@@ -293,7 +312,7 @@ impl LayoutBox {
         let bh =
             d.content.height + d.padding.top + d.padding.bottom + d.border.top + d.border.bottom;
 
-        if x < bx || x >= bx + bw || y < by || y >= by + bh {
+        if test_x < bx || test_x >= bx + bw || test_y < by || test_y >= by + bh {
             return None;
         }
 

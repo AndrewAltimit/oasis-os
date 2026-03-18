@@ -1,90 +1,43 @@
-//! Basic SVG parsing and rendering for inline SVG elements.
+//! SVG parsing and rendering for inline SVG elements.
 //!
-//! Supports a minimal subset of SVG: `<rect>`, `<circle>`, `<line>`,
-//! `<text>`, and `<ellipse>`. No transforms, gradients, or CSS styling --
-//! only presentation attributes (`fill`, `stroke`, `stroke-width`, etc.).
+//! Supports: `<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<text>`,
+//! `<path>`, `<polygon>`, `<polyline>`, and `<g>` groups with nested
+//! transform composition. Presentation attributes: `fill`, `stroke`,
+//! `stroke-width`, `fill-rule` (nonzero/evenodd), `stroke-linecap`
+//! (butt/round/square), `stroke-linejoin` (miter/round/bevel), and
+//! `transform` (translate/scale/rotate/matrix).
 
 use crate::html::dom::{Document, NodeId};
+use crate::transform::AffineTransform2D;
 use oasis_types::backend::Color;
 
-/// A 2D affine transform matrix [a, b, c, d, e, f] representing:
-///   | a c e |
-///   | b d f |
-///   | 0 0 1 |
-#[derive(Debug, Clone, Copy)]
-struct AffineTransform {
-    a: f32,
-    b: f32,
-    c: f32,
-    d: f32,
-    e: f32,
-    f: f32,
+/// Type alias for backward compatibility within this module.
+type AffineTransform = AffineTransform2D;
+
+/// SVG fill rule.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FillRule {
+    #[default]
+    NonZero,
+    EvenOdd,
 }
 
-impl AffineTransform {
-    fn identity() -> Self {
-        Self {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
+/// SVG stroke line cap style.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LineCap {
+    #[default]
+    Butt,
+    Round,
+    Square,
+}
 
-    fn translate(tx: f32, ty: f32) -> Self {
-        Self {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: tx,
-            f: ty,
-        }
-    }
-
-    fn scale(sx: f32, sy: f32) -> Self {
-        Self {
-            a: sx,
-            b: 0.0,
-            c: 0.0,
-            d: sy,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    fn rotate(angle_deg: f32) -> Self {
-        let r = angle_deg * std::f32::consts::PI / 180.0;
-        let (sin, cos) = (r.sin(), r.cos());
-        Self {
-            a: cos,
-            b: sin,
-            c: -sin,
-            d: cos,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    fn multiply(&self, other: &Self) -> Self {
-        Self {
-            a: self.a * other.a + self.c * other.b,
-            b: self.b * other.a + self.d * other.b,
-            c: self.a * other.c + self.c * other.d,
-            d: self.b * other.c + self.d * other.d,
-            e: self.a * other.e + self.c * other.f + self.e,
-            f: self.b * other.e + self.d * other.f + self.f,
-        }
-    }
-
-    fn apply(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            self.a * x + self.c * y + self.e,
-            self.b * x + self.d * y + self.f,
-        )
-    }
+/// SVG stroke line join style.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LineJoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
 }
 
 /// Parse SVG `transform` attribute into an affine matrix.
@@ -211,6 +164,9 @@ pub enum SvgShape {
         fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f32,
+        fill_rule: FillRule,
+        stroke_linecap: LineCap,
+        stroke_linejoin: LineJoin,
     },
     /// SVG `<polygon>` element.
     Polygon {
@@ -218,6 +174,9 @@ pub enum SvgShape {
         fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f32,
+        fill_rule: FillRule,
+        stroke_linecap: LineCap,
+        stroke_linejoin: LineJoin,
     },
     /// SVG `<polyline>` element (no auto-close).
     Polyline {
@@ -267,12 +226,8 @@ pub fn parse_svg(doc: &Document, svg_node: NodeId) -> Option<SvgElement> {
         .unwrap_or(150.0);
 
     let mut shapes = Vec::new();
-    let children = doc.get(svg_node).children.clone();
-    for &child_id in &children {
-        if let Some(shape) = parse_shape(doc, child_id) {
-            shapes.push(shape);
-        }
-    }
+    let parent_xf = AffineTransform::identity();
+    parse_children(doc, svg_node, &parent_xf, &mut shapes);
 
     Some(SvgElement {
         width,
@@ -280,6 +235,47 @@ pub fn parse_svg(doc: &Document, svg_node: NodeId) -> Option<SvgElement> {
         viewbox,
         shapes,
     })
+}
+
+/// Recursively parse children of an SVG element, composing group transforms.
+fn parse_children(
+    doc: &Document,
+    parent_id: NodeId,
+    parent_xf: &AffineTransform,
+    shapes: &mut Vec<SvgShape>,
+) {
+    let children = doc.get(parent_id).children.clone();
+    for &child_id in &children {
+        let Some(elem) = doc.element(child_id) else {
+            continue;
+        };
+        let tag = elem.tag.as_str();
+
+        // Parse optional transform attribute and compose with parent.
+        let local_xf = elem.get_attribute("transform").map(parse_transform_attr);
+        let composed = match &local_xf {
+            Some(t) => parent_xf.multiply(t),
+            None => *parent_xf,
+        };
+
+        if tag == "g" {
+            // Recursively parse <g> group children with composed transform.
+            parse_children(doc, child_id, &composed, shapes);
+        } else if let Some(mut shape) = parse_shape_inner(doc, child_id, elem, tag) {
+            // Apply composed transform to the shape.
+            let identity = AffineTransform::identity();
+            let needs_xf = composed.a != identity.a
+                || composed.b != identity.b
+                || composed.c != identity.c
+                || composed.d != identity.d
+                || composed.e != identity.e
+                || composed.f != identity.f;
+            if needs_xf {
+                apply_transform_to_shape(&mut shape, &composed);
+            }
+            shapes.push(shape);
+        }
+    }
 }
 
 /// Apply a transform to a shape's coordinates (translating key points).
@@ -323,23 +319,6 @@ fn apply_transform_to_shape(shape: &mut SvgShape, xf: &AffineTransform) {
             }
         },
     }
-}
-
-/// Parse a single SVG child element into a shape.
-fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
-    let elem = doc.element(node_id)?;
-    let tag = elem.tag.as_str();
-
-    // Parse optional transform attribute.
-    let transform = elem.get_attribute("transform").map(parse_transform_attr);
-
-    let mut shape = parse_shape_inner(doc, node_id, elem, tag)?;
-
-    if let Some(xf) = transform {
-        apply_transform_to_shape(&mut shape, &xf);
-    }
-
-    Some(shape)
 }
 
 /// Inner shape parsing (without transform application).
@@ -429,11 +408,17 @@ fn parse_shape_inner(
             let fill = attr_fill(elem);
             let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
+            let fill_rule = parse_fill_rule(elem);
+            let stroke_linecap = parse_linecap(elem);
+            let stroke_linejoin = parse_linejoin(elem);
             Some(SvgShape::Path {
                 points,
                 fill,
                 stroke,
                 stroke_width,
+                fill_rule,
+                stroke_linecap,
+                stroke_linejoin,
             })
         },
         "polygon" => {
@@ -447,11 +432,17 @@ fn parse_shape_inner(
             let fill = attr_fill(elem);
             let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
+            let fill_rule = parse_fill_rule(elem);
+            let stroke_linecap = parse_linecap(elem);
+            let stroke_linejoin = parse_linejoin(elem);
             Some(SvgShape::Polygon {
                 points: pts,
                 fill,
                 stroke,
                 stroke_width,
+                fill_rule,
+                stroke_linecap,
+                stroke_linejoin,
             })
         },
         "polyline" => {
@@ -548,6 +539,32 @@ fn attr_fill(elem: &ElementData) -> Option<Color> {
     match elem.get_attribute("fill") {
         None => Some(Color::rgb(0, 0, 0)), // SVG default fill is black
         Some(val) => parse_svg_color(val), // "none" → None, color → Some
+    }
+}
+
+/// Parse the `fill-rule` attribute.
+fn parse_fill_rule(elem: &ElementData) -> FillRule {
+    match elem.get_attribute("fill-rule") {
+        Some("evenodd") => FillRule::EvenOdd,
+        _ => FillRule::NonZero,
+    }
+}
+
+/// Parse the `stroke-linecap` attribute.
+fn parse_linecap(elem: &ElementData) -> LineCap {
+    match elem.get_attribute("stroke-linecap") {
+        Some("round") => LineCap::Round,
+        Some("square") => LineCap::Square,
+        _ => LineCap::Butt,
+    }
+}
+
+/// Parse the `stroke-linejoin` attribute.
+fn parse_linejoin(elem: &ElementData) -> LineJoin {
+    match elem.get_attribute("stroke-linejoin") {
+        Some("round") => LineJoin::Round,
+        Some("bevel") => LineJoin::Bevel,
+        _ => LineJoin::Miter,
     }
 }
 
@@ -934,7 +951,7 @@ fn flatten_commands(cmds: &[PathCmd]) -> Vec<(f32, f32)> {
 ///
 /// Arguments: `(x0, y0)` start, `(x1, y1)` control 1, `(x2, y2)` control 2, `(x3, y3)` end.
 #[allow(clippy::too_many_arguments)]
-fn flatten_cubic(
+pub(crate) fn flatten_cubic(
     points: &mut Vec<(f32, f32)>,
     x0: f32,
     y0: f32,
@@ -995,7 +1012,7 @@ fn flatten_cubic_inner(
 }
 
 /// Flatten a quadratic bezier curve into line segments.
-fn flatten_quad(
+pub(crate) fn flatten_quad(
     points: &mut Vec<(f32, f32)>,
     x0: f32,
     y0: f32,
@@ -1221,14 +1238,30 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             fill,
             stroke,
             stroke_width,
+            fill_rule,
+            stroke_linecap,
+            stroke_linejoin,
         }
         | SvgShape::Polygon {
             points,
             fill,
             stroke,
             stroke_width,
+            fill_rule,
+            stroke_linecap,
+            stroke_linejoin,
         } => {
-            paint_polygon_shape(points, *fill, *stroke, *stroke_width, backend, xf)?;
+            paint_polygon_shape(
+                points,
+                *fill,
+                *stroke,
+                *stroke_width,
+                *fill_rule,
+                *stroke_linecap,
+                *stroke_linejoin,
+                backend,
+                xf,
+            )?;
         },
         SvgShape::Polyline {
             points,
@@ -1258,11 +1291,15 @@ fn xf_point(x: f32, y: f32, xf: &SvgTransform) -> (i32, i32) {
 }
 
 /// Paint a filled and/or stroked polygon (used by Path and Polygon shapes).
+#[allow(clippy::too_many_arguments)]
 fn paint_polygon_shape(
     points: &[(f32, f32)],
     fill: Option<Color>,
     stroke: Option<Color>,
     stroke_width: f32,
+    fill_rule: FillRule,
+    linecap: LineCap,
+    linejoin: LineJoin,
     backend: &mut dyn SdiBackend,
     xf: &SvgTransform,
 ) -> Result<()> {
@@ -1272,7 +1309,22 @@ fn paint_polygon_shape(
     let screen_pts: Vec<(i32, i32)> = points.iter().map(|&(x, y)| xf_point(x, y, xf)).collect();
 
     if let Some(fc) = fill {
-        backend.fill_polygon(&screen_pts, fc)?;
+        if fill_rule == FillRule::EvenOdd && screen_pts.len() >= 3 {
+            // Ear-clip triangulation for concave polygons with evenodd rule.
+            let float_pts: Vec<(f32, f32)> = screen_pts
+                .iter()
+                .map(|&(x, y)| (x as f32, y as f32))
+                .collect();
+            let triangles = crate::transform::ear_clip_triangulate(&float_pts);
+            for tri in &triangles {
+                let p0 = screen_pts[tri[0]];
+                let p1 = screen_pts[tri[1]];
+                let p2 = screen_pts[tri[2]];
+                backend.fill_polygon(&[p0, p1, p2], fc)?;
+            }
+        } else {
+            backend.fill_polygon(&screen_pts, fc)?;
+        }
     }
     if let Some(sc) = stroke {
         let sw = (stroke_width * xf.sx.min(xf.sy)).max(1.0) as u32;
@@ -1286,12 +1338,43 @@ fn paint_polygon_shape(
                 sw,
                 sc,
             )?;
+
+            // Line join at vertices (skip first segment).
+            if linejoin == LineJoin::Round {
+                let r = (sw / 2).max(1) as u16;
+                backend.fill_circle(window[1].0, window[1].1, r, sc)?;
+            }
         }
         // Close the path (last → first).
         if let (Some(last), Some(first)) = (screen_pts.last(), screen_pts.first())
             && last != first
         {
             stroke_line_bresenham(backend, last.0, last.1, first.0, first.1, sw, sc)?;
+        }
+
+        // Line caps at endpoints.
+        match linecap {
+            LineCap::Round => {
+                let r = (sw / 2).max(1) as u16;
+                if let Some(first) = screen_pts.first() {
+                    backend.fill_circle(first.0, first.1, r, sc)?;
+                }
+                if let Some(last) = screen_pts.last() {
+                    backend.fill_circle(last.0, last.1, r, sc)?;
+                }
+            },
+            LineCap::Square => {
+                // Square cap extends by half stroke width beyond endpoints.
+                // Approximated by drawing a small rect at each endpoint.
+                let half = (sw / 2).max(1);
+                if let Some(first) = screen_pts.first() {
+                    backend.fill_rect(first.0 - half as i32, first.1 - half as i32, sw, sw, sc)?;
+                }
+                if let Some(last) = screen_pts.last() {
+                    backend.fill_rect(last.0 - half as i32, last.1 - half as i32, sw, sw, sc)?;
+                }
+            },
+            LineCap::Butt => {}, // Default: no extension
         }
     }
     Ok(())

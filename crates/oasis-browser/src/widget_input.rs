@@ -280,12 +280,17 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
-            // Dispatch keydown + input events to JS for focused nodes.
+            // Dispatch keydown + keyup + input events to JS.
             InputEvent::TextInput(ch) => {
                 #[cfg(feature = "javascript")]
-                if let (Some(nid), Some(engine)) = (self.focused_node, &self.js_engine) {
-                    Self::dispatch_js_key_event(engine, nid, *ch);
-                    Self::dispatch_js_event(engine, nid, "input");
+                if let Some(engine) = &self.js_engine {
+                    // Dispatch to focused node, or body as fallback.
+                    let target = self.focused_node.or(self.body_node_id);
+                    if let Some(nid) = target {
+                        Self::dispatch_js_key_event(engine, nid, *ch);
+                        Self::dispatch_js_event(engine, nid, "keyup");
+                        Self::dispatch_js_event(engine, nid, "input");
+                    }
                 }
                 // Zoom: + / - / 0 keys when not in URL bar.
                 match ch {
@@ -504,9 +509,13 @@ impl BrowserWidget {
         // Click in content area: leave URL bar editing.
         self.focus = Focus::Content;
 
-        // Dispatch click event to JS if an engine is retained.
+        // Dispatch mousedown, mouseup, then click to JS.
         #[cfg(feature = "javascript")]
-        self.dispatch_js_click(x, y);
+        {
+            self.dispatch_js_mouse_event(x, y, "mousedown");
+            self.dispatch_js_mouse_event(x, y, "mouseup");
+            self.dispatch_js_click(x, y);
+        }
 
         // Check link hit regions.
         for link in &self.link_map {
@@ -610,7 +619,38 @@ impl BrowserWidget {
         let _ = engine.eval(&code);
     }
 
-    /// Dispatch a keydown event to JS with the key character as detail.
+    /// Dispatch a mouse event (mousedown, mouseup, etc.) to the node at
+    /// the given coordinates, passing `clientX`/`clientY` as detail.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_mouse_event(&mut self, x: i32, y: i32, event_type: &str) {
+        let node_id = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32));
+        if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
+            Self::dispatch_js_mouse_event_to(engine, nid, x, y, event_type);
+        }
+    }
+
+    /// Dispatch a mouse event to a specific node with coordinates.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_mouse_event_to(
+        engine: &oasis_js::JsEngine,
+        node_id: NodeId,
+        x: i32,
+        y: i32,
+        event_type: &str,
+    ) {
+        let code = format!(
+            "if(typeof __oasis_dispatch_with_bubbling==='function'){{\
+             var __e={{clientX:{},clientY:{}}};\
+             __oasis_dispatch_with_bubbling({},'{}',__e)}}",
+            x, y, node_id, event_type
+        );
+        let _ = engine.eval(&code);
+    }
+
+    /// Dispatch a keydown event to JS with key info as detail object.
     #[cfg(feature = "javascript")]
     fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
         // Escape characters that break JS single-quoted string literals.
@@ -623,8 +663,8 @@ impl BrowserWidget {
         };
         let code = format!(
             "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'keydown','{}')",
-            node_id, escaped
+             __oasis_dispatch_with_bubbling({},'keydown',{{key:'{}',code:'{}'}})",
+            node_id, escaped, escaped
         );
         let _ = engine.eval(&code);
     }
@@ -661,7 +701,7 @@ impl BrowserWidget {
             let old_hover = self.hover_node;
             self.hover_node = new_hover;
 
-            // Dispatch mouseover/mouseout events to JS.
+            // Dispatch mouseover/mouseout/mousemove events to JS.
             #[cfg(feature = "javascript")]
             if let Some(engine) = &self.js_engine {
                 if let Some(old_nid) = old_hover {
@@ -669,6 +709,7 @@ impl BrowserWidget {
                 }
                 if let Some(new_nid) = new_hover {
                     Self::dispatch_js_event(engine, new_nid, "mouseover");
+                    Self::dispatch_js_mouse_event_to(engine, new_nid, x, y, "mousemove");
                 }
             }
 

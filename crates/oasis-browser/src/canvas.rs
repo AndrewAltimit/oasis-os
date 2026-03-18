@@ -3,6 +3,11 @@
 //! Drawing commands are recorded into a [`CanvasState`] by JavaScript
 //! (via the `__oasis_canvas_*` bindings in `js_dom.rs`) and then
 //! replayed at paint time through the SDI backend.
+//!
+//! Supported API: `fillRect`, `strokeRect`, `clearRect`, `fillText`,
+//! `beginPath`, `moveTo`, `lineTo`, `bezierCurveTo`, `quadraticCurveTo`,
+//! `closePath`, `fill`, `stroke`, `arc`, `save`, `restore`, plus
+//! properties `fillStyle`, `strokeStyle`, `lineWidth`, `font`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -61,6 +66,26 @@ pub enum CanvasCommand {
         color: Color,
         fill: bool,
     },
+    /// Filled polygon path.
+    FillPath {
+        points: Vec<(f32, f32)>,
+        color: Color,
+    },
+    /// Stroked polygon path.
+    StrokePath {
+        points: Vec<(f32, f32)>,
+        color: Color,
+        line_width: f32,
+    },
+}
+
+/// Saved canvas drawing state for save()/restore().
+#[derive(Debug, Clone)]
+struct CanvasSavedState {
+    fill_color: Color,
+    stroke_color: Color,
+    line_width: f32,
+    font_size: f32,
 }
 
 /// State for a single `<canvas>` element's 2D rendering context.
@@ -80,6 +105,12 @@ pub struct CanvasState {
     pub line_width: f32,
     /// Current font size.
     pub font_size: f32,
+    /// Current path being built.
+    pub current_path: Vec<(f32, f32)>,
+    /// Start of the current sub-path (for closePath).
+    pub path_start: Option<(f32, f32)>,
+    /// State save stack.
+    state_stack: Vec<CanvasSavedState>,
 }
 
 impl CanvasState {
@@ -93,6 +124,29 @@ impl CanvasState {
             stroke_color: Color::BLACK,
             line_width: 1.0,
             font_size: 10.0,
+            current_path: Vec::new(),
+            path_start: None,
+            state_stack: Vec::new(),
+        }
+    }
+
+    /// Save the current drawing state.
+    pub fn save(&mut self) {
+        self.state_stack.push(CanvasSavedState {
+            fill_color: self.fill_color,
+            stroke_color: self.stroke_color,
+            line_width: self.line_width,
+            font_size: self.font_size,
+        });
+    }
+
+    /// Restore the most recently saved drawing state.
+    pub fn restore(&mut self) {
+        if let Some(saved) = self.state_stack.pop() {
+            self.fill_color = saved.fill_color;
+            self.stroke_color = saved.stroke_color;
+            self.line_width = saved.line_width;
+            self.font_size = saved.font_size;
         }
     }
 }
@@ -232,6 +286,29 @@ pub fn paint_canvas(
                 } else {
                     // Stroke: draw a ring outline.
                     backend.stroke_rounded_rect(rx, ry, d, d, radius, 1, *color)?;
+                }
+            },
+            CanvasCommand::FillPath { points, color } => {
+                if points.len() >= 3 {
+                    let screen_pts: Vec<(i32, i32)> = points
+                        .iter()
+                        .map(|&(px, py)| (x + (px * sx) as i32, y + (py * sy) as i32))
+                        .collect();
+                    backend.fill_polygon(&screen_pts, *color)?;
+                }
+            },
+            CanvasCommand::StrokePath {
+                points,
+                color,
+                line_width,
+            } => {
+                if points.len() >= 2 {
+                    let screen_pts: Vec<(i32, i32)> = points
+                        .iter()
+                        .map(|&(px, py)| (x + (px * sx) as i32, y + (py * sy) as i32))
+                        .collect();
+                    let sw = (*line_width * sx).max(1.0) as u16;
+                    backend.stroke_polygon(&screen_pts, sw, *color)?;
                 }
             },
         }
