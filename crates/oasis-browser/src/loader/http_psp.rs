@@ -216,7 +216,7 @@ fn do_request(
                         {
                             is_chunked = true;
                         } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
-                            let after = &hdr_lower[cl_start + 17..];
+                            let after = &hdr_lower[cl_start + 16..];
                             let line_end = after.find('\n').unwrap_or(after.len());
                             if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
                                 expected_body_len = Some(cl);
@@ -234,7 +234,7 @@ fn do_request(
                         {
                             is_chunked = true;
                         } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
-                            let after = &hdr_lower[cl_start + 17..];
+                            let after = &hdr_lower[cl_start + 16..];
                             let line_end = after.find('\n').unwrap_or(after.len());
                             if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
                                 expected_body_len = Some(cl);
