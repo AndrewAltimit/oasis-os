@@ -514,20 +514,41 @@ impl DisplayList {
         const SCAN_WINDOW: usize = 32;
         let mut clip_depth: usize = 0;
         let mut clip_depths: Vec<usize> = Vec::with_capacity(self.items.len());
+        let mut in_translucent: Vec<bool> = Vec::with_capacity(self.items.len());
 
-        // First pass: compute clip depth for each item.
+        // First pass: compute clip depth and translucent-layer flag for each item.
+        let mut translucent_layer_depth: usize = 0;
         for item in &self.items {
             match item {
                 DisplayItem::PushClip { .. } => {
                     clip_depths.push(clip_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
                     clip_depth += 1;
                 },
                 DisplayItem::PopClip => {
                     clip_depth = clip_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
+                },
+                DisplayItem::PushLayer { opacity } => {
+                    clip_depths.push(clip_depth);
+                    if *opacity < 1.0 {
+                        translucent_layer_depth += 1;
+                    }
+                    in_translucent.push(translucent_layer_depth > 0);
+                },
+                DisplayItem::PopLayer => {
+                    // Check if the matching PushLayer was translucent.
+                    // Conservative: decrement if we are currently in a translucent
+                    // layer.
+                    translucent_layer_depth =
+                        translucent_layer_depth.saturating_sub(1);
+                    clip_depths.push(clip_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
                 },
                 _ => {
                     clip_depths.push(clip_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
                 },
             }
         }
@@ -536,7 +557,10 @@ impl DisplayList {
         let mut remove = vec![false; self.items.len()];
 
         for i in 1..self.items.len() {
-            // Only opaque FillRect items can occlude.
+            // Only opaque FillRect items outside translucent layers can occlude.
+            if in_translucent[i] {
+                continue;
+            }
             let (cx, cy, cw, ch) = match &self.items[i] {
                 DisplayItem::FillRect {
                     x, y, w, h, color, ..

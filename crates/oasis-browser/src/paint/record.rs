@@ -1662,7 +1662,7 @@ fn record_radio_button(
         });
     }
     // Inner dot when checked
-    if checked && w >= 7 && h >= 7 {
+    if checked && w > 8 && h > 8 {
         let inset = 4_u32;
         let dw = w - inset * 2;
         let dh = h - inset * 2;
