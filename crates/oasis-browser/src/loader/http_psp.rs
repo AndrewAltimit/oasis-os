@@ -228,8 +228,7 @@ fn do_request(
                         body_start = Some(hdr_end);
                         let hdr = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                         let hdr_lower = hdr.to_ascii_lowercase();
-                        if hdr_lower.contains("transfer-encoding")
-                            && hdr_lower.contains("chunked")
+                        if hdr_lower.contains("transfer-encoding") && hdr_lower.contains("chunked")
                         {
                             is_chunked = true;
                         } else if let Some(cl_start) = hdr_lower.find("content-length:") {
