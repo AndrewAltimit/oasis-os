@@ -608,7 +608,7 @@ pub trait SdiVector: SdiShapes {
         Ok(())
     }
 
-    /// Draw the outline of a polygon.
+    /// Draw the outline of a polygon (closed path).
     fn stroke_polygon(&mut self, points: &[(i32, i32)], width: u16, color: Color) -> Result<()> {
         if points.len() < 2 {
             return Ok(());
@@ -623,6 +623,14 @@ pub trait SdiVector: SdiShapes {
                 width,
                 color,
             )?;
+        }
+        Ok(())
+    }
+
+    /// Draw an open polyline (does not close back to the first point).
+    fn stroke_polyline(&mut self, points: &[(i32, i32)], width: u16, color: Color) -> Result<()> {
+        for pair in points.windows(2) {
+            self.draw_line(pair[0].0, pair[0].1, pair[1].0, pair[1].1, width, color)?;
         }
         Ok(())
     }

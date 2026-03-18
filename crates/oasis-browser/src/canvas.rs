@@ -308,7 +308,7 @@ pub fn paint_canvas(
                         .map(|&(px, py)| (x + (px * sx) as i32, y + (py * sy) as i32))
                         .collect();
                     let sw = (*line_width * sx).max(1.0) as u16;
-                    backend.stroke_polygon(&screen_pts, sw, *color)?;
+                    backend.stroke_polyline(&screen_pts, sw, *color)?;
                 }
             },
         }

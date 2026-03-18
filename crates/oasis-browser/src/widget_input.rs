@@ -268,6 +268,7 @@ impl BrowserWidget {
                 if let Some(nid) = self.find_scroll_container_at_cursor() {
                     let amount = *delta as f32 * crate::scroll::SCROLL_WHEEL as f32;
                     let entry = self.nested_scroll_offsets.entry(nid).or_insert((0.0, 0.0));
+                    let prev = entry.1;
                     entry.1 += amount;
                     // Clamp to content bounds (computed during layout).
                     if let Some(layout) = &self.layout_root
@@ -275,7 +276,12 @@ impl BrowserWidget {
                     {
                         entry.1 = entry.1.clamp(0.0, bounds);
                     }
-                    self.layout_dirty = true;
+                    if (entry.1 - prev).abs() > f32::EPSILON {
+                        self.layout_dirty = true;
+                    } else {
+                        // At scroll limit — bubble to main page scroll.
+                        self.scroll.wheel_scroll(*delta);
+                    }
                 } else {
                     self.scroll.wheel_scroll(*delta);
                 }
@@ -607,12 +613,28 @@ impl BrowserWidget {
         // Update focused_node so :focus CSS and JS keyboard events work.
         self.focused_node = Some(target_nid);
 
+        // Determine the input type so we can toggle checkbox/radio state.
+        let input_type = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => elem.get_attribute("type").unwrap_or("text"),
+            _ => "text",
+        };
+
         // Search form_manager for a form containing this element name
         // and focus it.
         for (fi, form) in self.form_manager.forms.iter().enumerate() {
             if form.has_element(&name) {
                 self.form_manager.focused_form = Some(fi);
-                self.form_manager.focused_element = Some(name);
+                self.form_manager.focused_element = Some(name.clone());
+
+                // Toggle checkbox/radio on label click (standard HTML
+                // behavior): simulate a Space key press on the focused
+                // element.
+                if input_type == "checkbox" || input_type == "radio" {
+                    let _ = self
+                        .form_manager
+                        .handle_input(crate::forms::FormKey::Space);
+                    self.layout_dirty = true;
+                }
                 return;
             }
         }
