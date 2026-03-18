@@ -61,9 +61,9 @@ impl BrowserWidget {
             vfs,
             &request,
             self.tls.as_deref(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             Some(&mut self.cookie_jar),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             Some(&self.cache),
         ) {
             Ok(loaded) => {
@@ -175,9 +175,9 @@ impl BrowserWidget {
             vfs,
             &request,
             self.tls.as_deref(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             Some(&mut self.cookie_jar),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             Some(&self.cache),
         ) {
             Ok(loaded) => {

@@ -3,7 +3,7 @@
 //! Handles lazy-loading of directory entries and dispatches rendering
 //! to view-specific SDI update functions and direct backend drawing.
 
-use oasis_backend_psp::{PspBackend, SdiRegistry};
+use oasis_backend_psp::{Color, PspBackend, SdiRegistry};
 
 use crate::app_states::*;
 use crate::chrome;
@@ -203,27 +203,37 @@ pub(crate) fn render_classic(
             }
         },
         ClassicView::Browser => {
-            if br.loading {
-                desktop::draw_loading_indicator(backend, "Loading page...");
+            if let Some(ref mut w) = br.widget {
+                if br.loading
+                    || w.loading_state() == oasis_browser::LoadingState::Loading
+                {
+                    desktop::draw_loading_indicator(backend, "Loading page...");
+                } else if w.loading_state() == oasis_browser::LoadingState::Error {
+                    // Show error as simple text (avoid paint crash on PSP).
+                    // Cache wrapped lines to avoid per-frame allocation.
+                    let msg = w.error_message().unwrap_or("Unknown error");
+                    if br.cached_error_msg != msg {
+                        br.cached_error_msg = msg.to_string();
+                        br.cached_error_lines = views::wrap_text(msg, 58);
+                    }
+                    backend.force_bitmap_font = true;
+                    for (i, line) in br.cached_error_lines.iter().enumerate().take(25) {
+                        backend.draw_text_inner(line, 4, 20 + (i as i32 * 9), 8, Color::WHITE);
+                    }
+                    backend.force_bitmap_font = false;
+                } else {
+                    let _ = w.paint(backend);
+                }
             } else {
-                views_sdi::update_browser(
-                    sdi,
-                    &br.url,
-                    &br.content_lines,
-                    br.scroll,
-                    &br.status_msg,
-                    active_theme,
-                );
+                // Widget not yet initialized -- show status message.
+                backend.force_bitmap_font = true;
+                backend.draw_text_inner(&br.status_msg, 4, 30, 8, Color::WHITE);
+                backend.force_bitmap_font = false;
             }
             backend.force_bitmap_font = true;
             chrome::draw_button_hints(
                 backend,
-                &[
-                    ("[]", "URL"),
-                    ("X", "Load"),
-                    ("^v", "Scroll"),
-                    ("O", "Back"),
-                ],
+                &[("[]", "URL"), ("X", "Go"), ("LR", "Link"), ("O", "Back")],
             );
             backend.force_bitmap_font = false;
         },

@@ -22,6 +22,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
+use crate::desktop;
 use crate::app_states::{
     BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TerminalState,
     TvGuideState,
@@ -446,16 +447,40 @@ pub(crate) fn dispatch_classic(
             *classic_view = ClassicView::Dashboard;
         },
 
-        // -- Browser input --
+        // -- Browser input (full oasis-browser engine) --
         InputEvent::ButtonPress(Button::Square) if *classic_view == ClassicView::Browser => {
+            // Open OSK for URL entry.
+            let current_url = br.url().to_string();
             match psp::osk::OskBuilder::new("Enter URL")
                 .max_chars(256)
-                .initial_text(&br.url)
+                .initial_text(&current_url)
                 .show()
             {
                 Ok(Some(text)) => {
-                    br.url = text;
-                    br.status_msg = String::from("Press X to load");
+                    // Ensure network is up.
+                    if !oasis_backend_psp::network::is_net_initialized() {
+                        if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
+                            br.status_msg = format!("Net error: {e}");
+                            backend.reinit_gu_frame();
+                            return DispatchResult::Continue;
+                        }
+                    }
+                    br.loading = true;
+                    br.status_msg = String::from("Loading...");
+                    // Flush a loading frame so the user sees feedback
+                    // before the blocking network request.
+                    desktop::draw_loading_indicator(backend, "Loading page...");
+                    backend.swap_buffers_inner();
+                    backend.reinit_gu_frame();
+                    dbg_log(&format!("[Browser] navigating to: {text}"));
+                    br.ensure_widget();
+                    if let Some(ref mut w) = br.widget {
+                        w.navigate_vfs(&text, &br.vfs);
+                    }
+                    dbg_log("[Browser] navigate_vfs returned");
+                    br.loading = false;
+                    let url_display = br.url().to_string();
+                    br.status_msg = format!("Loaded: {url_display}");
                 },
                 Ok(None) => {},
                 Err(e) => {
@@ -465,6 +490,8 @@ pub(crate) fn dispatch_classic(
             backend.reinit_gu_frame();
         },
         InputEvent::ButtonPress(Button::Confirm) if *classic_view == ClassicView::Browser => {
+            dbg_log("[Browser] Confirm pressed");
+            // Ensure network is up.
             if !oasis_backend_psp::network::is_net_initialized() {
                 if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                     br.status_msg = format!("Net error: {e}");
@@ -473,20 +500,55 @@ pub(crate) fn dispatch_classic(
                 }
                 backend.reinit_gu_frame();
             }
-            br.loading = true;
-            br.status_msg = String::from("Loading...");
-            br.content_lines.clear();
-            io.send(IoCmd::HttpGet {
-                url: br.url.clone(),
-                tag: 0xBEEF,
-            });
+            // Forward X press to BrowserWidget (follows focused link).
+            // Flush a loading frame first since handle_input may trigger
+            // a synchronous page load when following a link.
+            desktop::draw_loading_indicator(backend, "Loading...");
+            backend.swap_buffers_inner();
+            backend.reinit_gu_frame();
+            let input_event =
+                oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Confirm);
+            br.ensure_widget();
+            if let Some(ref mut w) = br.widget {
+                w.handle_input(&input_event, &br.vfs);
+            }
         },
         InputEvent::ButtonPress(Button::Up) if *classic_view == ClassicView::Browser => {
-            br.scroll = br.scroll.saturating_sub(3);
+            if let Some(ref mut w) = br.widget {
+                for _ in 0..3 {
+                    w.scroll_mut().scroll_up();
+                }
+            }
         },
         InputEvent::ButtonPress(Button::Down) if *classic_view == ClassicView::Browser => {
-            if br.scroll + 3 < br.content_lines.len() {
-                br.scroll += 3;
+            if let Some(ref mut w) = br.widget {
+                for _ in 0..3 {
+                    w.scroll_mut().scroll_down();
+                }
+            }
+        },
+        InputEvent::ButtonPress(Button::Left) if *classic_view == ClassicView::Browser => {
+            if let Some(ref mut w) = br.widget {
+                let event =
+                    oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Left);
+                w.handle_input(&event, &br.vfs);
+            }
+        },
+        InputEvent::ButtonPress(Button::Right) if *classic_view == ClassicView::Browser => {
+            if let Some(ref mut w) = br.widget {
+                let event =
+                    oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Right);
+                w.handle_input(&event, &br.vfs);
+            }
+        },
+        InputEvent::TriggerPress(Trigger::Left) if *classic_view == ClassicView::Browser => {
+            if let Some(ref mut w) = br.widget {
+                w.go_back(&br.vfs);
+            }
+        },
+        InputEvent::TriggerPress(Trigger::Right) if *classic_view == ClassicView::Browser => {
+            if let Some(ref mut w) = br.widget {
+                w.go_forward(&br.vfs);
             }
         },
         InputEvent::ButtonPress(Button::Triangle) if *classic_view == ClassicView::Browser => {

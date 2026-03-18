@@ -13,6 +13,7 @@ default = []
 javascript = ["dep:oasis-js"]
 webp = ["dep:image"]
 parallel-style = ["dep:rayon"]
+psp = []
 
 [dependencies]
 oasis-types = { workspace = true }

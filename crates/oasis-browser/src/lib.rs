@@ -84,7 +84,7 @@ use std::collections::{HashMap, HashSet};
 use html::dom::NodeId;
 use loader::ResourceRequest;
 use loader::cache::ResourceCache;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 use loader::cookies::CookieJar;
 use oasis_types::backend::TextureId;
 use paint::LinkRegion;
@@ -178,7 +178,7 @@ pub struct BrowserWidget {
     cache: ResourceCache,
 
     /// Session-scoped cookie jar for HTTP requests.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     cookie_jar: CookieJar,
 
     /// Current loading state.
@@ -252,15 +252,15 @@ pub struct BrowserWidget {
     decoded_images: HashMap<String, image::DecodedImage>,
 
     /// Channel to send `(url, raw_bytes)` to the background decode thread.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
 
     /// Channel to receive `(url, DecodedImage)` from the background decode thread.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     image_decode_rx: Option<std::sync::mpsc::Receiver<(String, image::DecodedImage)>>,
 
     /// Number of images sent to the decode thread but not yet received back.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     image_decode_in_flight: usize,
 
     /// GPU textures for decoded images, keyed by src URL.
@@ -413,7 +413,7 @@ impl BrowserWidget {
             nav: NavigationController::new(&home),
             scroll: ScrollState::new(238, smooth), // 272 - 34
             cache: ResourceCache::new(cache_bytes),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             cookie_jar: CookieJar::new(),
             state: LoadingState::Idle,
             error_message: None,
@@ -440,11 +440,11 @@ impl BrowserWidget {
             hover_node: None,
             focused_node: None,
             decoded_images: HashMap::new(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             image_decode_tx: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             image_decode_rx: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             image_atlas: image_atlas::ImageAtlas::new(),

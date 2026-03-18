@@ -219,6 +219,90 @@ impl TlsProvider for PspTlsProvider {
             write_buf: write_ptr,
         }))
     }
+
+    /// Open a raw TCP connection using PSP `sceNetInet*` sockets.
+    ///
+    /// `std::net::TcpStream` is not supported on PSP, so we use the
+    /// native PSP networking API directly.
+    fn connect_tcp(&self, host: &str, port: u16) -> Result<Box<dyn NetworkStream>> {
+        use crate::network::PspNetworkStream;
+        use std::mem;
+
+        // Ensure network modules are loaded.
+        if !crate::network::is_net_initialized() {
+            return Err(OasisError::Backend("network not initialized".into()));
+        }
+
+        // DNS resolution via PSP firmware.
+        let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
+        host_bytes.push(0);
+
+        let ip = psp::net::resolve_hostname(&host_bytes).map_err(|e| {
+            OasisError::Backend(format!("DNS resolve '{host}' failed: {e}").into())
+        })?;
+
+        // Create TCP socket.
+        // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.
+        let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
+        if fd < 0 {
+            let errno = unsafe { psp::sys::sceNetInetGetErrno() };
+            return Err(OasisError::Backend(
+                format!("socket() failed: errno {:#x}", errno as u32).into(),
+            ));
+        }
+
+        // Build sockaddr_in.
+        let mut sa = psp::sys::sockaddr {
+            sa_len: 16,
+            sa_family: 2, // AF_INET
+            sa_data: [0u8; 14],
+        };
+        let port_be = port.to_be_bytes();
+        sa.sa_data[0] = port_be[0];
+        sa.sa_data[1] = port_be[1];
+        sa.sa_data[2] = ip.0[0];
+        sa.sa_data[3] = ip.0[1];
+        sa.sa_data[4] = ip.0[2];
+        sa.sa_data[5] = ip.0[3];
+
+        // Set send/receive timeouts (30 seconds).
+        let timeout = psp::sys::timeval {
+            tv_sec: 30,
+            tv_usec: 0,
+        };
+        // SAFETY: setting socket options on a valid fd.
+        unsafe {
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_SNDTIMEO,
+                &timeout as *const _ as *const core::ffi::c_void,
+                mem::size_of::<psp::sys::timeval>() as u32,
+            );
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_RCVTIMEO,
+                &timeout as *const _ as *const core::ffi::c_void,
+                mem::size_of::<psp::sys::timeval>() as u32,
+            );
+        }
+
+        // Connect.
+        // SAFETY: sa is a valid sockaddr_in for the resolved address.
+        let ret = unsafe {
+            psp::sys::sceNetInetConnect(fd, &sa, mem::size_of::<psp::sys::sockaddr>() as u32)
+        };
+        if ret < 0 {
+            let errno = unsafe { psp::sys::sceNetInetGetErrno() };
+            unsafe { psp::sys::sceNetInetClose(fd) };
+            return Err(OasisError::Backend(
+                format!("connect {host}:{port} failed: errno {:#x}", errno as u32).into(),
+            ));
+        }
+
+        Ok(Box::new(PspNetworkStream::new(fd)))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +347,14 @@ impl NetworkStream for PspTlsStream<'_> {
             .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string().into()))?;
         embedded_io::Write::write(tls, data)
             .map_err(|e| OasisError::Backend(format!("TLS write: {:?}", e).into()))
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if let Some(ref mut tls) = self.tls {
+            embedded_io::Write::flush(tls)
+                .map_err(|e| OasisError::Backend(format!("TLS flush: {:?}", e).into()))?;
+        }
+        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {

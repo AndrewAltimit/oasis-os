@@ -162,6 +162,7 @@ pub(crate) fn draw_now_playing_visualizer(
 // ---------------------------------------------------------------------------
 
 /// Strip HTML tags and decode common entities.
+#[allow(dead_code)]
 pub(crate) fn strip_html(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
@@ -284,6 +285,7 @@ pub(crate) fn strip_html(html: &str) -> String {
 }
 
 /// Word-wrap text to `max_chars` columns.
+#[allow(dead_code)]
 pub(crate) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {

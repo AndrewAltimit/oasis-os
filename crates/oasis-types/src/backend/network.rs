@@ -30,6 +30,14 @@ pub trait NetworkStream: Send {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     /// Write `data` to the stream. Returns the number of bytes written.
     fn write(&mut self, data: &[u8]) -> Result<usize>;
+    /// Flush buffered write data to the underlying transport.
+    ///
+    /// TLS streams buffer records internally; call this after the last
+    /// `write` to ensure the data is actually sent. The default is a
+    /// no-op (plain TCP sends immediately).
+    fn flush(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Close the connection and release resources.
     fn close(&mut self) -> Result<()>;
 }

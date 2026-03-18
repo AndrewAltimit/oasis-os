@@ -142,11 +142,27 @@ fn ensure_net_init() -> Result<()> {
 
     NET_INITIALIZED.store(true, Ordering::Release);
 
+    // Log IP to file instead of dprintln (which lingers on screen
+    // for the entire duration of any subsequent blocking operation).
     if let Ok(ip) = psp::net::get_ip_address() {
         let ip_str = core::str::from_utf8(&ip)
             .unwrap_or("?")
             .trim_end_matches('\0');
-        psp::dprintln!("OASIS_OS: Network up, IP: {}", ip_str);
+        // Write to log file only (no on-screen overlay).
+        unsafe {
+            let msg = format!("[NET] up, IP: {ip_str}\n");
+            let fd = psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+                psp::sys::IoOpenFlags::APPEND
+                    | psp::sys::IoOpenFlags::CREAT
+                    | psp::sys::IoOpenFlags::WR_ONLY,
+                0o777,
+            );
+            if fd >= psp::sys::SceUid(0) {
+                psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+                psp::sys::sceIoClose(fd);
+            }
+        }
     }
 
     Ok(())
@@ -202,7 +218,7 @@ pub struct PspNetworkStream {
 unsafe impl Send for PspNetworkStream {}
 
 impl PspNetworkStream {
-    fn new(fd: i32) -> Self {
+    pub fn new(fd: i32) -> Self {
         Self { fd, closed: false }
     }
 }

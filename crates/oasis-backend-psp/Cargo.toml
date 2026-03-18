@@ -45,6 +45,7 @@ kernel-me = ["psp/kernel"]
 # Pinned to specific commit for reproducible builds.
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "f9ef537", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
+oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 libm = "0.2"
 
@@ -67,8 +68,8 @@ getrandom = "0.3"
 unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
 
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 4
 panic = "abort"
 # Do NOT set strip = true -- it conflicts with --emit-relocs needed by prxgen.
 

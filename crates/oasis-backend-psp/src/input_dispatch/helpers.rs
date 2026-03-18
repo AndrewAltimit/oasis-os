@@ -65,11 +65,12 @@ pub(super) fn dispatch_dashboard_confirm(
             mp.loaded = false;
         },
         "Browser" => {
+            dbg_log("[Browser] entering browser view");
             *classic_view = ClassicView::Browser;
-            br.content_lines.clear();
-            br.scroll = 0;
+            // Initialize widget immediately so the chrome is visible.
+            br.ensure_widget();
             br.loading = false;
-            br.status_msg = String::from("Press [] to enter URL");
+            br.status_msg = String::from("Press [] to enter URL, X to navigate");
         },
         "Radio" => {
             *classic_view = ClassicView::Radio;
