@@ -69,11 +69,28 @@ mod inner {
     /// Lazily spawned on first use. Communicates via `mpsc` channels.
     /// The thread processes requests sequentially (not in parallel) to
     /// keep resource usage predictable.
+    ///
+    /// On drop, the sender channel is closed and the worker thread is
+    /// joined to ensure it has fully exited before any resources it
+    /// references (e.g. `TlsProvider`) are freed.
     pub struct IoThread {
         tx: mpsc::Sender<IoWork>,
         rx: mpsc::Receiver<IoResult>,
+        handle: Option<std::thread::JoinHandle<()>>,
         next_id: IoRequestId,
         in_flight: usize,
+    }
+
+    impl Drop for IoThread {
+        fn drop(&mut self) {
+            // Close the sender so the worker's `recv()` returns `Err`.
+            // (Happens automatically when `tx` is dropped, but we drop
+            // it explicitly here before joining for clarity.)
+            drop(std::mem::replace(&mut self.tx, mpsc::channel().0));
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     impl IoThread {
@@ -85,7 +102,7 @@ mod inner {
             let (work_tx, work_rx) = mpsc::channel::<IoWork>();
             let (result_tx, result_rx) = mpsc::channel::<IoResult>();
 
-            std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name("browser-io".into())
                 .spawn(move || {
                     Self::worker_loop(work_rx, result_tx, tls, cookie_jar);
@@ -95,6 +112,7 @@ mod inner {
             IoThread {
                 tx: work_tx,
                 rx: result_rx,
+                handle: Some(handle),
                 next_id: 1,
                 in_flight: 0,
             }

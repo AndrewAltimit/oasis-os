@@ -252,8 +252,9 @@ pub struct BrowserWidget {
     /// Lazily created on first network request.
     ///
     /// **Drop order**: `io_thread` is declared before `tls` so it is
-    /// dropped first. Dropping the `IoThread` closes the sender channel,
-    /// causing the worker thread to exit before the `TlsProvider` is freed.
+    /// dropped first. `IoThread::drop()` closes the sender channel and
+    /// joins the worker thread, ensuring it has fully exited before the
+    /// `TlsProvider` is freed.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     io_thread: Option<loader::io_thread::IoThread>,
 
