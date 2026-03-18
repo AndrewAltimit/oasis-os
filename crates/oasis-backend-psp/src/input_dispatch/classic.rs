@@ -504,22 +504,7 @@ pub(crate) fn dispatch_classic(
                 .as_mut()
                 .is_some_and(|w| w.handle_input(&input_event, &br.vfs));
             if !handled {
-                // No link selected -- navigate to home URL.
-                let home = br
-                    .widget
-                    .as_ref()
-                    .map(|w| w.config.features.home_url.clone())
-                    .unwrap_or_else(|| "https://info.cern.ch".to_string());
-                br.loading = true;
-                br.status_msg = String::from("Loading...");
-                dbg_log(&format!("[Browser] navigating to home: {home}"));
-                if let Some(ref mut w) = br.widget {
-                    w.navigate_vfs(&home, &br.vfs);
-                }
-                dbg_log("[Browser] navigate_vfs returned");
-                br.loading = false;
-                let url_display = br.url().to_string();
-                br.status_msg = format!("Loaded: {url_display}");
+                // No link focused -- ignore the press to avoid accidental navigation.
             }
         },
         InputEvent::ButtonPress(Button::Up) if *classic_view == ClassicView::Browser => {

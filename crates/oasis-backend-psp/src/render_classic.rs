@@ -210,10 +210,14 @@ pub(crate) fn render_classic(
                     desktop::draw_loading_indicator(backend, "Loading page...");
                 } else if w.loading_state() == oasis_browser::LoadingState::Error {
                     // Show error as simple text (avoid paint crash on PSP).
-                    let msg = w.error_message().unwrap_or("Unknown error").to_string();
+                    // Cache wrapped lines to avoid per-frame allocation.
+                    let msg = w.error_message().unwrap_or("Unknown error");
+                    if br.cached_error_msg != msg {
+                        br.cached_error_msg = msg.to_string();
+                        br.cached_error_lines = views::wrap_text(msg, 58);
+                    }
                     backend.force_bitmap_font = true;
-                    let lines = views::wrap_text(&msg, 58);
-                    for (i, line) in lines.iter().enumerate().take(25) {
+                    for (i, line) in br.cached_error_lines.iter().enumerate().take(25) {
                         backend.draw_text_inner(line, 4, 20 + (i as i32 * 9), 8, Color::WHITE);
                     }
                     backend.force_bitmap_font = false;

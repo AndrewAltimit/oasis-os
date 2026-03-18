@@ -164,6 +164,10 @@ pub(crate) struct BrowserState {
     pub(crate) status_msg: String,
     /// Whether the browser is currently loading (for loading indicator).
     pub(crate) loading: bool,
+    /// Cached wrapped error lines to avoid per-frame allocation.
+    pub(crate) cached_error_lines: Vec<String>,
+    /// The raw error message that produced `cached_error_lines`.
+    pub(crate) cached_error_msg: String,
 }
 
 impl BrowserState {
@@ -173,6 +177,8 @@ impl BrowserState {
             vfs: oasis_core::vfs::MemoryVfs::new(),
             status_msg: String::from("Press [] to enter URL, X to navigate"),
             loading: false,
+            cached_error_lines: Vec::new(),
+            cached_error_msg: String::new(),
         }
     }
 
