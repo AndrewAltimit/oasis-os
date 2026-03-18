@@ -878,12 +878,15 @@ impl BrowserWidget {
 /// without changing layout geometry. Properties in this set can be updated
 /// via dirty-rect repainting instead of triggering a full layout rebuild.
 fn is_visual_only_property(prop: &str) -> bool {
+    // NOTE: `opacity` is intentionally excluded — while it doesn't affect
+    // layout, `patch_node_colors` only updates color fields, not PushLayer
+    // opacity. Treating it as visual-only would cause opacity transitions
+    // to stall because the display list never gets rebuilt.
     matches!(
         prop,
         "color"
             | "background-color"
             | "background"
-            | "opacity"
             | "border-color"
             | "border-top-color"
             | "border-right-color"

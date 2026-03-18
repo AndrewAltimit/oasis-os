@@ -613,10 +613,14 @@ impl BrowserWidget {
         // Update focused_node so :focus CSS and JS keyboard events work.
         self.focused_node = Some(target_nid);
 
-        // Determine the input type so we can toggle checkbox/radio state.
-        let input_type = match &doc.nodes[target_nid].kind {
-            NodeKind::Element(elem) => elem.get_attribute("type").unwrap_or("text"),
-            _ => "text",
+        // Determine the input type and value so we can toggle
+        // checkbox/radio state.
+        let (input_type, target_value) = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => (
+                elem.get_attribute("type").unwrap_or("text"),
+                elem.get_attribute("value").unwrap_or("").to_string(),
+            ),
+            _ => ("text", String::new()),
         };
 
         // Search form_manager for a form containing this element name
@@ -627,12 +631,18 @@ impl BrowserWidget {
                 self.form_manager.focused_element = Some(name.clone());
 
                 // Toggle checkbox/radio on label click (standard HTML
-                // behavior): simulate a Space key press on the focused
-                // element.
-                if input_type == "checkbox" || input_type == "radio" {
+                // behavior).
+                if input_type == "checkbox" {
                     let _ = self
                         .form_manager
                         .handle_input(crate::forms::FormKey::Space);
+                    self.layout_dirty = true;
+                } else if input_type == "radio" {
+                    // For radio buttons, select_radio uses the value to
+                    // pick the correct option in the group, avoiding the
+                    // index_of(name) ambiguity where all radios share
+                    // the same name.
+                    self.form_manager.select_radio(fi, &name, &target_value);
                     self.layout_dirty = true;
                 }
                 return;
