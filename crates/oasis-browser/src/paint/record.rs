@@ -62,6 +62,7 @@ pub fn record(
     display_list: &mut DisplayList,
 ) -> Vec<LinkRegion> {
     display_list.clear();
+    display_list.set_recording_scroll_y(viewport.scroll_y);
 
     let mut ctx = RecordContext {
         links: Vec::new(),
@@ -111,7 +112,19 @@ fn record_box(
     let is_sticky = layout_box.style.position == Position::Sticky;
     if is_sticky {
         dl.set_has_sticky();
-        dl.push(DisplayItem::PushLayer { opacity: 1.0 });
+        dl.push(DisplayItem::PushSticky {
+            natural_y: layout_box.dimensions.content.y,
+            box_height: layout_box.dimensions.margin_box().height,
+            top_px: match layout_box.style.top {
+                Dimension::Px(t) => Some(t),
+                _ => None,
+            },
+            bottom_px: match layout_box.style.bottom {
+                Dimension::Px(b) => Some(b),
+                _ => None,
+            },
+            visible_viewport_h: ctx.visible_viewport_height,
+        });
     }
 
     // Screen-space culling.
@@ -121,15 +134,15 @@ fn record_box(
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
     if box_bottom < 0.0 || screen_y > ctx.viewport_height {
-        // Close the sticky layer opened above to keep the stack balanced.
+        // Close the sticky group opened above to keep the stack balanced.
         if is_sticky {
-            dl.push(DisplayItem::PopLayer);
+            dl.push(DisplayItem::PopSticky);
         }
         return;
     }
     if box_right < 0.0 || screen_x > ctx.viewport_width {
         if is_sticky {
-            dl.push(DisplayItem::PopLayer);
+            dl.push(DisplayItem::PopSticky);
         }
         return;
     }
@@ -317,9 +330,9 @@ fn record_box(
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
 
-    // Close the sticky compositing layer (outermost, pushed before opacity).
+    // Close the sticky group (outermost, pushed before opacity).
     if is_sticky {
-        dl.push(DisplayItem::PopLayer);
+        dl.push(DisplayItem::PopSticky);
     }
 
     // Restore the previous DOM node context.

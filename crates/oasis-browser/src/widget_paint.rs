@@ -41,8 +41,44 @@ impl BrowserWidget {
         let anim_active = self.animation_engine.tick(dt_ms);
         let trans_active = self.transition_engine.tick(dt_ms);
         if anim_active || trans_active {
-            // Animations or transitions changed values — repaint needed.
-            self.layout_dirty = true;
+            // Check if all animated properties are visual-only (color changes
+            // that don't affect layout). If so, use dirty-rect repainting
+            // instead of a full layout rebuild.
+            let mut all_visual = true;
+            let mut nodes: Vec<usize> = Vec::new();
+
+            for (nid, props) in self.animation_engine.active_node_properties() {
+                if props.iter().all(|p| is_visual_only_property(p)) {
+                    nodes.push(nid);
+                } else {
+                    all_visual = false;
+                    break;
+                }
+            }
+            if all_visual {
+                for (nid, prop) in self.transition_engine.active_node_properties() {
+                    if is_visual_only_property(prop) {
+                        nodes.push(nid);
+                    } else {
+                        all_visual = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_visual && !nodes.is_empty() {
+                // Compute dirty rects for animated nodes so the display list
+                // can be patched and replayed without a full rebuild.
+                if let Some(layout) = &self.layout_root {
+                    for nid in nodes {
+                        if let Some(rect) = Self::find_node_rect(layout, nid) {
+                            self.dirty_rects.push(rect);
+                        }
+                    }
+                }
+            } else {
+                self.layout_dirty = true;
+            }
         }
 
         // Tick JS timers (setTimeout / setInterval).
@@ -249,16 +285,14 @@ impl BrowserWidget {
                     // Check if we can reuse the cached display list by replaying
                     // with a translation offset instead of re-recording.
                     //
-                    // This is safe when:
-                    // 1. The scroll delta is within the buffer zone (items beyond
-                    //    the visible area were already recorded)
-                    // 2. No sticky-positioned elements (they move independently
-                    //    of normal scroll translation)
+                    // This is safe when the scroll delta is within the buffer
+                    // zone (items beyond the visible area were already recorded).
+                    // Sticky elements are handled via PushSticky/PopSticky
+                    // which recompute their offset during replay.
                     let abs_dy = dy.unsigned_abs() as f32;
                     let abs_dx = dx.unsigned_abs() as f32;
-                    let can_reuse = !self.display_list.has_sticky()
-                        && abs_dy <= self.scroll.buffer_zone as f32
-                        && abs_dx <= self.window_w as f32;
+                    let can_reuse =
+                        abs_dy <= self.scroll.buffer_zone as f32 && abs_dx <= self.window_w as f32;
 
                     if can_reuse {
                         // Shift link_map regions by the per-frame scroll delta
@@ -819,4 +853,26 @@ impl BrowserWidget {
         }
         Ok(())
     }
+}
+
+/// Whether a CSS property only affects visual appearance (color, opacity)
+/// without changing layout geometry. Properties in this set can be updated
+/// via dirty-rect repainting instead of triggering a full layout rebuild.
+fn is_visual_only_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "color"
+            | "background-color"
+            | "background"
+            | "opacity"
+            | "border-color"
+            | "border-top-color"
+            | "border-right-color"
+            | "border-bottom-color"
+            | "border-left-color"
+            | "box-shadow"
+            | "outline-color"
+            | "visibility"
+            | "text-decoration-color"
+    )
 }

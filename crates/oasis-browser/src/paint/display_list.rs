@@ -15,7 +15,7 @@
 //! collected into batches so backends can submit them as a single GPU
 //! draw call.
 
-use oasis_types::backend::{BatchRect, Color, GradientStyle, SdiBackend, TextureId};
+use oasis_types::backend::{BatchRect, BatchText, Color, GradientStyle, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
@@ -141,6 +141,19 @@ pub enum DisplayItem {
     /// dimming) via [`super::filters::apply_filters`].
     /// GPU backends can override with actual Gaussian blur via render targets.
     BlurHint { radius: f32 },
+    /// Begin a sticky-positioned element group.
+    ///
+    /// During scroll-delta replay, the sticky offset is recomputed from
+    /// these parameters so the display list can be reused without rebuild.
+    PushSticky {
+        natural_y: f32,
+        box_height: f32,
+        top_px: Option<f32>,
+        bottom_px: Option<f32>,
+        visible_viewport_h: f32,
+    },
+    /// End a sticky-positioned element group.
+    PopSticky,
 }
 
 impl DisplayItem {
@@ -216,7 +229,9 @@ impl DisplayItem {
             DisplayItem::PopClip
             | DisplayItem::PushLayer { .. }
             | DisplayItem::PopLayer
-            | DisplayItem::BlurHint { .. } => None,
+            | DisplayItem::BlurHint { .. }
+            | DisplayItem::PushSticky { .. }
+            | DisplayItem::PopSticky => None,
         }
     }
 }
@@ -242,6 +257,9 @@ pub struct DisplayList {
     /// not safe because sticky elements change their visual position
     /// relative to scroll independently of normal content flow.
     has_sticky: bool,
+    /// The scroll Y value at the time this display list was recorded.
+    /// Used by `PushSticky` to recompute sticky offsets during replay.
+    recording_scroll_y: f32,
 }
 
 impl DisplayList {
@@ -251,6 +269,7 @@ impl DisplayList {
             items: Vec::with_capacity(256),
             generation: 0,
             has_sticky: false,
+            recording_scroll_y: 0.0,
         }
     }
 
@@ -259,6 +278,12 @@ impl DisplayList {
         self.items.clear();
         self.generation += 1;
         self.has_sticky = false;
+        self.recording_scroll_y = 0.0;
+    }
+
+    /// Set the scroll Y value at recording time.
+    pub fn set_recording_scroll_y(&mut self, scroll_y: f32) {
+        self.recording_scroll_y = scroll_y;
     }
 
     /// Whether the display list contains sticky-positioned elements.
@@ -576,43 +601,117 @@ impl DisplayList {
         let mut opacity_stack: Vec<f32> = Vec::new();
         // Clip stack stores the *intersected* clip rect for each level.
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
+        // Sticky correction stack: Y offset adjustment for sticky elements
+        // when replaying with a scroll delta different from recording time.
+        let mut sticky_dy_stack: Vec<i32> = Vec::new();
         // Batch of consecutive FillRect items for batched submission.
         let mut rect_batch: Vec<BatchRect> = Vec::new();
+        // Batch of consecutive same-style DrawText items.
+        let mut text_batch: Vec<BatchText<'_>> = Vec::new();
+        let mut text_batch_key: (u16, bool, bool) = (0, false, false);
 
         for item in &self.items {
             match item {
                 DisplayItem::PushLayer { opacity } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.push(*opacity);
                     continue;
                 },
                 DisplayItem::PopLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.pop();
+                    continue;
+                },
+                DisplayItem::PushSticky {
+                    natural_y,
+                    box_height,
+                    top_px,
+                    bottom_px,
+                    visible_viewport_h,
+                } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    // Compute the sticky offset difference between replay
+                    // scroll and recording scroll.
+                    let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
+                    let new_dy = compute_sticky_dy_from_params(
+                        *natural_y,
+                        *box_height,
+                        *top_px,
+                        *bottom_px,
+                        *visible_viewport_h,
+                        eff_scroll,
+                    );
+                    let rec_dy = compute_sticky_dy_from_params(
+                        *natural_y,
+                        *box_height,
+                        *top_px,
+                        *bottom_px,
+                        *visible_viewport_h,
+                        self.recording_scroll_y,
+                    );
+                    sticky_dy_stack.push(new_dy - rec_dy);
+                    continue;
+                },
+                DisplayItem::PopSticky => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    sticky_dy_stack.pop();
                     continue;
                 },
                 _ => {},
             }
 
             let layer_opacity = layer_opacity_product(&opacity_stack);
+            let sticky_correction = sticky_dy_stack.last().copied().unwrap_or(0);
+            let eff_dy = scroll_dy + sticky_correction;
 
             match item {
                 DisplayItem::FillRect {
                     x, y, w, h, color, ..
                 } => {
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     let c = apply_layer_opacity(*color, layer_opacity);
                     rect_batch.push(BatchRect {
                         x: x + scroll_dx,
-                        y: y + scroll_dy,
+                        y: y + eff_dy,
                         w: *w,
                         h: *h,
                         color: c,
                     });
                     continue;
                 },
-                _ => {
-                    // Non-FillRect item breaks the batch.
+                DisplayItem::DrawText {
+                    text,
+                    x,
+                    y,
+                    font_size,
+                    color,
+                    bold,
+                    italic,
+                    ..
+                } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let key = (*font_size, *bold, *italic);
+                    if !text_batch.is_empty() && text_batch_key != key {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    }
+                    text_batch_key = key;
+                    text_batch.push(BatchText {
+                        text,
+                        x: x + scroll_dx,
+                        y: y + eff_dy,
+                        color: c,
+                    });
+                    continue;
+                },
+                _ => {
+                    // Non-FillRect/DrawText item breaks both batches.
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                 },
             }
 
@@ -627,7 +726,7 @@ impl DisplayList {
                     ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
+                    backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,
@@ -641,33 +740,12 @@ impl DisplayList {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.stroke_rounded_rect(
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         *radius,
                         *stroke_width,
                         c,
-                    )?;
-                },
-                DisplayItem::DrawText {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    color,
-                    bold,
-                    italic,
-                    ..
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.draw_text_styled(
-                        text,
-                        x + scroll_dx,
-                        y + scroll_dy,
-                        *font_size,
-                        c,
-                        *bold,
-                        *italic,
                     )?;
                 },
                 DisplayItem::Blit {
@@ -677,7 +755,7 @@ impl DisplayList {
                     w,
                     h,
                 } => {
-                    backend.blit(*texture, x + scroll_dx, y + scroll_dy, *w, *h)?;
+                    backend.blit(*texture, x + scroll_dx, y + eff_dy, *w, *h)?;
                 },
                 DisplayItem::BlitSub {
                     texture,
@@ -697,13 +775,13 @@ impl DisplayList {
                         *src_w,
                         *src_h,
                         dst_x + scroll_dx,
-                        dst_y + scroll_dy,
+                        dst_y + eff_dy,
                         *dst_w,
                         *dst_h,
                     )?;
                 },
                 DisplayItem::Gradient { x, y, w, h, style } => {
-                    backend.fill_rect_gradient(x + scroll_dx, y + scroll_dy, *w, *h, style)?;
+                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, style)?;
                 },
                 DisplayItem::BorderEdge {
                     x,
@@ -718,7 +796,7 @@ impl DisplayList {
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         c,
@@ -741,7 +819,7 @@ impl DisplayList {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_shadow(
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         *blur,
@@ -753,7 +831,7 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::PushClip { x, y, w, h } => {
-                    let raw = (x + scroll_dx, y + scroll_dy, *w, *h);
+                    let raw = (x + scroll_dx, y + eff_dy, *w, *h);
                     // Intersect with parent clip for tighter bounds.
                     let effective = if let Some(&parent) = clip_stack.last() {
                         intersect_clip(parent, raw)
@@ -778,8 +856,11 @@ impl DisplayList {
                 },
                 // Already handled above the match.
                 DisplayItem::FillRect { .. }
+                | DisplayItem::DrawText { .. }
                 | DisplayItem::PushLayer { .. }
-                | DisplayItem::PopLayer => {},
+                | DisplayItem::PopLayer
+                | DisplayItem::PushSticky { .. }
+                | DisplayItem::PopSticky => {},
                 // BlurHint is metadata for GPU backends; software fallback
                 // applies per-color approximation during recording.
                 DisplayItem::BlurHint { .. } => {},
@@ -787,6 +868,7 @@ impl DisplayList {
         }
 
         flush_rect_batch(backend, &mut rect_batch)?;
+        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
         backend.flush_batch()?;
         Ok(())
     }
@@ -809,14 +891,19 @@ impl DisplayList {
 
         let mut opacity_stack: Vec<f32> = Vec::new();
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
+        let mut sticky_dy_stack: Vec<i32> = Vec::new();
         let mut rect_batch: Vec<BatchRect> = Vec::new();
+        let mut text_batch: Vec<BatchText<'_>> = Vec::new();
+        let mut text_batch_key: (u16, bool, bool) = (0, false, false);
 
         for item in &self.items {
-            // Clip and layer items must always be replayed.
+            // Clip, layer, and sticky items must always be replayed.
             match item {
                 DisplayItem::PushClip { x, y, w, h } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
-                    let raw = (x + scroll_dx, y + scroll_dy, *w, *h);
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    let sticky_corr = sticky_dy_stack.last().copied().unwrap_or(0);
+                    let raw = (x + scroll_dx, y + scroll_dy + sticky_corr, *w, *h);
                     let effective = if let Some(&parent) = clip_stack.last() {
                         intersect_clip(parent, raw)
                     } else if let Some(base) = base_clip {
@@ -830,6 +917,7 @@ impl DisplayList {
                 },
                 DisplayItem::PopClip => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     clip_stack.pop();
                     if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
                         backend.set_clip_rect(cx, cy, cw, ch)?;
@@ -842,22 +930,61 @@ impl DisplayList {
                 },
                 DisplayItem::PushLayer { opacity } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.push(*opacity);
                     continue;
                 },
                 DisplayItem::PopLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.pop();
+                    continue;
+                },
+                DisplayItem::PushSticky {
+                    natural_y,
+                    box_height,
+                    top_px,
+                    bottom_px,
+                    visible_viewport_h,
+                } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
+                    let new_dy = compute_sticky_dy_from_params(
+                        *natural_y,
+                        *box_height,
+                        *top_px,
+                        *bottom_px,
+                        *visible_viewport_h,
+                        eff_scroll,
+                    );
+                    let rec_dy = compute_sticky_dy_from_params(
+                        *natural_y,
+                        *box_height,
+                        *top_px,
+                        *bottom_px,
+                        *visible_viewport_h,
+                        self.recording_scroll_y,
+                    );
+                    sticky_dy_stack.push(new_dy - rec_dy);
+                    continue;
+                },
+                DisplayItem::PopSticky => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    sticky_dy_stack.pop();
                     continue;
                 },
                 _ => {},
             }
 
             // Cull items outside the dirty rect.
+            let sticky_correction = sticky_dy_stack.last().copied().unwrap_or(0);
+            let eff_dy = scroll_dy + sticky_correction;
             if let Some(bounds) = item.bounds() {
                 let shifted = Rect {
                     x: bounds.x + scroll_dx as f32,
-                    y: bounds.y + scroll_dy as f32,
+                    y: bounds.y + eff_dy as f32,
                     width: bounds.width,
                     height: bounds.height,
                 };
@@ -868,23 +995,50 @@ impl DisplayList {
 
             let layer_opacity = layer_opacity_product(&opacity_stack);
 
-            // Replay the item — batch consecutive FillRects.
+            // Replay the item — batch consecutive FillRects and DrawTexts.
             match item {
                 DisplayItem::FillRect {
                     x, y, w, h, color, ..
                 } => {
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     let c = apply_layer_opacity(*color, layer_opacity);
                     rect_batch.push(BatchRect {
                         x: x + scroll_dx,
-                        y: y + scroll_dy,
+                        y: y + eff_dy,
                         w: *w,
                         h: *h,
                         color: c,
                     });
                     continue;
                 },
+                DisplayItem::DrawText {
+                    text,
+                    x,
+                    y,
+                    font_size,
+                    color,
+                    bold,
+                    italic,
+                    ..
+                } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let key = (*font_size, *bold, *italic);
+                    if !text_batch.is_empty() && text_batch_key != key {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    }
+                    text_batch_key = key;
+                    text_batch.push(BatchText {
+                        text,
+                        x: x + scroll_dx,
+                        y: y + eff_dy,
+                        color: c,
+                    });
+                    continue;
+                },
                 _ => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                 },
             }
 
@@ -899,7 +1053,7 @@ impl DisplayList {
                     ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.fill_rounded_rect(x + scroll_dx, y + scroll_dy, *w, *h, *radius, c)?;
+                    backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,
@@ -913,33 +1067,12 @@ impl DisplayList {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.stroke_rounded_rect(
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         *radius,
                         *stroke_width,
                         c,
-                    )?;
-                },
-                DisplayItem::DrawText {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    color,
-                    bold,
-                    italic,
-                    ..
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.draw_text_styled(
-                        text,
-                        x + scroll_dx,
-                        y + scroll_dy,
-                        *font_size,
-                        c,
-                        *bold,
-                        *italic,
                     )?;
                 },
                 DisplayItem::Blit {
@@ -949,7 +1082,7 @@ impl DisplayList {
                     w,
                     h,
                 } => {
-                    backend.blit(*texture, x + scroll_dx, y + scroll_dy, *w, *h)?;
+                    backend.blit(*texture, x + scroll_dx, y + eff_dy, *w, *h)?;
                 },
                 DisplayItem::BlitSub {
                     texture,
@@ -969,13 +1102,13 @@ impl DisplayList {
                         *src_w,
                         *src_h,
                         dst_x + scroll_dx,
-                        dst_y + scroll_dy,
+                        dst_y + eff_dy,
                         *dst_w,
                         *dst_h,
                     )?;
                 },
                 DisplayItem::Gradient { x, y, w, h, style } => {
-                    backend.fill_rect_gradient(x + scroll_dx, y + scroll_dy, *w, *h, style)?;
+                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, style)?;
                 },
                 DisplayItem::BorderEdge {
                     x,
@@ -990,7 +1123,7 @@ impl DisplayList {
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         c,
@@ -1013,7 +1146,7 @@ impl DisplayList {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_shadow(
                         x + scroll_dx,
-                        y + scroll_dy,
+                        y + eff_dy,
                         *w,
                         *h,
                         *blur,
@@ -1025,15 +1158,19 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::FillRect { .. }
+                | DisplayItem::DrawText { .. }
                 | DisplayItem::PushClip { .. }
                 | DisplayItem::PopClip
                 | DisplayItem::PushLayer { .. }
-                | DisplayItem::PopLayer => {},
+                | DisplayItem::PopLayer
+                | DisplayItem::PushSticky { .. }
+                | DisplayItem::PopSticky => {},
                 DisplayItem::BlurHint { .. } => {},
             }
         }
 
         flush_rect_batch(backend, &mut rect_batch)?;
+        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
         backend.flush_batch()?;
         Ok(())
     }
@@ -1064,6 +1201,31 @@ fn flush_rect_batch(backend: &mut dyn SdiBackend, batch: &mut Vec<BatchRect>) ->
         },
         _ => {
             backend.submit_rect_batch(batch)?;
+        },
+    }
+    batch.clear();
+    Ok(())
+}
+
+/// Flush accumulated `DrawText` items as a single batched call.
+///
+/// When the batch contains multiple texts with the same font style, they
+/// are submitted via [`SdiBatch::submit_text_batch`] so backends can
+/// coalesce glyph atlas lookups. Single-text batches fall through to
+/// `draw_text_styled` to avoid overhead.
+fn flush_text_batch(
+    backend: &mut dyn SdiBackend,
+    batch: &mut Vec<BatchText<'_>>,
+    key: (u16, bool, bool),
+) -> Result<()> {
+    match batch.len() {
+        0 => {},
+        1 => {
+            let t = &batch[0];
+            backend.draw_text_styled(t.text, t.x, t.y, key.0, t.color, key.1, key.2)?;
+        },
+        _ => {
+            backend.submit_text_batch(batch, key.0, key.1, key.2)?;
         },
     }
     batch.clear();
@@ -1106,6 +1268,39 @@ fn apply_layer_opacity(color: Color, opacity: f32) -> Color {
     }
     let a = (color.a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
     Color::rgba(color.r, color.g, color.b, a)
+}
+
+/// Compute the sticky Y offset from the element's parameters and a scroll value.
+///
+/// This mirrors `compute_sticky_dy` in `record.rs` but works from stored
+/// parameters rather than a live layout box, enabling offset recomputation
+/// during scroll-delta replay.
+fn compute_sticky_dy_from_params(
+    natural_y: f32,
+    box_height: f32,
+    top_px: Option<f32>,
+    bottom_px: Option<f32>,
+    visible_viewport_h: f32,
+    scroll_y: f32,
+) -> i32 {
+    if let Some(top) = top_px {
+        let natural = natural_y - scroll_y;
+        if natural < top {
+            (top - natural) as i32
+        } else {
+            0
+        }
+    } else if let Some(bottom) = bottom_px {
+        let natural = natural_y - scroll_y;
+        let threshold = visible_viewport_h - bottom - box_height;
+        if natural > threshold {
+            (threshold - natural) as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    }
 }
 
 /// Test whether two rectangles overlap.
