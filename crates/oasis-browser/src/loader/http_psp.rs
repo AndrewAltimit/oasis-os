@@ -151,7 +151,8 @@ fn do_request(
         "{method} {path} HTTP/1.1\r\n\
          Host: {host_header}\r\n\
          User-Agent: OASIS-PSP/1.0\r\n\
-         Accept: */*\r\n\
+         Accept: text/html, application/xhtml+xml, */*\r\n\
+         Accept-Encoding: identity\r\n\
          Connection: close\r\n"
     );
 
@@ -192,11 +193,17 @@ fn do_request(
     let mut body_start: Option<usize> = None;
     let mut expected_body_len: Option<usize> = None;
     let mut is_chunked = false;
+    // Safety limit: max read iterations to prevent infinite loops when
+    // the TLS layer blocks without returning EOF (e.g. missing
+    // close_notify from servers that ignore Connection: close).
+    let mut reads_since_progress = 0u32;
+    const MAX_STALL_READS: u32 = 64;
 
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
+                reads_since_progress = 0;
                 if buf.len() + n > MAX_BODY_SIZE + MAX_HEADER_SIZE {
                     break;
                 }
@@ -253,10 +260,14 @@ fn do_request(
                             break;
                         }
                     } else if is_chunked {
+                        // Search for the chunked terminator anywhere in
+                        // the body data, not just at the end. Servers may
+                        // append trailing headers or padding after the
+                        // final `0\r\n\r\n` chunk marker.
                         let chunk_data = &buf[bs..];
-                        if chunk_data.ends_with(b"\r\n0\r\n\r\n")
-                            || chunk_data.ends_with(b"0\r\n\r\n")
-                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 5)
+                        if find_subsequence(chunk_data, b"\r\n0\r\n\r\n").is_some()
+                            || find_subsequence(chunk_data, b"\n0\r\n\r\n").is_some()
+                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 7)
                         {
                             break;
                         }
@@ -264,7 +275,17 @@ fn do_request(
                     // No content-length + not chunked: read until EOF/error.
                 }
             },
-            Err(_) => break,
+            Err(_) => {
+                // Read error (timeout, connection reset, etc.).
+                // If we have headers and some body data, use what we got.
+                if body_start.is_some() && buf.len() > body_start.unwrap_or(0) + 64 {
+                    break;
+                }
+                reads_since_progress += 1;
+                if reads_since_progress >= MAX_STALL_READS {
+                    break;
+                }
+            },
         }
     }
     let _ = stream.close();
