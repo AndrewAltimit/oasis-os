@@ -682,6 +682,7 @@ impl Document {
                 self.id_index.remove(id);
             }
             self.nodes[*child_id].parent = None;
+            self.free_list.push(*child_id);
         }
         self.nodes[node_id].children.clear();
         let text_id = self.add_node(NodeKind::Text(text.to_string()));

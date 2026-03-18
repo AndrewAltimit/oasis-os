@@ -226,9 +226,6 @@ pub struct BrowserWidget {
     window_w: u32,
     window_h: u32,
 
-    /// Optional TLS provider for HTTPS and Gemini connections.
-    tls: Option<Box<dyn oasis_net::tls::TlsProvider>>,
-
     /// Whether the layout tree needs rebuilding.
     layout_dirty: bool,
 
@@ -253,8 +250,18 @@ pub struct BrowserWidget {
 
     /// Background I/O thread for non-blocking HTTP requests.
     /// Lazily created on first network request.
+    ///
+    /// **Drop order**: `io_thread` is declared before `tls` so it is
+    /// dropped first. Dropping the `IoThread` closes the sender channel,
+    /// causing the worker thread to exit before the `TlsProvider` is freed.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     io_thread: Option<loader::io_thread::IoThread>,
+
+    /// Optional TLS provider for HTTPS and Gemini connections.
+    ///
+    /// **Drop order**: Must be declared after `io_thread` so it outlives
+    /// the I/O worker thread (see `SharedTlsProvider` safety invariant).
+    tls: Option<Box<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -464,7 +471,6 @@ impl BrowserWidget {
             window_y: 0,
             window_w: 480,
             window_h: 272,
-            tls: None,
             layout_dirty: false,
             skip_nav_push: false,
             last_layout_w: 480,
@@ -474,6 +480,7 @@ impl BrowserWidget {
             decoded_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             io_thread: None,
+            tls: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_page_load: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]

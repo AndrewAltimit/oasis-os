@@ -26,12 +26,10 @@ use crate::loader::io_thread::{IoRequestKind, IoThread};
 /// # Safety
 ///
 /// The raw pointer is valid for the lifetime of the `BrowserWidget` that
-/// owns the original `Box<dyn TlsProvider>`. The I/O thread is dropped
-/// before the widget (it is a field that is dropped in declaration order,
-/// and `io_thread` is declared before `tls` would need to outlive it --
-/// but we actually drop the IoThread explicitly or let it be dropped
-/// with the widget). The IoThread's worker exits when its sender channel
-/// is dropped, which happens when IoThread is dropped.
+/// owns the original `Box<dyn TlsProvider>`. In `BrowserWidget`, the
+/// `io_thread` field is declared *before* `tls`, so Rust drops it first.
+/// Dropping the `IoThread` closes its sender channel, which causes the
+/// worker thread to exit before `tls` (and thus the pointee) is freed.
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 struct SharedTlsProvider(*const dyn oasis_net::tls::TlsProvider);
 
