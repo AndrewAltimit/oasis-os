@@ -454,10 +454,11 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return;
                 }
-                // Clear existing children.
+                // Recursively free existing children and all descendants
+                // (ID index entries, arena slots).
                 let old: Vec<NodeId> = doc.nodes[id].children.clone();
                 for child_id in old {
-                    doc.nodes[child_id].parent = None;
+                    doc.free_subtree(child_id);
                 }
                 doc.nodes[id].children.clear();
 

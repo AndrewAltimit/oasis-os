@@ -730,6 +730,7 @@ impl BrowserWidget {
 
         let mut any_changed = false;
         let mut geometry_changed = false;
+        let mut needs_full_repaint = false;
         let mut tag_cache = FxHashMap::<String, String>::default();
         for &nid in &affected {
             let node = &doc.nodes[nid];
@@ -753,6 +754,21 @@ impl BrowserWidget {
                     if !styles_geometry_equal(old_style, &new_style) {
                         geometry_changed = true;
                     }
+                    // Check if non-patchable visual properties changed
+                    // (border colors, opacity, box-shadow, outline, etc.).
+                    // patch_node_colors only handles color + background_color,
+                    // so other visual changes need a full display list rebuild.
+                    if !needs_full_repaint
+                        && (old_style.border_top_color != new_style.border_top_color
+                            || old_style.border_right_color != new_style.border_right_color
+                            || old_style.border_bottom_color != new_style.border_bottom_color
+                            || old_style.border_left_color != new_style.border_left_color
+                            || old_style.opacity != new_style.opacity
+                            || old_style.outline_color != new_style.outline_color
+                            || old_style.box_shadow != new_style.box_shadow)
+                    {
+                        needs_full_repaint = true;
+                    }
                 } else {
                     geometry_changed = true;
                 }
@@ -764,10 +780,12 @@ impl BrowserWidget {
         if any_changed && geometry_changed {
             // Geometry changed: need full relayout.
             self.layout_dirty = true;
+        } else if any_changed && needs_full_repaint {
+            // Non-patchable visual properties changed (border color,
+            // opacity, etc.) — need full display list rebuild.
+            self.full_repaint_needed = true;
         } else if any_changed {
-            // Only visual properties changed (color, background, opacity, etc.).
-            // Mark affected nodes' rects as dirty so paint rebuilds the
-            // display list and uses replay_dirty() for partial repaint.
+            // Only color/background changed — patchable in-place.
             let affected_vec: Vec<NodeId> = affected.into_iter().collect();
             self.mark_hover_focus_dirty(&affected_vec);
         }

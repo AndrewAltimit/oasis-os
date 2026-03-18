@@ -670,19 +670,34 @@ impl Document {
         if text.is_empty() { None } else { Some(text) }
     }
 
+    /// Recursively free a node and all its descendants.
+    ///
+    /// Removes ID index entries for any elements with `id` attributes
+    /// and pushes all node slots onto the free list for reuse.
+    pub(crate) fn free_subtree(&mut self, node_id: NodeId) {
+        // Collect children first to avoid borrow conflict.
+        let children: Vec<NodeId> = self.nodes[node_id].children.clone();
+        for child in children {
+            self.free_subtree(child);
+        }
+        // Remove from ID index.
+        if let NodeKind::Element(ref data) = self.nodes[node_id].kind
+            && let Some(id) = data.id()
+            && self.id_index.get(id) == Some(&node_id)
+        {
+            self.id_index.remove(id);
+        }
+        self.nodes[node_id].parent = None;
+        self.nodes[node_id].children.clear();
+        self.free_list.push(node_id);
+    }
+
     /// Replace the children of `node_id` with a single text node.
     pub fn set_text_content(&mut self, node_id: NodeId, text: &str) {
-        // Remove ID index entries for old children being detached.
+        // Recursively free old children and all their descendants.
         let old_children: Vec<NodeId> = self.nodes[node_id].children.clone();
-        for child_id in &old_children {
-            if let NodeKind::Element(ref data) = self.nodes[*child_id].kind
-                && let Some(id) = data.id()
-                && self.id_index.get(id) == Some(child_id)
-            {
-                self.id_index.remove(id);
-            }
-            self.nodes[*child_id].parent = None;
-            self.free_list.push(*child_id);
+        for child_id in old_children {
+            self.free_subtree(child_id);
         }
         self.nodes[node_id].children.clear();
         let text_id = self.add_node(NodeKind::Text(text.to_string()));
@@ -691,18 +706,13 @@ impl Document {
 
     /// Remove `child_id` from its parent's child list and clear its
     /// parent link. Returns the former parent if one existed.
+    ///
+    /// Recursively frees all descendants, removing their ID index
+    /// entries and adding their arena slots to the free list.
     pub fn remove_child(&mut self, child_id: NodeId) -> Option<NodeId> {
-        // Remove from ID index if this element has an id.
-        if let NodeKind::Element(ref data) = self.nodes[child_id].kind
-            && let Some(id) = data.id()
-            && self.id_index.get(id) == Some(&child_id)
-        {
-            self.id_index.remove(id);
-        }
         let parent_id = self.nodes[child_id].parent.take()?;
         self.nodes[parent_id].children.retain(|&c| c != child_id);
-        // Add the unlinked slot to the free list for reuse by add_node.
-        self.free_list.push(child_id);
+        self.free_subtree(child_id);
         Some(parent_id)
     }
 
