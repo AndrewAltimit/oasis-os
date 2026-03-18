@@ -22,6 +22,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
+use crate::desktop;
 use crate::app_states::{
     BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TerminalState,
     TvGuideState,
@@ -466,8 +467,12 @@ pub(crate) fn dispatch_classic(
                     }
                     br.loading = true;
                     br.status_msg = String::from("Loading...");
+                    // Flush a loading frame so the user sees feedback
+                    // before the blocking network request.
+                    desktop::draw_loading_indicator(backend, "Loading page...");
+                    backend.swap_buffers_inner();
+                    backend.reinit_gu_frame();
                     dbg_log(&format!("[Browser] navigating to: {text}"));
-                    // Ensure widget exists, then navigate.
                     br.ensure_widget();
                     if let Some(ref mut w) = br.widget {
                         w.navigate_vfs(&text, &br.vfs);
@@ -495,16 +500,12 @@ pub(crate) fn dispatch_classic(
                 }
                 backend.reinit_gu_frame();
             }
-            br.ensure_widget();
             // Forward X press to BrowserWidget (follows focused link).
+            br.ensure_widget();
             let input_event =
                 oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Confirm);
-            let handled = br
-                .widget
-                .as_mut()
-                .is_some_and(|w| w.handle_input(&input_event, &br.vfs));
-            if !handled {
-                // No link focused -- ignore the press to avoid accidental navigation.
+            if let Some(ref mut w) = br.widget {
+                w.handle_input(&input_event, &br.vfs);
             }
         },
         InputEvent::ButtonPress(Button::Up) if *classic_view == ClassicView::Browser => {
