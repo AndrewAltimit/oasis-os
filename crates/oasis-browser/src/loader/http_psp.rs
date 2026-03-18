@@ -62,8 +62,12 @@ pub fn http_request_full(
                 current_url = current_url.resolve(&location).ok_or_else(|| {
                     OasisError::Backend(format!("bad redirect Location: {location}").into())
                 })?;
-                current_method = "GET".to_string();
-                current_body = None;
+                // 307/308 must preserve the original method and body.
+                // 301/302/303 convert to GET and drop the body.
+                if !matches!(resp.status_code, 307 | 308) {
+                    current_method = "GET".to_string();
+                    current_body = None;
+                }
                 continue;
             }
         }
