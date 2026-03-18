@@ -633,9 +633,7 @@ impl BrowserWidget {
                 // Toggle checkbox/radio on label click (standard HTML
                 // behavior).
                 if input_type == "checkbox" {
-                    let _ = self
-                        .form_manager
-                        .handle_input(crate::forms::FormKey::Space);
+                    let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
                     self.layout_dirty = true;
                 } else if input_type == "radio" {
                     // For radio buttons, select_radio uses the value to

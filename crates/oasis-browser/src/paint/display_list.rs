@@ -541,8 +541,7 @@ impl DisplayList {
                     // Check if the matching PushLayer was translucent.
                     // Conservative: decrement if we are currently in a translucent
                     // layer.
-                    translucent_layer_depth =
-                        translucent_layer_depth.saturating_sub(1);
+                    translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
