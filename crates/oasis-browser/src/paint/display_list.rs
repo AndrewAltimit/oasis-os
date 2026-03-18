@@ -1,17 +1,21 @@
-//! Display list intermediate representation.
+//! Display list intermediate representation (light compositor).
 //!
 //! Instead of issuing draw calls directly during the layout tree walk,
 //! the paint layer records [`DisplayItem`]s into a [`DisplayList`].
 //! The display list can then be:
 //! - Cached between frames when layout hasn't changed
-//! - Replayed with batching optimizations (group by draw type)
+//! - Compacted (horizontal strip merging, zero-size removal)
+//! - Optimized (vertical strip merging, occluded rect elimination)
+//! - Replayed with batched rect submission ([`SdiBatch::submit_rect_batch`])
 //! - Filtered by dirty rectangles (only replay items that intersect)
 //! - Scrolled by adjusting offsets without rebuilding
+//!
+//! Nested clip rectangles are intersected during replay to minimize
+//! redundant hardware clip changes. Consecutive `FillRect` items are
+//! collected into batches so backends can submit them as a single GPU
+//! draw call.
 
-// Items and methods are defined for future phases (dirty-rect culling,
-// batching, tile caching). Suppress dead_code warnings until they're wired in.
-
-use oasis_types::backend::{Color, GradientStyle, SdiBackend, TextureId};
+use oasis_types::backend::{BatchRect, Color, GradientStyle, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
@@ -406,22 +410,160 @@ impl DisplayList {
         self.items = merged;
     }
 
-    /// Replay all display items against the backend.
+    /// Optimize the display list by merging and culling items.
     ///
-    /// This is the main rendering path. The `scroll_dx` and `scroll_dy`
-    /// offsets are applied to all items, enabling scroll without rebuild.
+    /// Call after [`compact()`](Self::compact) for additional optimizations:
+    /// - Merge consecutive vertically abutting `FillRect` items (same x,
+    ///   width, and color)
+    /// - Eliminate opaque `FillRect` items fully occluded by a later opaque
+    ///   `FillRect` within the same clip context
     ///
-    /// `PushLayer`/`PopLayer` items maintain an opacity stack. Colors of
-    /// draw items are multiplied by the cumulative layer opacity, providing
-    /// correct compositing for the common single-layer case. True offscreen
-    /// compositing for overlapping children within a layer requires render
-    /// target support in the backend (future GPU override path).
+    /// These reduce draw call count and command buffer usage on all backends,
+    /// which is critical on PSP where the GU command buffer is 1 MB.
+    pub fn optimize(&mut self) {
+        self.merge_vertical_strips();
+        self.eliminate_occluded();
+    }
+
+    /// Merge consecutive `FillRect` items that form a vertical strip
+    /// (same x, same width, same color, abutting y + h == next y).
+    fn merge_vertical_strips(&mut self) {
+        if self.items.len() < 2 {
+            return;
+        }
+        let mut merged: Vec<DisplayItem> = Vec::with_capacity(self.items.len());
+        let mut drain = self.items.drain(..);
+        let mut current = drain.next().expect("len >= 2");
+
+        for next in drain {
+            if let (
+                DisplayItem::FillRect {
+                    x: cx,
+                    y: cy,
+                    w: cw,
+                    h: ch,
+                    color: cc,
+                    ..
+                },
+                DisplayItem::FillRect {
+                    x: nx,
+                    y: ny,
+                    w: nw,
+                    h: nh,
+                    color: nc,
+                    ..
+                },
+            ) = (&current, &next)
+            {
+                // Same color, same x, same width, vertically abutting?
+                if cc == nc && cx == nx && cw == nw && cy + *ch as i32 == *ny {
+                    current = DisplayItem::FillRect {
+                        x: *cx,
+                        y: *cy,
+                        w: *cw,
+                        h: ch + nh,
+                        color: *cc,
+                        node_id: None,
+                    };
+                    continue;
+                }
+            }
+            merged.push(current);
+            current = next;
+        }
+        merged.push(current);
+        self.items = merged;
+    }
+
+    /// Remove opaque `FillRect` items fully covered by a later opaque
+    /// `FillRect` within the same clip level.
+    ///
+    /// Uses a backward scan with a small window (32 items) to keep the
+    /// algorithm O(n × k) rather than O(n²). Only eliminates items in the
+    /// same clip depth to preserve correctness.
+    fn eliminate_occluded(&mut self) {
+        if self.items.len() < 2 {
+            return;
+        }
+
+        const SCAN_WINDOW: usize = 32;
+        let mut clip_depth: usize = 0;
+        let mut clip_depths: Vec<usize> = Vec::with_capacity(self.items.len());
+
+        // First pass: compute clip depth for each item.
+        for item in &self.items {
+            match item {
+                DisplayItem::PushClip { .. } => {
+                    clip_depths.push(clip_depth);
+                    clip_depth += 1;
+                },
+                DisplayItem::PopClip => {
+                    clip_depth = clip_depth.saturating_sub(1);
+                    clip_depths.push(clip_depth);
+                },
+                _ => {
+                    clip_depths.push(clip_depth);
+                },
+            }
+        }
+
+        // Second pass: mark items fully occluded by later opaque rects.
+        let mut remove = vec![false; self.items.len()];
+
+        for i in 1..self.items.len() {
+            // Only opaque FillRect items can occlude.
+            let (cx, cy, cw, ch) = match &self.items[i] {
+                DisplayItem::FillRect {
+                    x, y, w, h, color, ..
+                } if color.a == 255 => (*x, *y, *w, *h),
+                _ => continue,
+            };
+
+            let my_depth = clip_depths[i];
+            let start = i.saturating_sub(SCAN_WINDOW);
+
+            for j in start..i {
+                if remove[j] || clip_depths[j] != my_depth {
+                    continue;
+                }
+
+                let (ox, oy, ow, oh) = match &self.items[j] {
+                    DisplayItem::FillRect { x, y, w, h, .. } => (*x, *y, *w, *h),
+                    _ => continue,
+                };
+
+                // Is the earlier rect fully contained within the covering rect?
+                if ox >= cx
+                    && oy >= cy
+                    && ox + ow as i32 <= cx + cw as i32
+                    && oy + oh as i32 <= cy + ch as i32
+                {
+                    remove[j] = true;
+                }
+            }
+        }
+
+        // Third pass: remove marked items.
+        let mut idx = 0;
+        self.items.retain(|_| {
+            let keep = !remove[idx];
+            idx += 1;
+            keep
+        });
+    }
+
     /// Replay all display items against the backend.
     ///
     /// `base_clip` is the outer clip rectangle (browser window content area)
     /// that should be restored when `PopClip` empties the clip stack. This
     /// prevents content from rendering outside the browser window when the
     /// scroll buffer zone extends the recorded area beyond the viewport.
+    ///
+    /// Consecutive `FillRect` items at the same layer opacity are collected
+    /// into a batch and submitted via [`SdiBatch::submit_rect_batch`],
+    /// allowing backends to optimize them into a single draw call.
+    /// Nested clip rectangles are intersected to avoid redundant hardware
+    /// clip changes.
     pub fn replay(
         &self,
         backend: &mut dyn SdiBackend,
@@ -432,15 +574,20 @@ impl DisplayList {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
+        // Clip stack stores the *intersected* clip rect for each level.
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
+        // Batch of consecutive FillRect items for batched submission.
+        let mut rect_batch: Vec<BatchRect> = Vec::new();
 
         for item in &self.items {
             match item {
                 DisplayItem::PushLayer { opacity } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
                     opacity_stack.push(*opacity);
                     continue;
                 },
                 DisplayItem::PopLayer => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
                     opacity_stack.pop();
                     continue;
                 },
@@ -454,8 +601,22 @@ impl DisplayList {
                     x, y, w, h, color, ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
+                    rect_batch.push(BatchRect {
+                        x: x + scroll_dx,
+                        y: y + scroll_dy,
+                        w: *w,
+                        h: *h,
+                        color: c,
+                    });
+                    continue;
                 },
+                _ => {
+                    // Non-FillRect item breaks the batch.
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                },
+            }
+
+            match item {
                 DisplayItem::FillRoundedRect {
                     x,
                     y,
@@ -592,8 +753,17 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::PushClip { x, y, w, h } => {
-                    clip_stack.push((x + scroll_dx, y + scroll_dy, *w, *h));
-                    backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
+                    let raw = (x + scroll_dx, y + scroll_dy, *w, *h);
+                    // Intersect with parent clip for tighter bounds.
+                    let effective = if let Some(&parent) = clip_stack.last() {
+                        intersect_clip(parent, raw)
+                    } else if let Some(base) = base_clip {
+                        intersect_clip(base, raw)
+                    } else {
+                        raw
+                    };
+                    clip_stack.push(effective);
+                    backend.set_clip_rect(effective.0, effective.1, effective.2, effective.3)?;
                 },
                 DisplayItem::PopClip => {
                     clip_stack.pop();
@@ -607,13 +777,16 @@ impl DisplayList {
                     }
                 },
                 // Already handled above the match.
-                DisplayItem::PushLayer { .. } | DisplayItem::PopLayer => {},
+                DisplayItem::FillRect { .. }
+                | DisplayItem::PushLayer { .. }
+                | DisplayItem::PopLayer => {},
                 // BlurHint is metadata for GPU backends; software fallback
                 // applies per-color approximation during recording.
                 DisplayItem::BlurHint { .. } => {},
             }
         }
 
+        flush_rect_batch(backend, &mut rect_batch)?;
         backend.flush_batch()?;
         Ok(())
     }
@@ -623,6 +796,7 @@ impl DisplayList {
     /// `dirty` is in screen coordinates. Items fully outside `dirty`
     /// are skipped. Clip push/pop and layer push/pop items are always
     /// replayed to maintain correct compositing and clip state.
+    /// Consecutive `FillRect` items are batched like in [`replay`](Self::replay).
     pub fn replay_dirty(
         &self,
         backend: &mut dyn SdiBackend,
@@ -635,16 +809,27 @@ impl DisplayList {
 
         let mut opacity_stack: Vec<f32> = Vec::new();
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
+        let mut rect_batch: Vec<BatchRect> = Vec::new();
 
         for item in &self.items {
             // Clip and layer items must always be replayed.
             match item {
                 DisplayItem::PushClip { x, y, w, h } => {
-                    clip_stack.push((x + scroll_dx, y + scroll_dy, *w, *h));
-                    backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    let raw = (x + scroll_dx, y + scroll_dy, *w, *h);
+                    let effective = if let Some(&parent) = clip_stack.last() {
+                        intersect_clip(parent, raw)
+                    } else if let Some(base) = base_clip {
+                        intersect_clip(base, raw)
+                    } else {
+                        raw
+                    };
+                    clip_stack.push(effective);
+                    backend.set_clip_rect(effective.0, effective.1, effective.2, effective.3)?;
                     continue;
                 },
                 DisplayItem::PopClip => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
                     clip_stack.pop();
                     if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
                         backend.set_clip_rect(cx, cy, cw, ch)?;
@@ -656,10 +841,12 @@ impl DisplayList {
                     continue;
                 },
                 DisplayItem::PushLayer { opacity } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
                     opacity_stack.push(*opacity);
                     continue;
                 },
                 DisplayItem::PopLayer => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
                     opacity_stack.pop();
                     continue;
                 },
@@ -681,14 +868,27 @@ impl DisplayList {
 
             let layer_opacity = layer_opacity_product(&opacity_stack);
 
-            // Replay the item.
+            // Replay the item — batch consecutive FillRects.
             match item {
                 DisplayItem::FillRect {
                     x, y, w, h, color, ..
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.fill_rect(x + scroll_dx, y + scroll_dy, *w, *h, c)?;
+                    rect_batch.push(BatchRect {
+                        x: x + scroll_dx,
+                        y: y + scroll_dy,
+                        w: *w,
+                        h: *h,
+                        color: c,
+                    });
+                    continue;
                 },
+                _ => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                },
+            }
+
+            match item {
                 DisplayItem::FillRoundedRect {
                     x,
                     y,
@@ -824,17 +1024,16 @@ impl DisplayList {
                         *radius,
                     )?;
                 },
-                DisplayItem::PushClip { .. }
+                DisplayItem::FillRect { .. }
+                | DisplayItem::PushClip { .. }
                 | DisplayItem::PopClip
                 | DisplayItem::PushLayer { .. }
-                | DisplayItem::PopLayer => {
-                    // Already handled above.
-                },
-                // BlurHint is metadata for GPU backends; no-op here.
+                | DisplayItem::PopLayer => {},
                 DisplayItem::BlurHint { .. } => {},
             }
         }
 
+        flush_rect_batch(backend, &mut rect_batch)?;
         backend.flush_batch()?;
         Ok(())
     }
@@ -849,6 +1048,42 @@ impl Default for DisplayList {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Flush accumulated `FillRect` items as a single batched call.
+///
+/// When the batch contains multiple rects, they are submitted via
+/// [`SdiBatch::submit_rect_batch`] so backends can optimize them into
+/// a single draw call. Single-rect batches fall through to `fill_rect`
+/// to avoid the overhead of a batch submission for a trivial case.
+fn flush_rect_batch(backend: &mut dyn SdiBackend, batch: &mut Vec<BatchRect>) -> Result<()> {
+    match batch.len() {
+        0 => {},
+        1 => {
+            let r = batch[0];
+            backend.fill_rect(r.x, r.y, r.w, r.h, r.color)?;
+        },
+        _ => {
+            backend.submit_rect_batch(batch)?;
+        },
+    }
+    batch.clear();
+    Ok(())
+}
+
+/// Compute the intersection of two clip rectangles.
+///
+/// Returns the overlapping region. If the rectangles don't overlap,
+/// returns a zero-size rect at the intersection point (the GPU will
+/// clip everything, which is correct — nothing should be visible).
+fn intersect_clip(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
+    let x1 = a.0.max(b.0);
+    let y1 = a.1.max(b.1);
+    let x2 = (a.0 + a.2 as i32).min(b.0 + b.2 as i32);
+    let y2 = (a.1 + a.3 as i32).min(b.1 + b.3 as i32);
+    let w = (x2 - x1).max(0) as u32;
+    let h = (y2 - y1).max(0) as u32;
+    (x1, y1, w, h)
+}
 
 /// Compute the product of all opacities in the layer stack.
 ///
@@ -1392,5 +1627,246 @@ mod tests {
         } else {
             panic!("expected FillRect");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Optimizer tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn optimize_merges_vertical_strips() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(100, 100, 100);
+        // Three vertically abutting rects at x=5, w=10.
+        dl.push(DisplayItem::FillRect {
+            x: 5,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 5,
+            y: 5,
+            w: 10,
+            h: 5,
+            color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 5,
+            y: 10,
+            w: 10,
+            h: 5,
+            color,
+            node_id: None,
+        });
+        dl.optimize();
+        assert_eq!(dl.len(), 1);
+        if let DisplayItem::FillRect { x, y, w, h, .. } = &dl.items()[0] {
+            assert_eq!(*x, 5);
+            assert_eq!(*y, 0);
+            assert_eq!(*w, 10);
+            assert_eq!(*h, 15);
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn optimize_no_vertical_merge_different_width() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(100, 100, 100);
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 5,
+            w: 20,
+            h: 5,
+            color,
+            node_id: None,
+        });
+        dl.optimize();
+        assert_eq!(dl.len(), 2);
+    }
+
+    #[test]
+    fn optimize_eliminates_occluded_rect() {
+        let mut dl = DisplayList::new();
+        // Small rect fully inside the big one.
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+            color: Color::rgb(255, 0, 0),
+            node_id: None,
+        });
+        // Opaque rect covering the small one.
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+            color: Color::rgb(0, 255, 0),
+            node_id: None,
+        });
+        dl.optimize();
+        assert_eq!(dl.len(), 1);
+        if let DisplayItem::FillRect { color, .. } = &dl.items()[0] {
+            // Only the covering green rect should remain.
+            assert_eq!(*color, Color::rgb(0, 255, 0));
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn optimize_does_not_eliminate_semi_transparent() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+            color: Color::rgb(255, 0, 0),
+            node_id: None,
+        });
+        // Semi-transparent covering rect — should NOT eliminate the first.
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+            color: Color::rgba(0, 255, 0, 128),
+            node_id: None,
+        });
+        dl.optimize();
+        assert_eq!(dl.len(), 2);
+    }
+
+    #[test]
+    fn optimize_respects_clip_depth() {
+        let mut dl = DisplayList::new();
+        // Rect outside clip.
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+            color: Color::rgb(255, 0, 0),
+            node_id: None,
+        });
+        // Enter clip context.
+        dl.push(DisplayItem::PushClip {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 200,
+        });
+        // Opaque rect inside clip — should NOT eliminate the one outside clip.
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+            color: Color::rgb(0, 255, 0),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopClip);
+        dl.optimize();
+        // All items should survive because they're at different clip depths.
+        assert_eq!(dl.len(), 4);
+    }
+
+    #[test]
+    fn intersect_clip_overlapping() {
+        let result = intersect_clip((10, 10, 100, 100), (50, 50, 100, 100));
+        assert_eq!(result, (50, 50, 60, 60));
+    }
+
+    #[test]
+    fn intersect_clip_non_overlapping() {
+        let result = intersect_clip((0, 0, 10, 10), (20, 20, 10, 10));
+        assert_eq!(result, (20, 20, 0, 0));
+    }
+
+    #[test]
+    fn intersect_clip_contained() {
+        let result = intersect_clip((0, 0, 100, 100), (10, 10, 20, 20));
+        assert_eq!(result, (10, 10, 20, 20));
+    }
+
+    #[test]
+    fn replay_batches_consecutive_fill_rects() {
+        let mut dl = DisplayList::new();
+        // Three consecutive FillRects.
+        for i in 0..3 {
+            dl.push(DisplayItem::FillRect {
+                x: i * 10,
+                y: 0,
+                w: 10,
+                h: 10,
+                color: Color::rgb(255, 0, 0),
+                node_id: None,
+            });
+        }
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+
+        // All three rects should be drawn (via batch submission which
+        // falls back to individual fill_rect calls in MockBackend).
+        assert_eq!(backend.fill_rect_count(), 3);
+    }
+
+    #[test]
+    fn replay_flushes_batch_on_non_rect_item() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgb(255, 0, 0),
+            node_id: None,
+        });
+        dl.push(DisplayItem::DrawText {
+            text: "hi".into(),
+            x: 0,
+            y: 0,
+            font_size: 12,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            width: 1,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgb(0, 255, 0),
+            node_id: None,
+        });
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 2);
+        assert_eq!(backend.draw_text_count(), 1);
+        // Verify ordering: first rect, then text, then second rect.
+        assert!(matches!(&backend.calls[0], DrawCall::FillRect { .. }));
+        assert!(matches!(&backend.calls[1], DrawCall::DrawText { .. }));
+        assert!(matches!(&backend.calls[2], DrawCall::FillRect { .. }));
     }
 }

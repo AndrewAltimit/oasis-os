@@ -142,8 +142,9 @@ impl BrowserWidget {
                 // Record to display list (no draw calls emitted).
                 let links =
                     paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
-                // Compact the display list (merge adjacent rects, remove zero-size items).
+                // Compact and optimize the display list.
                 self.display_list.compact();
+                self.display_list.optimize();
                 self.link_map = links;
                 self.scroll
                     .set_content_height(layout.dimensions.margin_box().height as i32);
@@ -221,6 +222,7 @@ impl BrowserWidget {
                         &mut self.display_list,
                     );
                     self.display_list.compact();
+                    self.display_list.optimize();
                     self.link_map = links;
                     self.display_list_scroll_y = self.scroll.scroll_y;
                     self.display_list_scroll_x = self.scroll.scroll_x;
@@ -306,6 +308,7 @@ impl BrowserWidget {
                             &mut self.display_list,
                         );
                         self.display_list.compact();
+                        self.display_list.optimize();
                         self.link_map = links;
                         self.display_list_scroll_y = self.scroll.scroll_y;
                         self.display_list_scroll_x = self.scroll.scroll_x;

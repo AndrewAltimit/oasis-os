@@ -729,6 +729,21 @@ pub trait SdiVector: SdiShapes {
 // SdiBatch
 // ---------------------------------------------------------------------------
 
+/// A rectangle for batched submission via [`SdiBatch::submit_rect_batch`].
+#[derive(Debug, Clone, Copy)]
+pub struct BatchRect {
+    /// X position in screen pixels.
+    pub x: i32,
+    /// Y position in screen pixels.
+    pub y: i32,
+    /// Width in pixels.
+    pub w: u32,
+    /// Height in pixels.
+    pub h: u32,
+    /// Fill color.
+    pub color: Color,
+}
+
 /// Batch rendering operations (begin/flush command queues).
 pub trait SdiBatch: SdiCore {
     /// Begin recording draw commands into a batch.
@@ -738,6 +753,19 @@ pub trait SdiBatch: SdiCore {
 
     /// Flush and execute all batched draw commands.
     fn flush_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Submit a batch of solid colored rectangles in a single call.
+    ///
+    /// Backends can override this to submit all rectangles as GPU geometry
+    /// (e.g. `SDL_RenderGeometry`, PSP `sceGumDrawArray`) reducing draw call
+    /// overhead and command buffer usage. The default issues individual
+    /// `fill_rect` calls which is correct but not batched.
+    fn submit_rect_batch(&mut self, rects: &[BatchRect]) -> Result<()> {
+        for r in rects {
+            self.fill_rect(r.x, r.y, r.w, r.h, r.color)?;
+        }
         Ok(())
     }
 }
