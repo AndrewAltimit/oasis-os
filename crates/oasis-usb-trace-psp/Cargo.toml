@@ -1,0 +1,23 @@
+# Standalone kernel-mode crate -- excluded from the oasis_os workspace.
+# Requires mipsel-sony-psp target, rust-psp SDK, and custom firmware.
+# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+[workspace]
+
+[package]
+name = "oasis-usb-trace-psp"
+description = "PSP USB Host Mode Phase 0b: kernel MMIO trace + register snapshot diff"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AndrewAltimit/oasis-os"
+authors = ["AndrewAltimit"]
+
+[dependencies]
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "f9ef537", features = ["kernel"] }
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 4
+panic = "abort"

@@ -1,0 +1,24 @@
+# Standalone crate -- excluded from the oasis_os workspace because it
+# requires the mipsel-sony-psp target and the rust-psp SDK.
+# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+[workspace]
+
+[package]
+name = "oasis-usb-debug-psp"
+description = "PSP USB Host Mode Phase 0: Zero-RE VBUS experiment"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AndrewAltimit/oasis-os"
+authors = ["AndrewAltimit"]
+
+[dependencies]
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "f9ef537" }
+
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 4
+panic = "abort"
