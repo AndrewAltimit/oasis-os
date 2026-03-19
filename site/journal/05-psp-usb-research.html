@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PSP USB Research - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Deep hardware reverse engineering of the PSP's USB subsystem — firmware decryption, OHCI controller discovery, Syscon protocol, and a working custom USB device driver in Rust.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">PSP USB Research: From Firmware Decryption to a Custom Device Driver</h1>
+    <p class="article-subtitle">
+      What started as an attempt to enable USB host mode became a deep reverse engineering
+      expedition &mdash; decrypting Sony's USB firmware, mapping undocumented hardware
+      registers, and ultimately building a working custom USB device driver in Rust that
+      turns the PSP into a thin client for external compute.
+    </p>
+    <div class="article-meta">
+      <span>Entry 05</span>
+      <span>hardware, reverse-engineering, usb</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Original Goal</h2>
+
+  <p>
+    The plan was straightforward: enable USB host mode on the PSP so it could supply 5V
+    VBUS power and communicate with microcontrollers like the Luckfox Pico. Sony's
+    first-party accessories (Go!Cam, GPS, TV tuner) proved the hardware could do it.
+    We just needed to find the right register writes.
+  </p>
+
+  <p>
+    What followed was three weeks of increasingly deep reverse engineering across two PSP
+    models (PSP-1001 and PSP-3001), dozens of firmware experiments, and the decryption
+    of Sony's USB firmware blob &mdash; ultimately leading to a fundamental discovery
+    about how PSP accessories actually work.
+  </p>
+
+  <h2>The Discovery: PSP Accessories Are the Host</h2>
+
+  <p>
+    After exhaustively testing every accessible register, Syscon command, and GPIO pin,
+    we discovered that <strong>the PSP never acts as a USB host</strong>. Sony's accessories
+    contain their own USB host controller chips. The PSP is always the device. The
+    accessories power themselves from dedicated side contact pins on the PSP's USB port,
+    not from VBUS.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">How PSP Accessories Actually Work</span>
+
+<span class="hl-warn">What we assumed:</span>
+  PSP (host) ──VBUS 5V──&gt; Accessory (device)
+  PSP enumerates and controls the peripheral
+
+<span class="hl-accent">What actually happens:</span>
+  PSP (device) &lt;──data──&gt; Accessory (host)
+  Accessory has its own host chip + power
+  PSP presents itself as a custom USB device
+  Accessory controls the conversation</code></pre>
+    <div class="diagram-caption">The PSP's Mini-B port is always a device port &mdash; accessories are the masters</div>
+  </div>
+
+  <h2>The Reverse Engineering Journey</h2>
+
+  <h3>Phase 0&ndash;1: VBUS Experiments</h3>
+  <p>
+    Built kernel-mode Rust EBOOTs to probe the PSP's USB hardware. Tested GPIO pins,
+    Syscon SPI commands (0x00&ndash;0x50), SYSCTL registers, and USB PHY configuration.
+    No VBUS appeared on either PSP model despite setting every accessible bit.
+  </p>
+
+  <h3>Phase 2: Firmware Decryption</h3>
+  <p>
+    Extracted and decrypted the USB firmware blob embedded within <code>usb_cam.prx</code>:
+  </p>
+  <ul>
+    <li>Located encrypted <code>~PSP</code> header at offset 0x7D580 in kernel memory dump</li>
+    <li>Decrypted with <code>pspdecrypt</code> (tag <code>0x4C9494F0</code>)</li>
+    <li>Decompressed KL3E format &rarr; 77,320 bytes of raw MIPS code</li>
+    <li>Loaded into Ghidra at base 0x88600000, decompiled 40+ functions</li>
+  </ul>
+
+  <h3>Phase 3: Register Map Discovery</h3>
+  <p>
+    The firmware analysis revealed three previously undocumented register blocks:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Address Block</th><th>Purpose</th><th>Key Finding</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>0xBE4C0000</code></td>
+        <td>USB PHY serial controller</td>
+        <td>Clock, mode, features &mdash; configures the physical layer</td>
+      </tr>
+      <tr>
+        <td><code>0xBD101000</code></td>
+        <td>OHCI host controller</td>
+        <td>Gated by <code>BC100050</code> bit 13 &mdash; fully functional OHCI 1.0 rev 3</td>
+      </tr>
+      <tr>
+        <td><code>0xBDE00000</code></td>
+        <td>Raw SPI/DMA controller</td>
+        <td>Dead code in firmware &mdash; never called</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    We also mapped the complete Syscon command set for Baryon 0x00040600 (256 GET commands,
+    14 SET commands identified from kernel disassembly) and found the <code>_sceSysconCommonWrite</code>
+    function with its GET/SET pairing (e.g., GET=0x46, SET=0x47 for USB power).
+  </p>
+
+  <h2>The Pivot: Custom USB Device Driver</h2>
+
+  <p>
+    With USB host mode ruled out, we pivoted to the correct architecture: the PSP as a USB
+    <strong>device</strong> with custom bulk endpoints. If we want the PSP to talk to a
+    Luckfox Pico, the Pico should be the USB host and the PSP should present a custom
+    device interface.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP Thin Client Architecture</span>
+
+┌─────────────────┐   USB 2.0   ┌──────────────────┐
+│  Luckfox Pico   │◄───────────►│       PSP        │
+│  (USB Host)     │   480Mbps   │  (USB Device)    │
+│                 │   bulk xfer │                  │
+│  ARM Cortex-A7  │             │  Custom driver:  │
+│  Linux + libusb │             │  <span class="hl-accent">sceUsbbdRegister</span>│
+│  AI / compute   │             │  EP1 IN  (0x81)  │
+│  networking     │             │  EP2 OUT (0x02)  │
+│  $9, 51x21mm    │             │                  │
+└─────────────────┘             └──────────────────┘</code></pre>
+    <div class="diagram-caption">The PSP registers a vendor-specific USB device with bulk endpoints</div>
+  </div>
+
+  <h3>sceUsbbd: The Undocumented Kernel API</h3>
+
+  <p>
+    The PSP's <code>sceUsbBus_driver</code> exports functions for registering custom USB
+    device drivers &mdash; the same API that Sony's mass storage and camera drivers use
+    internally. These functions are kernel-only and not documented in any public SDK:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>NID (6.61)</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sceUsbbdRegister</code></td>
+        <td><code>0xB1644BE7</code></td>
+        <td>Register a custom USB device driver</td>
+      </tr>
+      <tr>
+        <td><code>sceUsbbdReqSend</code></td>
+        <td><code>0x913EC15D</code></td>
+        <td>Queue async bulk IN transfer (device&rarr;host)</td>
+      </tr>
+      <tr>
+        <td><code>sceUsbbdReqRecv</code></td>
+        <td><code>0x7B87815D</code></td>
+        <td>Queue async bulk OUT transfer (host&rarr;device)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The NIDs were resolved from the PSP-3001's kernel memory dump &mdash; the standard
+    PSPSDK NIDs are wrong for 6.61 firmware. The functions require direct address calls
+    rather than NID-resolved stubs on ARK-4 CFW.
+  </p>
+
+  <h3>It Works</h3>
+
+  <p>
+    The custom USB device driver successfully registers with the PSP's USB bus driver
+    and presents itself to any connected USB host:
+  </p>
+
+  <pre><code>$ lsusb
+Bus 003 Device 073: ID <span class="hl-accent">054c:1337</span> Sony Corp.
+
+$ lsusb -v -d 054c:1337
+  idVendor         0x054c Sony Corp.
+  idProduct        0x1337
+    Interface Descriptor:
+      bInterfaceClass     255 Vendor Specific Class
+      bNumEndpoints         2
+      Endpoint Descriptor:
+        bEndpointAddress  <span class="hl-accent">0x81  EP 1 IN</span>  (Bulk, 512 bytes)
+      Endpoint Descriptor:
+        bEndpointAddress  <span class="hl-accent">0x02  EP 2 OUT</span> (Bulk, 512 bytes)</code></pre>
+
+  <p>
+    Two high-speed bulk endpoints at 512 bytes per packet &mdash; enough for ~30 MB/s
+    sustained throughput. A full 480&times;272 RGBA framebuffer (522 KB) can be
+    transferred in under 20ms, enabling 30+ FPS thin client rendering.
+  </p>
+
+  <h2>What's Next</h2>
+
+  <ul>
+    <li><strong>Bulk transfer protocol:</strong> Implement the send/receive data path over
+        the registered endpoints using <code>sceUsbbdReqSend</code> and <code>sceUsbbdReqRecv</code></li>
+    <li><strong>Thin client protocol:</strong> Define a framed message format for
+        framebuffer data (host&rarr;PSP) and input events (PSP&rarr;host)</li>
+    <li><strong>Luckfox Pico integration:</strong> Linux-side <code>libusb</code> client that
+        renders OASIS_OS frames and streams them to the PSP for display</li>
+    <li><strong>Convert to PRX:</strong> Move from game-slot EBOOT to kernel PRX loaded via
+        <code>PLUGINS.TXT</code> for always-on USB device mode</li>
+  </ul>
+
+  <nav class="article-nav">
+    <a class="prev" href="04-rust-psp-sdk.html">&larr; Prev: Modernizing the rust-psp SDK</a>
+    <a class="next" href="06-backend-trait-system.html">Next: Anatomy of the Backend Trait System &rarr;</a>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>
