@@ -7,7 +7,7 @@ use oasis_core::sdi::SdiRegistry;
 use crate::theme::*;
 
 use super::list_view::{
-    hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar, LIST_ROWS,
+    LIST_ROWS, hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar,
 };
 
 pub(crate) fn setup_music_browser(sdi: &mut SdiRegistry) {

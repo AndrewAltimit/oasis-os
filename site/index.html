@@ -411,11 +411,11 @@
     <div class="features-grid">
       <div class="feature-card">
         <h3>Browser Engine</h3>
-        <p>Full HTML/CSS/Gemini rendering engine with DOM parser, CSS cascade, flex/grid/table layout, calc(), transforms, animations, transitions, @supports, cookies, CSP, link navigation, reader mode, and JavaScript execution.</p>
+        <p>Full HTML/CSS/Gemini rendering engine with DOM parser, CSS cascade, flex/grid/table layout, calc(), full 2D CSS transforms (rotate/scale/skew), Canvas 2D path API, SVG paths with fill-rule/linecap/linejoin and &lt;g&gt; groups, light compositor (display list with batched rect+text submission, occlusion culling, clip intersection, granular animation dirty tracking, sticky element scroll caching), animations, hover-triggered CSS transitions, form elements (select dropdown, label association), soft hyphens, bidi text, @supports, cookies, CSP, link navigation, reader mode, and JavaScript execution.</p>
       </div>
       <div class="feature-card">
         <h3>JavaScript Engine</h3>
-        <p>Embedded QuickJS-NG runtime with console API, inline &lt;script&gt; execution, and DOM manipulation &mdash; getElementById, createElement, textContent, attributes.</p>
+        <p>Embedded QuickJS-NG runtime with console API, inline &lt;script&gt; execution, DOM manipulation, full event dispatch (click, keydown/keyup, mousedown/mouseup/mousemove with detail properties), document.cookie, history.pushState/replaceState, and persistent localStorage.</p>
       </div>
       <div class="feature-card">
         <h3>Window Manager</h3>
@@ -489,8 +489,8 @@
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-wm</span>         (window manager: drag/resize, hit testing, decorations)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-skin</span>       (TOML skin engine, 18 skins, theme derivation)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, JS bindings)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, 2D transforms, Canvas 2D paths, SVG groups, light compositor + text batching + sticky scroll, JS bindings)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM, event dispatch)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (MP4/H.264+AAC decode: StreamingBuffer, progressive playback)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-vector</span>     (vector graphics: scene graph, path ops, icons, animations)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-shader</span>     (GPU shader wallpapers: voronoi, city lights, ocean waves)

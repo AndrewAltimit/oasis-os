@@ -24,7 +24,10 @@ We define **five separate backend traits** in `oasis-types`:
    (shapes, gradients, text styling, texture ops, clip/transform stacks, vector
    graphics, batching). Also split into 8 extension traits: `SdiShapes`,
    `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
-   `SdiVector`, `SdiBatch`.
+   `SdiVector`, `SdiBatch`. `SdiBatch` provides `begin_batch`/`flush_batch`
+   plus `submit_rect_batch`/`submit_text_batch` for batched rect and text
+   geometry submission (used by the browser's light compositor to reduce
+   draw call count).
    All have default implementations that fall back to `SdiCore` methods.
 3. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
 4. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,

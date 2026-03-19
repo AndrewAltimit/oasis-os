@@ -30,6 +30,10 @@ pub type SharedDoc = Rc<RefCell<Document>>;
 /// Shared, interior-mutable computed styles for `getComputedStyle()`.
 pub type SharedStyles = Rc<RefCell<Vec<Option<ComputedStyle>>>>;
 
+/// Shared, interior-mutable localStorage backing store that persists
+/// across page navigations within the same `BrowserWidget` lifetime.
+pub type SharedLocalStorage = Rc<RefCell<HashMap<String, String>>>;
+
 /// Sentinel returned when a DOM lookup produces no result.
 const NO_NODE: i32 = -1;
 
@@ -64,7 +68,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav, None, None)
+    install_document_global_full(ctx, doc, "", &nav, None, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -72,7 +76,7 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav, None, None)
+    install_document_global_full(ctx, doc, url, &nav, None, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
@@ -85,11 +89,12 @@ pub fn install_document_global_with_nav(
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, None, None)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None, None)
 }
 
 /// Like [`install_document_global_with_nav`] but also accepts an
-/// optional CSP policy to enforce `connect-src` on `fetch()` calls.
+/// optional CSP policy to enforce `connect-src` on `fetch()` calls,
+/// and an optional persistent localStorage backing store.
 pub fn install_document_global_with_csp(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -97,12 +102,21 @@ pub fn install_document_global_with_csp(
     nav_actions: &SharedNavActions,
     styles: &SharedStyles,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    persistent_local_storage: Option<&SharedLocalStorage>,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, Some(styles), csp)
+    install_document_global_full(
+        ctx,
+        doc,
+        url,
+        nav_actions,
+        Some(styles),
+        csp,
+        persistent_local_storage,
+    )
 }
 
 /// Full installation: document global, location/history, nav actions,
-/// computed styles, fetch, localStorage/sessionStorage.
+/// computed styles, fetch, localStorage/sessionStorage, document.cookie.
 fn install_document_global_full(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -110,6 +124,7 @@ fn install_document_global_full(
     nav_actions: &SharedNavActions,
     styles: Option<&SharedStyles>,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    persistent_local_storage: Option<&SharedLocalStorage>,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -590,15 +605,6 @@ fn install_document_global_full(
         )?;
     }
 
-    // -- __oasis_location() -> String ---------------------------------
-    {
-        let url_owned = url.to_string();
-        globals.set(
-            "__oasis_location",
-            Function::new(ctx.clone(), move || -> String { url_owned.clone() })?,
-        )?;
-    }
-
     // -- __oasis_location_assign(url) ---------------------------------
     {
         let nav = Rc::clone(nav_actions);
@@ -699,11 +705,69 @@ fn install_document_global_full(
         )?;
     }
 
-    // -- localStorage / sessionStorage -----------------------------------
-    // Each storage type gets its own backing HashMap so that writes to
-    // localStorage do not leak into sessionStorage and vice-versa.
+    // -- __oasis_location_push(url) -- for history.pushState URL updates --
     {
-        let local_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+        let pushed_url: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let pu1 = Rc::clone(&pushed_url);
+        globals.set(
+            "__oasis_location_push",
+            Function::new(ctx.clone(), move |url: String| {
+                *pu1.borrow_mut() = Some(url);
+            })?,
+        )?;
+        // Also override __oasis_location to return the pushed URL if set.
+        let pu2 = Rc::clone(&pushed_url);
+        let orig_url = url.to_string();
+        globals.set(
+            "__oasis_location",
+            Function::new(ctx.clone(), move || -> String {
+                pu2.borrow().clone().unwrap_or_else(|| orig_url.clone())
+            })?,
+        )?;
+    }
+
+    // -- __oasis_cookie_get() / __oasis_cookie_set(raw) ------------------
+    {
+        let cookie_map: Rc<RefCell<HashMap<String, String>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let cm1 = Rc::clone(&cookie_map);
+        globals.set(
+            "__oasis_cookie_get",
+            Function::new(ctx.clone(), move || -> String {
+                let map = cm1.borrow();
+                let mut pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                pairs.sort();
+                pairs.join("; ")
+            })?,
+        )?;
+        let cm2 = Rc::clone(&cookie_map);
+        globals.set(
+            "__oasis_cookie_set",
+            Function::new(ctx.clone(), move |raw: String| {
+                // Parse "name=value; path=/; ..." — only extract the first name=value.
+                if let Some(pair) = raw.split(';').next() {
+                    let pair = pair.trim();
+                    if let Some(eq) = pair.find('=') {
+                        let name = pair[..eq].trim().to_string();
+                        let value = pair[eq + 1..].trim().to_string();
+                        if !name.is_empty() {
+                            cm2.borrow_mut().insert(name, value);
+                        }
+                    }
+                }
+            })?,
+        )?;
+    }
+
+    // -- localStorage / sessionStorage -----------------------------------
+    // localStorage uses a persistent backing store (shared across page
+    // navigations) when provided, otherwise falls back to a fresh map.
+    // sessionStorage always uses a fresh map (page-scoped).
+    {
+        let local_store = match persistent_local_storage {
+            Some(store) => Rc::clone(store),
+            None => Rc::new(RefCell::new(HashMap::<String, String>::new())),
+        };
         let session_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
 
         let l1 = Rc::clone(&local_store);
@@ -1229,21 +1293,42 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
 
   // -- Event listener support --
+  // Listeners stored as {fn, once, capture, passive} objects.
   var __oasis_listeners = {};
 
-  Element.prototype.addEventListener = function(type, fn) {
+  function __parse_opts(opts) {
+    var c = false, o = false, p = false;
+    if (opts === true || opts === false) { c = opts; }
+    else if (opts && typeof opts === 'object') {
+      c = !!opts.capture; o = !!opts.once; p = !!opts.passive;
+    }
+    return {capture: c, once: o, passive: p};
+  }
+
+  Element.prototype.addEventListener = function(type, fn, opts) {
+    if (!fn) return;
+    var o = __parse_opts(opts);
     var nid = this.__oasis_node_id;
     var key = nid + ":" + type;
     if (!__oasis_listeners[key]) __oasis_listeners[key] = [];
-    __oasis_listeners[key].push(fn);
+    var arr = __oasis_listeners[key];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].fn === fn && arr[i].capture === o.capture) return;
+    }
+    arr.push({fn: fn, once: o.once, capture: o.capture, passive: o.passive});
   };
-  Element.prototype.removeEventListener = function(type, fn) {
+  Element.prototype.removeEventListener = function(type, fn, opts) {
+    var cap = false;
+    if (opts === true || opts === false) cap = opts;
+    else if (opts && typeof opts === 'object') cap = !!opts.capture;
     var nid = this.__oasis_node_id;
     var key = nid + ":" + type;
     var arr = __oasis_listeners[key];
     if (!arr) return;
     for (var i = 0; i < arr.length; i++) {
-      if (arr[i] === fn) { arr.splice(i, 1); return; }
+      if (arr[i].fn === fn && arr[i].capture === cap) {
+        arr.splice(i, 1); return;
+      }
     }
   };
   Element.prototype.dispatchEvent = function(evt) {
@@ -1252,8 +1337,28 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     var arr = __oasis_listeners[key];
     if (!arr) return;
     evt.target = this;
-    for (var i = 0; i < arr.length; i++) arr[i].call(this, evt);
+    for (var i = 0; i < arr.length; i++) {
+      arr[i].fn.call(this, evt);
+      if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+    }
   };
+
+  // Helper: invoke matching listeners, handling once removal.
+  // phase: 1=capture, 2=target, 3=bubble
+  function __fire(key, el, evt, phase) {
+    var arr = __oasis_listeners[key];
+    if (!arr) return;
+    for (var i = 0; i < arr.length; i++) {
+      if (evt._stopped) break;
+      var e = arr[i];
+      if (phase === 2 || (phase === 1 && e.capture) ||
+          (phase === 3 && !e.capture)) {
+        evt.currentTarget = el;
+        e.fn.call(el, evt);
+        if (e.once) { arr.splice(i, 1); i--; }
+      }
+    }
+  }
 
   // Expose dispatch helper for Rust-side event triggering.
   globalThis.__oasis_dispatch_event =
@@ -1263,13 +1368,19 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       if (!arr || arr.length === 0) return;
       var el = new Element(nid);
       var evt = {
-        type: type, target: el, detail: detail || null
+        type: type, target: el, detail: detail || null,
+        _stopped: false,
+        stopPropagation: function() { this._stopped = true; },
+        preventDefault: function() { this._defaultPrevented = true; },
+        _defaultPrevented: false
       };
-      for (var i = 0; i < arr.length; i++)
-        arr[i].call(el, evt);
+      for (var i = 0; i < arr.length; i++) {
+        arr[i].fn.call(el, evt);
+        if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+      }
     };
 
-  // Dispatch with bubbling: walk from target up to root.
+  // Dispatch with capture, target, and bubble phases.
   globalThis.__oasis_dispatch_with_bubbling =
     function(nid, type, detail) {
       var target = new Element(nid);
@@ -1278,6 +1389,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
         detail: detail || null,
         target: target,
         currentTarget: null,
+        eventPhase: 0,
         _stopped: false,
         stopPropagation: function() {
           this._stopped = true;
@@ -1287,17 +1399,30 @@ const JS_DOM_BOOTSTRAP: &str = r#"
         },
         _defaultPrevented: false
       };
-      var current = nid;
-      while (current >= 0 && !evt._stopped) {
-        var key = current + ":" + type;
-        var arr = __oasis_listeners[key];
-        if (arr) {
-          evt.currentTarget = new Element(current);
-          for (var i = 0; i < arr.length; i++) {
-            arr[i].call(evt.currentTarget, evt);
-          }
+      if (detail && typeof detail === 'object') {
+        for (var k in detail) {
+          if (detail.hasOwnProperty(k)) evt[k] = detail[k];
         }
-        current = __oasis_parent(current);
+      }
+      // Build ancestor chain (excluding target), root first.
+      var ancestors = [];
+      var p = __oasis_parent(nid);
+      while (p >= 0) { ancestors.push(p); p = __oasis_parent(p); }
+      ancestors.reverse();
+      // Capture phase: root -> target (ancestors only, capture listeners).
+      evt.eventPhase = 1;
+      for (var i = 0; i < ancestors.length && !evt._stopped; i++) {
+        __fire(ancestors[i] + ":" + type, new Element(ancestors[i]), evt, 1);
+      }
+      // Target phase: all listeners on target.
+      if (!evt._stopped) {
+        evt.eventPhase = 2;
+        __fire(nid + ":" + type, target, evt, 2);
+      }
+      // Bubble phase: target -> root (ancestors only, non-capture listeners).
+      evt.eventPhase = 3;
+      for (var i = ancestors.length - 1; i >= 0 && !evt._stopped; i--) {
+        __fire(ancestors[i] + ":" + type, new Element(ancestors[i]), evt, 3);
       }
     };
 
@@ -1345,20 +1470,33 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   // Give document event listener support.
   var __doc_listeners = {};
-  document.addEventListener = function(type, fn) {
+  document.addEventListener = function(type, fn, opts) {
+    if (!fn) return;
+    var o = __parse_opts(opts);
     if (!__doc_listeners[type]) __doc_listeners[type] = [];
-    __doc_listeners[type].push(fn);
+    var arr = __doc_listeners[type];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].fn === fn && arr[i].capture === o.capture) return;
+    }
+    arr.push({fn: fn, once: o.once, capture: o.capture, passive: o.passive});
   };
-  document.removeEventListener = function(type, fn) {
+  document.removeEventListener = function(type, fn, opts) {
+    var cap = false;
+    if (opts === true || opts === false) cap = opts;
+    else if (opts && typeof opts === 'object') cap = !!opts.capture;
     if (!__doc_listeners[type]) return;
-    __doc_listeners[type] = __doc_listeners[type].filter(function(f) {
-      return f !== fn;
+    __doc_listeners[type] = __doc_listeners[type].filter(function(e) {
+      return !(e.fn === fn && e.capture === cap);
     });
   };
   document.dispatchEvent = function(evt) {
     var type = evt && evt.type ? evt.type : evt;
-    var fns = __doc_listeners[type];
-    if (fns) for (var i = 0; i < fns.length; i++) fns[i](evt);
+    var arr = __doc_listeners[type];
+    if (!arr) return;
+    for (var i = 0; i < arr.length; i++) {
+      arr[i].fn(evt);
+      if (arr[i] && arr[i].once) { arr.splice(i, 1); i--; }
+    }
   };
 
   // Minimal Event constructor for DOMContentLoaded etc.
@@ -1387,6 +1525,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   // -- history object --
   globalThis.history = {
+    __state: null,
     back: function() { __oasis_history_back(); },
     forward: function() { __oasis_history_forward(); },
     go: function(delta) {
@@ -1394,6 +1533,15 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       else if (delta > 0) __oasis_history_forward();
       else __oasis_location_assign(__oasis_location());
     },
+    pushState: function(state, title, url) {
+      this.__state = state;
+      if (url) __oasis_location_push(String(url));
+    },
+    replaceState: function(state, title, url) {
+      this.__state = state;
+      if (url) __oasis_location_push(String(url));
+    },
+    get state() { return this.__state; },
     get length() { return 1; }
   };
 
@@ -1438,6 +1586,13 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
   globalThis.localStorage = __make_storage(0);
   globalThis.sessionStorage = __make_storage(1);
+
+  // -- document.cookie --
+  Object.defineProperty(document, 'cookie', {
+    get: function() { return __oasis_cookie_get(); },
+    set: function(v) { __oasis_cookie_set(String(v)); },
+    configurable: true
+  });
 })();
 "#;
 
@@ -1680,6 +1835,200 @@ pub fn install_canvas_bindings(
         )?;
     }
 
+    // -- __oasis_canvas_begin_path(nid) ---------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_begin_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_move_to(nid, x, y) ----------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_move_to",
+            Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    let pt = (x as f32, y as f32);
+                    s.current_path.push(pt);
+                    s.path_start = Some(pt);
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_line_to(nid, x, y) ----------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_line_to",
+            Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().current_path.push((x as f32, y as f32));
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_bezier_curve_to(nid, cp1x, cp1y, cp2x, cp2y, x, y)
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_bezier_curve_to",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let (cx, cy) = s.current_path.last().copied().unwrap_or((0.0, 0.0));
+                        crate::svg::flatten_cubic(
+                            &mut s.current_path,
+                            cx,
+                            cy,
+                            cp1x as f32,
+                            cp1y as f32,
+                            cp2x as f32,
+                            cp2y as f32,
+                            x as f32,
+                            y as f32,
+                        );
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_quadratic_curve_to(nid, cpx, cpy, x, y) ------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_quadratic_curve_to",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, cpx: f64, cpy: f64, x: f64, y: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let (cx, cy) = s.current_path.last().copied().unwrap_or((0.0, 0.0));
+                        crate::svg::flatten_quad(
+                            &mut s.current_path,
+                            cx,
+                            cy,
+                            cpx as f32,
+                            cpy as f32,
+                            x as f32,
+                            y as f32,
+                        );
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_close_path(nid) -------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_close_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if let Some(start) = s.path_start {
+                        s.current_path.push(start);
+                    }
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_fill_path(nid) --------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_fill_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if s.current_path.len() >= 3 {
+                        let color = s.fill_color;
+                        let points = std::mem::take(&mut s.current_path);
+                        s.commands
+                            .push(crate::canvas::CanvasCommand::FillPath { points, color });
+                    }
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_stroke_path(nid) ------------------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_stroke_path",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    let mut s = state.borrow_mut();
+                    if s.current_path.len() >= 2 {
+                        let color = s.stroke_color;
+                        let lw = s.line_width;
+                        let points = std::mem::take(&mut s.current_path);
+                        s.commands.push(crate::canvas::CanvasCommand::StrokePath {
+                            points,
+                            color,
+                            line_width: lw,
+                        });
+                    }
+                    s.current_path.clear();
+                    s.path_start = None;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_save(nid) / __oasis_canvas_restore(nid) -------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_save",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().save();
+                }
+            })?,
+        )?;
+    }
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_restore",
+            Function::new(ctx.clone(), move |nid: i32| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().restore();
+                }
+            })?,
+        )?;
+    }
+
     // -- JavaScript CanvasRenderingContext2D class ---------------------
     let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
 
@@ -1752,62 +2101,70 @@ const JS_CANVAS_BOOTSTRAP: &str = r##"
   };
   CanvasRenderingContext2D.prototype.strokeText = function() {};
   CanvasRenderingContext2D.prototype.beginPath = function() {
-    this._pathSegments = [];
+    __oasis_canvas_begin_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.moveTo = function(x, y) {
+    __oasis_canvas_move_to(this.__nid, +x, +y);
     this._pathX = +x;
     this._pathY = +y;
   };
   CanvasRenderingContext2D.prototype.lineTo = function(x, y) {
-    this._pathSegments.push({
-      type: "line",
-      x1: this._pathX, y1: this._pathY,
-      x2: +x, y2: +y
-    });
+    __oasis_canvas_line_to(this.__nid, +x, +y);
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.bezierCurveTo = function(cp1x, cp1y, cp2x, cp2y, x, y) {
+    __oasis_canvas_bezier_curve_to(this.__nid, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y);
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.quadraticCurveTo = function(cpx, cpy, x, y) {
+    __oasis_canvas_quadratic_curve_to(this.__nid, +cpx, +cpy, +x, +y);
     this._pathX = +x;
     this._pathY = +y;
   };
   CanvasRenderingContext2D.prototype.arc = function(cx, cy, r) {
+    // Arc is handled specially: emit as native arc command.
     this._pathSegments.push({
       type: "arc", cx: +cx, cy: +cy, r: +r
     });
   };
-  CanvasRenderingContext2D.prototype.closePath = function() {};
+  CanvasRenderingContext2D.prototype.closePath = function() {
+    __oasis_canvas_close_path(this.__nid);
+  };
   CanvasRenderingContext2D.prototype.fill = function() {
+    // First flush any arc segments (legacy path).
     for (var i = 0; i < this._pathSegments.length; i++) {
       var seg = this._pathSegments[i];
-      if (seg.type === "line") {
-        __oasis_canvas_line(
-          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, true
-        );
-      } else if (seg.type === "arc") {
-        __oasis_canvas_arc(
-          this.__nid, seg.cx, seg.cy, seg.r, true
-        );
+      if (seg.type === "arc") {
+        __oasis_canvas_arc(this.__nid, seg.cx, seg.cy, seg.r, true);
       }
     }
     this._pathSegments = [];
+    // Then emit the native path fill.
+    __oasis_canvas_fill_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.stroke = function() {
+    // First flush any arc segments (legacy path).
     for (var i = 0; i < this._pathSegments.length; i++) {
       var seg = this._pathSegments[i];
-      if (seg.type === "line") {
-        __oasis_canvas_line(
-          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, false
-        );
-      } else if (seg.type === "arc") {
-        __oasis_canvas_arc(
-          this.__nid, seg.cx, seg.cy, seg.r, false
-        );
+      if (seg.type === "arc") {
+        __oasis_canvas_arc(this.__nid, seg.cx, seg.cy, seg.r, false);
       }
     }
     this._pathSegments = [];
+    // Then emit the native path stroke.
+    __oasis_canvas_stroke_path(this.__nid);
   };
   CanvasRenderingContext2D.prototype.measureText = function(text) {
     return { width: String(text).length * 6 };
   };
-  CanvasRenderingContext2D.prototype.save = function() {};
-  CanvasRenderingContext2D.prototype.restore = function() {};
+  CanvasRenderingContext2D.prototype.save = function() {
+    __oasis_canvas_save(this.__nid);
+  };
+  CanvasRenderingContext2D.prototype.restore = function() {
+    __oasis_canvas_restore(this.__nid);
+  };
 
   var __canvas_contexts = {};
 
@@ -2188,6 +2545,174 @@ mod tests {
             .unwrap();
         let val = engine.eval("clicked").unwrap();
         assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    // ---------------------------------------------------------------
+    // addEventListener options tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn once_option_removes_after_first_call() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { count++; }, {once: true}); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn capture_option_fires_in_capture_phase() {
+        let (engine, _doc) = setup(sample_doc());
+        // p(7) is child of div#main(6).
+        // Capture listener on div fires before bubble listener on p.
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function() { order.push('div-cap'); }, true); \
+                 p.addEventListener('click', function() { order.push('p'); }); \
+                 div.addEventListener('click', function() { order.push('div-bub'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("div-cap,p,div-bub".into()));
+    }
+
+    #[test]
+    fn remove_listener_must_match_capture_flag() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1, true); \
+                 el.removeEventListener('click', fn1, false); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        // Listener was added with capture=true, removed with capture=false,
+        // so it should NOT be removed.
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn remove_listener_with_matching_capture() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1, true); \
+                 el.removeEventListener('click', fn1, true); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(0));
+    }
+
+    #[test]
+    fn boolean_capture_arg_works() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function() { order.push('cap'); }, true); \
+                 div.addEventListener('click', function() { order.push('bub'); }, false); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("cap,bub".into()));
+    }
+
+    #[test]
+    fn once_with_bubbling() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { count++; }, {once: true}); \
+                 __oasis_dispatch_with_bubbling(\
+                     el.__oasis_node_id, 'click', null); \
+                 __oasis_dispatch_with_bubbling(\
+                     el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn document_once_listener() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 document.addEventListener('custom', function() { count++; }, {once: true}); \
+                 document.dispatchEvent({type: 'custom'}); \
+                 document.dispatchEvent({type: 'custom'})",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn duplicate_listener_prevented() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1); \
+                 el.addEventListener('click', fn1); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        // Per spec, adding the same fn+capture combo twice is a no-op.
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(1));
+    }
+
+    #[test]
+    fn stop_propagation_in_capture_phase() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function(e) { \
+                     order.push('div-cap'); e.stopPropagation(); \
+                 }, true); \
+                 p.addEventListener('click', function() { order.push('p'); }); \
+                 div.addEventListener('click', function() { order.push('div-bub'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        // Capture listener stops propagation, so target and bubble never fire.
+        assert_eq!(val, oasis_js::JsValue::String("div-cap".into()));
     }
 
     // ---------------------------------------------------------------

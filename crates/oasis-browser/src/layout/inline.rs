@@ -7,8 +7,8 @@
 use super::block::{TextMeasurer, layout_block};
 use super::box_model::*;
 use super::text::{
-    apply_text_transform, collapse_whitespace, measure_space, measure_word, replace_unrenderable,
-    split_into_words,
+    apply_text_transform, collapse_whitespace, detect_direction, measure_space, measure_word,
+    replace_unrenderable, split_into_words,
 };
 use crate::css::values::{
     ComputedStyle, Dimension, OverflowWrap, TextAlign, TextDirection, VerticalAlign, WhiteSpace,
@@ -26,10 +26,26 @@ use crate::html::dom::NodeId;
 pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let available_width = parent.dimensions.content.width;
     let text_align = parent.style.text_align;
-    let direction = parent.style.direction;
 
     // Collect all inline fragments from the children.
     let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
+
+    // Resolve `TextDirection::Auto` by detecting the dominant
+    // direction from the first text fragment's content.
+    let direction = if parent.style.direction == TextDirection::Auto {
+        let sample = fragments.iter().find_map(|f| {
+            if let InlineFragment::Text { text, .. } = f
+                && !text.is_empty()
+                && text != "\n"
+            {
+                return Some(text.as_str());
+            }
+            None
+        });
+        sample.map_or(TextDirection::Ltr, detect_direction)
+    } else {
+        parent.style.direction
+    };
 
     // Break fragments into line boxes.
     // Estimate ~1 line per 80px of content width as a rough heuristic
@@ -142,6 +158,30 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     // CSS 2.1 §16.6.1: strip spaces at line boundaries.
     for line in &mut lines {
         trim_line_boundary_spaces(line, measurer);
+    }
+
+    // Soft-hyphen resolution: for every non-last line whose last
+    // fragment has `soft_hyphen == true`, append a visible "-" and
+    // widen the fragment accordingly.
+    let line_count = lines.len();
+    for (i, line) in lines.iter_mut().enumerate() {
+        if i >= line_count - 1 {
+            break; // last line: no hyphen needed
+        }
+        if let Some(InlineFragment::Text {
+            text,
+            width,
+            style,
+            soft_hyphen,
+            ..
+        }) = line.fragments.last_mut()
+            && *soft_hyphen
+        {
+            let hyphen_w = measurer.measure_text("-", style.font_size as u16) as f32;
+            text.push('-');
+            *width += hyphen_w;
+            *soft_hyphen = false; // consumed
+        }
     }
 
     // Position line boxes vertically and apply text alignment.
@@ -324,6 +364,7 @@ fn text_fragments_for_inline(
             width: 0.0,
             style: style.clone(),
             node: layout_box.node,
+            soft_hyphen: false,
         }];
     }
 
@@ -377,9 +418,19 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
             let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
             (text_w + 16.0, 20.0)
         },
-        ReplacedContent::SelectBox { label } => {
+        ReplacedContent::SelectBox { label, .. } => {
             let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
             (text_w + 20.0, 18.0) // extra space for dropdown arrow
+        },
+        ReplacedContent::Checkbox { .. } => (13.0, 13.0),
+        ReplacedContent::RadioButton { .. } => (13.0, 13.0),
+        ReplacedContent::TextArea { rows, cols, .. } => {
+            let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
+            let line_height = 14.0;
+            (
+                *cols as f32 * char_w + 8.0,
+                *rows as f32 * line_height + 4.0,
+            )
         },
         ReplacedContent::Svg { element } => (element.width, element.height),
         ReplacedContent::Canvas { state } => {
@@ -450,6 +501,7 @@ pub fn make_text_fragments(
                 width: 0.0,
                 style: style.clone(),
                 node,
+                soft_hyphen: false,
             });
             continue;
         }
@@ -478,6 +530,7 @@ pub fn make_text_fragments(
             width: total_width,
             style: style.clone(),
             node,
+            soft_hyphen: word.soft_hyphen,
         });
     }
 
@@ -524,6 +577,7 @@ fn break_word_fragment(
                 width: piece_width,
                 style: style.clone(),
                 node: *node,
+                soft_hyphen: false,
             });
             start = end;
         }
@@ -744,6 +798,7 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     width,
                     style,
                     node,
+                    ..
                 } => {
                     let mut lb = LayoutBox::new(BoxType::Inline, style.clone(), node);
                     lb.text = Some(text);
@@ -1127,6 +1182,7 @@ mod tests {
             width: 999.0, // will be recomputed by break_word_fragment
             style: style.clone(),
             node: None,
+            soft_hyphen: false,
         };
 
         // Break into pieces at a narrow width that forces splitting.

@@ -3,13 +3,10 @@
 
 use core::sync::atomic::Ordering;
 
-use super::{
-    io_log, send_audio_cmd,
-    AudioCmd, IoResponse, DOWNLOAD_CANCEL, IO_RESP_QUEUE,
-};
 use super::tls_http::TlsHttpReader;
-use super::video_dl_http::{http_open_with_redirect, HttpDataSource};
+use super::video_dl_http::{HttpDataSource, http_open_with_redirect};
 use super::video_dl_parse::{find_moov_end, process_stream_chunk};
+use super::{AudioCmd, DOWNLOAD_CANCEL, IO_RESP_QUEUE, IoResponse, io_log, send_audio_cmd};
 
 // ---------------------------------------------------------------------------
 // Video download handler

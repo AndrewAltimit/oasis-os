@@ -148,10 +148,11 @@ impl FormManager {
                 if let FormElement::SelectBox {
                     options,
                     selected_index,
+                    open,
                     ..
                 } = &mut form.elements[elem_idx]
                 {
-                    Self::handle_select_key(&key, options, selected_index)
+                    Self::handle_select_key(&key, options, selected_index, open)
                 } else {
                     FormAction::None
                 }
@@ -289,12 +290,25 @@ impl FormManager {
         key: &FormKey,
         options: &[SelectOption],
         selected_index: &mut Option<usize>,
+        open: &mut bool,
     ) -> FormAction {
         if options.is_empty() {
             return FormAction::None;
         }
 
         match key {
+            FormKey::Space | FormKey::Enter => {
+                *open = !*open;
+                FormAction::ValueChanged
+            },
+            FormKey::Char('\u{001B}') => {
+                if *open {
+                    *open = false;
+                    FormAction::ValueChanged
+                } else {
+                    FormAction::None
+                }
+            },
             FormKey::Up => {
                 let current = selected_index.unwrap_or(0);
                 // Search backward for a non-disabled option.

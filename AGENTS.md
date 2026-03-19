@@ -81,8 +81,8 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 18 skins, theme derivation)
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
-├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, animations, transitions, @media/@supports, cookies, CSP, JS DOM bindings)
-├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
+├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, animations, hover-triggered transitions, light compositor with text batching + sticky scroll caching, form elements with select dropdown + label association, soft hyphens, bidi text, @media/@supports, cookies, CSP, JS DOM bindings)
+├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API, document.cookie, history.pushState, persistent localStorage)
 ├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, no-std-demux, video-decode)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
@@ -128,8 +128,8 @@ The repository contains 37 crates (35 in the workspace, 2 excluded PSP crates). 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 18 skins (14 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors to ~30 UI element colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media`/`@supports` queries, flex/grid/table layout, `calc()`, transforms, animations, transitions, cookies, gzip, CSP, link navigation, reader mode, JavaScript DOM bindings
-- **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation. Feature-gated (`javascript`)
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media`/`@supports` queries, flex/grid/table layout, `calc()`, transforms, animations, hover-triggered CSS transitions, light compositor (batched rect+text, occlusion culling, animation dirty tracking, sticky scroll caching), form elements (select dropdown, label for="" association), soft hyphens, bidi text detection, cookies, gzip, CSP (img-src relaxed), link navigation, reader mode, JavaScript DOM bindings
+- **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation, `document.cookie`, `history.pushState`/`replaceState`, persistent `localStorage`. Feature-gated (`javascript`)
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping

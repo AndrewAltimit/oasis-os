@@ -4,6 +4,7 @@ use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vfs::Vfs;
 
+use crate::css::values::ComputedStyle;
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect, ReplacedContent};
 use crate::paint;
@@ -40,9 +41,58 @@ impl BrowserWidget {
         // Advance CSS animations and transitions.
         let anim_active = self.animation_engine.tick(dt_ms);
         let trans_active = self.transition_engine.tick(dt_ms);
+
+        // Apply transition overrides to styles so layout and paint see
+        // the interpolated values.
+        if trans_active {
+            for (nid, prop) in self.transition_engine.active_node_properties() {
+                if let Some(val) = self.transition_engine.get_node_value(nid, prop)
+                    && let Some(Some(style)) = self.styles.get_mut(nid)
+                {
+                    apply_transition_value(style, prop, val);
+                }
+            }
+        }
+
         if anim_active || trans_active {
-            // Animations or transitions changed values — repaint needed.
-            self.layout_dirty = true;
+            // Check if all animated properties are visual-only (color changes
+            // that don't affect layout). If so, use dirty-rect repainting
+            // instead of a full layout rebuild.
+            let mut all_visual = true;
+            let mut nodes: Vec<usize> = Vec::new();
+
+            for (nid, props) in self.animation_engine.active_node_properties() {
+                if props.iter().all(|p| is_visual_only_property(p)) {
+                    nodes.push(nid);
+                } else {
+                    all_visual = false;
+                    break;
+                }
+            }
+            if all_visual {
+                for (nid, prop) in self.transition_engine.active_node_properties() {
+                    if is_visual_only_property(prop) {
+                        nodes.push(nid);
+                    } else {
+                        all_visual = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_visual && !nodes.is_empty() {
+                // Compute dirty rects for animated nodes so the display list
+                // can be patched and replayed without a full rebuild.
+                if let Some(layout) = &self.layout_root {
+                    for nid in nodes {
+                        if let Some(rect) = Self::find_node_rect(layout, nid) {
+                            self.dirty_rects.push(rect);
+                        }
+                    }
+                }
+            } else {
+                self.layout_dirty = true;
+            }
         }
 
         // Tick JS timers (setTimeout / setInterval).
@@ -140,10 +190,16 @@ impl BrowserWidget {
                 };
 
                 // Record to display list (no draw calls emitted).
-                let links =
-                    paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
-                // Compact the display list (merge adjacent rects, remove zero-size items).
+                let links = paint::record::record_with_scroll(
+                    layout,
+                    viewport,
+                    &self.href_map,
+                    &mut self.display_list,
+                    &self.nested_scroll_offsets,
+                );
+                // Compact and optimize the display list.
                 self.display_list.compact();
+                self.display_list.optimize();
                 self.link_map = links;
                 self.scroll
                     .set_content_height(layout.dimensions.margin_box().height as i32);
@@ -221,6 +277,7 @@ impl BrowserWidget {
                         &mut self.display_list,
                     );
                     self.display_list.compact();
+                    self.display_list.optimize();
                     self.link_map = links;
                     self.display_list_scroll_y = self.scroll.scroll_y;
                     self.display_list_scroll_x = self.scroll.scroll_x;
@@ -247,16 +304,14 @@ impl BrowserWidget {
                     // Check if we can reuse the cached display list by replaying
                     // with a translation offset instead of re-recording.
                     //
-                    // This is safe when:
-                    // 1. The scroll delta is within the buffer zone (items beyond
-                    //    the visible area were already recorded)
-                    // 2. No sticky-positioned elements (they move independently
-                    //    of normal scroll translation)
+                    // This is safe when the scroll delta is within the buffer
+                    // zone (items beyond the visible area were already recorded).
+                    // Sticky elements are handled via PushSticky/PopSticky
+                    // which recompute their offset during replay.
                     let abs_dy = dy.unsigned_abs() as f32;
                     let abs_dx = dx.unsigned_abs() as f32;
-                    let can_reuse = !self.display_list.has_sticky()
-                        && abs_dy <= self.scroll.buffer_zone as f32
-                        && abs_dx <= self.window_w as f32;
+                    let can_reuse =
+                        abs_dy <= self.scroll.buffer_zone as f32 && abs_dx <= self.window_w as f32;
 
                     if can_reuse {
                         // Shift link_map regions by the per-frame scroll delta
@@ -306,6 +361,7 @@ impl BrowserWidget {
                             &mut self.display_list,
                         );
                         self.display_list.compact();
+                        self.display_list.optimize();
                         self.link_map = links;
                         self.display_list_scroll_y = self.scroll.scroll_y;
                         self.display_list_scroll_x = self.scroll.scroll_x;
@@ -815,5 +871,64 @@ impl BrowserWidget {
             )?;
         }
         Ok(())
+    }
+}
+
+/// Whether a CSS property only affects visual appearance (color, opacity)
+/// without changing layout geometry. Properties in this set can be updated
+/// via dirty-rect repainting instead of triggering a full layout rebuild.
+fn is_visual_only_property(prop: &str) -> bool {
+    // NOTE: `opacity` is intentionally excluded — while it doesn't affect
+    // layout, `patch_node_colors` only updates color fields, not PushLayer
+    // opacity. Treating it as visual-only would cause opacity transitions
+    // to stall because the display list never gets rebuilt.
+    matches!(
+        prop,
+        "color"
+            | "background-color"
+            | "background"
+            | "border-color"
+            | "border-top-color"
+            | "border-right-color"
+            | "border-bottom-color"
+            | "border-left-color"
+            | "box-shadow"
+            | "outline-color"
+            | "visibility"
+            | "text-decoration-color"
+    )
+}
+
+/// Apply a single interpolated transition value to a [`ComputedStyle`].
+fn apply_transition_value(style: &mut ComputedStyle, property: &str, value: f32) {
+    match property {
+        "opacity" => style.opacity = value,
+        "font-size" => style.font_size = value,
+        "line-height" => style.line_height = value,
+        "letter-spacing" => style.letter_spacing = value,
+        "word-spacing" => style.word_spacing = value,
+        "margin-top" => style.margin_top = value,
+        "margin-right" => style.margin_right = value,
+        "margin-bottom" => style.margin_bottom = value,
+        "margin-left" => style.margin_left = value,
+        "padding-top" => style.padding_top = value,
+        "padding-right" => style.padding_right = value,
+        "padding-bottom" => style.padding_bottom = value,
+        "padding-left" => style.padding_left = value,
+        "border-top-width" => style.border_top_width = value,
+        "border-right-width" => style.border_right_width = value,
+        "border-bottom-width" => style.border_bottom_width = value,
+        "border-left-width" => style.border_left_width = value,
+        "border-radius" => style.border_radius = value,
+        "border-spacing" => style.border_spacing = value,
+        "outline-width" => style.outline_width = value,
+        "outline-offset" => style.outline_offset = value,
+        "text-indent" => style.text_indent = value,
+        "gap" => style.gap = value,
+        "column-gap" => style.column_gap = value,
+        "row-gap" => style.row_gap = value,
+        "flex-grow" => style.flex_grow = value,
+        "flex-shrink" => style.flex_shrink = value,
+        _ => {},
     }
 }

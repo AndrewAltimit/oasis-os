@@ -3,10 +3,7 @@
 //! Connects to an internet radio stream via raw TCP + HTTP, parses
 //! ICY metadata headers, and hands the socket to the audio thread.
 
-use super::{
-    find_header_end, parse_icy_metaint, parse_radio_url,
-    IoResponse, IO_RESP_QUEUE,
-};
+use super::{IO_RESP_QUEUE, IoResponse, find_header_end, parse_icy_metaint, parse_radio_url};
 
 /// Connect to an internet radio stream via raw TCP + HTTP.
 ///

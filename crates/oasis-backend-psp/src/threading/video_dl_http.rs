@@ -10,8 +10,7 @@ use super::tls_http::TlsHttpReader;
 
 /// Persistent sceHttp template ID.  Initialized once, never torn down.
 /// Mirrors how `psp::http::HttpClient` works (one template, many requests).
-static DL_TEMPLATE_ID: core::sync::atomic::AtomicI32 =
-    core::sync::atomic::AtomicI32::new(-1);
+static DL_TEMPLATE_ID: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
 /// Ensure sceHttp is initialized and return the persistent template ID.
 ///
@@ -41,9 +40,7 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
     io_log(&format!("[IO-DL] sceHttpInit: {ret:#x}"));
 
     // SAFETY: Creating HTTP template with user-agent string.
-    let tid = unsafe {
-        sys::sceHttpCreateTemplate(b"oasis-psp/1.0\0".as_ptr() as *mut u8, 1, 0)
-    };
+    let tid = unsafe { sys::sceHttpCreateTemplate(b"oasis-psp/1.0\0".as_ptr() as *mut u8, 1, 0) };
     if tid < 0 {
         return Err(format!("template: {tid:#x}"));
     }
@@ -103,9 +100,8 @@ pub(super) unsafe fn http_open_with_redirect(
         url_bytes.push(0);
 
         // SAFETY: Valid template ID and null-terminated URL.
-        let conn_id = unsafe {
-            sys::sceHttpCreateConnectionWithURL(template_id, url_bytes.as_ptr(), 0)
-        };
+        let conn_id =
+            unsafe { sys::sceHttpCreateConnectionWithURL(template_id, url_bytes.as_ptr(), 0) };
         if conn_id < 0 {
             return Err((format!("connect: {conn_id:#x}"), None));
         }
@@ -121,7 +117,9 @@ pub(super) unsafe fn http_open_with_redirect(
         };
         if req_id < 0 {
             // SAFETY: Cleaning up valid connection ID.
-            unsafe { sys::sceHttpDeleteConnection(conn_id); }
+            unsafe {
+                sys::sceHttpDeleteConnection(conn_id);
+            }
             return Err((format!("request: {req_id:#x}"), None));
         }
 
@@ -132,9 +130,7 @@ pub(super) unsafe fn http_open_with_redirect(
         }
 
         // SAFETY: Sending HTTP GET request with no body.
-        let ret = unsafe {
-            sys::sceHttpSendRequest(req_id, core::ptr::null_mut(), 0)
-        };
+        let ret = unsafe { sys::sceHttpSendRequest(req_id, core::ptr::null_mut(), 0) };
         if ret < 0 {
             io_log(&format!("[IO-DL] send failed: {ret:#x}"));
             // SAFETY: Cleaning up valid request and connection IDs.
@@ -147,7 +143,9 @@ pub(super) unsafe fn http_open_with_redirect(
 
         let mut status_code: i32 = 0;
         // SAFETY: Valid request ID, writing to local variable.
-        unsafe { sys::sceHttpGetStatusCode(req_id, &mut status_code); }
+        unsafe {
+            sys::sceHttpGetStatusCode(req_id, &mut status_code);
+        }
         io_log(&format!("[IO-DL] status={status_code} (attempt {attempt})"));
 
         // Handle redirects manually.
@@ -157,15 +155,11 @@ pub(super) unsafe fn http_open_with_redirect(
             let mut hdr_ptr: *mut u8 = core::ptr::null_mut();
             let mut hdr_len: u32 = 0;
             // SAFETY: Valid request ID, writing to local variables.
-            let ret = unsafe {
-                sys::sceHttpGetAllHeader(req_id, &mut hdr_ptr, &mut hdr_len)
-            };
+            let ret = unsafe { sys::sceHttpGetAllHeader(req_id, &mut hdr_ptr, &mut hdr_len) };
 
             let location_url = if ret >= 0 && !hdr_ptr.is_null() && hdr_len > 0 {
                 // SAFETY: Pointer valid while request alive; length from kernel.
-                let hdrs = unsafe {
-                    core::slice::from_raw_parts(hdr_ptr, hdr_len as usize)
-                };
+                let hdrs = unsafe { core::slice::from_raw_parts(hdr_ptr, hdr_len as usize) };
                 let hdr_str = core::str::from_utf8(hdrs).unwrap_or("");
                 hdr_str
                     .lines()
@@ -241,7 +235,9 @@ pub(super) unsafe fn http_open_with_redirect(
 
         let mut content_length: u64 = 0;
         // SAFETY: Valid request ID, writing to local variable.
-        unsafe { sys::sceHttpGetContentLength(req_id, &mut content_length); }
+        unsafe {
+            sys::sceHttpGetContentLength(req_id, &mut content_length);
+        }
 
         return Ok((req_id, conn_id, content_length));
     }

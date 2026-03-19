@@ -541,6 +541,7 @@ impl BrowserWidget {
                     let s = std::rc::Rc::clone(&shared);
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
                     let js_sty = std::rc::Rc::clone(&self.js_styles);
+                    let ls = std::rc::Rc::clone(&self.js_local_storage);
                     if let Err(e) = engine.with_context(|ctx| {
                         js_dom::install_document_global_with_csp(
                             &ctx,
@@ -549,6 +550,7 @@ impl BrowserWidget {
                             &nav,
                             &js_sty,
                             self.page_csp.as_ref(),
+                            Some(&ls),
                         )
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
@@ -693,12 +695,14 @@ impl BrowserWidget {
         }
 
         // 7. Store results.
+        self.body_node_id = doc.body();
         self.document = Some(doc);
         self.styles = styles;
         self.href_map = href_map;
         self.layout_root = Some(layout_root);
         self.link_map.clear();
         self.scroll.reset();
+        self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;

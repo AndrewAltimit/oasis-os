@@ -8,6 +8,8 @@ use super::values::types::{TimingFunction, Transition};
 /// An active transition being animated.
 #[derive(Debug, Clone)]
 struct ActiveTransition {
+    /// DOM node this transition belongs to.
+    node_id: usize,
     property: String,
     from: f32,
     to: f32,
@@ -104,15 +106,18 @@ impl TransitionEngine {
     /// value).
     pub fn start_transition(
         &mut self,
+        node_id: usize,
         property: &str,
         from_value: f32,
         to_value: f32,
         transition: &Transition,
     ) {
-        // Replace any existing transition on the same property.
-        self.active.retain(|a| a.property != property);
+        // Replace any existing transition on the same node + property.
+        self.active
+            .retain(|a| !(a.node_id == node_id && a.property == property));
 
         self.active.push(ActiveTransition {
+            node_id,
             property: property.to_string(),
             from: from_value,
             to: to_value,
@@ -143,9 +148,34 @@ impl TransitionEngine {
             .map(|t| t.current_value())
     }
 
+    /// Get the current interpolated value for a specific node's property.
+    pub fn get_node_value(&self, node_id: usize, property: &str) -> Option<f32> {
+        self.active
+            .iter()
+            .find(|t| t.node_id == node_id && t.property == property)
+            .map(|t| t.current_value())
+    }
+
+    /// Returns all interpolated property overrides for a given node.
+    pub fn get_node_overrides(&self, node_id: usize) -> Vec<(&str, f32)> {
+        self.active
+            .iter()
+            .filter(|t| t.node_id == node_id)
+            .map(|t| (t.property.as_str(), t.current_value()))
+            .collect()
+    }
+
     /// Returns `true` if any transitions are currently in progress.
     pub fn has_active(&self) -> bool {
         !self.active.is_empty()
+    }
+
+    /// Returns `(node_id, property_name)` for each active transition.
+    pub fn active_node_properties(&self) -> Vec<(usize, &str)> {
+        self.active
+            .iter()
+            .map(|t| (t.node_id, t.property.as_str()))
+            .collect()
     }
 }
 
@@ -166,7 +196,7 @@ mod tests {
     fn linear_interpolation() {
         let mut engine = TransitionEngine::new();
         let t = test_transition("opacity", 100.0);
-        engine.start_transition("opacity", 0.0, 1.0, &t);
+        engine.start_transition(0, "opacity", 0.0, 1.0, &t);
 
         assert!(engine.has_active());
         engine.tick(50.0);
@@ -189,7 +219,7 @@ mod tests {
             timing: TimingFunction::Linear,
             delay_ms: 50.0,
         };
-        engine.start_transition("opacity", 0.0, 1.0, &t);
+        engine.start_transition(0, "opacity", 0.0, 1.0, &t);
 
         engine.tick(25.0);
         let val = engine.get_value("opacity").expect("should have value");
@@ -241,11 +271,11 @@ mod tests {
     fn replace_existing_transition() {
         let mut engine = TransitionEngine::new();
         let t = test_transition("opacity", 100.0);
-        engine.start_transition("opacity", 0.0, 1.0, &t);
+        engine.start_transition(0, "opacity", 0.0, 1.0, &t);
         engine.tick(50.0);
 
         // Start a new transition on the same property.
-        engine.start_transition("opacity", 0.5, 0.0, &t);
+        engine.start_transition(0, "opacity", 0.5, 0.0, &t);
         let val = engine.get_value("opacity").expect("should have value");
         assert!(
             (val - 0.5).abs() < 0.01,

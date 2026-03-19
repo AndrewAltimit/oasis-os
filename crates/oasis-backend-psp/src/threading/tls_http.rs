@@ -7,7 +7,7 @@
 
 use core::sync::atomic::Ordering;
 
-use super::{find_header_end, io_log, parse_url, DOWNLOAD_CANCEL};
+use super::{DOWNLOAD_CANCEL, find_header_end, io_log, parse_url};
 
 /// Wraps a raw PSP socket fd for `embedded_io::Read + Write`.
 struct PspSocketIo {

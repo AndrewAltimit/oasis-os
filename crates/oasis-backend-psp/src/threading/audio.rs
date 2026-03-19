@@ -7,9 +7,9 @@ use crate::audio::{AudioPlayer, RadioStreamer};
 use crate::sfx::SfxEngine;
 
 use super::{
-    io_log, AudioCmd, AUDIO_BITRATE, AUDIO_CHANNELS, AUDIO_PAUSED, AUDIO_PLAYING,
-    AUDIO_POSITION_MS, AUDIO_QUEUE, AUDIO_SAMPLE_RATE, AUDIO_DURATION_MS,
-    RADIO_BUFFERING, RADIO_META_QUEUE, RADIO_STREAMING,
+    AUDIO_BITRATE, AUDIO_CHANNELS, AUDIO_DURATION_MS, AUDIO_PAUSED, AUDIO_PLAYING,
+    AUDIO_POSITION_MS, AUDIO_QUEUE, AUDIO_SAMPLE_RATE, AudioCmd, RADIO_BUFFERING, RADIO_META_QUEUE,
+    RADIO_STREAMING, io_log,
 };
 
 // ---------------------------------------------------------------------------

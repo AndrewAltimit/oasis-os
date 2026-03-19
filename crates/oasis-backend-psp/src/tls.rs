@@ -237,9 +237,8 @@ impl TlsProvider for PspTlsProvider {
         let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
         host_bytes.push(0);
 
-        let ip = psp::net::resolve_hostname(&host_bytes).map_err(|e| {
-            OasisError::Backend(format!("DNS resolve '{host}' failed: {e}").into())
-        })?;
+        let ip = psp::net::resolve_hostname(&host_bytes)
+            .map_err(|e| OasisError::Backend(format!("DNS resolve '{host}' failed: {e}").into()))?;
 
         // Create TCP socket.
         // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.

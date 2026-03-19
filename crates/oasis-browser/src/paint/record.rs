@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::css::values::{
     BorderStyle, Dimension, FilterFunction, Overflow, Position, TextOverflow, Visibility,
+    WhiteSpace,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
@@ -22,14 +23,14 @@ use super::{LinkRegion, PaintViewport};
 // -------------------------------------------------------------------
 
 /// Mutable state threaded through the recursive recording walk.
-struct RecordContext {
+struct RecordContext<'a> {
     /// Accumulated link regions.
     links: Vec<LinkRegion>,
     /// When recording inside an `<a>` element, holds `(href, node_id)`.
     current_link: Option<(String, NodeId)>,
-    /// Vertical scroll offset.
+    /// Vertical scroll offset (includes nested container offsets).
     scroll_y: f32,
-    /// Horizontal scroll offset.
+    /// Horizontal scroll offset (includes nested container offsets).
     scroll_x: f32,
     /// Viewport height for offscreen culling (includes buffer zone).
     viewport_height: f32,
@@ -45,6 +46,9 @@ struct RecordContext {
     text_overflow_ellipsis: bool,
     /// Current DOM node being recorded (for hover color patching).
     current_node: Option<NodeId>,
+    /// Per-element scroll offsets for nested scroll containers.
+    /// Maps DOM node IDs to `(scroll_x, scroll_y)` pixel offsets.
+    nested_scroll_offsets: &'a HashMap<NodeId, (f32, f32)>,
 }
 
 // -------------------------------------------------------------------
@@ -61,7 +65,23 @@ pub fn record(
     link_map: &HashMap<NodeId, String>,
     display_list: &mut DisplayList,
 ) -> Vec<LinkRegion> {
+    let empty = HashMap::new();
+    record_with_scroll(layout, viewport, link_map, display_list, &empty)
+}
+
+/// Record a layout tree into a display list with nested scroll offsets.
+///
+/// Like [`record`] but accepts per-element scroll offsets for nested
+/// scroll containers (`overflow: auto/scroll`).
+pub fn record_with_scroll(
+    layout: &LayoutBox,
+    viewport: PaintViewport,
+    link_map: &HashMap<NodeId, String>,
+    display_list: &mut DisplayList,
+    nested_scroll_offsets: &HashMap<NodeId, (f32, f32)>,
+) -> Vec<LinkRegion> {
     display_list.clear();
+    display_list.set_recording_scroll_y(viewport.scroll_y);
 
     let mut ctx = RecordContext {
         links: Vec::new(),
@@ -74,6 +94,7 @@ pub fn record(
         clip_rect: None,
         text_overflow_ellipsis: false,
         current_node: None,
+        nested_scroll_offsets,
     };
 
     record_box(
@@ -111,25 +132,47 @@ fn record_box(
     let is_sticky = layout_box.style.position == Position::Sticky;
     if is_sticky {
         dl.set_has_sticky();
-        dl.push(DisplayItem::PushLayer { opacity: 1.0 });
+        dl.push(DisplayItem::PushSticky {
+            natural_y: layout_box.dimensions.content.y,
+            box_height: layout_box.dimensions.margin_box().height,
+            top_px: match layout_box.style.top {
+                Dimension::Px(t) => Some(t),
+                _ => None,
+            },
+            bottom_px: match layout_box.style.bottom {
+                Dimension::Px(b) => Some(b),
+                _ => None,
+            },
+            visible_viewport_h: ctx.visible_viewport_height,
+        });
     }
 
-    // Screen-space culling.
-    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y + sticky_dy as f32;
+    // Compute transform translation early so culling accounts for it.
+    let (tx_off_x, tx_off_y) = super::compute_transform_offsets(
+        &layout_box.style.transforms,
+        &layout_box.dimensions.content,
+        offset_x,
+        offset_y,
+    );
+
+    // Screen-space culling (includes CSS transform translation).
+    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y
+        + sticky_dy as f32
+        + (tx_off_y - offset_y) as f32;
     let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
-    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x;
+    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x + (tx_off_x - offset_x) as f32;
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
     if box_bottom < 0.0 || screen_y > ctx.viewport_height {
-        // Close the sticky layer opened above to keep the stack balanced.
+        // Close the sticky group opened above to keep the stack balanced.
         if is_sticky {
-            dl.push(DisplayItem::PopLayer);
+            dl.push(DisplayItem::PopSticky);
         }
         return;
     }
     if box_right < 0.0 || screen_x > ctx.viewport_width {
         if is_sticky {
-            dl.push(DisplayItem::PopLayer);
+            dl.push(DisplayItem::PopSticky);
         }
         return;
     }
@@ -203,32 +246,48 @@ fn record_box(
     // Overflow clipping.
     let prev_clip = ctx.clip_rect;
     let prev_ellipsis = ctx.text_overflow_ellipsis;
-    if matches!(
+    let prev_scroll_x = ctx.scroll_x;
+    let prev_scroll_y = ctx.scroll_y;
+    let has_overflow_clip = matches!(
         layout_box.style.overflow,
         Overflow::Hidden | Overflow::Scroll | Overflow::Auto
-    ) {
+    );
+    if has_overflow_clip {
         let new_clip = layout_box.dimensions.content;
         let clipped = match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, new_clip),
             None => new_clip,
         };
         ctx.clip_rect = Some(clipped);
-        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
+        // text-overflow: ellipsis only activates when white-space
+        // prevents wrapping (nowrap / pre), so multi-line content is
+        // never ellipsized.
+        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis
+            && matches!(
+                layout_box.style.white_space,
+                WhiteSpace::NoWrap | WhiteSpace::Pre
+            );
+
         dl.push(DisplayItem::PushClip {
             x: (clipped.x - ctx.scroll_x + offset_x as f32) as i32,
             y: (clipped.y - ctx.scroll_y + offset_y as f32) as i32,
             w: clipped.width as u32,
             h: clipped.height as u32,
         });
+
+        // Apply nested scroll offset for this container AFTER pushing
+        // the clip so the clip boundary uses the parent's scroll offset,
+        // not this container's own scroll.
+        if let Some(nid) = layout_box.node {
+            if let Some(&(sx, sy)) = ctx.nested_scroll_offsets.get(&nid) {
+                ctx.scroll_x += sx;
+                ctx.scroll_y += sy;
+            }
+        }
     }
 
-    // Transform offsets.
-    let (tx_offset_x, tx_offset_y) = super::compute_transform_offsets(
-        &layout_box.style.transforms,
-        &layout_box.dimensions.content,
-        offset_x,
-        offset_y,
-    );
+    // Reuse transform offsets computed earlier (before culling).
+    let (tx_offset_x, tx_offset_y) = (tx_off_x, tx_off_y);
 
     // Children / inline / replaced / markers.
     match &layout_box.box_type {
@@ -240,17 +299,48 @@ fn record_box(
         | BoxType::TableRow
         | BoxType::TableCell
         | BoxType::InlineBlock => {
+            // CSS 2.1 painting order (appendix E):
+            //   1. Background & borders (already recorded above)
+            //   2. Stacking-context children with negative z-index
+            //   3. Non-positioned children in tree order (normal flow)
+            //   4. Positioned children with z-index: auto (tree order)
+            //   5. Stacking-context children with z-index >= 0 (sorted)
             let mut normal_children: Vec<&LayoutBox> = Vec::new();
-            let mut positioned_children: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+            let mut positioned_auto: Vec<(usize, &LayoutBox)> = Vec::new();
+            let mut stacking_neg: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+            let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
 
             for (idx, child) in layout_box.children.iter().enumerate() {
                 if super::creates_stacking_context(child) {
-                    positioned_children.push((child.style.z_index, idx, child));
+                    if child.style.z_index < 0 {
+                        stacking_neg.push((child.style.z_index, idx, child));
+                    } else {
+                        stacking_pos.push((child.style.z_index, idx, child));
+                    }
+                } else if super::is_positioned(child) {
+                    positioned_auto.push((idx, child));
                 } else {
                     normal_children.push(child);
                 }
             }
 
+            // Step 2: negative z-index stacking contexts (ascending).
+            stacking_neg.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, _, child) in &stacking_neg {
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
+                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
+            }
+
+            // Step 3: non-positioned children in DOM order.
             for child in &normal_children {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
@@ -265,9 +355,24 @@ fn record_box(
                 record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
             }
 
-            positioned_children.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            // Step 4: positioned with z-index: auto in tree order.
+            for (_, child) in &positioned_auto {
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
+                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
+            }
 
-            for (_, _, child) in &positioned_children {
+            // Step 5: non-negative z-index stacking contexts (sorted).
+            stacking_pos.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, _, child) in &stacking_pos {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
                     if cb.y + cb.height < clip.y
@@ -316,10 +421,12 @@ fn record_box(
     }
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
+    ctx.scroll_x = prev_scroll_x;
+    ctx.scroll_y = prev_scroll_y;
 
-    // Close the sticky compositing layer (outermost, pushed before opacity).
+    // Close the sticky group (outermost, pushed before opacity).
     if is_sticky {
-        dl.push(DisplayItem::PopLayer);
+        dl.push(DisplayItem::PopSticky);
     }
 
     // Restore the previous DOM node context.
@@ -1231,12 +1338,31 @@ fn record_replaced(
         },
         ReplacedContent::LineBreak => {},
         ReplacedContent::TextInput {
+            value,
+            placeholder,
+            is_password,
+            ..
+        } => {
+            record_text_input(layout_box, dl, x, y, value, placeholder, *is_password);
+        },
+        ReplacedContent::Checkbox { checked } => {
+            record_checkbox(layout_box, dl, x, y, *checked);
+        },
+        ReplacedContent::RadioButton { checked } => {
+            record_radio_button(layout_box, dl, x, y, *checked);
+        },
+        ReplacedContent::TextArea {
             value, placeholder, ..
         } => {
-            record_text_input(layout_box, dl, x, y, value, placeholder);
+            record_textarea(layout_box, dl, x, y, value, placeholder);
         },
-        ReplacedContent::SelectBox { label } => {
-            record_select_box(layout_box, dl, x, y, label);
+        ReplacedContent::SelectBox {
+            label,
+            open,
+            options,
+            selected_index,
+        } => {
+            record_select_box(layout_box, dl, x, y, label, *open, options, *selected_index);
         },
         ReplacedContent::SubmitButton { label } => {
             record_submit_button(layout_box, dl, x, y, label);
@@ -1260,6 +1386,7 @@ fn record_text_input(
     y: i32,
     value: &str,
     placeholder: &str,
+    is_password: bool,
 ) {
     let style = &layout_box.style;
     let w = layout_box.dimensions.content.width as u32;
@@ -1364,9 +1491,14 @@ fn record_text_input(
     let pad = style.padding_left.max(3.0) as i32;
     let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
     if !value.is_empty() {
-        let value_w = oasis_types::backend::bitmap_measure_text(value, font_size);
+        let display_text = if is_password {
+            "\u{25CF}".repeat(value.chars().count())
+        } else {
+            value.to_string()
+        };
+        let value_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size);
         dl.push(DisplayItem::DrawText {
-            text: value.to_string(),
+            text: display_text,
             x: x + pad,
             y: y + pad_top,
             font_size,
@@ -1392,7 +1524,271 @@ fn record_text_input(
     }
 }
 
-fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, label: &str) {
+fn record_checkbox(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, checked: bool) {
+    let w = layout_box.dimensions.content.width as u32;
+    let h = layout_box.dimensions.content.height as u32;
+    // White background
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w,
+        h,
+        color: Color::rgb(255, 255, 255),
+        node_id: None,
+    });
+    // Border
+    let bc = Color::rgb(118, 118, 118);
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w,
+        h: 1,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x,
+        y: y + h as i32 - 1,
+        w,
+        h: 1,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w: 1,
+        h,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x: x + w as i32 - 1,
+        y,
+        w: 1,
+        h,
+        color: bc,
+        node_id: None,
+    });
+    // Checkmark when checked
+    if checked && w >= 5 && h >= 5 {
+        let ck = Color::rgb(0, 0, 0);
+        // Short leg of checkmark
+        for &(dx, dy) in &[(2, -5), (3, -4), (4, -3)] {
+            dl.push(DisplayItem::FillRect {
+                x: x + dx,
+                y: y + h as i32 + dy,
+                w: 1,
+                h: 1,
+                color: ck,
+                node_id: None,
+            });
+        }
+        // Long leg of checkmark
+        for &(dx, dy) in &[(5, -4), (6, -5), (7, -6), (8, -7), (9, -8), (10, -9)] {
+            dl.push(DisplayItem::FillRect {
+                x: x + dx,
+                y: y + h as i32 + dy,
+                w: 1,
+                h: 1,
+                color: ck,
+                node_id: None,
+            });
+        }
+    }
+}
+
+fn record_radio_button(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    x: i32,
+    y: i32,
+    checked: bool,
+) {
+    let w = layout_box.dimensions.content.width as u32;
+    let h = layout_box.dimensions.content.height as u32;
+    // White background (using rounded rect for circle)
+    let radius = w.min(h) as u16 / 2;
+    dl.push(DisplayItem::FillRoundedRect {
+        x,
+        y,
+        w,
+        h,
+        radius,
+        color: Color::rgb(255, 255, 255),
+        node_id: None,
+    });
+    // Border edges for circle approximation
+    let bc = Color::rgb(118, 118, 118);
+    dl.push(DisplayItem::FillRect {
+        x: x + 2,
+        y,
+        w: w - 4,
+        h: 1,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x: x + 2,
+        y: y + h as i32 - 1,
+        w: w - 4,
+        h: 1,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x,
+        y: y + 2,
+        w: 1,
+        h: h - 4,
+        color: bc,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x: x + w as i32 - 1,
+        y: y + 2,
+        w: 1,
+        h: h - 4,
+        color: bc,
+        node_id: None,
+    });
+    // Corner pixels
+    for &(dx, dy) in &[
+        (1, 1),
+        (w as i32 - 2, 1),
+        (1, h as i32 - 2),
+        (w as i32 - 2, h as i32 - 2),
+    ] {
+        dl.push(DisplayItem::FillRect {
+            x: x + dx,
+            y: y + dy,
+            w: 1,
+            h: 1,
+            color: bc,
+            node_id: None,
+        });
+    }
+    // Inner dot when checked
+    if checked && w > 8 && h > 8 {
+        let inset = 4_u32;
+        let dw = w - inset * 2;
+        let dh = h - inset * 2;
+        if dw > 0 && dh > 0 {
+            dl.push(DisplayItem::FillRect {
+                x: x + inset as i32,
+                y: y + inset as i32,
+                w: dw,
+                h: dh,
+                color: Color::rgb(0, 0, 0),
+                node_id: None,
+            });
+        }
+    }
+}
+
+fn record_textarea(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    x: i32,
+    y: i32,
+    value: &str,
+    placeholder: &str,
+) {
+    let style = &layout_box.style;
+    let w = layout_box.dimensions.content.width as u32;
+    let h = layout_box.dimensions.content.height as u32;
+    // Background
+    let bg = if style.background_color.a > 0 {
+        style.background_color
+    } else {
+        Color::rgb(255, 255, 255)
+    };
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w,
+        h,
+        color: bg,
+        node_id: None,
+    });
+    // Border: 3D inset
+    let dark = Color::rgb(118, 118, 118);
+    let light = Color::rgb(200, 200, 200);
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w,
+        h: 1,
+        color: dark,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x,
+        y,
+        w: 1,
+        h,
+        color: dark,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x,
+        y: y + h as i32 - 1,
+        w,
+        h: 1,
+        color: light,
+        node_id: None,
+    });
+    dl.push(DisplayItem::FillRect {
+        x: x + w as i32 - 1,
+        y,
+        w: 1,
+        h,
+        color: light,
+        node_id: None,
+    });
+    // Text content
+    let font_size = style.font_size as u16;
+    let pad = 3_i32;
+    let line_height = font_size as i32 + 2;
+    let (text, color) = if !value.is_empty() {
+        (value, style.color)
+    } else if !placeholder.is_empty() {
+        (placeholder, Color::rgb(160, 160, 160))
+    } else {
+        ("", style.color)
+    };
+    if !text.is_empty() {
+        for (i, line) in text.lines().enumerate() {
+            let ly = y + pad + i as i32 * line_height;
+            if ly > y + h as i32 {
+                break;
+            }
+            let lw = oasis_types::backend::bitmap_measure_text(line, font_size);
+            dl.push(DisplayItem::DrawText {
+                text: line.to_string(),
+                x: x + pad,
+                y: ly,
+                font_size,
+                color,
+                bold: false,
+                italic: false,
+                width: lw,
+                node_id: None,
+            });
+        }
+    }
+}
+
+fn record_select_box(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    x: i32,
+    y: i32,
+    label: &str,
+    open: bool,
+    options: &[String],
+    selected_index: Option<usize>,
+) {
     let style = &layout_box.style;
     let w = layout_box.dimensions.content.width as u32;
     let h = layout_box.dimensions.content.height as u32;
@@ -1468,6 +1864,82 @@ fn record_select_box(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i3
         width: arrow_w,
         node_id: None,
     });
+    if open && !options.is_empty() {
+        let line_h = font_size as u32 + 4;
+        let dropdown_h = options.len() as u32 * line_h;
+        let dy = y + h as i32;
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w,
+            h: dropdown_h,
+            color: Color::rgb(255, 255, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w,
+            h: 1,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy + dropdown_h as i32 - 1,
+            w,
+            h: 1,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x,
+            y: dy,
+            w: 1,
+            h: dropdown_h,
+            color: border_color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: x + w as i32 - 1,
+            y: dy,
+            w: 1,
+            h: dropdown_h,
+            color: border_color,
+            node_id: None,
+        });
+        for (i, opt_label) in options.iter().enumerate() {
+            let oy = dy + i as i32 * line_h as i32;
+            let is_selected = selected_index == Some(i);
+            if is_selected {
+                dl.push(DisplayItem::FillRect {
+                    x: x + 1,
+                    y: oy,
+                    w: w.saturating_sub(2),
+                    h: line_h,
+                    color: Color::rgb(51, 122, 183),
+                    node_id: None,
+                });
+            }
+            let text_color = if is_selected {
+                Color::rgb(255, 255, 255)
+            } else {
+                style.color
+            };
+            let opt_w = oasis_types::backend::bitmap_measure_text(opt_label, font_size);
+            dl.push(DisplayItem::DrawText {
+                text: opt_label.clone(),
+                x: x + 3,
+                y: oy + 2,
+                font_size,
+                color: text_color,
+                bold: false,
+                italic: false,
+                width: opt_w,
+                node_id: None,
+            });
+        }
+    }
 }
 
 fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, label: &str) {

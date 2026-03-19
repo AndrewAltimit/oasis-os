@@ -1,8 +1,6 @@
 //! I/O thread: file reads, JPEG decoding, HTTP requests, TV catalog parsing.
 
-use super::{
-    io_log, IoCmd, IoResponse, TvCatalogRequest, IO_CMD_QUEUE, IO_RESP_QUEUE,
-};
+use super::{IO_CMD_QUEUE, IO_RESP_QUEUE, IoCmd, IoResponse, TvCatalogRequest, io_log};
 use crate::filesystem::decode_jpeg;
 
 // ---------------------------------------------------------------------------

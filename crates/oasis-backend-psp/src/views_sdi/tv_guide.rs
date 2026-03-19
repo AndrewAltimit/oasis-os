@@ -6,9 +6,9 @@ use oasis_core::sdi::SdiRegistry;
 
 use crate::theme::*;
 
-use super::helpers::{set_text, sdi_key};
+use super::helpers::{sdi_key, set_text};
 use super::list_view::{
-    hide_unused_rows, setup_list_bg, update_list_bg, update_scrollbar, LIST_ROWS, LIST_Y, ROW_H,
+    LIST_ROWS, LIST_Y, ROW_H, hide_unused_rows, setup_list_bg, update_list_bg, update_scrollbar,
 };
 
 pub(crate) fn setup_tv_channels(sdi: &mut SdiRegistry) {

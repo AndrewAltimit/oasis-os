@@ -100,6 +100,10 @@ pub struct ComputedStyle {
     pub bottom: Dimension,
     pub left: Dimension,
     pub z_index: i32,
+    /// True when `z-index` was not explicitly set (CSS initial value `auto`).
+    /// `z-index: auto` does NOT create a stacking context for positioned
+    /// elements, whereas `z-index: 0` (explicitly set) does.
+    pub z_index_auto: bool,
 
     // -- Replaced element sizing ----------------------------------------
     pub object_fit: ObjectFit,
@@ -299,6 +303,7 @@ impl Default for ComputedStyle {
             bottom: Dimension::Auto,
             left: Dimension::Auto,
             z_index: 0,
+            z_index_auto: true,
 
             // Replaced element sizing
             object_fit: ObjectFit::Fill,
@@ -479,7 +484,7 @@ impl ComputedStyle {
             "border-left-width" => format!("{}px", self.border_left_width),
             "opacity" => format!("{}", self.opacity),
             "z-index" => {
-                if self.position == Position::Static {
+                if self.z_index_auto {
                     "auto".into()
                 } else {
                     format!("{}", self.z_index)

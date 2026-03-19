@@ -22,6 +22,7 @@ pub mod scroll;
 pub mod search;
 pub mod skin;
 pub mod svg;
+pub(crate) mod transform;
 
 pub mod canvas;
 
@@ -245,6 +246,9 @@ pub struct BrowserWidget {
     /// DOM node that currently has keyboard/tab focus (for `:focus`).
     focused_node: Option<NodeId>,
 
+    /// DOM node ID of the `<body>` element (fallback target for key events).
+    body_node_id: Option<NodeId>,
+
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
@@ -355,6 +359,10 @@ pub struct BrowserWidget {
     #[cfg(feature = "javascript")]
     js_nav_actions: js_dom::SharedNavActions,
 
+    /// Persistent localStorage data shared across page navigations.
+    #[cfg(feature = "javascript")]
+    js_local_storage: js_dom::SharedLocalStorage,
+
     /// Shared canvas states keyed by DOM `NodeId`. Populated during
     /// layout for `<canvas>` elements, accessed by JS canvas bindings.
     #[cfg(feature = "javascript")]
@@ -424,6 +432,11 @@ pub struct BrowserWidget {
     /// Scroll X position that link_map regions are currently adjusted to.
     link_map_scroll_x: i32,
 
+    /// Per-element scroll offsets for nested scroll containers.
+    /// Elements with `overflow: auto/scroll` whose content exceeds their
+    /// box dimensions get an entry here, keyed by DOM node ID.
+    nested_scroll_offsets: HashMap<NodeId, (f32, f32)>,
+
     /// Dirty rectangles that need repainting (e.g. hover/focus changes).
     /// When non-empty and no layout change occurred, only these regions
     /// are replayed via `replay_dirty()` instead of a full `replay()`.
@@ -478,6 +491,7 @@ impl BrowserWidget {
             visited_urls: HashSet::new(),
             hover_node: None,
             focused_node: None,
+            body_node_id: None,
             decoded_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             io_thread: None,
@@ -517,6 +531,8 @@ impl BrowserWidget {
             #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
+            js_local_storage: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            #[cfg(feature = "javascript")]
             canvas_states: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             transition_engine: css::transition::TransitionEngine::new(),
             animation_engine: css::animation::AnimationEngine::new(),
@@ -535,6 +551,7 @@ impl BrowserWidget {
             display_list_scroll_x: 0,
             link_map_scroll_y: 0,
             link_map_scroll_x: 0,
+            nested_scroll_offsets: HashMap::new(),
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
             tile_grid: None,

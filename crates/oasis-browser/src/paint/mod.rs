@@ -31,6 +31,7 @@ use std::collections::HashMap;
 
 use crate::css::values::{
     BackgroundImage, Dimension, Overflow, Position, TextOverflow, TransformFunction, Visibility,
+    WhiteSpace,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
@@ -109,6 +110,8 @@ pub(super) struct PaintContext {
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
     text_overflow_ellipsis: bool,
+    /// Accumulated CSS transform from ancestor elements.
+    transform: crate::transform::AffineTransform2D,
 }
 
 // -------------------------------------------------------------------
@@ -136,6 +139,7 @@ pub fn paint(
         viewport_width: viewport.width,
         clip_rect: None,
         text_overflow_ellipsis: false,
+        transform: crate::transform::AffineTransform2D::identity(),
     };
 
     if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
@@ -335,7 +339,14 @@ pub(super) fn paint_box(
             Some(existing) => intersect_rects(existing, new_clip),
             None => new_clip,
         });
-        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
+        // text-overflow: ellipsis only activates when white-space
+        // prevents wrapping (nowrap / pre), so multi-line content is
+        // never ellipsized.
+        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis
+            && matches!(
+                layout_box.style.white_space,
+                WhiteSpace::NoWrap | WhiteSpace::Pre
+            );
     }
 
     // Push hardware clip rect to GPU when an overflow clip is active.
@@ -354,15 +365,18 @@ pub(super) fn paint_box(
         false
     };
 
-    // Compute transform offset adjustments for children.
-    // Translate: add dx/dy to offset. Scale: shift from center.
-    // Rotate: no-op for now (requires backend rotation support).
-    let (tx_offset_x, tx_offset_y) = compute_transform_offsets(
-        &layout_box.style.transforms,
-        &layout_box.dimensions.content,
-        offset_x,
-        offset_y,
-    );
+    // Compute transform matrix for this element.
+    let child_matrix =
+        compute_transform_matrix(&layout_box.style.transforms, &layout_box.dimensions.content);
+    // Compose with parent transform.
+    let prev_transform = ctx.transform;
+    let composed = ctx.transform.multiply(&child_matrix);
+    if !child_matrix.is_translation_only() {
+        ctx.transform = composed;
+    }
+    // For child offsets, always use translation component.
+    let tx_offset_x = offset_x + child_matrix.e as i32;
+    let tx_offset_y = offset_y + child_matrix.f as i32;
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -374,35 +388,57 @@ pub(super) fn paint_box(
         | BoxType::TableRow
         | BoxType::TableCell
         | BoxType::InlineBlock => {
-            // Stacking context: separate non-positioned (DOM order)
-            // from positioned children (sorted by z-index).
+            // CSS 2.1 painting order (appendix E):
+            //   1. Background & borders (already painted above)
+            //   2. Stacking-context children with negative z-index
+            //   3. Non-positioned children in tree order (normal flow)
+            //   4. Positioned children with z-index: auto (tree order)
+            //   5. Stacking-context children with z-index >= 0 (sorted)
             let child_count = layout_box.children.len();
             let mut normal_children: Vec<&LayoutBox> = Vec::with_capacity(child_count);
-            let mut positioned_children: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+            let mut positioned_auto: Vec<(usize, &LayoutBox)> = Vec::new();
+            let mut stacking_neg: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+            let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
 
             for (idx, child) in layout_box.children.iter().enumerate() {
                 if creates_stacking_context(child) {
-                    positioned_children.push((child.style.z_index, idx, child));
+                    if child.style.z_index < 0 {
+                        stacking_neg.push((child.style.z_index, idx, child));
+                    } else {
+                        stacking_pos.push((child.style.z_index, idx, child));
+                    }
+                } else if is_positioned(child) {
+                    positioned_auto.push((idx, child));
                 } else {
                     normal_children.push(child);
                 }
             }
 
-            // For block-flow containers (Block/Anonymous), children are
-            // sorted by Y position. We can break early once we pass the
-            // bottom of the clip rect instead of scanning all remaining
-            // children.
             let y_sorted = matches!(
                 layout_box.box_type,
                 BoxType::Block | BoxType::Anonymous | BoxType::TableWrapper
             );
 
-            // Paint non-positioned children in DOM order first.
+            // Step 2: negative z-index stacking contexts (ascending).
+            stacking_neg.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, _, child) in &stacking_neg {
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
+                paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
+            }
+
+            // Step 3: non-positioned children in DOM order.
             for child in &normal_children {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
-                    // Child is entirely below the clip — if Y-sorted,
-                    // all subsequent children are too, so stop early.
                     if cb.y > clip.y + clip.height {
                         if y_sorted {
                             break;
@@ -419,12 +455,24 @@ pub(super) fn paint_box(
                 paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
             }
 
-            // Sort positioned children by z-index (stable sort
-            // preserves DOM order for equal z-index values).
-            positioned_children.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            // Step 4: positioned with z-index: auto in tree order.
+            for (_, child) in &positioned_auto {
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
+                paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
+            }
 
-            // Paint positioned children in z-order.
-            for (_, _, child) in &positioned_children {
+            // Step 5: non-negative z-index stacking contexts (sorted).
+            stacking_pos.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, _, child) in &stacking_pos {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
                     if cb.y + cb.height < clip.y
@@ -504,9 +552,10 @@ pub(super) fn paint_box(
         }
     }
 
-    // Restore previous clip rect and ellipsis flag.
+    // Restore previous clip rect, ellipsis flag, and transform.
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
+    ctx.transform = prev_transform;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -571,12 +620,25 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     }
 }
 
+/// Compute the full 2D affine transform from CSS transforms.
+///
+/// Returns the composed matrix which callers use either as a simple
+/// translation offset (fast path) or for full geometry transformation.
+pub(crate) fn compute_transform_matrix(
+    transforms: &[TransformFunction],
+    content: &Rect,
+) -> crate::transform::AffineTransform2D {
+    let ox = content.width / 2.0;
+    let oy = content.height / 2.0;
+    crate::transform::AffineTransform2D::from_css_transforms(transforms, ox, oy)
+}
+
 /// Compute offset adjustments from CSS transforms.
 ///
-/// Applies translate and scale transforms in order. Translate adds dx/dy.
-/// Scale adjusts the offset from the element's center so children are
-/// painted at the scaled position. Rotate is a no-op (requires backend
-/// rotation support).
+/// Returns the translation component of the composed transform matrix
+/// added to the base offsets. For translation-only transforms this is
+/// exact; for rotation/scale/skew the full matrix is available via
+/// [`compute_transform_matrix`].
 pub(crate) fn compute_transform_offsets(
     transforms: &[TransformFunction],
     content: &Rect,
@@ -586,98 +648,26 @@ pub(crate) fn compute_transform_offsets(
     if transforms.is_empty() {
         return (base_x, base_y);
     }
-
-    // Use 2D affine matrix composition: [a b e; c d f; 0 0 1]
-    // Identity matrix: a=1, b=0, c=0, d=1, e=0, f=0
-    let mut a: f32 = 1.0;
-    let mut b: f32 = 0.0;
-    let mut c: f32 = 0.0;
-    let mut d: f32 = 1.0;
-    let mut e: f32 = 0.0;
-    let mut f: f32 = 0.0;
-
-    // Default transform-origin is center of the element.
-    let ox = content.width / 2.0;
-    let oy = content.height / 2.0;
-
-    // Translate to origin, apply transforms, translate back.
-    // Pre-translate: shift by -origin.
-    e -= a * ox + b * oy;
-    f -= c * ox + d * oy;
-
-    for tf in transforms {
-        match tf {
-            TransformFunction::Translate(tx, ty) => {
-                e += a * tx + b * ty;
-                f += c * tx + d * ty;
-            },
-            TransformFunction::Scale(sx, sy) => {
-                a *= sx;
-                b *= sy;
-                c *= sx;
-                d *= sy;
-            },
-            TransformFunction::Rotate(deg) => {
-                let rad = deg.to_radians();
-                let cos = rad.cos();
-                let sin = rad.sin();
-                let na = a * cos + b * sin;
-                let nb = -a * sin + b * cos;
-                let nc = c * cos + d * sin;
-                let nd = -c * sin + d * cos;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-            },
-            TransformFunction::Skew(ax, ay) => {
-                let tan_x = ax.to_radians().tan();
-                let tan_y = ay.to_radians().tan();
-                let na = a + b * tan_y;
-                let nb = a * tan_x + b;
-                let nc = c + d * tan_y;
-                let nd = c * tan_x + d;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-            },
-            TransformFunction::Matrix(ma, mb, mc, md, me, mf) => {
-                let na = a * ma + b * mc;
-                let nb = a * mb + b * md;
-                let ne = a * me + b * mf + e;
-                let nc = c * ma + d * mc;
-                let nd = c * mb + d * md;
-                let nf = c * me + d * mf + f;
-                a = na;
-                b = nb;
-                c = nc;
-                d = nd;
-                e = ne;
-                f = nf;
-            },
-        }
-    }
-
-    // Post-translate: shift by +origin.
-    e += a * ox + b * oy;
-    f += c * ox + d * oy;
-
-    // The effective offset is (e, f) from the composed matrix.
-    (base_x + e as i32, base_y + f as i32)
+    let m = compute_transform_matrix(transforms, content);
+    (base_x + m.e as i32, base_y + m.f as i32)
 }
 
 /// Returns `true` if a layout box creates a new stacking context.
 ///
-/// A stacking context is created by:
-/// - Positioned elements (non-static) with a non-zero z-index
+/// Per CSS 2.1, a stacking context is created by:
+/// - Positioned elements (non-static) with an explicit z-index (not `auto`)
 /// - Elements with opacity < 1.0
 /// - Elements with CSS transforms
+/// - Elements with CSS filters
+/// - Elements with will-change: transform
+///
+/// Note: positioned elements with `z-index: auto` do NOT create a stacking
+/// context -- they participate in the parent's stacking context at level 0.
 pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
     let style = &layout_box.style;
 
-    // Positioned + non-zero z-index.
-    if style.position != Position::Static && style.z_index != 0 {
+    // Positioned + explicit z-index (not auto).
+    if style.position != Position::Static && !style.z_index_auto {
         return true;
     }
 
@@ -702,6 +692,11 @@ pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
     }
 
     false
+}
+
+/// Returns `true` if a layout box is positioned (position != static).
+pub(crate) fn is_positioned(layout_box: &LayoutBox) -> bool {
+    !matches!(layout_box.style.position, Position::Static)
 }
 
 /// Compute the intersection of two rectangles.
@@ -1201,6 +1196,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         style.z_index = 1;
+        style.z_index_auto = false;
         let lb = LayoutBox::new(BoxType::Block, style, None);
         assert!(creates_stacking_context(&lb));
     }
@@ -1222,12 +1218,24 @@ mod tests {
     }
 
     #[test]
-    fn positioned_z_index_zero_no_stacking_context() {
+    fn positioned_z_index_auto_no_stacking_context() {
+        // z-index: auto (the default) does NOT create a stacking context.
+        let mut style = ComputedStyle::default();
+        style.position = Position::Relative;
+        // z_index_auto is true by default -- this is "z-index: auto".
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(!creates_stacking_context(&lb));
+    }
+
+    #[test]
+    fn positioned_z_index_zero_explicit_creates_stacking_context() {
+        // z-index: 0 (explicitly set) DOES create a stacking context.
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         style.z_index = 0;
+        style.z_index_auto = false;
         let lb = LayoutBox::new(BoxType::Block, style, None);
-        assert!(!creates_stacking_context(&lb));
+        assert!(creates_stacking_context(&lb));
     }
 
     // ---------------------------------------------------------------
@@ -1251,6 +1259,7 @@ mod tests {
         style_a.background_color = Color::rgb(255, 0, 0);
         style_a.position = Position::Relative;
         style_a.z_index = 2;
+        style_a.z_index_auto = false;
         let child_a = make_block(10.0, 10.0, 50.0, 50.0, style_a);
 
         // Child B: z-index=1
@@ -1258,6 +1267,7 @@ mod tests {
         style_b.background_color = Color::rgb(0, 255, 0);
         style_b.position = Position::Relative;
         style_b.z_index = 1;
+        style_b.z_index_auto = false;
         let child_b = make_block(10.0, 70.0, 50.0, 50.0, style_b);
 
         // Add A first, then B in DOM order.
@@ -1291,6 +1301,99 @@ mod tests {
         assert!(
             green_idx.expect("green") < red_idx.expect("red"),
             "z-index=1 (green) should be painted before z-index=2 (red)",
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: CSS 2.1 full 5-step painting order
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn css21_painting_order_negative_normal_positioned_positive() {
+        let mut backend = MockBackend::new();
+        let link_map = HashMap::new();
+
+        let mut root_style = ComputedStyle::default();
+        root_style.background_color = Color::rgba(0, 0, 0, 0);
+        let mut root = make_block(0.0, 0.0, 480.0, 272.0, root_style);
+
+        // Step 2: negative z-index (blue, should paint first)
+        let mut style_neg = ComputedStyle::default();
+        style_neg.background_color = Color::rgb(0, 0, 255);
+        style_neg.position = Position::Relative;
+        style_neg.z_index = -1;
+        style_neg.z_index_auto = false;
+        let child_neg = make_block(10.0, 10.0, 50.0, 50.0, style_neg);
+
+        // Step 3: non-positioned normal flow (white)
+        let mut style_normal = ComputedStyle::default();
+        style_normal.background_color = Color::rgb(255, 255, 255);
+        let child_normal = make_block(10.0, 70.0, 50.0, 50.0, style_normal);
+
+        // Step 4: positioned with z-index: auto (yellow)
+        let mut style_auto = ComputedStyle::default();
+        style_auto.background_color = Color::rgb(255, 255, 0);
+        style_auto.position = Position::Relative;
+        // z_index_auto is true by default.
+        let child_auto = make_block(10.0, 130.0, 50.0, 50.0, style_auto);
+
+        // Step 5: positive z-index stacking context (red)
+        let mut style_pos = ComputedStyle::default();
+        style_pos.background_color = Color::rgb(255, 0, 0);
+        style_pos.position = Position::Relative;
+        style_pos.z_index = 1;
+        style_pos.z_index_auto = false;
+        let child_pos = make_block(10.0, 190.0, 50.0, 50.0, style_pos);
+
+        // Add in scrambled DOM order to verify sorting.
+        root.children.push(child_pos);
+        root.children.push(child_normal);
+        root.children.push(child_neg);
+        root.children.push(child_auto);
+
+        paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
+
+        let fill_calls: Vec<_> = backend
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let DrawCall::FillRect { color, .. } = c {
+                    Some(*color)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let blue_idx = fill_calls
+            .iter()
+            .position(|c| *c == Color::rgb(0, 0, 255))
+            .expect("blue (z=-1) should be painted");
+        let white_idx = fill_calls
+            .iter()
+            .position(|c| *c == Color::rgb(255, 255, 255))
+            .expect("white (normal) should be painted");
+        let yellow_idx = fill_calls
+            .iter()
+            .position(|c| *c == Color::rgb(255, 255, 0))
+            .expect("yellow (auto) should be painted");
+        let red_idx = fill_calls
+            .iter()
+            .position(|c| *c == Color::rgb(255, 0, 0))
+            .expect("red (z=1) should be painted");
+
+        // CSS 2.1 order: negative < normal < positioned-auto < positive
+        assert!(
+            blue_idx < white_idx,
+            "negative z-index (blue) should paint before normal flow (white)",
+        );
+        assert!(
+            white_idx < yellow_idx,
+            "normal flow (white) should paint before positioned-auto (yellow)",
+        );
+        assert!(
+            yellow_idx < red_idx,
+            "positioned-auto (yellow) should paint before positive z-index (red)",
         );
     }
 }

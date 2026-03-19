@@ -5,9 +5,12 @@ use oasis_vfs::Vfs;
 use rustc_hash::FxHashMap;
 
 use crate::css;
+use crate::css::transition::TransitionEngine;
 use crate::css::values::ComputedStyle;
+use crate::css::values::types::Transition;
 use crate::html;
 use crate::html::dom::NodeId;
+use crate::layout::box_model::LayoutBox;
 use crate::loader::Url;
 use crate::{BrowserWidget, Focus};
 
@@ -261,7 +264,27 @@ impl BrowserWidget {
                 true
             },
             InputEvent::MouseWheel { delta } => {
-                self.scroll.wheel_scroll(*delta);
+                // Check if cursor is over a nested scroll container.
+                if let Some(nid) = self.find_scroll_container_at_cursor() {
+                    let amount = *delta as f32 * crate::scroll::SCROLL_WHEEL as f32;
+                    let entry = self.nested_scroll_offsets.entry(nid).or_insert((0.0, 0.0));
+                    let prev = entry.1;
+                    entry.1 += amount;
+                    // Clamp to content bounds (computed during layout).
+                    if let Some(layout) = &self.layout_root
+                        && let Some(bounds) = Self::find_scroll_bounds(layout, nid)
+                    {
+                        entry.1 = entry.1.clamp(0.0, bounds);
+                    }
+                    if (entry.1 - prev).abs() > f32::EPSILON {
+                        self.layout_dirty = true;
+                    } else {
+                        // At scroll limit — bubble to main page scroll.
+                        self.scroll.wheel_scroll(*delta);
+                    }
+                } else {
+                    self.scroll.wheel_scroll(*delta);
+                }
                 true
             },
             InputEvent::CursorMove { x, y } => {
@@ -280,12 +303,17 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
-            // Dispatch keydown + input events to JS for focused nodes.
+            // Dispatch keydown + keyup + input events to JS.
             InputEvent::TextInput(ch) => {
                 #[cfg(feature = "javascript")]
-                if let (Some(nid), Some(engine)) = (self.focused_node, &self.js_engine) {
-                    Self::dispatch_js_key_event(engine, nid, *ch);
-                    Self::dispatch_js_event(engine, nid, "input");
+                if let Some(engine) = &self.js_engine {
+                    // Dispatch to focused node, or body as fallback.
+                    let target = self.focused_node.or(self.body_node_id);
+                    if let Some(nid) = target {
+                        Self::dispatch_js_key_event(engine, nid, *ch);
+                        Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
+                        Self::dispatch_js_event(engine, nid, "input");
+                    }
                 }
                 // Zoom: + / - / 0 keys when not in URL bar.
                 match ch {
@@ -504,9 +532,13 @@ impl BrowserWidget {
         // Click in content area: leave URL bar editing.
         self.focus = Focus::Content;
 
-        // Dispatch click event to JS if an engine is retained.
+        // Dispatch mousedown, mouseup, then click to JS.
         #[cfg(feature = "javascript")]
-        self.dispatch_js_click(x, y);
+        {
+            self.dispatch_js_mouse_event(x, y, "mousedown");
+            self.dispatch_js_mouse_event(x, y, "mouseup");
+            self.dispatch_js_click(x, y);
+        }
 
         // Check link hit regions.
         for link in &self.link_map {
@@ -524,6 +556,96 @@ impl BrowserWidget {
 
         // Handle <summary> click: toggle the parent <details> open state.
         self.handle_details_toggle(x, y);
+
+        // Handle <label for="..."> click: focus the associated form element.
+        self.handle_label_for_click(x, y);
+    }
+
+    /// If the click hits a `<label>` element with a `for` attribute,
+    /// focus the form element whose `id` matches.
+    fn handle_label_for_click(&mut self, x: i32, y: i32) {
+        use crate::html::dom::{NodeKind, TagName};
+
+        let node_id = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32));
+
+        let Some(nid) = node_id else { return };
+        let Some(doc) = &self.document else {
+            return;
+        };
+
+        // Walk up from the hit node to find a <label> ancestor.
+        let mut label_for = None;
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if let NodeKind::Element(ref elem) = doc.nodes[id].kind
+                && elem.tag == TagName::Label
+            {
+                if let Some(for_val) = elem.get_attribute("for") {
+                    label_for = Some(for_val.to_string());
+                }
+                break;
+            }
+            cur = doc.nodes[id].parent;
+        }
+
+        let Some(for_id) = label_for else { return };
+
+        // Find the target element by id.
+        let Some(target_nid) = doc.get_element_by_id(&for_id) else {
+            return;
+        };
+
+        // Get the target element's name attribute to match against
+        // form elements.
+        let target_name = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => elem
+                .get_attribute("name")
+                .or_else(|| elem.get_attribute("id"))
+                .map(|s| s.to_string()),
+            _ => None,
+        };
+
+        let Some(name) = target_name else { return };
+
+        // Update focused_node so :focus CSS and JS keyboard events work.
+        self.focused_node = Some(target_nid);
+
+        // Determine the input type and value so we can toggle
+        // checkbox/radio state.
+        let (input_type, target_value) = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => (
+                elem.get_attribute("type").unwrap_or("text"),
+                elem.get_attribute("value").unwrap_or("").to_string(),
+            ),
+            _ => ("text", String::new()),
+        };
+
+        // Search form_manager for a form containing this element name
+        // and focus it.
+        for (fi, form) in self.form_manager.forms.iter().enumerate() {
+            if form.has_element(&name) {
+                self.form_manager.focused_form = Some(fi);
+                self.form_manager.focused_element = Some(name.clone());
+
+                // Toggle checkbox/radio on label click (standard HTML
+                // behavior).
+                if input_type == "checkbox" {
+                    let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
+                    self.layout_dirty = true;
+                } else if input_type == "radio" {
+                    // For radio buttons, select_radio uses the value to
+                    // pick the correct option in the group, avoiding the
+                    // index_of(name) ambiguity where all radios share
+                    // the same name.
+                    self.form_manager.select_radio(fi, &name, &target_value);
+                    self.layout_dirty = true;
+                }
+                return;
+            }
+        }
     }
 
     /// If the click hits a `<summary>` element, toggle the `open`
@@ -610,9 +732,50 @@ impl BrowserWidget {
         let _ = engine.eval(&code);
     }
 
-    /// Dispatch a keydown event to JS with the key character as detail.
+    /// Dispatch a mouse event (mousedown, mouseup, etc.) to the node at
+    /// the given coordinates, passing `clientX`/`clientY` as detail.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_mouse_event(&mut self, x: i32, y: i32, event_type: &str) {
+        let node_id = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32));
+        if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
+            Self::dispatch_js_mouse_event_to(engine, nid, x, y, event_type);
+        }
+    }
+
+    /// Dispatch a mouse event to a specific node with coordinates.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_mouse_event_to(
+        engine: &oasis_js::JsEngine,
+        node_id: NodeId,
+        x: i32,
+        y: i32,
+        event_type: &str,
+    ) {
+        let code = format!(
+            "if(typeof __oasis_dispatch_with_bubbling==='function'){{\
+             var __e={{clientX:{},clientY:{}}};\
+             __oasis_dispatch_with_bubbling({},'{}',__e)}}",
+            x, y, node_id, event_type
+        );
+        let _ = engine.eval(&code);
+    }
+
+    /// Dispatch a keydown event to JS with key info as detail object.
     #[cfg(feature = "javascript")]
     fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
+        Self::dispatch_js_key_event_typed(engine, node_id, key, "keydown");
+    }
+
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_key_event_typed(
+        engine: &oasis_js::JsEngine,
+        node_id: NodeId,
+        key: char,
+        event_type: &str,
+    ) {
         // Escape characters that break JS single-quoted string literals.
         let escaped: String = match key {
             '\\' => "\\\\".into(),
@@ -623,8 +786,8 @@ impl BrowserWidget {
         };
         let code = format!(
             "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'keydown','{}')",
-            node_id, escaped
+             __oasis_dispatch_with_bubbling({},'{event_type}',{{key:'{}',code:'{}'}})",
+            node_id, escaped, escaped
         );
         let _ = engine.eval(&code);
     }
@@ -661,7 +824,7 @@ impl BrowserWidget {
             let old_hover = self.hover_node;
             self.hover_node = new_hover;
 
-            // Dispatch mouseover/mouseout events to JS.
+            // Dispatch mouseover/mouseout/mousemove events to JS.
             #[cfg(feature = "javascript")]
             if let Some(engine) = &self.js_engine {
                 if let Some(old_nid) = old_hover {
@@ -669,6 +832,7 @@ impl BrowserWidget {
                 }
                 if let Some(new_nid) = new_hover {
                     Self::dispatch_js_event(engine, new_nid, "mouseover");
+                    Self::dispatch_js_mouse_event_to(engine, new_nid, x, y, "mousemove");
                 }
             }
 
@@ -769,6 +933,15 @@ impl BrowserWidget {
                     {
                         needs_full_repaint = true;
                     }
+
+                    // Start CSS transitions for numeric properties that
+                    // changed, if the element declares transitions.
+                    start_transitions_for_change(
+                        &mut self.transition_engine,
+                        nid,
+                        old_style,
+                        &new_style,
+                    );
                 } else {
                     geometry_changed = true;
                 }
@@ -946,6 +1119,255 @@ impl BrowserWidget {
                 self.visited_urls.insert(resolved_action.clone());
                 self.navigate_post(&resolved_action, body, vfs);
             },
+        }
+    }
+
+    /// Find the innermost nested scroll container under the current cursor
+    /// position. Returns `None` if the cursor is not over any scroll container.
+    fn find_scroll_container_at_cursor(&self) -> Option<NodeId> {
+        use crate::css::values::Overflow;
+
+        let layout = self.layout_root.as_ref()?;
+        // Use hover_node as a proxy for cursor position — walk its ancestors
+        // looking for the nearest scroll container.
+        let hover = self.hover_node?;
+        Self::find_scroll_ancestor(layout, hover).filter(|&nid| {
+            // Only return if this node is an overflow container.
+            if let Some(Some(style)) = self.styles.get(nid) {
+                matches!(style.overflow, Overflow::Auto | Overflow::Scroll)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Walk the layout tree to find the nearest ancestor of `target_nid`
+    /// that has `overflow: auto/scroll`.
+    fn find_scroll_ancestor(layout_box: &LayoutBox, target_nid: NodeId) -> Option<NodeId> {
+        use crate::css::values::Overflow;
+
+        // Check if this box IS the target node.
+        if layout_box.node == Some(target_nid) {
+            // The target itself may be a scroll container.
+            if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
+                return layout_box.node;
+            }
+            return None;
+        }
+
+        for child in &layout_box.children {
+            // If child IS the target, return this box if it's a scroll container.
+            if child.node == Some(target_nid) {
+                if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
+                    return layout_box.node;
+                }
+                return None;
+            }
+
+            // Recurse into child.
+            if let Some(found) = Self::find_scroll_ancestor(child, target_nid) {
+                return Some(found);
+            }
+
+            // Check if target is somewhere in this child's subtree.
+            if Self::subtree_contains(child, target_nid) {
+                // Target is inside this child. If this box is a scroll
+                // container, return it.
+                if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
+                    return layout_box.node;
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Check if a layout subtree contains a node with the given ID.
+    fn subtree_contains(layout_box: &LayoutBox, nid: NodeId) -> bool {
+        if layout_box.node == Some(nid) {
+            return true;
+        }
+        layout_box
+            .children
+            .iter()
+            .any(|c| Self::subtree_contains(c, nid))
+    }
+
+    /// Find the maximum scroll Y for a nested scroll container.
+    ///
+    /// Returns `content_height - box_height`, clamped to >= 0.
+    fn find_scroll_bounds(layout_box: &LayoutBox, nid: NodeId) -> Option<f32> {
+        if layout_box.node == Some(nid) {
+            let content_h: f32 = layout_box
+                .children
+                .iter()
+                .map(|c| {
+                    let mb = c.dimensions.margin_box();
+                    mb.y + mb.height
+                })
+                .fold(0.0f32, f32::max);
+            let box_h = layout_box.dimensions.content.height;
+            let max_scroll = (content_h - layout_box.dimensions.content.y - box_h).max(0.0);
+            return Some(max_scroll);
+        }
+        for child in &layout_box.children {
+            if let Some(bounds) = Self::find_scroll_bounds(child, nid) {
+                return Some(bounds);
+            }
+        }
+        None
+    }
+}
+
+/// All CSS properties that can be smoothly transitioned as a single f32.
+const TRANSITIONABLE_PROPERTIES: &[&str] = &[
+    "opacity",
+    "font-size",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-radius",
+    "border-spacing",
+    "outline-width",
+    "outline-offset",
+    "text-indent",
+    "gap",
+    "column-gap",
+    "row-gap",
+    "flex-grow",
+    "flex-shrink",
+];
+
+/// Extract a numeric value from a [`ComputedStyle`] for a transitionable
+/// CSS property. Returns `None` for properties that are not numeric
+/// (e.g. colors, enums) or not recognized.
+fn get_style_numeric_value(style: &ComputedStyle, property: &str) -> Option<f32> {
+    match property {
+        "opacity" => Some(style.opacity),
+        "font-size" => Some(style.font_size),
+        "line-height" => Some(style.line_height),
+        "letter-spacing" => Some(style.letter_spacing),
+        "word-spacing" => Some(style.word_spacing),
+        "margin-top" => Some(style.margin_top),
+        "margin-right" => Some(style.margin_right),
+        "margin-bottom" => Some(style.margin_bottom),
+        "margin-left" => Some(style.margin_left),
+        "padding-top" => Some(style.padding_top),
+        "padding-right" => Some(style.padding_right),
+        "padding-bottom" => Some(style.padding_bottom),
+        "padding-left" => Some(style.padding_left),
+        "border-top-width" => Some(style.border_top_width),
+        "border-right-width" => Some(style.border_right_width),
+        "border-bottom-width" => Some(style.border_bottom_width),
+        "border-left-width" => Some(style.border_left_width),
+        "border-radius" => Some(style.border_radius),
+        "border-spacing" => Some(style.border_spacing),
+        "outline-width" => Some(style.outline_width),
+        "outline-offset" => Some(style.outline_offset),
+        "text-indent" => Some(style.text_indent),
+        "gap" => Some(style.gap),
+        "column-gap" => Some(style.column_gap),
+        "row-gap" => Some(style.row_gap),
+        "flex-grow" => Some(style.flex_grow),
+        "flex-shrink" => Some(style.flex_shrink),
+        _ => None,
+    }
+}
+
+/// Try to start a single transition for `prop` between `old_style` and
+/// `new_style` using the given [`Transition`] declaration.
+fn try_start_property_transition(
+    engine: &mut TransitionEngine,
+    nid: NodeId,
+    prop: &str,
+    old_style: &ComputedStyle,
+    new_style: &ComputedStyle,
+    trans: &Transition,
+) {
+    if trans.duration_ms <= 0.0 {
+        return;
+    }
+    if let (Some(from), Some(to)) = (
+        get_style_numeric_value(old_style, prop),
+        get_style_numeric_value(new_style, prop),
+    ) && (from - to).abs() > f32::EPSILON
+    {
+        engine.start_transition(nid, prop, from, to, trans);
+    }
+}
+
+/// Start CSS transitions for all numeric properties that changed between
+/// `old_style` and `new_style`, based on the transition declarations in
+/// both styles.
+///
+/// The new style's transitions are checked first (entering a state like
+/// `:hover`). The old style's transitions are also checked for properties
+/// not covered by the new style (leaving a state).
+fn start_transitions_for_change(
+    engine: &mut TransitionEngine,
+    nid: NodeId,
+    old_style: &ComputedStyle,
+    new_style: &ComputedStyle,
+) {
+    // Transitions declared on the new style (e.g. entering :hover).
+    for trans in &new_style.transitions {
+        if trans.property == "all" {
+            for &prop in TRANSITIONABLE_PROPERTIES {
+                try_start_property_transition(engine, nid, prop, old_style, new_style, trans);
+            }
+        } else {
+            try_start_property_transition(
+                engine,
+                nid,
+                &trans.property,
+                old_style,
+                new_style,
+                trans,
+            );
+        }
+    }
+
+    // Transitions declared on the old style that are not covered by the
+    // new style (e.g. leaving :hover -- the base style may not redeclare
+    // the transition, but the old hover style's transition should still
+    // animate back).
+    for trans in &old_style.transitions {
+        let prop_name = &trans.property;
+        let already_covered = if prop_name == "all" {
+            // If new_style already has an "all" transition, skip.
+            new_style.transitions.iter().any(|t| t.property == "all")
+        } else {
+            new_style
+                .transitions
+                .iter()
+                .any(|t| t.property == *prop_name || t.property == "all")
+        };
+        if already_covered {
+            continue;
+        }
+
+        if *prop_name == "all" {
+            for &prop in TRANSITIONABLE_PROPERTIES {
+                // Skip properties already started from new_style.
+                if new_style.transitions.iter().any(|t| t.property == prop) {
+                    continue;
+                }
+                try_start_property_transition(engine, nid, prop, old_style, new_style, trans);
+            }
+        } else {
+            try_start_property_transition(engine, nid, prop_name, old_style, new_style, trans);
         }
     }
 }

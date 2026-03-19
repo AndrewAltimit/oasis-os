@@ -27,7 +27,16 @@ pub(super) fn paint_background(
         &layout_box.style.filters,
     );
     if bg.a > 0 {
-        if layout_box.style.border_radius > 0.0 {
+        if !ctx.transform.is_translation_only() && layout_box.style.border_radius == 0.0 {
+            // Non-trivial transform: render as transformed quadrilateral.
+            let quad = ctx.transform.transform_rect_to_quad(
+                padding.x - ctx.scroll_x + offset_x as f32,
+                padding.y - ctx.scroll_y + offset_y as f32,
+                padding.width,
+                padding.height,
+            );
+            backend.fill_polygon(&quad, bg)?;
+        } else if layout_box.style.border_radius > 0.0 {
             backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
         } else {
             backend.fill_rect(x, y, w, h, bg)?;

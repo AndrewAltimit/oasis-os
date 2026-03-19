@@ -182,6 +182,22 @@ pub enum ReplacedContent {
         value: String,
         placeholder: String,
         size: u32,
+        is_password: bool,
+    },
+    /// A checkbox input.
+    Checkbox {
+        checked: bool,
+    },
+    /// A radio button input.
+    RadioButton {
+        checked: bool,
+    },
+    /// A multi-line text area.
+    TextArea {
+        value: String,
+        placeholder: String,
+        rows: u32,
+        cols: u32,
     },
     /// A submit/button input.
     SubmitButton {
@@ -190,6 +206,9 @@ pub enum ReplacedContent {
     /// A `<select>` dropdown box.
     SelectBox {
         label: String,
+        open: bool,
+        options: Vec<String>,
+        selected_index: Option<usize>,
     },
     /// An inline `<svg>` element.
     Svg {
@@ -285,6 +304,25 @@ impl LayoutBox {
     /// if the point is outside the layout tree or no box with a DOM
     /// node ID contains it.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        // If this box has CSS transforms, apply the inverse transform
+        // to the test point so AABB check works in local coordinates.
+        let (test_x, test_y) = if !self.style.transforms.is_empty() {
+            let ox = self.dimensions.content.width / 2.0;
+            let oy = self.dimensions.content.height / 2.0;
+            let m = crate::transform::AffineTransform2D::from_css_transforms(
+                &self.style.transforms,
+                self.dimensions.content.x + ox,
+                self.dimensions.content.y + oy,
+            );
+            if let Some(inv) = m.inverse() {
+                inv.apply(x, y)
+            } else {
+                (x, y) // singular matrix — fall back to untransformed
+            }
+        } else {
+            (x, y)
+        };
+
         let d = &self.dimensions;
         let bx = d.content.x - d.padding.left - d.border.left;
         let by = d.content.y - d.padding.top - d.border.top;
@@ -293,13 +331,15 @@ impl LayoutBox {
         let bh =
             d.content.height + d.padding.top + d.padding.bottom + d.border.top + d.border.bottom;
 
-        if x < bx || x >= bx + bw || y < by || y >= by + bh {
+        if test_x < bx || test_x >= bx + bw || test_y < by || test_y >= by + bh {
             return None;
         }
 
         // Check children deepest-first (later children paint on top).
+        // Pass the (possibly inverse-transformed) coordinates so children
+        // are tested in local coordinate space.
         for child in self.children.iter().rev() {
-            if let Some(nid) = child.hit_test(x, y) {
+            if let Some(nid) = child.hit_test(test_x, test_y) {
                 return Some(nid);
             }
         }
@@ -374,6 +414,9 @@ pub enum InlineFragment {
         width: f32,
         style: ComputedStyle,
         node: Option<NodeId>,
+        /// When true, this fragment originated from a soft-hyphen split
+        /// and a visible "-" should be appended when it ends a line.
+        soft_hyphen: bool,
     },
     InlineBox {
         layout_box: LayoutBox,
@@ -545,6 +588,7 @@ mod tests {
             width: 40.0,
             style: style.clone(),
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag1));
         assert_eq!(line.used_width(), 40.0);
@@ -555,6 +599,7 @@ mod tests {
             width: 40.0,
             style: style.clone(),
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag2));
         assert_eq!(line.used_width(), 80.0);
@@ -566,6 +611,7 @@ mod tests {
             width: 30.0,
             style,
             node: None,
+            soft_hyphen: false,
         };
         assert!(!line.try_add(&frag3));
     }
@@ -582,6 +628,7 @@ mod tests {
             width: 200.0,
             style,
             node: None,
+            soft_hyphen: false,
         };
         assert!(line.try_add(&frag));
     }

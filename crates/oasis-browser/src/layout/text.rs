@@ -30,6 +30,9 @@ pub struct TextWord {
     pub leading_space: bool,
     /// Whether this word had trailing whitespace in the source text.
     pub trailing_space: bool,
+    /// If true, a visible hyphen should be rendered when this word
+    /// is at the end of a line break (soft hyphen U+00AD boundary).
+    pub soft_hyphen: bool,
 }
 
 // -------------------------------------------------------------------
@@ -135,6 +138,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                         text: "\n".to_string(),
                         leading_space: false,
                         trailing_space: false,
+                        soft_hyphen: false,
                     });
                 }
                 if !line.is_empty() {
@@ -142,6 +146,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                         text: line.to_string(),
                         leading_space: false,
                         trailing_space: false,
+                        soft_hyphen: false,
                     });
                 }
             }
@@ -156,6 +161,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                         text: "\n".to_string(),
                         leading_space: false,
                         trailing_space: false,
+                        soft_hyphen: false,
                     });
                 }
                 split_line_into_words(line, &mut words);
@@ -172,7 +178,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
 }
 
 /// Split a single line (no embedded newlines) into space-separated
-/// words.
+/// words, further splitting on soft hyphen (U+00AD) boundaries.
 fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
     let parts: Vec<&str> = line.split(' ').collect();
     let last_idx = parts.len().saturating_sub(1);
@@ -182,11 +188,31 @@ fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
             saw_empty = true;
             continue;
         }
-        out.push(TextWord {
-            text: (*part).to_string(),
-            leading_space: saw_empty,
-            trailing_space: i < last_idx,
-        });
+        // Further split each word on soft hyphen boundaries.
+        let shy_parts: Vec<&str> = part.split('\u{00AD}').collect();
+        if shy_parts.len() > 1 {
+            for (j, sp) in shy_parts.iter().enumerate() {
+                if !sp.is_empty() {
+                    out.push(TextWord {
+                        text: sp.to_string(),
+                        leading_space: if j == 0 { saw_empty } else { false },
+                        trailing_space: if j == shy_parts.len() - 1 {
+                            i < last_idx
+                        } else {
+                            false
+                        },
+                        soft_hyphen: j < shy_parts.len() - 1,
+                    });
+                }
+            }
+        } else {
+            out.push(TextWord {
+                text: (*part).to_string(),
+                leading_space: saw_empty,
+                trailing_space: i < last_idx,
+                soft_hyphen: false,
+            });
+        }
         saw_empty = false;
     }
 }
@@ -254,6 +280,45 @@ fn capitalize_words(text: &str) -> String {
         }
     }
     result
+}
+
+// -------------------------------------------------------------------
+// Bidi text direction detection
+// -------------------------------------------------------------------
+
+use crate::css::values::TextDirection;
+
+/// Check if a character is in an RTL Unicode block.
+pub fn is_rtl_char(ch: char) -> bool {
+    matches!(ch as u32,
+        0x0590..=0x05FF |  // Hebrew
+        0x0600..=0x06FF |  // Arabic
+        0x0700..=0x074F |  // Syriac
+        0xFB50..=0xFDFF |  // Arabic Presentation Forms-A
+        0xFE70..=0xFEFF    // Arabic Presentation Forms-B
+    )
+}
+
+/// Detect the dominant text direction from content.
+///
+/// Counts RTL vs LTR alphabetic characters and returns the
+/// direction of the majority. Falls back to LTR when counts are
+/// equal or the text contains no alphabetic characters.
+pub fn detect_direction(text: &str) -> TextDirection {
+    let mut rtl_count = 0u32;
+    let mut ltr_count = 0u32;
+    for ch in text.chars() {
+        if is_rtl_char(ch) {
+            rtl_count += 1;
+        } else if ch.is_alphabetic() {
+            ltr_count += 1;
+        }
+    }
+    if rtl_count > ltr_count {
+        TextDirection::Rtl
+    } else {
+        TextDirection::Ltr
+    }
 }
 
 // -------------------------------------------------------------------
@@ -485,5 +550,93 @@ mod tests {
             w >= 0.0,
             "negative letter-spacing should not produce negative width, got {w}",
         );
+    }
+
+    // -- soft hyphen splitting ----------------------------------------
+
+    #[test]
+    fn split_soft_hyphen_produces_pieces() {
+        let words = split_into_words("sup\u{00AD}er\u{00AD}cal", WhiteSpace::Normal);
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0].text, "sup");
+        assert!(words[0].soft_hyphen);
+        assert_eq!(words[1].text, "er");
+        assert!(words[1].soft_hyphen);
+        assert_eq!(words[2].text, "cal");
+        assert!(!words[2].soft_hyphen);
+    }
+
+    #[test]
+    fn split_soft_hyphen_no_leading_trailing_space_between_parts() {
+        let words = split_into_words("ab\u{00AD}cd ef", WhiteSpace::Normal);
+        // "ab" (soft_hyphen=true), "cd" (trailing_space), "ef"
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0].text, "ab");
+        assert!(words[0].soft_hyphen);
+        assert!(!words[0].trailing_space);
+        assert!(!words[0].leading_space);
+        assert_eq!(words[1].text, "cd");
+        assert!(!words[1].soft_hyphen);
+        assert!(words[1].trailing_space);
+        assert!(!words[1].leading_space);
+        assert_eq!(words[2].text, "ef");
+    }
+
+    #[test]
+    fn no_soft_hyphen_unchanged() {
+        let words = split_into_words("hello world", WhiteSpace::Normal);
+        assert_eq!(words.len(), 2);
+        assert!(!words[0].soft_hyphen);
+        assert!(!words[1].soft_hyphen);
+    }
+
+    // -- bidi detection -----------------------------------------------
+
+    #[test]
+    fn detect_direction_ltr() {
+        assert_eq!(detect_direction("hello world"), TextDirection::Ltr);
+    }
+
+    #[test]
+    fn detect_direction_rtl_arabic() {
+        // Arabic text should be detected as RTL.
+        assert_eq!(
+            detect_direction("\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}"),
+            TextDirection::Rtl
+        );
+    }
+
+    #[test]
+    fn detect_direction_rtl_hebrew() {
+        assert_eq!(
+            detect_direction("\u{05E9}\u{05DC}\u{05D5}\u{05DD}"),
+            TextDirection::Rtl
+        );
+    }
+
+    #[test]
+    fn detect_direction_mixed_majority_ltr() {
+        // More Latin than Arabic characters.
+        assert_eq!(
+            detect_direction("hello \u{0645}\u{0631}"),
+            TextDirection::Ltr,
+        );
+    }
+
+    #[test]
+    fn detect_direction_empty() {
+        assert_eq!(detect_direction(""), TextDirection::Ltr);
+    }
+
+    #[test]
+    fn is_rtl_char_arabic() {
+        assert!(is_rtl_char('\u{0645}'));
+        assert!(is_rtl_char('\u{0627}'));
+    }
+
+    #[test]
+    fn is_rtl_char_latin() {
+        assert!(!is_rtl_char('a'));
+        assert!(!is_rtl_char('Z'));
     }
 }

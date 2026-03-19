@@ -152,10 +152,38 @@ fn build_box_for_node(
                 return Some(lb);
             }
 
+            // Handle <textarea> as a replaced element.
+            if elem.tag == TagName::Textarea {
+                let value = collect_text_content(doc, node_id);
+                let placeholder = elem.get_attribute("placeholder").unwrap_or("").to_string();
+                let rows = elem
+                    .get_attribute("rows")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(2);
+                let cols = elem
+                    .get_attribute("cols")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(20);
+                let replaced = ReplacedContent::TextArea {
+                    value,
+                    placeholder,
+                    rows,
+                    cols,
+                };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
             // Handle <select> specially: find selected/first <option> text.
             if elem.tag == TagName::Select {
-                let label = find_select_label(doc, node_id);
-                let replaced = ReplacedContent::SelectBox { label };
+                let (label, options, selected_index) = find_select_info(doc, node_id);
+                let replaced = ReplacedContent::SelectBox {
+                    label,
+                    open: false,
+                    options,
+                    selected_index,
+                };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
                 return Some(lb);
@@ -369,8 +397,17 @@ fn replaced_content(
                         .to_string();
                     Some(ReplacedContent::SubmitButton { label })
                 },
+                "checkbox" => {
+                    let checked = elem.get_attribute("checked").is_some();
+                    Some(ReplacedContent::Checkbox { checked })
+                },
+                "radio" => {
+                    let checked = elem.get_attribute("checked").is_some();
+                    Some(ReplacedContent::RadioButton { checked })
+                },
                 _ => {
                     // text, password, search, etc.
+                    let is_password = input_type == "password";
                     let value = elem.get_attribute("value").unwrap_or("").to_string();
                     let placeholder = elem.get_attribute("placeholder").unwrap_or("").to_string();
                     let size = elem
@@ -381,6 +418,7 @@ fn replaced_content(
                         value,
                         placeholder,
                         size,
+                        is_password,
                     })
                 },
             }
@@ -395,34 +433,40 @@ fn replaced_content(
 ///
 /// Searches for the first `<option>` with a `selected` attribute, or
 /// falls back to the first `<option>`. Returns the option's text content.
-fn find_select_label(doc: &Document, select_id: NodeId) -> String {
-    let mut first_option: Option<NodeId> = None;
-    let mut selected_option: Option<NodeId> = None;
+fn find_select_info(doc: &Document, select_id: NodeId) -> (String, Vec<String>, Option<usize>) {
+    let mut option_labels = Vec::new();
+    let mut selected_idx: Option<usize> = None;
+    let mut first_option_idx: Option<usize> = None;
     for &child_id in &doc.get(select_id).children {
         if let NodeKind::Element(ref elem) = doc.get(child_id).kind
             && elem.tag == TagName::Option
         {
-            if first_option.is_none() {
-                first_option = Some(child_id);
+            let idx = option_labels.len();
+            let text = collect_text_content(doc, child_id);
+            let trimmed = text.trim();
+            let lbl = if trimmed.is_empty() {
+                "Option".to_string()
+            } else {
+                trimmed.to_string()
+            };
+            option_labels.push(lbl);
+            if first_option_idx.is_none() {
+                first_option_idx = Some(idx);
             }
             if elem.get_attribute("selected").is_some() {
-                selected_option = Some(child_id);
+                selected_idx = Some(idx);
             }
         }
     }
-    let option_id = selected_option.or(first_option);
-    match option_id {
-        Some(id) => {
-            let text = collect_text_content(doc, id);
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                "Select".to_string()
-            } else {
-                trimmed.to_string()
-            }
-        },
+    let display_idx = selected_idx.or(first_option_idx);
+    let label = match display_idx {
+        Some(i) => option_labels
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| "Select".to_string()),
         None => "Select".to_string(),
-    }
+    };
+    (label, option_labels, selected_idx)
 }
 
 /// Recursively collect text content from a DOM node and its descendants.

@@ -141,6 +141,7 @@ impl FormManager {
                 name: n,
                 options,
                 selected_index,
+                open,
             } = elem
                 && n == name
                 && index < options.len()
@@ -149,6 +150,7 @@ impl FormManager {
                     && !opt.disabled
                 {
                     *selected_index = Some(index);
+                    *open = false;
                 }
                 return;
             }
@@ -615,6 +617,7 @@ mod tests {
                     },
                 ],
                 selected_index: None,
+                open: false,
             },
         );
 
@@ -651,6 +654,7 @@ mod tests {
                     },
                 ],
                 selected_index: Some(0),
+                open: false,
             },
         );
 
@@ -693,6 +697,7 @@ mod tests {
                     },
                 ],
                 selected_index: Some(0),
+                open: false,
             },
         );
         mgr.focused_form = Some(fid);
@@ -736,6 +741,7 @@ mod tests {
                     },
                 ],
                 selected_index: Some(0),
+                open: false,
             },
         );
         mgr.focused_form = Some(fid);
@@ -1121,6 +1127,7 @@ mod tests {
                 name: "empty".into(),
                 options: vec![],
                 selected_index: None,
+                open: false,
             },
         );
         mgr.focused_form = Some(fid);
@@ -1195,6 +1202,7 @@ mod tests {
                     },
                 ],
                 selected_index: Some(1),
+                open: false,
             },
         );
 
@@ -1216,6 +1224,7 @@ mod tests {
                     disabled: false,
                 }],
                 selected_index: None,
+                open: false,
             },
         );
 
@@ -1237,6 +1246,7 @@ mod tests {
                     disabled: false,
                 }],
                 selected_index: Some(0),
+                open: false,
             },
         );
 

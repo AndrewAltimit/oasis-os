@@ -106,8 +106,8 @@ oasis-os/
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
 |   +-- oasis-skin/                  # TOML skin engine, 18 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
-|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, @media queries, JS DOM bindings
-|   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
+|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, full 2D transforms, Canvas 2D path API, SVG paths/groups, light compositor (text batching, animation dirty tracking, sticky scroll caching), hover-triggered transitions, form elements (select dropdown, label association), soft hyphens, bidi text, @media queries, JS DOM bindings
+|   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation, document.cookie, history.pushState, persistent localStorage
 |   +-- oasis-video/                 # Software MP4/H.264+AAC decode (symphonia + openh264, streaming VideoSource API)
 |   +-- oasis-vector/                # Vector graphics: scene graph, path ops, icons, frame-driven animations
 |   +-- oasis-shader/                # Animated shader wallpapers (voronoi, city lights, ocean waves, calm waves)

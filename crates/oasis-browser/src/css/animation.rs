@@ -227,6 +227,24 @@ impl AnimationEngine {
     pub fn has_active(&self) -> bool {
         !self.active.is_empty()
     }
+
+    /// Returns `(node_id, property_names)` for each active animation node.
+    pub fn active_node_properties(&self) -> Vec<(usize, Vec<&str>)> {
+        self.active
+            .iter()
+            .map(|(nid, anims)| {
+                let props: Vec<&str> = anims
+                    .iter()
+                    .flat_map(|a| {
+                        a.keyframe_properties
+                            .iter()
+                            .flat_map(|(_, ps)| ps.iter().map(|(p, _)| p.as_str()))
+                    })
+                    .collect();
+                (*nid, props)
+            })
+            .collect()
+    }
 }
 
 /// Find the two bounding keyframe stop indices for a given percentage.
