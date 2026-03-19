@@ -1,12 +1,14 @@
-//! PSP USB Host Mode Phase 2e: Targeted Syscon SET commands
+//! PSP USB Host Mode Phase 3G: Cmd 0x45 retry with correct format
 //!
-//! Phase 2d mapped all GET commands 0x00-0x34. Cmd 0x0E (USB SET) returned
-//! 0x4108 with OHCI enabled (was 0x4004 without). This version focuses on
-//! SET commands with various data values to find the VBUS power switch.
+//! Phase 3F with buggy length=6 caused black screen + solid memory card light
+//! on cmd 0x45 — this matches the USB firmware reboot sequence!
+//! This version sends cmd 0x45 with correct length=3 format, then waits
+//! 60 seconds to let the sequence complete without interruption.
+//!
+//! IMPORTANT: Keep FNB58 plugged in. Do NOT reboot during the wait.
 
 #![no_std]
 #![no_main]
-#![feature(asm_experimental_arch)]
 
 use psp::hw::{hw_read32, hw_write32};
 use psp::sys::{
@@ -18,11 +20,11 @@ use core::ffi::c_void;
 
 psp::module_kernel!("USBHostTest", 1, 0);
 
-static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/USBTRACE/phase2e.log\0";
+static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/USBTRACE/phase3g.log\0";
 
 struct Logger;
 impl Logger {
-    fn open() -> Self {
+    fn init() {
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -31,9 +33,9 @@ impl Logger {
             )
         };
         if fd.0 >= 0 { unsafe { psp::sys::sceIoClose(fd) }; }
-        Self
     }
-    fn w(&self, s: &str) {
+    fn log(s: &str) {
+        psp::dprintln!("{}", s);
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -44,6 +46,7 @@ impl Logger {
         if fd.0 >= 0 {
             unsafe {
                 psp::sys::sceIoWrite(fd, s.as_ptr() as *const c_void, s.len());
+                psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
                 psp::sys::sceIoClose(fd);
             }
         }
@@ -80,16 +83,10 @@ impl Fmt {
     }
 }
 
-fn lr(l: &Logger, label: &str, val: u32) {
+fn lr(label: &str, val: u32) {
     let mut f = Fmt::new();
-    f.p(label); f.h8(val); f.p("\n");
-    psp::dprintln!("{}{:08X}", label, val);
-    l.w(f.s());
-}
-
-fn ls(l: &Logger, s: &str) {
-    psp::dprintln!("{}", s);
-    l.w(s); l.w("\n");
+    f.p(label); f.h8(val);
+    Logger::log(f.s());
 }
 
 fn wait_cross() {
@@ -112,26 +109,17 @@ fn hw(addr: u32, val: u32) {
     unsafe { hw_write32(addr, val) };
 }
 
-/// Execute Syscon command via known 1001 address
-fn syscon_cmd(cmd: u8, data: &[u8]) -> (i32, [u8; 16]) {
+fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
     let mut pkt = [0u8; 128];
     for b in pkt[0x0C..0x1C].iter_mut() { *b = 0xFF; }
     for b in pkt[0x1C..0x2C].iter_mut() { *b = 0xFF; }
 
     pkt[0x0C] = cmd;
-    let len = 2 + data.len() as u8;
-    pkt[0x0D] = len;
-    for (i, &b) in data.iter().enumerate() {
-        pkt[0x0E + i] = b;
-    }
-    let mut sum: u8 = 0;
-    for i in 0..(len as usize) {
-        sum = sum.wrapping_add(pkt[0x0C + i]);
-    }
-    pkt[0x0C + len as usize] = !sum;
+    pkt[0x0D] = 3;
+    pkt[0x0E] = value;
+    let sum = pkt[0x0C].wrapping_add(pkt[0x0D]).wrapping_add(pkt[0x0E]);
+    pkt[0x0F] = !sum;
 
-    // PSP-1001: 0x880A6D4C, PSP-3001: 0x880A6E4C (both 6.61 ARK-4)
-    // Detect via Tachyon version: 0x00300000 = 1001, 0x00600000 = 3001
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
     let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
@@ -143,179 +131,180 @@ fn syscon_cmd(cmd: u8, data: &[u8]) -> (i32, [u8; 16]) {
     (ret, rx)
 }
 
-fn log_syscon(l: &Logger, desc: &str, cmd: u8, data: &[u8]) {
-    let (ret, rx) = syscon_cmd(cmd, data);
+fn syscon_get(cmd: u8) -> (i32, [u8; 16]) {
+    let mut pkt = [0u8; 128];
+    for b in pkt[0x0C..0x1C].iter_mut() { *b = 0xFF; }
+    for b in pkt[0x1C..0x2C].iter_mut() { *b = 0xFF; }
+
+    pkt[0x0C] = cmd;
+    pkt[0x0D] = 2;
+    let sum = pkt[0x0C].wrapping_add(pkt[0x0D]);
+    pkt[0x0E] = !sum;
+
+    type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
+    let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
+    let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
+    let func: F = unsafe { core::mem::transmute(addr) };
+    let ret = unsafe { func(pkt.as_mut_ptr(), 0) };
+
+    let mut rx = [0u8; 16];
+    rx.copy_from_slice(&pkt[0x1C..0x2C]);
+    (ret, rx)
+}
+
+fn log_cmd(desc: &str, ret: i32, rx: &[u8; 16]) {
     let mut f = Fmt::new();
     f.p(desc);
-    f.p(": ret=");
+    f.p(": r=");
     f.h8(ret as u32);
-    f.p(" rx=");
-    for i in 0..6 {
-        f.h2(rx[i]);
-        f.p(" ");
-    }
-    f.p("\n");
-    psp::dprintln!("{}: r={:08X} {:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        desc, ret as u32, rx[0], rx[1], rx[2], rx[3], rx[4], rx[5]);
-    l.w(f.s());
+    f.p(" ");
+    for i in 0..6 { f.h2(rx[i]); f.p(" "); }
+    Logger::log(f.s());
 }
 
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
-    let l = Logger::open();
+    Logger::init();
 
-    ls(&l, "=== USB Host Phase 2e ===");
-    ls(&l, "Targeted Syscon SET");
-    ls(&l, "");
+    Logger::log("=== USB Host Phase 3G ===");
+    Logger::log("CMD 0x45 retry (fixed)");
+    Logger::log("");
+    Logger::log("!! DO NOT REBOOT !!");
+    Logger::log("!! WAIT FOR TIMER !!");
+    Logger::log("");
 
-    // Enable OHCI + port power
+    lr("Tachyon=", hr(0xBC10_0040));
+
+    // Enable OHCI + port power first
     let v50 = hr(0xBC10_0050);
     hw(0xBC10_0050, v50 | 0x2000);
-    unsafe { core::arch::asm!("sync") };
     unsafe { sceKernelDelayThread(10_000) };
     hw(0xBD10_1038, 0x0303);
-    unsafe { core::arch::asm!("sync") };
-    lr(&l, "OHCI +38=", hr(0xBD10_1038));
-    ls(&l, "");
+    unsafe { sceKernelDelayThread(10_000) };
+    lr("OHCI +38=", hr(0xBD10_1038));
 
-    // Read baseline USB status
-    ls(&l, "--- Baseline ---");
-    log_syscon(&l, "GET USB(0C)", 0x0C, &[]);
-    log_syscon(&l, "GET 0E", 0x0E, &[]);
-    log_syscon(&l, "GET pwr(0B)", 0x0B, &[]);
-    ls(&l, "");
+    // Baseline
+    let (r, rx) = syscon_get(0x44);
+    log_cmd("GET 0x44", r, &rx);
+    let (r, rx) = syscon_get(0x46);
+    log_cmd("GET 0x46", r, &rx);
+    Logger::log("");
 
-    ls(&l, "CROSS = SET commands");
+    Logger::log("CROSS = send 0x45 SET");
+    Logger::log("(then WAIT 60s, watch FNB58)");
     wait_cross();
 
-    // ====== SET commands on cmd 0x0E (USB SET) ======
-    // Phase 0b: cmd 0x0E with length=2 (no data) returned 0x4004
-    // Phase 2d: same cmd returned 0x4108 with OHCI enabled
-    // Now try SET with various data values
-    // The SET format: cmd=0x0E, length=3 (cmd+len+data), data=value
-    ls(&l, "--- USB SET (0x0E) ---");
-    let set_values: [u8; 16] = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x08, 0x10,
-        0x20, 0x40, 0x41, 0x42, 0x80, 0xC0, 0xFE, 0xFF,
-    ];
-    for &val in &set_values {
-        let mut desc = [0u8; 16];
-        desc[..7].copy_from_slice(b"SET 0E ");
-        let hex = b"0123456789ABCDEF";
-        desc[7] = hex[(val >> 4) as usize];
-        desc[8] = hex[(val & 0xF) as usize];
-        let desc_str = unsafe { core::str::from_utf8_unchecked(&desc[..9]) };
-        log_syscon(&l, desc_str, 0x0E, &[val]);
-        unsafe { sceKernelDelayThread(50_000) };
-    }
-    // Read back USB status after SETs
-    log_syscon(&l, "GET USB(0C)", 0x0C, &[]);
-    log_syscon(&l, "GET 0E", 0x0E, &[]);
-    ls(&l, "");
+    // ====== THE TEST: cmd 0x45 with correct length=3 ======
+    Logger::log("Sending SET 0x45 v=1...");
+    let (r, rx) = syscon_set(0x45, 1);
+    log_cmd("SET 0x45 v=1", r, &rx);
 
-    // ====== Try SET on other known-good commands ======
-    ls(&l, "--- Other SET cmds ---");
+    // Log state immediately after
+    lr("OHCI +38=", hr(0xBD10_1038));
+    lr("BC10+50=", hr(0xBC10_0050));
+    lr("BC10+40=", hr(0xBC10_0040));
 
-    // Cmd 0x00 (NOP) with data
-    log_syscon(&l, "SET 00 01", 0x00, &[0x01]);
-    // Cmd 0x04 with data
-    log_syscon(&l, "SET 04 01", 0x04, &[0x01]);
-    log_syscon(&l, "SET 04 03", 0x04, &[0x03]);
-    // Cmd 0x05 (power related?)
-    log_syscon(&l, "SET 05 01", 0x05, &[0x01]);
-    log_syscon(&l, "SET 05 FF", 0x05, &[0xFF]);
-    // Cmd 0x0D (ACK cmd from Phase 0b)
-    log_syscon(&l, "SET 0D 01", 0x0D, &[0x01]);
-    // Cmd 0x10 (ACK cmd)
-    log_syscon(&l, "SET 10 01", 0x10, &[0x01]);
-    // Cmd 0x12-0x1F (all ACK'd in scan)
-    log_syscon(&l, "SET 12 01", 0x12, &[0x01]);
-    log_syscon(&l, "SET 13 01", 0x13, &[0x01]);
-    // Cmd 0x20 (worked in scan)
-    log_syscon(&l, "SET 20 01", 0x20, &[0x01]);
-    log_syscon(&l, "SET 20 FF", 0x20, &[0xFF]);
-    // Cmd 0x22 (worked in scan)
-    log_syscon(&l, "SET 22 01", 0x22, &[0x01]);
-    // Cmd 0x31 (worked in scan)
-    log_syscon(&l, "SET 31 01", 0x31, &[0x01]);
-    ls(&l, "");
+    // Now WAIT — the PSP might enter a different mode
+    // Show countdown on screen
+    Logger::log("");
+    Logger::log("WAITING 60s...");
+    Logger::log("Watch FNB58 for VBUS!");
+    Logger::log("");
 
-    // ====== Multi-byte SET on cmd 0x0E ======
-    // Maybe VBUS needs a 2-byte value
-    ls(&l, "--- 0x0E multi-byte ---");
-    log_syscon(&l, "0E 41,08", 0x0E, &[0x41, 0x08]);
-    log_syscon(&l, "0E 41,0C", 0x0E, &[0x41, 0x0C]);
-    log_syscon(&l, "0E 41,48", 0x0E, &[0x41, 0x48]);
-    log_syscon(&l, "0E 43,08", 0x0E, &[0x43, 0x08]);
-    log_syscon(&l, "0E C1,08", 0x0E, &[0xC1, 0x08]);
-    log_syscon(&l, "0E FF,FF", 0x0E, &[0xFF, 0xFF]);
-    ls(&l, "");
+    for sec in 0u32..60 {
+        unsafe { sceKernelDelayThread(1_000_000) };
 
-    // ====== Check GPIO pins we haven't tried ======
-    ls(&l, "--- GPIO scan ---");
-    // Read all GPIO registers
-    lr(&l, "GPIO dir  =", hr(0xBE24_0000));
-    lr(&l, "GPIO out  =", hr(0xBE24_0004));
-    lr(&l, "GPIO in   =", hr(0xBE24_0008));
-    lr(&l, "GPIO intr =", hr(0xBE24_000C));
-    lr(&l, "GPIO +10  =", hr(0xBE24_0010));
-    lr(&l, "GPIO +14  =", hr(0xBE24_0014));
-    lr(&l, "GPIO +18  =", hr(0xBE24_0018));
-    lr(&l, "GPIO +1C  =", hr(0xBE24_001C));
-    lr(&l, "GPIO +20  =", hr(0xBE24_0020));
-    lr(&l, "GPIO +24  =", hr(0xBE24_0024));
-    lr(&l, "GPIO +28  =", hr(0xBE24_0028));
-    lr(&l, "GPIO +40  =", hr(0xBE24_0040));
-    lr(&l, "GPIO +44  =", hr(0xBE24_0044));
-    lr(&l, "GPIO +48  =", hr(0xBE24_0048));
-    ls(&l, "");
-
-    // Try toggling GPIO pins that might control VBUS
-    // GPIO port 2 (bits 16-23) and port 3 (bits 24-31) are common for power
-    ls(&l, "--- GPIO VBUS hunt ---");
-    let gpio_dir = hr(0xBE24_0000);
-    let gpio_out = hr(0xBE24_0004);
-
-    // Try each GPIO bit 0-31 as output high
-    for bit in 0u32..32 {
-        let mask = 1u32 << bit;
-        // Set direction to output
-        hw(0xBE24_0000, gpio_dir | mask);
-        // Set output high
-        hw(0xBE24_0004, gpio_out | mask);
-        unsafe { sceKernelDelayThread(20_000) };
-
-        // Check if something happened (OHCI port status might change)
-        let rhps = hr(0xBD10_1038);
-        if rhps != 0x300 {
+        // Every 10 seconds, log state
+        if sec % 10 == 9 {
             let mut f = Fmt::new();
-            f.p("  GPIO bit ");
-            f.h2(bit as u8);
-            f.p(": OHCI changed! +38=");
-            f.h8(rhps);
-            f.p("\n");
-            l.w(f.s());
-            psp::dprintln!("  GPIO bit {}: OHCI={:08X}", bit, rhps);
+            f.p("t=");
+            if sec + 1 >= 10 {
+                f.buf[f.pos] = b'0' + ((sec + 1) / 10) as u8;
+                f.pos += 1;
+            }
+            f.buf[f.pos] = b'0' + ((sec + 1) % 10) as u8;
+            f.pos += 1;
+            f.p("s +38=");
+            f.h8(hr(0xBD10_1038));
+            f.p(" +50=");
+            f.h8(hr(0xBC10_0050));
+            Logger::log(f.s());
         }
 
-        // Restore
-        hw(0xBE24_0004, gpio_out);
-        hw(0xBE24_0000, gpio_dir);
+        // Check for triangle to skip wait
+        let mut p = SceCtrlData::default();
+        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
+        if p.buttons.intersects(CtrlButtons::TRIANGLE) {
+            Logger::log("(skipped by user)");
+            break;
+        }
     }
-    ls(&l, "GPIO scan done");
-    ls(&l, "");
 
-    // Final state
-    ls(&l, "--- Final ---");
-    log_syscon(&l, "GET USB(0C)", 0x0C, &[]);
-    log_syscon(&l, "GET 0E", 0x0E, &[]);
-    lr(&l, "OHCI +38=", hr(0xBD10_1038));
-    lr(&l, "GPIO dir=", hr(0xBE24_0000));
-    lr(&l, "GPIO out=", hr(0xBE24_0004));
+    // Also try cmd 0x47 after 0x45, in case 0x45 is "prepare" and 0x47 is "activate"
+    Logger::log("");
+    Logger::log("Now trying 0x47 after 0x45:");
+    // Re-enable OHCI
+    hw(0xBC10_0050, hr(0xBC10_0050) | 0x2000);
+    unsafe { sceKernelDelayThread(10_000) };
+    hw(0xBD10_1038, 0x0303);
+    unsafe { sceKernelDelayThread(10_000) };
 
-    ls(&l, "");
-    ls(&l, "CROSS = exit");
-    l.w("=== END ===\n");
+    let (r, rx) = syscon_set(0x47, 1);
+    log_cmd("SET 0x47 v=1", r, &rx);
+    unsafe { sceKernelDelayThread(500_000) };
+    lr("OHCI +38=", hr(0xBD10_1038));
+
+    // Try the sequence: 0x45 then 0x47 quickly
+    Logger::log("");
+    Logger::log("Sequence: 0x45 then 0x47:");
+    hw(0xBC10_0050, hr(0xBC10_0050) | 0x2000);
+    unsafe { sceKernelDelayThread(10_000) };
+    hw(0xBD10_1038, 0x0303);
+    unsafe { sceKernelDelayThread(10_000) };
+
+    let (r1, rx1) = syscon_set(0x45, 1);
+    log_cmd("SET 0x45 v=1", r1, &rx1);
+    unsafe { sceKernelDelayThread(50_000) };
+    let (r2, rx2) = syscon_set(0x47, 1);
+    log_cmd("SET 0x47 v=1", r2, &rx2);
+    unsafe { sceKernelDelayThread(500_000) };
+    lr("OHCI +38=", hr(0xBD10_1038));
+    lr("BC10+50=", hr(0xBC10_0050));
+
+    // Wait another 30 seconds
+    Logger::log("");
+    Logger::log("WAITING 30s more...");
+    for sec in 0u32..30 {
+        unsafe { sceKernelDelayThread(1_000_000) };
+        if sec % 10 == 9 {
+            let mut f = Fmt::new();
+            f.p("t=");
+            f.buf[f.pos] = b'0' + ((sec + 1) / 10) as u8;
+            f.pos += 1;
+            f.buf[f.pos] = b'0' + ((sec + 1) % 10) as u8;
+            f.pos += 1;
+            f.p("s +38=");
+            f.h8(hr(0xBD10_1038));
+            Logger::log(f.s());
+        }
+        let mut p = SceCtrlData::default();
+        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
+        if p.buttons.intersects(CtrlButtons::TRIANGLE) {
+            Logger::log("(skipped)");
+            break;
+        }
+    }
+
+    Logger::log("");
+    Logger::log("--- Final ---");
+    lr("OHCI +38=", hr(0xBD10_1038));
+    lr("BC10+50=", hr(0xBC10_0050));
+    lr("BC10+40=", hr(0xBC10_0040));
+    let (r, rx) = syscon_get(0x46);
+    log_cmd("GET 0x46", r, &rx);
+
+    Logger::log("");
+    Logger::log("CROSS = exit");
     wait_cross();
     unsafe { sceKernelDelayThread(1_000_000) };
 }
