@@ -311,7 +311,7 @@ impl BrowserWidget {
                     let target = self.focused_node.or(self.body_node_id);
                     if let Some(nid) = target {
                         Self::dispatch_js_key_event(engine, nid, *ch);
-                        Self::dispatch_js_event(engine, nid, "keyup");
+                        Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
                         Self::dispatch_js_event(engine, nid, "input");
                     }
                 }
@@ -766,6 +766,16 @@ impl BrowserWidget {
     /// Dispatch a keydown event to JS with key info as detail object.
     #[cfg(feature = "javascript")]
     fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
+        Self::dispatch_js_key_event_typed(engine, node_id, key, "keydown");
+    }
+
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_key_event_typed(
+        engine: &oasis_js::JsEngine,
+        node_id: NodeId,
+        key: char,
+        event_type: &str,
+    ) {
         // Escape characters that break JS single-quoted string literals.
         let escaped: String = match key {
             '\\' => "\\\\".into(),
@@ -776,7 +786,7 @@ impl BrowserWidget {
         };
         let code = format!(
             "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'keydown',{{key:'{}',code:'{}'}})",
+             __oasis_dispatch_with_bubbling({},'{event_type}',{{key:'{}',code:'{}'}})",
             node_id, escaped, escaped
         );
         let _ = engine.eval(&code);
@@ -1136,9 +1146,12 @@ impl BrowserWidget {
     fn find_scroll_ancestor(layout_box: &LayoutBox, target_nid: NodeId) -> Option<NodeId> {
         use crate::css::values::Overflow;
 
-        // Check if this box contains the target node.
+        // Check if this box IS the target node.
         if layout_box.node == Some(target_nid) {
-            // Found the target — no scroll ancestor from here.
+            // The target itself may be a scroll container.
+            if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
+                return layout_box.node;
+            }
             return None;
         }
 

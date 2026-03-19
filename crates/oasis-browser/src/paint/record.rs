@@ -147,10 +147,20 @@ fn record_box(
         });
     }
 
-    // Screen-space culling.
-    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y + sticky_dy as f32;
+    // Compute transform translation early so culling accounts for it.
+    let (tx_off_x, tx_off_y) = super::compute_transform_offsets(
+        &layout_box.style.transforms,
+        &layout_box.dimensions.content,
+        offset_x,
+        offset_y,
+    );
+
+    // Screen-space culling (includes CSS transform translation).
+    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y
+        + sticky_dy as f32
+        + (tx_off_y - offset_y) as f32;
     let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
-    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x;
+    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x + (tx_off_x - offset_x) as f32;
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
     if box_bottom < 0.0 || screen_y > ctx.viewport_height {
@@ -276,13 +286,8 @@ fn record_box(
         }
     }
 
-    // Transform offsets.
-    let (tx_offset_x, tx_offset_y) = super::compute_transform_offsets(
-        &layout_box.style.transforms,
-        &layout_box.dimensions.content,
-        offset_x,
-        offset_y,
-    );
+    // Reuse transform offsets computed earlier (before culling).
+    let (tx_offset_x, tx_offset_y) = (tx_off_x, tx_off_y);
 
     // Children / inline / replaced / markers.
     match &layout_box.box_type {

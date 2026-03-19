@@ -513,40 +513,56 @@ impl DisplayList {
 
         const SCAN_WINDOW: usize = 32;
         let mut clip_depth: usize = 0;
+        let mut sticky_depth: usize = 0;
         let mut clip_depths: Vec<usize> = Vec::with_capacity(self.items.len());
+        let mut sticky_depths: Vec<usize> = Vec::with_capacity(self.items.len());
         let mut in_translucent: Vec<bool> = Vec::with_capacity(self.items.len());
 
-        // First pass: compute clip depth and translucent-layer flag for each item.
+        // First pass: compute clip/sticky depth and translucent-layer flag.
         let mut translucent_layer_depth: usize = 0;
         for item in &self.items {
             match item {
                 DisplayItem::PushClip { .. } => {
                     clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                     clip_depth += 1;
                 },
                 DisplayItem::PopClip => {
                     clip_depth = clip_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 DisplayItem::PushLayer { opacity } => {
                     clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
                     if *opacity < 1.0 {
                         translucent_layer_depth += 1;
                     }
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 DisplayItem::PopLayer => {
-                    // Check if the matching PushLayer was translucent.
-                    // Conservative: decrement if we are currently in a translucent
-                    // layer.
                     translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
+                },
+                DisplayItem::PushSticky { .. } => {
+                    clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
+                    sticky_depth += 1;
+                },
+                DisplayItem::PopSticky => {
+                    sticky_depth = sticky_depth.saturating_sub(1);
+                    clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 _ => {
                     clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
             }
@@ -567,11 +583,12 @@ impl DisplayList {
                 _ => continue,
             };
 
-            let my_depth = clip_depths[i];
+            let my_clip = clip_depths[i];
+            let my_sticky = sticky_depths[i];
             let start = i.saturating_sub(SCAN_WINDOW);
 
             for j in start..i {
-                if remove[j] || clip_depths[j] != my_depth {
+                if remove[j] || clip_depths[j] != my_clip || sticky_depths[j] != my_sticky {
                     continue;
                 }
 
