@@ -358,10 +358,34 @@ pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
     }
 }
 
-/// Blocking recv: queue a recv without callback, poll until data arrives.
+/// Blocking recv: queue a recv, poll until data arrives.
+/// Re-queues automatically if cancelled (e.g. by host claim_interface).
 /// Used for the initial handshake before enabling callback-driven mode.
 /// Returns true if data was received, false on timeout.
 pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
+    unsafe {
+        core::ptr::write_volatile(&raw mut HANDSHAKE_DONE, false);
+        core::ptr::write_volatile(&raw mut HANDSHAKE_CANCELLED, false);
+
+        queue_blocking_recv(ep2);
+
+        // Poll for completion (up to 30 seconds)
+        for _ in 0..300 {
+            psp::sys::sceKernelDelayThread(100_000); // 100ms
+            if core::ptr::read_volatile(&raw const HANDSHAKE_DONE) {
+                return true;
+            }
+            // Re-queue if cancelled (host claim_interface resets endpoints)
+            if core::ptr::read_volatile(&raw const HANDSHAKE_CANCELLED) {
+                core::ptr::write_volatile(&raw mut HANDSHAKE_CANCELLED, false);
+                queue_blocking_recv(ep2);
+            }
+        }
+        false
+    }
+}
+
+unsafe fn queue_blocking_recv(ep2: *mut UsbEndpoint) {
     unsafe {
         let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
         invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
@@ -373,19 +397,7 @@ pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
         RECV_REQ.0.func = Some(blocking_recv_complete);
 
         flush_dcache();
-        let r = usbd::req_recv(&raw mut RECV_REQ.0);
-        if r != 0 {
-            return false;
-        }
-
-        // Poll for completion (up to 30 seconds)
-        for _ in 0..300 {
-            psp::sys::sceKernelDelayThread(100_000); // 100ms
-            if core::ptr::read_volatile(&raw const HANDSHAKE_DONE) {
-                return true;
-            }
-        }
-        false
+        usbd::req_recv(&raw mut RECV_REQ.0);
     }
 }
 
@@ -402,6 +414,7 @@ pub fn process_and_respond() {
 }
 
 static mut HANDSHAKE_DONE: bool = false;
+static mut HANDSHAKE_CANCELLED: bool = false;
 
 unsafe extern "C" fn blocking_recv_complete(
     req: *mut UsbdDeviceReq,
@@ -415,6 +428,9 @@ unsafe extern "C" fn blocking_recv_complete(
         core::ptr::write_volatile(&raw mut LAST_RECV_STATUS, status);
         if size > 0 && status == 0 {
             core::ptr::write_volatile(&raw mut HANDSHAKE_DONE, true);
+        } else {
+            // Cancelled (e.g. by host claim_interface) — signal re-queue
+            core::ptr::write_volatile(&raw mut HANDSHAKE_CANCELLED, true);
         }
     }
     0
