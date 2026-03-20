@@ -370,11 +370,25 @@ fn psp_main() {
                 unsafe { sceKernelDelayThread(100_000) };
             }
 
-            // Step 3: Enable thin-client mode and queue first recv
-            transfer::enable_thin_client_mode();
+            // Step 3: Dump EP2 descriptor state before recv
+            log_str("EP2 descriptor state (pre-recv):");
+            usbd::dump_ep_descriptor_state(2);
+
+            // Step 4: Clear EP2 FIFO (with corrected NID — was calling Stall before!)
             let ep2 = unsafe { driver::get_endpoint(2) };
+            let r = unsafe { usbd::clear_fifo(ep2) };
+            log_hex("clear_fifo EP2=", r as u32);
+
+            log_str("EP2 descriptor state (post-clear):");
+            usbd::dump_ep_descriptor_state(2);
+
+            // Step 5: Enable thin-client mode and queue first recv
+            transfer::enable_thin_client_mode();
             let r = unsafe { transfer::start_recv(ep2) };
             log_hex("thin-client recv=", r as u32);
+
+            log_str("EP2 descriptor state (post-recv):");
+            usbd::dump_ep_descriptor_state(2);
             log_str("Thin-client mode ON");
 
             attach_done = true;

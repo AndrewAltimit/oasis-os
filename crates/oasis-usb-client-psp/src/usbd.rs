@@ -9,16 +9,17 @@ use crate::driver::{UsbDriver, UsbEndpoint, UsbdDeviceReq};
 // NID constants (from PSPSDK pspusbbus.h / USBHostFS source)
 // ---------------------------------------------------------------------------
 
-// NIDs verified from PSP-3001 6.61 ARK-4 kernel memory dump
-// (NID table at 0x88190324, library "sceUsbBus_driver")
-const NID_USBBD_REGISTER: u32 = 0xB1644BE7;    // was 0xB1644BE4 in old PSPSDK
+// NIDs from PSPSDK pspusbbus.h (sceUsbBus_driver library)
+// Verified against kernel NID table at 0x88190324 in PSP-3001 6.61 dump
+const NID_USBBD_REGISTER: u32 = 0xB1644BE7;
 const NID_USBBD_UNREGISTER: u32 = 0xC1E2A540;
-const NID_USBBD_REQ_SEND: u32 = 0x913EC15D;
-const NID_USBBD_REQ_RECV: u32 = 0x7B87815D;    // was 0x7C765D1A in old PSPSDK
+const NID_USBBD_REQ_SEND: u32 = 0x23E51D8F;     // 0x88189128
+const NID_USBBD_REQ_RECV: u32 = 0x913EC15D;     // 0x88189244
+const NID_USBBD_REQ_CANCEL: u32 = 0xCC57EC9D;   // cancel single request
 const NID_USBBD_REQ_CANCEL_ALL: u32 = 0xC5E53685;
-const NID_USBBD_CLEAR_FIFO: u32 = 0xE65441C1;
+const NID_USBBD_CLEAR_FIFO: u32 = 0x951A24CC;   // was swapped with Stall
 #[allow(dead_code)]
-const NID_USBBD_STALL: u32 = 0x951A24CC;       // from NID table index 6
+const NID_USBBD_STALL: u32 = 0xE65441C1;        // was swapped with ClearFIFO
 
 // Module/library pairs to search
 const USB_MODULES: &[(&[u8], &[u8])] = &[
@@ -104,12 +105,10 @@ unsafe fn try_direct_addresses() -> bool {
     unsafe {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));
-        // SWAPPED from NID table: disassembly shows 0x88189128 and 0x88189244 are
-        // nearly identical (same code, one branch offset difference for direction).
-        // Testing confirms 0x88189128 works as send (PSP READY on EP1).
-        // NID 0x7B87815D ("ReqRecv") → 0x8818F884 is just a flag-clear stub,
-        // NOT a bulk transfer function.
-        // Achieved 105 FPS / 28 MB/s with this mapping on first test session.
+        // Confirmed by PSPSDK NIDs + Ghidra disassembly:
+        // 0x88189128 = ReqSend (NID 0x23E51D8F): stores direction=1 (OUT), calls TX finalize
+        // 0x88189244 = ReqRecv (NID 0x913EC15D): stores direction=2 (IN), calls RX finalize
+        // Achieved 105 FPS / 28 MB/s with this mapping.
         core::ptr::write_volatile(&raw mut REQ_SEND_FN, Some(core::mem::transmute(0x88189128u32)));
         core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x88189244u32)));
         core::ptr::write_volatile(&raw mut CANCEL_ALL_FN, Some(core::mem::transmute(0x88189E94u32)));
@@ -247,6 +246,47 @@ pub unsafe fn clear_fifo(endp: *mut UsbEndpoint) -> i32 {
         } else {
             -1
         }
+    }
+}
+
+/// Dump endpoint descriptor state for recv debugging.
+/// The recv finalize at 0x8818B128 checks descriptor flags that can
+/// prevent RX hardware from being enabled even when req_recv returns 0.
+pub fn dump_ep_descriptor_state(ep_index: u32) {
+    unsafe {
+        // Descriptor table at 0x88190850, 36 bytes per entry
+        let desc_base = (0x88190850u32 + ep_index * 36) as *const u8;
+        crate::log_hex("ep_desc_base=", desc_base as u32);
+
+        // Flags byte at offset 0 of descriptor
+        let flags = core::ptr::read_volatile(desc_base as *const u32);
+        crate::log_hex("  desc_flags=", flags);
+
+        // field4 at offset 4 (checked by recv finalize 0x8818B730)
+        let field4 = core::ptr::read_volatile(desc_base.add(4) as *const u32);
+        crate::log_hex("  desc_field4=", field4);
+
+        // Counter halfwords at desc+0x21E and desc+0x220
+        // Both must be zero for recv hardware enable
+        // These are relative to the descriptor BASE structure, not the 36-byte entry
+        // The desc entries are small but reference a larger structure
+        // Let's dump more of the descriptor area
+        for i in 0..9 {
+            let val = core::ptr::read_volatile(desc_base.add(i * 4) as *const u32);
+            crate::log_hex("  desc+", (i * 4) as u32);
+            crate::log_hex("    =", val);
+        }
+
+        // Also dump the USB driver state at 0x88190600
+        let state_base = 0x88190600u32 as *const u8;
+        let driver_state = core::ptr::read_volatile(state_base.add(0xE8) as *const u32);
+        let sub_state = core::ptr::read_volatile(state_base.add(0xEC) as *const u32);
+        let phase = core::ptr::read_volatile(state_base.add(0xF0) as *const u32);
+        let blocked = core::ptr::read_volatile(state_base.add(0xE4) as *const u32);
+        crate::log_hex("  drv_state[E8]=", driver_state);
+        crate::log_hex("  drv_sub[EC]=", sub_state);
+        crate::log_hex("  drv_phase[F0]=", phase);
+        crate::log_hex("  drv_blocked[E4]=", blocked);
     }
 }
 

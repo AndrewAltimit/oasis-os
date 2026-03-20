@@ -279,9 +279,13 @@ unsafe extern "C" fn send_complete(
         if core::ptr::read_volatile(&raw const ECHO_MODE)
             || core::ptr::read_volatile(&raw const THIN_CLIENT_MODE)
         {
+            // Invalidate recv buffer cache before re-queuing (USBHostFS pattern)
+            let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
+            invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
+
             core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
             RECV_REQ.0.endp = core::ptr::read_volatile(&raw const EP2_PTR);
-            RECV_REQ.0.data = (&raw mut RECV_BUF.0) as *mut u8;
+            RECV_REQ.0.data = buf_ptr;
             RECV_REQ.0.size = RECV_BUF_SIZE as i32;
             RECV_REQ.0.func = Some(recv_complete);
 
@@ -301,6 +305,19 @@ unsafe fn flush_dcache() {
         fn sceKernelDcacheWritebackInvalidateAll();
     }
     unsafe { sceKernelDcacheWritebackInvalidateAll() };
+}
+
+/// Invalidate dcache for a recv buffer (like USBHostFS does before recv).
+/// This ensures the CPU reads DMA-written data, not stale cache.
+unsafe fn invalidate_dcache_range(ptr: *const u8, size: usize) {
+    unsafe extern "C" {
+        fn sceKernelDcacheInvalidateRange(p: *const u8, size: u32) -> i32;
+    }
+    // Align to 64-byte boundary
+    let addr = ptr as u32;
+    let block = addr & !63;
+    let top = (addr + size as u32 + 63) & !63;
+    unsafe { sceKernelDcacheInvalidateRange(block as *const u8, top - block) };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,12 +359,17 @@ pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
 }
 
 /// Start an async receive on EP2 (bulk OUT, host→PSP).
+/// Matches USBHostFS pattern: invalidate recv buffer cache, then queue.
 pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
     unsafe {
+        // Invalidate recv buffer cache (USBHostFS pattern — DMA will write here)
+        let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
+        invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
+
         core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
 
         RECV_REQ.0.endp = ep2;
-        RECV_REQ.0.data = (&raw mut RECV_BUF.0) as *mut u8;
+        RECV_REQ.0.data = buf_ptr;
         RECV_REQ.0.size = RECV_BUF_SIZE as i32;
         RECV_REQ.0.func = Some(recv_complete);
 
