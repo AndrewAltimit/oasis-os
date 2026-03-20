@@ -62,22 +62,24 @@ static mut SEND_STATUS: i32 = 0;
 // Completion callbacks (called from USB interrupt context)
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" fn recv_complete(req: *mut UsbdDeviceReq, _arg1: i32, _arg2: i32) -> i32 {
+unsafe extern "C" fn recv_complete(req: *mut UsbdDeviceReq, arg1: i32, arg2: i32) -> i32 {
     unsafe {
         let r = &*req;
         core::ptr::write_volatile(&raw mut RECV_SIZE, r.recvsize);
         core::ptr::write_volatile(&raw mut RECV_STATUS, r.retcode);
         core::ptr::write_volatile(&raw mut RECV_DONE, true);
     }
+    psp::dprintln!("[USB] recv_complete a1={} a2={}", arg1, arg2);
     0
 }
 
-unsafe extern "C" fn send_complete(req: *mut UsbdDeviceReq, _arg1: i32, _arg2: i32) -> i32 {
+unsafe extern "C" fn send_complete(req: *mut UsbdDeviceReq, arg1: i32, arg2: i32) -> i32 {
     unsafe {
         let r = &*req;
         core::ptr::write_volatile(&raw mut SEND_STATUS, r.retcode);
         core::ptr::write_volatile(&raw mut SEND_DONE, true);
     }
+    psp::dprintln!("[USB] send_complete a1={} a2={}", arg1, arg2);
     0
 }
 

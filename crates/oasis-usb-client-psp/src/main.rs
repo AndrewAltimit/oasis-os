@@ -158,105 +158,84 @@ fn psp_main() {
     log_str("");
     log_str("USB device active.");
     log_str("Connect to host!");
+    log_str("Monitoring callbacks...");
 
-    // Main loop: wait for connection, then run echo protocol
+    // Simple monitor loop — just log state changes and wait for callbacks
+    let mut last_state: i32 = 0;
+    let mut last_attached = false;
+    let mut tick: u32 = 0;
+
     loop {
-        let state = unsafe { sceUsbGetState() };
-        let bits = state.bits();
+        let state = unsafe { sceUsbGetState() }.bits();
+        let attached = driver::is_attached();
 
-        if bits & 0x002 != 0 {
-            // ESTABLISHED - host has selected our configuration
-            log_str("CONNECTED!");
-            log_hex("state=", bits as u32);
+        // Log state changes
+        if state != last_state {
+            log_hex("state=", state as u32);
+            last_state = state;
+        }
+        if attached != last_attached {
+            if attached {
+                log_str(">> ATTACHED flag set");
+            } else {
+                log_str(">> ATTACHED flag cleared");
+            }
+            last_attached = attached;
+        }
 
-            // Run the echo loop
-            echo_loop();
+        tick += 1;
 
-            log_str("Disconnected, waiting...");
+        // At 3 seconds + attached: start recv on EP2 (so host can write)
+        if tick == 30 && attached {
+            log_str("Starting recv on EP2...");
+            let ep2 = unsafe { driver::get_endpoint(2) };
+            let r = unsafe { transfer::start_recv(ep2) };
+            log_hex("recv ret=", r as u32);
+        }
+
+        // At 4 seconds: queue a 512-byte send on EP1
+        if tick == 40 && attached {
+            log_str("Sending 512b on EP1...");
+            let ep1 = unsafe { driver::get_endpoint(1) };
+            // Pad to full 512-byte packet
+            let mut buf = [0u8; 512];
+            buf[..9].copy_from_slice(b"PSP READY");
+            let r = unsafe { transfer::start_send(ep1, &buf) };
+            log_hex("send ret=", r as u32);
+        }
+
+        // At 8 seconds: check both
+        if tick == 80 {
+            let (sdone, sstatus) = transfer::send_poll();
+            let (rdone, rsize, rstatus) = transfer::recv_poll();
+            if sdone {
+                log_hex("SEND OK status=", sstatus as u32);
+            } else {
+                log_str("send still pending");
+            }
+            if rdone {
+                log_hex("RECV OK size=", rsize as u32);
+                log_hex("RECV status=", rstatus as u32);
+            } else {
+                log_str("recv still pending");
+            }
+        }
+
+        // Every 5 seconds, log a heartbeat
+        if tick % 50 == 0 {
+            log_hex("tick state=", state as u32);
         }
 
         unsafe { sceKernelDelayThread(100_000) };
-    }
-}
 
-/// Echo loop: receive data from host, echo it back + send controller state.
-/// This is the simplest bidirectional test — proves bulk transfers work.
-fn echo_loop() {
-    // EP1 = bulk IN (index 1), EP2 = bulk OUT (index 2)
-    let ep1 = unsafe { driver::get_endpoint(1) };
-    let ep2 = unsafe { driver::get_endpoint(2) };
-
-    log_str("Waiting 3s for host...");
-    unsafe { sceKernelDelayThread(3_000_000) };
-
-    if unsafe { sceUsbGetState() }.bits() & 0x002 == 0 {
-        log_str("Lost connection");
-        return;
-    }
-
-    // Continuously send "PING" every second so host can read
-    // This tests the IN (PSP→host) direction
-    log_str("Sending PINGs on EP1...");
-    let mut ping_count: u32 = 0;
-
-    loop {
-        // Check USB still connected
-        if unsafe { sceUsbGetState() }.bits() & 0x002 == 0 {
-            return;
-        }
-
-        // Build ping message
-        let mut msg = [0u8; 32];
-        msg[..5].copy_from_slice(b"PING ");
-        // Add counter as ASCII digits
-        let hex = b"0123456789ABCDEF";
-        for i in 0..8 {
-            msg[5 + i] = hex[((ping_count >> (28 - i * 4)) & 0xF) as usize];
-        }
-        msg[13] = b'\n';
-
-        // Send on EP1
-        let r = unsafe { transfer::start_send(ep1, &msg[..14]) };
-        if r == 0 {
-            // Wait for completion (5 second timeout)
-            let mut completed = false;
-            for _ in 0..50000 {
-                let (done, status) = transfer::send_poll();
-                if done {
-                    if ping_count < 3 {
-                        log_hex("ping sent status=", status as u32);
-                    }
-                    completed = true;
-                    break;
-                }
-                unsafe { sceKernelDelayThread(100) };
-            }
-            if !completed && ping_count < 3 {
-                log_str("ping send timeout");
-            }
-            ping_count += 1;
-        } else if ping_count < 3 {
-            log_hex("ping start fail=", r as u32);
-        }
-
-        // Also try to receive on EP2 (non-blocking check)
-        if ping_count == 1 {
-            log_str("Also starting recv...");
-            let r = unsafe { transfer::start_recv(ep2) };
-            log_hex("recv start=", r as u32);
-        }
-        let (rdone, rsize, rstatus) = transfer::recv_poll();
-        if rdone && rsize > 0 && rstatus == 0 {
-            log_hex("GOT DATA! bytes=", rsize as u32);
-        }
-
-        unsafe { sceKernelDelayThread(1_000_000) }; // 1 second between pings
-
+        // Home to exit
         let mut pad = SceCtrlData::default();
         unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
         if pad.buttons.intersects(CtrlButtons::HOME) {
-            log_str("Home pressed, exiting");
-            return;
+            log_str("Exiting");
+            break;
         }
     }
 }
+
+// Transfer code removed for diagnostic build — just monitoring callbacks
