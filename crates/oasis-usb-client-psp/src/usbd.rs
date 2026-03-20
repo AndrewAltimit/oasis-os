@@ -36,13 +36,16 @@ type UnregisterFn = unsafe extern "C" fn(*mut UsbDriver) -> i32;
 type ReqSendFn = unsafe extern "C" fn(*mut UsbdDeviceReq) -> i32;
 type ReqRecvFn = unsafe extern "C" fn(*mut UsbdDeviceReq) -> i32;
 type CancelAllFn = unsafe extern "C" fn(*mut UsbEndpoint) -> i32;
+type ClearFifoFn = unsafe extern "C" fn(*mut UsbEndpoint) -> i32;
+type StallFn = unsafe extern "C" fn(*mut UsbEndpoint) -> i32;
 
 static mut REGISTER_FN: Option<RegisterFn> = None;
 static mut UNREGISTER_FN: Option<UnregisterFn> = None;
 static mut REQ_SEND_FN: Option<ReqSendFn> = None;
 static mut REQ_RECV_FN: Option<ReqRecvFn> = None;
-#[allow(dead_code)]
 static mut CANCEL_ALL_FN: Option<CancelAllFn> = None;
+static mut CLEAR_FIFO_FN: Option<ClearFifoFn> = None;
+static mut STALL_FN: Option<StallFn> = None;
 
 // ---------------------------------------------------------------------------
 // NID resolution
@@ -70,9 +73,10 @@ unsafe fn resolve_nid(nid: u32) -> Option<*mut u8> {
 /// Try resolving via direct addresses from kernel memory dump (PSP-3001 6.61)
 /// Falls back to NID resolution if direct addresses fail sanity check.
 unsafe fn try_direct_addresses() -> bool {
-    use psp::hw::hw_read32;
     // Only use direct addresses on PSP-3001 (Tachyon >= 0x00500000)
-    let tachyon = unsafe { hw_read32(0xBC10_0040) } & 0xFF00_0000;
+    let tachyon = unsafe {
+        core::ptr::read_volatile(0xBC10_0040u32 as *const u32)
+    } & 0xFF00_0000;
     if tachyon < 0x0050_0000 {
         return false;
     }
@@ -81,12 +85,17 @@ unsafe fn try_direct_addresses() -> bool {
     // NID 0xB1644BE7 (Register)    -> 0x8818F024
     // NID 0xC1E2A540 (Unregister)  -> 0x8818F164
     // NID 0x913EC15D (ReqSend)     -> 0x88189244
-    // NID 0x7B87815D (ReqRecv)     -> 0x88189128 (NOT 0x8818F884 which is a tiny accessor)
+    // NID 0x7B87815D (ReqRecv)     -> 0x88189128
     // NID 0xC5E53685 (CancelAll)   -> 0x88189E94
+    //
+    // NOTE: Trying SWAPPED Send/Recv — retcode values (1,2) were swapped
+    // relative to endpoint numbers, suggesting the NID mapping may be wrong.
 
     // Sanity check: read first instruction at Register address
     // Should be 0x27BDFFE0 (addiu $sp, $sp, -32)
-    let first_insn = unsafe { hw_read32(0x8818F024) };
+    let first_insn = unsafe {
+        core::ptr::read_volatile(0x8818F024u32 as *const u32)
+    };
     if first_insn != 0x27BDFFE0 {
         psp::dprintln!("Direct addr check fail: {:08X}", first_insn);
         return false;
@@ -95,10 +104,32 @@ unsafe fn try_direct_addresses() -> bool {
     unsafe {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));
-        core::ptr::write_volatile(&raw mut REQ_SEND_FN, Some(core::mem::transmute(0x88189244u32)));
-        core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x88189128u32)));
+        // SWAPPED: try 0x88189128 as Send and 0x88189244 as Recv
+        core::ptr::write_volatile(&raw mut REQ_SEND_FN, Some(core::mem::transmute(0x88189128u32)));
+        core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x88189244u32)));
         core::ptr::write_volatile(&raw mut CANCEL_ALL_FN, Some(core::mem::transmute(0x88189E94u32)));
     }
+
+    // Resolve ClearFIFO and Stall via NID (not in direct address table)
+    if let Some(p) = unsafe { resolve_nid(NID_USBBD_CLEAR_FIFO) } {
+        unsafe {
+            core::ptr::write_volatile(
+                &raw mut CLEAR_FIFO_FN,
+                Some(core::mem::transmute(p as u32)),
+            );
+        }
+        psp::dprintln!("  ClearFIFO = {:08X}", p as u32);
+    }
+    if let Some(p) = unsafe { resolve_nid(NID_USBBD_STALL) } {
+        unsafe {
+            core::ptr::write_volatile(
+                &raw mut STALL_FN,
+                Some(core::mem::transmute(p as u32)),
+            );
+        }
+        psp::dprintln!("  Stall = {:08X}", p as u32);
+    }
+
     psp::dprintln!("Using direct addresses");
     true
 }
@@ -118,14 +149,18 @@ pub unsafe fn resolve_all() -> bool {
             (NID_USBBD_REQ_SEND, "ReqSend"),
             (NID_USBBD_REQ_RECV, "ReqRecv"),
             (NID_USBBD_REQ_CANCEL_ALL, "CancelAll"),
+            (NID_USBBD_CLEAR_FIFO, "ClearFIFO"),
+            (NID_USBBD_STALL, "Stall"),
         ];
 
-        let ptrs: [*mut Option<*mut u8>; 5] = [
+        let ptrs: [*mut Option<*mut u8>; 7] = [
             (&raw mut REGISTER_FN) as *mut Option<*mut u8>,
             (&raw mut UNREGISTER_FN) as *mut Option<*mut u8>,
             (&raw mut REQ_SEND_FN) as *mut Option<*mut u8>,
             (&raw mut REQ_RECV_FN) as *mut Option<*mut u8>,
             (&raw mut CANCEL_ALL_FN) as *mut Option<*mut u8>,
+            (&raw mut CLEAR_FIFO_FN) as *mut Option<*mut u8>,
+            (&raw mut STALL_FN) as *mut Option<*mut u8>,
         ];
 
         for (i, &(nid, name)) in nids.iter().enumerate() {
@@ -184,6 +219,36 @@ pub unsafe fn req_recv(req: *mut UsbdDeviceReq) -> i32 {
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const REQ_RECV_FN) {
             f(req)
+        } else {
+            -1
+        }
+    }
+}
+
+pub unsafe fn cancel_all(endp: *mut UsbEndpoint) -> i32 {
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const CANCEL_ALL_FN) {
+            f(endp)
+        } else {
+            -1
+        }
+    }
+}
+
+pub unsafe fn clear_fifo(endp: *mut UsbEndpoint) -> i32 {
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const CLEAR_FIFO_FN) {
+            f(endp)
+        } else {
+            -1
+        }
+    }
+}
+
+pub unsafe fn stall(endp: *mut UsbEndpoint) -> i32 {
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const STALL_FN) {
+            f(endp)
         } else {
             -1
         }

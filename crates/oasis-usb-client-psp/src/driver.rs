@@ -95,12 +95,12 @@ pub static mut DRIVER_STATIC: UsbDriver = UsbDriver {
     name: DRIVER_NAME.as_ptr(),
     endpoints: 4,
     endp: unsafe { &raw mut ENDPOINTS[0] },
-    intp: unsafe { &raw mut INTERFACE },
+    intp: &raw mut INTERFACE,
     devp_hi: core::ptr::null_mut(),  // filled by start_func
     confp_hi: core::ptr::null_mut(),
     devp: core::ptr::null_mut(),
     confp: core::ptr::null_mut(),
-    str_desc: unsafe { (&raw mut STRING_DESC) as *mut StringDescriptor },
+    str_desc: (&raw mut STRING_DESC) as *mut StringDescriptor,
     recvctl: Some(usb_recvctl),
     func28: Some(usb_func28),
     attach: Some(usb_attach),
@@ -117,7 +117,7 @@ static mut ATTACHED: bool = false;
 // Driver callbacks
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" fn usb_recvctl(arg1: i32, arg2: i32, req: *mut u8) -> i32 {
+unsafe extern "C" fn usb_recvctl(arg1: i32, _arg2: i32, req: *mut u8) -> i32 {
     if !req.is_null() {
         let bm = unsafe { *req };
         let breq = unsafe { *req.add(1) };
@@ -126,24 +126,30 @@ unsafe extern "C" fn usb_recvctl(arg1: i32, arg2: i32, req: *mut u8) -> i32 {
     -1 // let bus driver handle
 }
 
-unsafe extern "C" fn usb_func28(arg1: i32, arg2: i32, arg3: i32) -> i32 {
-    crate::log_str("[CB] func28");
-    crate::log_hex("[CB] f28 arg1=", arg1 as u32);
-    crate::log_hex("[CB] f28 arg2=", arg2 as u32);
-    crate::log_hex("[CB] f28 arg3=", arg3 as u32);
+unsafe extern "C" fn usb_func28(arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
+    // NOTE: interrupt context — NO file I/O (log_str/log_hex), only dprintln
+    psp::dprintln!("[CB] func28 a1={:08X}", arg1);
     0
 }
+
+/// Stores the speed reported by the attach callback.
+/// 2 = hi-speed (480 Mbps), 1 = full-speed (12 Mbps).
+static mut ATTACH_SPEED: i32 = 0;
 
 unsafe extern "C" fn usb_attach(speed: i32, _arg2: *mut u8, _arg3: *mut u8) -> i32 {
-    crate::log_str("[CB] ATTACH!");
-    crate::log_hex("[CB] speed=", speed as u32);
-    unsafe { core::ptr::write_volatile(&raw mut ATTACHED, true) };
+    // NOTE: interrupt context — NO file I/O, only dprintln + volatile writes
+    // Do NOT queue transfers here — echo mode handles the chain from main loop
+    psp::dprintln!("[CB] ATTACH speed={}", speed);
+    unsafe {
+        core::ptr::write_volatile(&raw mut ATTACH_SPEED, speed);
+        core::ptr::write_volatile(&raw mut ATTACHED, true);
+    }
     0
 }
 
-unsafe extern "C" fn usb_detach(arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
-    crate::log_str("[CB] DETACH");
-    crate::log_hex("[CB] det arg1=", arg1 as u32);
+unsafe extern "C" fn usb_detach(_arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
+    // NOTE: interrupt context — NO file I/O
+    psp::dprintln!("[CB] DETACH");
     unsafe { core::ptr::write_volatile(&raw mut ATTACHED, false) };
     0
 }
@@ -168,24 +174,26 @@ unsafe extern "C" fn usb_start(_size: i32, _args: *mut u8) -> i32 {
     }
 
     // Log the full descriptor pointer chain
-    crate::log_hex("[CB] ud0.devdesc=", USB_DATA[0].devdesc as u32);
-    crate::log_hex("[CB] ud0.cfg.pconf=", USB_DATA[0].config.pconfdesc as u32);
-    crate::log_hex("[CB] ud0.cfg.pintf=", USB_DATA[0].config.pinterfaces as u32);
-    crate::log_hex("[CB] ud0.cfg.pintd=", USB_DATA[0].config.pinterdesc as u32);
-    crate::log_hex("[CB] ud0.cfg.pendp=", USB_DATA[0].config.pendp as u32);
-    crate::log_hex("[CB] ud0.confd.pintf=", USB_DATA[0].confdesc.pinterfaces as u32);
-    crate::log_hex("[CB] ud0.intf.pd0=", USB_DATA[0].interfaces.pinterdesc[0] as u32);
-    crate::log_hex("[CB] ud0.intf.cnt=", USB_DATA[0].interfaces.intcount);
-    crate::log_hex("[CB] ud0.intd.pendp=", USB_DATA[0].interdesc.pendp as u32);
-    // Endpoint descriptor bytes
-    crate::log_hex("[CB] ep0.b0123=", u32::from_le_bytes([
-        USB_DATA[0].endp[0].desc[0], USB_DATA[0].endp[0].desc[1],
-        USB_DATA[0].endp[0].desc[2], USB_DATA[0].endp[0].desc[3],
-    ]));
-    crate::log_hex("[CB] ep1.b0123=", u32::from_le_bytes([
-        USB_DATA[0].endp[1].desc[0], USB_DATA[0].endp[1].desc[1],
-        USB_DATA[0].endp[1].desc[2], USB_DATA[0].endp[1].desc[3],
-    ]));
+    unsafe {
+        crate::log_hex("[CB] ud0.devdesc=", USB_DATA[0].devdesc as u32);
+        crate::log_hex("[CB] ud0.cfg.pconf=", USB_DATA[0].config.pconfdesc as u32);
+        crate::log_hex("[CB] ud0.cfg.pintf=", USB_DATA[0].config.pinterfaces as u32);
+        crate::log_hex("[CB] ud0.cfg.pintd=", USB_DATA[0].config.pinterdesc as u32);
+        crate::log_hex("[CB] ud0.cfg.pendp=", USB_DATA[0].config.pendp as u32);
+        crate::log_hex("[CB] ud0.confd.pintf=", USB_DATA[0].confdesc.pinterfaces as u32);
+        crate::log_hex("[CB] ud0.intf.pd0=", USB_DATA[0].interfaces.pinterdesc[0] as u32);
+        crate::log_hex("[CB] ud0.intf.cnt=", USB_DATA[0].interfaces.intcount);
+        crate::log_hex("[CB] ud0.intd.pendp=", USB_DATA[0].interdesc.pendp as u32);
+        // Endpoint descriptor bytes
+        crate::log_hex("[CB] ep0.b0123=", u32::from_le_bytes([
+            USB_DATA[0].endp[0].desc[0], USB_DATA[0].endp[0].desc[1],
+            USB_DATA[0].endp[0].desc[2], USB_DATA[0].endp[0].desc[3],
+        ]));
+        crate::log_hex("[CB] ep1.b0123=", u32::from_le_bytes([
+            USB_DATA[0].endp[1].desc[0], USB_DATA[0].endp[1].desc[1],
+            USB_DATA[0].endp[1].desc[2], USB_DATA[0].endp[1].desc[3],
+        ]));
+    }
 
     crate::log_str("[CB] start_func done");
     0
@@ -211,6 +219,12 @@ pub unsafe fn register() -> i32 {
 
 pub fn is_attached() -> bool {
     unsafe { core::ptr::read_volatile(&raw const ATTACHED) }
+}
+
+/// Get the connection speed from the attach callback.
+/// 2 = hi-speed (480 Mbps), 1 = full-speed (12 Mbps), 0 = not yet attached.
+pub fn attach_speed() -> i32 {
+    unsafe { core::ptr::read_volatile(&raw const ATTACH_SPEED) }
 }
 
 pub unsafe fn get_endpoint(index: usize) -> *mut UsbEndpoint {
