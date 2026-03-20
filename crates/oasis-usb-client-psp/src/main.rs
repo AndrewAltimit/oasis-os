@@ -15,6 +15,7 @@
 mod usbd;
 mod descriptors;
 mod driver;
+mod framebuffer;
 mod transfer;
 
 use psp::sys::{
@@ -342,14 +343,14 @@ fn psp_main() {
             last_attached = attached;
         }
 
-        // On first attach: send proactive message, then start echo chain
+        // On first attach: send PSP READY, init framebuffer, start thin-client
         if attached && !attach_done {
             unsafe { sceKernelDelayThread(200_000) };
 
             let speed = driver::attach_speed();
             log_hex("speed=", speed as u32);
 
-            // Step 1: Proactive send "PSP READY" (NOT in echo mode yet)
+            // Step 1: Proactive send "PSP READY" (NOT in thin-client mode yet)
             let ep1 = unsafe { driver::get_endpoint(1) };
             let mut buf = [0u8; 512];
             buf[..9].copy_from_slice(b"PSP READY");
@@ -357,7 +358,7 @@ fn psp_main() {
             log_hex("proactive send=", r as u32);
 
             // Step 2: Wait for proactive send to complete (host reads it)
-            // Don't enable echo mode until this send is done
+            // Don't enable thin-client mode until this send is done
             // (only one SEND_REQ at a time)
             log_str("Waiting for host to read PSP READY...");
             for _ in 0..100 {
@@ -369,37 +370,43 @@ fn psp_main() {
                 unsafe { sceKernelDelayThread(100_000) };
             }
 
-            // Step 3: Enable echo mode and queue first recv
-            transfer::enable_echo_mode();
+            // Step 3: Enable thin-client mode and queue first recv
+            transfer::enable_thin_client_mode();
             let ep2 = unsafe { driver::get_endpoint(2) };
             let r = unsafe { transfer::start_recv(ep2) };
-            log_hex("echo recv=", r as u32);
-            log_str("Echo mode ON");
+            log_hex("thin-client recv=", r as u32);
+            log_str("Thin-client mode ON");
 
             attach_done = true;
         }
 
-        // Log echo completions (driven by callbacks, we just monitor)
+        // Poll controller and update input state for USB responses
+        unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
+        transfer::update_input(
+            pad.buttons.bits(),
+            pad.lx,
+            pad.ly,
+            0, // battery — could read via scePowerGetBatteryLifePercent
+        );
+
+        // Log transfer completions (driven by callbacks, we just monitor)
         let (updated, count) = transfer::poll_echo();
         if updated && count != last_echo_count {
-            let (size, status) = transfer::last_recv_info();
-            log_hex("echo #", count);
-            log_hex("  size=", size as u32);
             last_echo_count = count;
         }
 
         tick += 1;
 
         // Heartbeat every 10 seconds
-        if tick % 100 == 0 {
+        if tick % 10000 == 0 {
             log_hex("tick=", tick);
-            log_hex("  echoes=", last_echo_count);
+            log_hex("  transfers=", last_echo_count);
+            log_hex("  frames=", framebuffer::frames_done());
         }
 
-        unsafe { sceKernelDelayThread(10_000) }; // 10ms poll
+        unsafe { sceKernelDelayThread(1_000) }; // 1ms poll for responsive input
 
         // Home to exit
-        unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
         if pad.buttons.intersects(CtrlButtons::HOME) {
             log_str("Exiting...");
             break;

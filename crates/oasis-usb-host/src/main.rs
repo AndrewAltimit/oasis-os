@@ -1,7 +1,7 @@
 //! USB host for PSP thin client.
 //!
-//! Connects to the PSP USB device driver, runs echo tests, measures
-//! throughput, and (later) streams frames + receives input.
+//! Connects to the PSP USB device driver, streams RGB565 frames to the
+//! PSP display, and receives controller input state back.
 //!
 //! Usage: sudo cargo run -p oasis-usb-host
 //! (sudo required for USB access, or set up udev rules)
@@ -12,6 +12,7 @@ mod device;
 mod protocol;
 
 use device::PspDevice;
+use protocol::InputState;
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -26,8 +27,6 @@ fn main() {
         },
     };
 
-    // Don't clear_halt before reading — it may cancel PSP's pending transfers
-
     // Read the "PSP READY" message
     print!("Waiting for PSP READY... ");
     match psp.read_ready() {
@@ -38,68 +37,85 @@ fn main() {
         },
     }
 
-    // Give PSP time to process send_complete and queue its first recv
-    println!("Waiting for PSP echo mode...");
+    // Give PSP time to queue first recv
+    println!("Waiting for PSP thin-client mode...");
     std::thread::sleep(Duration::from_secs(2));
 
     println!();
-    test_echo(&psp);
+    test_input(&psp);
     println!();
-    test_multi_packet(&psp);
+    test_frame(&psp);
     println!();
-    test_throughput(&psp);
+    test_streaming(&psp);
     println!();
 
     println!("All tests complete.");
 }
 
-fn test_echo(psp: &PspDevice) {
-    println!("--- Echo Test ---");
-    let data = b"Hello from Rust USB host!";
-    match psp.echo(data) {
-        Ok(true) => println!("  PASS: {} bytes echoed", data.len()),
-        Ok(false) => println!("  FAIL: data mismatch"),
+/// Test GET_INPUT: send a single input poll and print the response.
+fn test_input(psp: &PspDevice) {
+    println!("--- Input Test ---");
+    match psp.get_input() {
+        Ok(input) => {
+            println!("  PASS: {}", input.display());
+        },
         Err(e) => println!("  FAIL: {e}"),
     }
 }
 
-fn test_multi_packet(psp: &PspDevice) {
-    println!("--- Multi-Packet Test ---");
-    let mut pass = 0;
-    let total = 10;
-    for i in 0..total {
-        let size = 10 + i * 50; // 10, 60, 110, ..., 460
-        let data: Vec<u8> = (0..size).map(|j| (j & 0xFF) as u8).collect();
-        match psp.echo(&data) {
-            Ok(true) => pass += 1,
-            Ok(false) => println!("  [{i}] FAIL: mismatch ({size} bytes)"),
-            Err(e) => {
-                println!("  [{i}] FAIL: {e} ({size} bytes)");
-                psp.clear_halt();
-            },
-        }
+/// Test single frame: send a solid red frame, verify display + input response.
+fn test_frame(psp: &PspDevice) {
+    println!("--- Frame Test ---");
+
+    // Generate solid red frame (RGB565: R=31, G=0, B=0 -> 0xF800)
+    let red_pixel: u16 = 0xF800;
+    let frame = generate_solid_frame(red_pixel);
+
+    match psp.send_frame(&frame, 0) {
+        Ok(input) => {
+            println!("  PASS: solid red frame sent ({} bytes)", frame.len());
+            println!("  Input: {}", input.display());
+        },
+        Err(e) => {
+            println!("  FAIL: {e}");
+            psp.clear_halt();
+        },
     }
-    println!("  {pass}/{total} passed");
 }
 
-fn test_throughput(psp: &PspDevice) {
-    println!("--- Throughput Test ---");
+/// Test streaming: send 100 frames of cycling colors, measure FPS, print input.
+fn test_streaming(psp: &PspDevice) {
+    println!("--- Streaming Test (100 frames) ---");
 
-    // Use 500 bytes (not 512) to avoid ZLP issue
-    let payload: Vec<u8> = (0..500).map(|i| (i & 0xFF) as u8).collect();
-    let duration = Duration::from_secs(5);
+    let colors: [u16; 3] = [
+        0xF800, // Red
+        0x07E0, // Green
+        0x001F, // Blue
+    ];
+
     let start = Instant::now();
-    let mut count: u64 = 0;
-    let mut errors: u64 = 0;
+    let mut errors = 0u32;
+    let mut last_input = InputState::default();
 
-    while start.elapsed() < duration {
-        match psp.echo(&payload) {
-            Ok(true) => count += 1,
-            Ok(false) => errors += 1,
-            Err(_) => {
+    let mut last_buttons = 0u32;
+    for i in 0u8..100 {
+        let color = colors[i as usize % 3];
+        let frame = generate_solid_frame(color);
+
+        match psp.send_frame(&frame, i) {
+            Ok(input) => {
+                last_input = input;
+                // Print on button state changes only
+                if input.buttons != last_buttons {
+                    println!("  Frame {i}: {}", input.display());
+                    last_buttons = input.buttons;
+                }
+            },
+            Err(e) => {
                 errors += 1;
+                println!("  Frame {i}: ERROR {e}");
                 psp.clear_halt();
-                if errors > 10 {
+                if errors > 5 {
                     println!("  Too many errors, stopping");
                     break;
                 }
@@ -108,16 +124,34 @@ fn test_throughput(psp: &PspDevice) {
     }
 
     let elapsed = start.elapsed().as_secs_f64();
-    let total_bytes = count * payload.len() as u64 * 2; // send + receive
-    let throughput_kb = total_bytes as f64 / elapsed / 1024.0;
-    let throughput_mb = throughput_kb / 1024.0;
+    let frames_sent = 100 - errors;
+    let fps = frames_sent as f64 / elapsed;
+    let total_bytes = frames_sent as u64 * protocol::FRAME_SIZE_STRIDE as u64;
+    let throughput_mb = total_bytes as f64 / elapsed / 1024.0 / 1024.0;
 
-    println!("  {count} round-trips in {elapsed:.1}s");
-    println!("  {throughput_kb:.0} KB/s ({throughput_mb:.1} MB/s), {errors} errors");
+    println!();
+    println!("  {frames_sent} frames in {elapsed:.2}s = {fps:.1} FPS");
+    println!("  {throughput_mb:.1} MB/s frame data, {errors} errors");
+    println!("  Last input: {}", last_input.display());
+}
 
-    // Latency estimate
-    if count > 0 {
-        let avg_us = (elapsed * 1_000_000.0) / count as f64;
-        println!("  Avg round-trip: {avg_us:.0} µs");
+/// Generate a solid-color stride-padded RGB565 frame.
+fn generate_solid_frame(color_rgb565: u16) -> Vec<u8> {
+    let size = protocol::FRAME_SIZE_STRIDE;
+    let mut frame = vec![0u8; size];
+    let pixel = color_rgb565.to_le_bytes();
+
+    // Fill stride-padded buffer: 512 pixels/row x 272 rows
+    for row in 0..protocol::DISPLAY_HEIGHT as usize {
+        let row_offset = row * protocol::FRAME_STRIDE as usize * 2;
+        // Fill visible 480 pixels
+        for col in 0..protocol::DISPLAY_WIDTH as usize {
+            let offset = row_offset + col * 2;
+            frame[offset] = pixel[0];
+            frame[offset + 1] = pixel[1];
+        }
+        // Padding columns (480..512) remain zero (black)
     }
+
+    frame
 }

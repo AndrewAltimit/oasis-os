@@ -3,10 +3,13 @@
 //! Uses sceUsbbdReqSend (bulk IN, device→host) and sceUsbbdReqRecv
 //! (bulk OUT, host→device) with completion callbacks for async I/O.
 //!
-//! Echo mode is callback-driven: recv_complete queues the echo send,
-//! send_complete re-queues the recv. No main-loop polling needed.
+//! Two modes:
+//! - **Echo mode**: recv_complete echoes data back, send_complete re-queues recv.
+//! - **Thin-client mode**: recv_complete parses protocol messages (FRAME_CHUNK,
+//!   FRAME_DONE, GET_INPUT), writes pixels to VRAM, responds with InputState.
 
 use crate::driver::{UsbEndpoint, UsbdDeviceReq};
+use crate::framebuffer;
 use crate::usbd;
 
 // ---------------------------------------------------------------------------
@@ -74,14 +77,53 @@ static mut EP2_PTR: *mut UsbEndpoint = core::ptr::null_mut();
 /// auto-re-queues recv. Fully callback-driven, no main loop needed.
 static mut ECHO_MODE: bool = false;
 
+/// Thin-client mode: when true, recv callback parses protocol messages
+/// and responds with InputState instead of echoing.
+static mut THIN_CLIENT_MODE: bool = false;
+
 /// Counters for main loop to monitor (read-only from main)
 static mut ECHO_COUNT: u32 = 0;
 static mut LAST_RECV_SIZE: i32 = 0;
 static mut LAST_RECV_STATUS: i32 = 0;
 static mut LAST_SEND_STATUS: i32 = 0;
 
-/// Flag for main loop to detect new echo completions
+/// Flag for main loop to detect new completions
 static mut ECHO_UPDATED: bool = false;
+
+
+// ---------------------------------------------------------------------------
+// Thin-client protocol constants (must match host protocol.rs)
+// ---------------------------------------------------------------------------
+
+/// Message header size
+const MSG_HEADER_SIZE: usize = 4;
+
+/// Host → PSP message types
+const CMD_FRAME_CHUNK: u8 = 0x11;
+const CMD_FRAME_DONE: u8 = 0x12;
+const CMD_GET_INPUT: u8 = 0x20;
+
+/// PSP → Host message types
+const RSP_INPUT_STATE: u8 = 0x21;
+
+/// InputState: current controller state, updated by main loop.
+/// 8 bytes: [buttons: u32, analog_x: u8, analog_y: u8, battery: u8, pad: u8]
+#[repr(C)]
+struct InputStateData {
+    buttons: u32,
+    analog_x: u8,
+    analog_y: u8,
+    battery: u8,
+    _pad: u8,
+}
+
+static mut CURRENT_INPUT: InputStateData = InputStateData {
+    buttons: 0,
+    analog_x: 128,
+    analog_y: 128,
+    battery: 0,
+    _pad: 0,
+};
 
 // ---------------------------------------------------------------------------
 // Completion callbacks (USB interrupt context — NO file I/O)
@@ -98,8 +140,18 @@ unsafe extern "C" fn recv_complete(
         core::ptr::write_volatile(&raw mut LAST_RECV_SIZE, size);
         core::ptr::write_volatile(&raw mut LAST_RECV_STATUS, status);
 
-        // In echo mode: immediately send the received data back
-        if core::ptr::read_volatile(&raw const ECHO_MODE) && size > 0 && status == 0 {
+        if size <= 0 || status != 0 {
+            return 0;
+        }
+
+        // Thin-client mode: parse protocol message, respond with InputState
+        if core::ptr::read_volatile(&raw const THIN_CLIENT_MODE) {
+            handle_thin_client_recv(size as usize);
+            return 0;
+        }
+
+        // Echo mode: immediately send the received data back
+        if core::ptr::read_volatile(&raw const ECHO_MODE) {
             let len = (size as usize).min(SEND_BUF_SIZE);
 
             // Copy recv data to send buffer
@@ -121,6 +173,95 @@ unsafe extern "C" fn recv_complete(
     0
 }
 
+/// Handle a received message in thin-client mode.
+///
+/// Parses the MsgHeader, dispatches by type, and sends an InputState response.
+///
+/// # Safety
+/// Called from USB interrupt context — no syscalls, no file I/O.
+unsafe fn handle_thin_client_recv(size: usize) {
+    unsafe {
+        if size < MSG_HEADER_SIZE {
+            // Too short for a header — send InputState anyway to keep chain alive
+            send_input_response();
+            return;
+        }
+
+        let buf = (&raw const RECV_BUF.0) as *const u8;
+
+        // Parse header: [type, flags, len_lo, len_hi]
+        let msg_type = core::ptr::read(buf);
+        let flags = core::ptr::read(buf.add(1));
+        let _payload_len = core::ptr::read(buf.add(2)) as u16
+            | ((core::ptr::read(buf.add(3)) as u16) << 8);
+
+        let payload = buf.add(MSG_HEADER_SIZE);
+        let payload_size = size - MSG_HEADER_SIZE;
+
+        match msg_type {
+            CMD_FRAME_CHUNK => {
+                // flags = chunk_index (0-17)
+                framebuffer::write_chunk(
+                    flags,
+                    core::slice::from_raw_parts(payload, payload_size),
+                );
+                send_input_response();
+            }
+            CMD_FRAME_DONE => {
+                // flags = frame_seq (ignored for now)
+                framebuffer::swap();
+                send_input_response();
+            }
+            CMD_GET_INPUT => {
+                send_input_response();
+            }
+            _ => {
+                // Unknown message type — respond with InputState to keep chain alive
+                send_input_response();
+            }
+        }
+    }
+}
+
+/// Build and send a 12-byte InputState response: 4-byte header + 8-byte InputState.
+///
+/// # Safety
+/// Called from USB interrupt context.
+unsafe fn send_input_response() {
+    unsafe {
+        let dst = (&raw mut SEND_BUF.0) as *mut u8;
+
+        // Header: [RSP_INPUT_STATE, 0, 8, 0] (payload_len = 8)
+        core::ptr::write(dst, RSP_INPUT_STATE);
+        core::ptr::write(dst.add(1), 0); // flags
+        core::ptr::write(dst.add(2), 8); // payload_len low byte
+        core::ptr::write(dst.add(3), 0); // payload_len high byte
+
+        // InputState (8 bytes)
+        let input = &raw const CURRENT_INPUT;
+        let buttons = core::ptr::read_volatile(&(*input).buttons);
+        let b = buttons.to_le_bytes();
+        core::ptr::write(dst.add(4), b[0]);
+        core::ptr::write(dst.add(5), b[1]);
+        core::ptr::write(dst.add(6), b[2]);
+        core::ptr::write(dst.add(7), b[3]);
+        core::ptr::write(dst.add(8), core::ptr::read_volatile(&(*input).analog_x));
+        core::ptr::write(dst.add(9), core::ptr::read_volatile(&(*input).analog_y));
+        core::ptr::write(dst.add(10), core::ptr::read_volatile(&(*input).battery));
+        core::ptr::write(dst.add(11), 0); // pad
+
+        // Queue 12-byte send
+        core::ptr::write_bytes(&raw mut SEND_REQ.0, 0, 1);
+        SEND_REQ.0.endp = core::ptr::read_volatile(&raw const EP1_PTR);
+        SEND_REQ.0.data = dst;
+        SEND_REQ.0.size = 12;
+        SEND_REQ.0.func = Some(send_complete);
+
+        flush_dcache();
+        usbd::req_send(&raw mut SEND_REQ.0);
+    }
+}
+
 unsafe extern "C" fn send_complete(
     _req: *mut UsbdDeviceReq,
     _arg1: i32,
@@ -134,8 +275,10 @@ unsafe extern "C" fn send_complete(
         core::ptr::write_volatile(&raw mut ECHO_COUNT, count + 1);
         core::ptr::write_volatile(&raw mut ECHO_UPDATED, true);
 
-        // In echo mode: immediately re-queue recv for next packet
-        if core::ptr::read_volatile(&raw const ECHO_MODE) {
+        // In echo or thin-client mode: immediately re-queue recv for next packet
+        if core::ptr::read_volatile(&raw const ECHO_MODE)
+            || core::ptr::read_volatile(&raw const THIN_CLIENT_MODE)
+        {
             core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
             RECV_REQ.0.endp = core::ptr::read_volatile(&raw const EP2_PTR);
             RECV_REQ.0.data = (&raw mut RECV_BUF.0) as *mut u8;
@@ -164,7 +307,7 @@ unsafe fn flush_dcache() {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Initialize endpoint pointers for callback-driven echo.
+/// Initialize endpoint pointers for callback-driven transfers.
 /// Must be called before any transfers.
 pub unsafe fn init_endpoints(ep1: *mut UsbEndpoint, ep2: *mut UsbEndpoint) {
     unsafe {
@@ -178,8 +321,27 @@ pub fn enable_echo_mode() {
     unsafe { core::ptr::write_volatile(&raw mut ECHO_MODE, true) };
 }
 
+/// Enable thin-client mode (replaces echo mode).
+/// recv_complete parses protocol messages and responds with InputState.
+pub fn enable_thin_client_mode() {
+    unsafe {
+        core::ptr::write_volatile(&raw mut ECHO_MODE, false);
+        core::ptr::write_volatile(&raw mut THIN_CLIENT_MODE, true);
+    }
+}
+
+/// Update the current input state from the main loop.
+/// Called every tick with fresh controller data.
+pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
+    unsafe {
+        core::ptr::write_volatile(&raw mut CURRENT_INPUT.buttons, buttons);
+        core::ptr::write_volatile(&raw mut CURRENT_INPUT.analog_x, analog_x);
+        core::ptr::write_volatile(&raw mut CURRENT_INPUT.analog_y, analog_y);
+        core::ptr::write_volatile(&raw mut CURRENT_INPUT.battery, battery);
+    }
+}
+
 /// Start an async receive on EP2 (bulk OUT, host→PSP).
-/// In echo mode, the recv callback will auto-send the echo.
 pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
     unsafe {
         core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
@@ -214,7 +376,7 @@ pub unsafe fn start_send(ep1: *mut UsbEndpoint, data: &[u8]) -> i32 {
     }
 }
 
-/// Check if there's a new echo completion. Returns (updated, count).
+/// Check if there's a new completion. Returns (updated, count).
 /// Clears the updated flag.
 pub fn poll_echo() -> (bool, u32) {
     unsafe {

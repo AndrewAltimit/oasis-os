@@ -105,6 +105,82 @@ impl MsgHeader {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frame streaming constants
+// ---------------------------------------------------------------------------
+
+/// VRAM stride in pixels (PSP hardware requires 512px stride for 480px display)
+pub const FRAME_STRIDE: u32 = 512;
+
+/// Frame size with stride padding: 512 * 272 * 2 = 278,528 bytes
+pub const FRAME_SIZE_STRIDE: usize = (FRAME_STRIDE * DISPLAY_HEIGHT * BPP_RGB565) as usize;
+
+/// Maximum chunk payload in bytes (16376 + 4 header = 16380, not a multiple of 512)
+pub const MAX_CHUNK_PAYLOAD: usize = 16376;
+
+/// Number of chunks per frame: ceil(278528 / 16376) = 18
+pub const CHUNKS_PER_FRAME: usize = FRAME_SIZE_STRIDE.div_ceil(MAX_CHUNK_PAYLOAD);
+
+// ---------------------------------------------------------------------------
+// PSP button bitmasks (matches psp::sys::CtrlButtons)
+// ---------------------------------------------------------------------------
+
+pub mod buttons {
+    pub const SELECT: u32 = 0x000001;
+    pub const START: u32 = 0x000008;
+    pub const UP: u32 = 0x000010;
+    pub const RIGHT: u32 = 0x000020;
+    pub const DOWN: u32 = 0x000040;
+    pub const LEFT: u32 = 0x000080;
+    pub const L_TRIGGER: u32 = 0x000100;
+    pub const R_TRIGGER: u32 = 0x000200;
+    pub const TRIANGLE: u32 = 0x001000;
+    pub const CIRCLE: u32 = 0x002000;
+    pub const CROSS: u32 = 0x004000;
+    pub const SQUARE: u32 = 0x008000;
+    pub const HOME: u32 = 0x010000;
+    pub const HOLD: u32 = 0x020000;
+    pub const NOTE: u32 = 0x800000;
+
+    /// Format button bitmask as a human-readable string.
+    pub fn format(bits: u32) -> String {
+        let names = [
+            (SELECT, "SEL"),
+            (START, "START"),
+            (UP, "UP"),
+            (RIGHT, "RIGHT"),
+            (DOWN, "DOWN"),
+            (LEFT, "LEFT"),
+            (L_TRIGGER, "L"),
+            (R_TRIGGER, "R"),
+            (TRIANGLE, "△"),
+            (CIRCLE, "○"),
+            (CROSS, "×"),
+            (SQUARE, "□"),
+            (HOME, "HOME"),
+            (HOLD, "HOLD"),
+            (NOTE, "NOTE"),
+        ];
+        let mut result = String::new();
+        for (mask, name) in names {
+            if bits & mask != 0 {
+                if !result.is_empty() {
+                    result.push('+');
+                }
+                result.push_str(name);
+            }
+        }
+        if result.is_empty() {
+            result.push_str("(none)");
+        }
+        result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PSP input state
+// ---------------------------------------------------------------------------
+
 /// PSP input state (8 bytes, sent PSP → Host)
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -144,5 +220,16 @@ impl InputState {
             battery: b[6],
             _pad: b[7],
         })
+    }
+
+    /// Format as a human-readable string.
+    pub fn display(&self) -> String {
+        format!(
+            "buttons={} analog=({},{}) bat={}%",
+            buttons::format(self.buttons),
+            self.analog_x,
+            self.analog_y,
+            self.battery,
+        )
     }
 }

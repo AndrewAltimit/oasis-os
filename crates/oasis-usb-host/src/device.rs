@@ -1,6 +1,6 @@
 //! PSP USB device connection — find, claim, and communicate.
 
-use crate::protocol::{self, MsgHeader};
+use crate::protocol::{self, InputState, MsgHeader};
 use rusb::{Context, DeviceHandle, UsbContext};
 use std::time::Duration;
 
@@ -150,5 +150,82 @@ impl PspDevice {
         }
 
         Ok((header.msg_type, buf[MsgHeader::SIZE..total].to_vec()))
+    }
+
+    // -----------------------------------------------------------------------
+    // Thin-client: frame streaming + input
+    // -----------------------------------------------------------------------
+
+    /// Receive an InputState response (12 bytes: 4 header + 8 payload).
+    fn recv_input_state(&self) -> Result<InputState, String> {
+        let (msg_type, payload) = self.recv_msg()?;
+        if msg_type != protocol::rsp::INPUT_STATE {
+            return Err(format!("Expected INPUT_STATE (0x21), got 0x{msg_type:02x}"));
+        }
+        InputState::from_bytes(&payload).ok_or_else(|| "Bad InputState payload".to_string())
+    }
+
+    /// Send a single frame chunk and read back the InputState response.
+    ///
+    /// `chunk_index` is 0..17. `pixels` is raw RGB565 data (max 16376 bytes).
+    pub fn send_frame_chunk(&self, chunk_index: u8, pixels: &[u8]) -> Result<InputState, String> {
+        let header = MsgHeader {
+            msg_type: protocol::cmd::FRAME_CHUNK,
+            flags: chunk_index,
+            payload_len: pixels.len() as u16,
+        };
+        let mut packet = Vec::with_capacity(MsgHeader::SIZE + pixels.len());
+        packet.extend_from_slice(&header.to_bytes());
+        packet.extend_from_slice(pixels);
+
+        // Avoid ZLP
+        if packet.len() % 512 == 0 {
+            packet.push(0);
+        }
+
+        self.write(&packet, TIMEOUT)
+            .map_err(|e| format!("Send chunk {chunk_index}: {e}"))?;
+
+        self.recv_input_state()
+    }
+
+    /// Send FRAME_DONE to trigger buffer swap, read back InputState.
+    pub fn send_frame_done(&self, frame_seq: u8) -> Result<InputState, String> {
+        let header = MsgHeader {
+            msg_type: protocol::cmd::FRAME_DONE,
+            flags: frame_seq,
+            payload_len: 0,
+        };
+        self.write(&header.to_bytes(), TIMEOUT)
+            .map_err(|e| format!("Send FRAME_DONE: {e}"))?;
+
+        self.recv_input_state()
+    }
+
+    /// Send a full frame (stride-padded RGB565) as 18 chunks + FRAME_DONE.
+    ///
+    /// `pixels` must be exactly `FRAME_SIZE_STRIDE` bytes (278,528).
+    /// Returns the InputState from the final FRAME_DONE response.
+    pub fn send_frame(&self, pixels: &[u8], frame_seq: u8) -> Result<InputState, String> {
+        let total = pixels.len();
+        let chunk_size = protocol::MAX_CHUNK_PAYLOAD;
+
+        let mut chunk_index: u8 = 0;
+        let mut offset = 0;
+
+        while offset < total {
+            let end = (offset + chunk_size).min(total);
+            self.send_frame_chunk(chunk_index, &pixels[offset..end])?;
+            chunk_index += 1;
+            offset = end;
+        }
+
+        self.send_frame_done(frame_seq)
+    }
+
+    /// Send GET_INPUT and read back the current InputState.
+    pub fn get_input(&self) -> Result<InputState, String> {
+        self.send_msg(protocol::cmd::GET_INPUT, &[])?;
+        self.recv_input_state()
     }
 }

@@ -104,7 +104,12 @@ unsafe fn try_direct_addresses() -> bool {
     unsafe {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));
-        // SWAPPED: try 0x88189128 as Send and 0x88189244 as Recv
+        // SWAPPED from NID table: disassembly shows 0x88189128 and 0x88189244 are
+        // nearly identical (same code, one branch offset difference for direction).
+        // Testing confirms 0x88189128 works as send (PSP READY on EP1).
+        // NID 0x7B87815D ("ReqRecv") → 0x8818F884 is just a flag-clear stub,
+        // NOT a bulk transfer function.
+        // Achieved 105 FPS / 28 MB/s with this mapping on first test session.
         core::ptr::write_volatile(&raw mut REQ_SEND_FN, Some(core::mem::transmute(0x88189128u32)));
         core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x88189244u32)));
         core::ptr::write_volatile(&raw mut CANCEL_ALL_FN, Some(core::mem::transmute(0x88189E94u32)));
@@ -140,7 +145,7 @@ pub unsafe fn resolve_all() -> bool {
     if unsafe { try_direct_addresses() } {
         return true;
     }
-    psp::dprintln!("Direct addrs failed, trying NID...");
+    crate::log_str("Direct addrs failed, trying NID...");
 
     unsafe {
         let nids: &[(u32, &str)] = &[
@@ -165,11 +170,11 @@ pub unsafe fn resolve_all() -> bool {
 
         for (i, &(nid, name)) in nids.iter().enumerate() {
             if let Some(p) = resolve_nid(nid) {
-                psp::dprintln!("  {} = {:08X}", name, p as u32);
+                crate::log_hex("  NID addr=", p as u32);
                 // SAFETY: transmuting resolved function pointer
                 core::ptr::write_volatile(ptrs[i], Some(p));
             } else {
-                psp::dprintln!("  {} FAIL ({:08X})", name, nid);
+                crate::log_str("  NID FAIL");
                 // Only Register, ReqSend, ReqRecv are critical
                 if i < 4 && i != 1 {
                     return false;
