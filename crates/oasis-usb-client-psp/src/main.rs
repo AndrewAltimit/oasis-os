@@ -12,10 +12,12 @@
 mod usbd;
 mod descriptors;
 mod driver;
+mod transfer;
 
 use psp::sys::{
     sceKernelDelayThread, sceUsbGetState, sceUsbStart, sceUsbActivate,
     sceUsbDeactivate, sceUsbStop, IoOpenFlags,
+    SceCtrlData, CtrlButtons, sceCtrlPeekBufferPositive,
 };
 use core::ffi::c_void;
 
@@ -157,27 +159,104 @@ fn psp_main() {
     log_str("USB device active.");
     log_str("Connect to host!");
 
-    // Main loop: show USB state + wait for connection
+    // Main loop: wait for connection, then run echo protocol
     loop {
         let state = unsafe { sceUsbGetState() };
         let bits = state.bits();
 
         if bits & 0x002 != 0 {
             // ESTABLISHED - host has selected our configuration
-            dbg_log!("CONNECTED! state={:03X}", bits);
+            log_str("CONNECTED!");
+            log_hex("state=", bits as u32);
 
-            // TODO: Start transfer threads
-            // For now, just loop and show state
-            loop {
-                unsafe { sceKernelDelayThread(1_000_000) };
-                let s = unsafe { sceUsbGetState() }.bits();
-                if s & 0x002 == 0 {
-                    dbg_log!("Disconnected. state={:03X}", s);
-                    break;
-                }
-            }
+            // Run the echo loop
+            echo_loop();
+
+            log_str("Disconnected, waiting...");
         }
 
         unsafe { sceKernelDelayThread(100_000) };
+    }
+}
+
+/// Echo loop: receive data from host, echo it back + send controller state.
+/// This is the simplest bidirectional test — proves bulk transfers work.
+fn echo_loop() {
+    // EP1 = bulk IN (index 1), EP2 = bulk OUT (index 2)
+    let ep1 = unsafe { driver::get_endpoint(1) };
+    let ep2 = unsafe { driver::get_endpoint(2) };
+
+    log_str("Waiting 3s for host...");
+    unsafe { sceKernelDelayThread(3_000_000) };
+
+    if unsafe { sceUsbGetState() }.bits() & 0x002 == 0 {
+        log_str("Lost connection");
+        return;
+    }
+
+    // Continuously send "PING" every second so host can read
+    // This tests the IN (PSP→host) direction
+    log_str("Sending PINGs on EP1...");
+    let mut ping_count: u32 = 0;
+
+    loop {
+        // Check USB still connected
+        if unsafe { sceUsbGetState() }.bits() & 0x002 == 0 {
+            return;
+        }
+
+        // Build ping message
+        let mut msg = [0u8; 32];
+        msg[..5].copy_from_slice(b"PING ");
+        // Add counter as ASCII digits
+        let hex = b"0123456789ABCDEF";
+        for i in 0..8 {
+            msg[5 + i] = hex[((ping_count >> (28 - i * 4)) & 0xF) as usize];
+        }
+        msg[13] = b'\n';
+
+        // Send on EP1
+        let r = unsafe { transfer::start_send(ep1, &msg[..14]) };
+        if r == 0 {
+            // Wait for completion (5 second timeout)
+            let mut completed = false;
+            for _ in 0..50000 {
+                let (done, status) = transfer::send_poll();
+                if done {
+                    if ping_count < 3 {
+                        log_hex("ping sent status=", status as u32);
+                    }
+                    completed = true;
+                    break;
+                }
+                unsafe { sceKernelDelayThread(100) };
+            }
+            if !completed && ping_count < 3 {
+                log_str("ping send timeout");
+            }
+            ping_count += 1;
+        } else if ping_count < 3 {
+            log_hex("ping start fail=", r as u32);
+        }
+
+        // Also try to receive on EP2 (non-blocking check)
+        if ping_count == 1 {
+            log_str("Also starting recv...");
+            let r = unsafe { transfer::start_recv(ep2) };
+            log_hex("recv start=", r as u32);
+        }
+        let (rdone, rsize, rstatus) = transfer::recv_poll();
+        if rdone && rsize > 0 && rstatus == 0 {
+            log_hex("GOT DATA! bytes=", rsize as u32);
+        }
+
+        unsafe { sceKernelDelayThread(1_000_000) }; // 1 second between pings
+
+        let mut pad = SceCtrlData::default();
+        unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
+        if pad.buttons.intersects(CtrlButtons::HOME) {
+            log_str("Home pressed, exiting");
+            return;
+        }
     }
 }

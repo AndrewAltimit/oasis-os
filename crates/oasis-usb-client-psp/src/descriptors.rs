@@ -135,7 +135,7 @@ unsafe impl Sync for StringDescriptor {}
 // ---------------------------------------------------------------------------
 
 // wTotalLength = config(9) + interface(9) + 2 endpoints(7*2) = 32
-const TOTAL_LEN: u16 = 9 + 9 + 7 + 7;
+const TOTAL_LEN: u16 = 9 + 9 + 7 * 2;
 
 pub static mut DEVDESC_HI: DeviceDescriptor = DeviceDescriptor {
     b_length: 18,

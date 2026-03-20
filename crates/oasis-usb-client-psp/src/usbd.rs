@@ -81,7 +81,7 @@ unsafe fn try_direct_addresses() -> bool {
     // NID 0xB1644BE7 (Register)    -> 0x8818F024
     // NID 0xC1E2A540 (Unregister)  -> 0x8818F164
     // NID 0x913EC15D (ReqSend)     -> 0x88189244
-    // NID 0x7B87815D (ReqRecv)     -> 0x8818F884
+    // NID 0x7B87815D (ReqRecv)     -> 0x88189128 (NOT 0x8818F884 which is a tiny accessor)
     // NID 0xC5E53685 (CancelAll)   -> 0x88189E94
 
     // Sanity check: read first instruction at Register address
@@ -96,7 +96,7 @@ unsafe fn try_direct_addresses() -> bool {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));
         core::ptr::write_volatile(&raw mut REQ_SEND_FN, Some(core::mem::transmute(0x88189244u32)));
-        core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x8818F884u32)));
+        core::ptr::write_volatile(&raw mut REQ_RECV_FN, Some(core::mem::transmute(0x88189128u32)));
         core::ptr::write_volatile(&raw mut CANCEL_ALL_FN, Some(core::mem::transmute(0x88189E94u32)));
     }
     psp::dprintln!("Using direct addresses");
