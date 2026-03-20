@@ -358,6 +358,68 @@ pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
     }
 }
 
+/// Blocking recv: queue a recv without callback, poll until data arrives.
+/// Used for the initial handshake before enabling callback-driven mode.
+/// Returns true if data was received, false on timeout.
+pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
+    unsafe {
+        let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
+        invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
+
+        core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
+        RECV_REQ.0.endp = ep2;
+        RECV_REQ.0.data = buf_ptr;
+        RECV_REQ.0.size = RECV_BUF_SIZE as i32;
+        RECV_REQ.0.func = Some(blocking_recv_complete);
+
+        flush_dcache();
+        let r = usbd::req_recv(&raw mut RECV_REQ.0);
+        if r != 0 {
+            return false;
+        }
+
+        // Poll for completion (up to 30 seconds)
+        for _ in 0..300 {
+            psp::sys::sceKernelDelayThread(100_000); // 100ms
+            if core::ptr::read_volatile(&raw const HANDSHAKE_DONE) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Process the handshake message already in RECV_BUF and send InputState response.
+/// Then queue the first callback-driven recv for the thin-client chain.
+pub fn process_and_respond() {
+    unsafe {
+        let size = core::ptr::read_volatile(&raw const LAST_RECV_SIZE) as usize;
+        if size > 0 {
+            handle_thin_client_recv(size);
+        }
+        // send_complete will queue the next recv (callback chain starts)
+    }
+}
+
+static mut HANDSHAKE_DONE: bool = false;
+
+unsafe extern "C" fn blocking_recv_complete(
+    req: *mut UsbdDeviceReq,
+    _arg1: i32,
+    _arg2: i32,
+) -> i32 {
+    unsafe {
+        let size = (*req).recvsize;
+        let status = (*req).retcode;
+        core::ptr::write_volatile(&raw mut LAST_RECV_SIZE, size);
+        core::ptr::write_volatile(&raw mut LAST_RECV_STATUS, status);
+        if size > 0 && status == 0 {
+            core::ptr::write_volatile(&raw mut HANDSHAKE_DONE, true);
+        }
+    }
+    0
+}
+
 /// Start an async receive on EP2 (bulk OUT, host→PSP).
 /// Matches USBHostFS pattern: invalidate recv buffer cache, then queue.
 pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {

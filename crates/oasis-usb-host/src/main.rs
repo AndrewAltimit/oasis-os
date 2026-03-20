@@ -37,9 +37,11 @@ fn main() {
         },
     }
 
-    // Give PSP time to queue first recv
+    // Give PSP time to queue first recv.
+    // PSP waits 500ms after PSP READY for host claim_interface to settle,
+    // then queues recv. We wait 1s to be safe.
     println!("Waiting for PSP thin-client mode...");
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(Duration::from_secs(1));
 
     println!();
     test_input(&psp);

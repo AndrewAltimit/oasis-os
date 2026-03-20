@@ -343,7 +343,7 @@ fn psp_main() {
             last_attached = attached;
         }
 
-        // On first attach: send PSP READY, init framebuffer, start thin-client
+        // On first attach: send PSP READY, wait for host handshake, start thin-client
         if attached && !attach_done {
             unsafe { sceKernelDelayThread(200_000) };
 
@@ -358,11 +358,8 @@ fn psp_main() {
             log_hex("proactive send=", r as u32);
 
             // Step 2: Wait for proactive send to complete (host reads it)
-            // Don't enable thin-client mode until this send is done
-            // (only one SEND_REQ at a time)
             log_str("Waiting for host to read PSP READY...");
             for _ in 0..100 {
-                // 10 seconds max
                 let (updated, _) = transfer::poll_echo();
                 if updated {
                     break;
@@ -370,26 +367,30 @@ fn psp_main() {
                 unsafe { sceKernelDelayThread(100_000) };
             }
 
-            // Step 3: Dump EP2 descriptor state before recv
-            log_str("EP2 descriptor state (pre-recv):");
-            usbd::dump_ep_descriptor_state(2);
-
-            // Step 4: Clear EP2 FIFO (with corrected NID — was calling Stall before!)
+            // Step 3: Wait for host's first write as handshake.
+            // CRITICAL: The host's claim_interface resets endpoints. We must
+            // NOT queue a callback-driven recv until the host has finished
+            // setup. Instead, we do a blocking recv-poll: queue a recv,
+            // then poll the RECV_REQ.retcode field until it changes from
+            // the initial value (indicating the recv completed).
             let ep2 = unsafe { driver::get_endpoint(2) };
             let r = unsafe { usbd::clear_fifo(ep2) };
             log_hex("clear_fifo EP2=", r as u32);
 
-            log_str("EP2 descriptor state (post-clear):");
-            usbd::dump_ep_descriptor_state(2);
-
-            // Step 5: Enable thin-client mode and queue first recv
-            transfer::enable_thin_client_mode();
-            let r = unsafe { transfer::start_recv(ep2) };
-            log_hex("thin-client recv=", r as u32);
-
-            log_str("EP2 descriptor state (post-recv):");
-            usbd::dump_ep_descriptor_state(2);
-            log_str("Thin-client mode ON");
+            log_str("Waiting for host handshake...");
+            // Queue recv WITHOUT callback — we'll poll manually
+            let handshake_ok = unsafe { transfer::blocking_recv(ep2) };
+            if handshake_ok {
+                log_str("Host handshake received!");
+                // Now safe to enable callback-driven thin-client mode.
+                // The host has finished setup and sent its first message.
+                transfer::enable_thin_client_mode();
+                // Process the handshake message and send response
+                transfer::process_and_respond();
+                log_str("Thin-client mode ON");
+            } else {
+                log_str("Handshake timeout");
+            }
 
             attach_done = true;
         }
