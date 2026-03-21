@@ -1587,7 +1587,109 @@ fn phase6_step4_full_chain_vbus() {
     Logger::log("Done.");
 }
 
-/// Step 6.5: Hook sceUsbActivate to trace USB driver init.
+/// Step 6.5: Scan Syscon commands 0x50-0xFF for GPIO unlock.
+///
+/// Sends each GET command and checks if GPIO OutEn (+0x24) or
+/// AltFunc (+0x40) changed. Skips known dangerous commands.
+fn phase6_step5_syscon_scan() {
+    Logger::log("=== 6.5: Syscon Scan 0x50-0xFF ===");
+    Logger::log("Scanning for GPIO unlock command...");
+
+    // First enable port via BC10007C (accepted in prior tests)
+    unsafe {
+        let v7c = hw_read32(0xBC10_007C);
+        psp::hw::hw_write32(0xBC10_007C, v7c | 0x0080_0000);
+    }
+
+    let baseline_outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+    let baseline_altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+    lr("Baseline OutEn=", baseline_outen);
+    lr("Baseline AltFn=", baseline_altfn);
+
+    // Scan GET commands 0x50-0xFF
+    for cmd in 0x50u8..=0xFF {
+        // Skip known dangerous: 0x34 (crash), 0x45 (shutdown)
+        // Also skip SET-range commands that might change state dangerously
+        // GET commands are typically safe
+        let (r, rx) = syscon::syscon_get(cmd);
+
+        // Check if GPIO changed
+        let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+
+        if outen != baseline_outen || altfn != baseline_altfn {
+            // SOMETHING CHANGED!
+            let mut f = Fmt::new();
+            f.p("!!! CMD "); f.h2(cmd);
+            f.p(" OutEn="); f.h8(outen);
+            f.p(" AltFn="); f.h8(altfn);
+            Logger::log(f.s());
+        }
+
+        // Log commands that return success (might be interesting)
+        if r == 0 && rx[0] != 0xFF {
+            let mut f = Fmt::new();
+            f.p("  GET "); f.h2(cmd);
+            f.p(": r="); f.h8(r as u32);
+            f.p(" [");
+            for i in 0..6 {
+                if i > 0 { f.p(" "); }
+                f.h2(rx[i]);
+            }
+            f.p("]");
+            Logger::log(f.s());
+        }
+
+        unsafe { sceKernelDelayThread(10_000) };
+    }
+
+    // Now try SET commands with value=1 for promising ones
+    // Only try even-numbered SET commands (less likely to be dangerous)
+    Logger::log("");
+    Logger::log("SET scan (even cmds 0x50-0x9E)...");
+    for cmd_idx in 0u8..40 {
+        let cmd = 0x50 + cmd_idx * 2;
+        if cmd == 0x34 { continue; } // crash
+
+        let gpio_before = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+
+        let (r, rx) = syscon::syscon_set(cmd, 1);
+
+        let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+
+        if outen != baseline_outen || altfn != baseline_altfn {
+            let mut f = Fmt::new();
+            f.p("!!! SET "); f.h2(cmd);
+            f.p(" OutEn="); f.h8(outen);
+            f.p(" AltFn="); f.h8(altfn);
+            Logger::log(f.s());
+        }
+
+        // Log accepted commands
+        if r == 0 {
+            let mut f = Fmt::new();
+            f.p("  SET "); f.h2(cmd);
+            f.p(" v=1 OK [");
+            for i in 0..4 {
+                if i > 0 { f.p(" "); }
+                f.h2(rx[i]);
+            }
+            f.p("]");
+            Logger::log(f.s());
+        }
+
+        unsafe { sceKernelDelayThread(10_000) };
+    }
+
+    // Final state
+    Logger::log("");
+    lr("Final OutEn=", unsafe { psp::hw::hw_read32(0xBE24_0024) });
+    lr("Final AltFn=", unsafe { psp::hw::hw_read32(0xBE24_0040) });
+    lr("Final P0Read=", unsafe { psp::hw::hw_read32(0xBE24_0000) });
+}
+
+/// Step 6.6: Hook sceUsbActivate to trace USB driver init.
 ///
 /// Instead of replicating the init chain, hook the USB driver's own
 /// functions and log register state changes. Uses sceUsbStart +
@@ -1758,11 +1860,12 @@ const MENU: &[MenuItem] = &[
     MenuItem { label: "6.2 Probe 0xBE500000 block", func: phase6_step2_probe_be500000 },
     MenuItem { label: "6.3 Full sceSysreg init (14 NIDs)", func: phase6_step3_full_sysreg_init },
     MenuItem { label: "6.4 FULL CHAIN + VBUS", func: phase6_step4_full_chain_vbus },
-    MenuItem { label: "6.5 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
+    MenuItem { label: "6.5 Syscon scan 0x50-0xFF", func: phase6_step5_syscon_scan },
+    MenuItem { label: "6.6 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
 ];
 
 /// Collect menu labels into a fixed array for screen rendering.
-const MENU_LABELS: [&str; 19] = [
+const MENU_LABELS: [&str; 20] = [
     "1.1 Dump GPIO registers",
     "1.2 Resolve GPIO NIDs",
     "1.3 Monitor GPIO (needs camera)",
@@ -1781,7 +1884,8 @@ const MENU_LABELS: [&str; 19] = [
     "6.2 Probe 0xBE500000 block",
     "6.3 Full sceSysreg init (14 NIDs)",
     "6.4 FULL CHAIN + VBUS",
-    "6.5 Hook sceUsbActivate trace",
+    "6.5 Syscon scan 0x50-0xFF",
+    "6.6 Hook sceUsbActivate trace",
 ];
 
 fn psp_main() {
