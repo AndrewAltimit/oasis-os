@@ -11,30 +11,45 @@
 
 use psp::hw::hw_read32;
 
+static mut CTRL_USB_POWER_FN: Option<unsafe extern "C" fn(i32) -> i32> = None;
+static mut RESOLVED_ADDR: u32 = 0;
+
 /// Get the resolved function address (for logging).
-/// Now returns the NID-linked stub address.
 pub fn resolved_addr() -> u32 {
-    // With psp::sys linking, the stub address is determined at load time.
-    // Return the Syscon driver NID for reference.
-    0xC8D97773
+    unsafe { core::ptr::read_volatile(&raw const RESOLVED_ADDR) }
 }
 
-/// No-op for backwards compatibility. Syscon functions are now linked at
-/// module load via `psp::sys::sceSyscon*`.
-///
-/// Returns true (always available) to match old API contract.
+/// Resolve sceSysconCtrlUsbPower via find_function.
+/// Returns true if found.
 pub unsafe fn resolve_nids() -> bool {
-    true
+    let modules: [&[u8]; 2] = [
+        psp::sys::syscon::SYSCON_MODULE,
+        psp::sys::syscon::SYSCON_MODULE_ALT,
+    ];
+    let library = psp::sys::syscon::SYSCON_LIBRARY.as_ptr();
+    let nid = psp::sys::syscon::NID_SYSCON_CTRL_USB_POWER;
+
+    for module in &modules {
+        if let Some(addr) = psp::hook::find_function(module.as_ptr(), library, nid) {
+            core::ptr::write_volatile(
+                &raw mut CTRL_USB_POWER_FN,
+                Some(core::mem::transmute(addr)),
+            );
+            core::ptr::write_volatile(&raw mut RESOLVED_ADDR, addr as u32);
+            return true;
+        }
+    }
+    false
 }
 
-/// Call sceSysconCtrlUsbPower(enable) via psp::sys (linked at module load).
+/// Call sceSysconCtrlUsbPower(enable) via resolved function pointer.
 ///
 /// Note: On PSP-3001 6.61, this NID resolves to a getter stub — it reads
 /// a cached value but may not actually control USB power. The raw Syscon
 /// command path (syscon_set 0x47) is more reliable for testing.
 pub unsafe fn ctrl_usb_power(enable: i32) -> Option<i32> {
-    let ret = psp::sys::sceSysconCtrlUsbPower(enable);
-    Some(ret)
+    let f = core::ptr::read_volatile(&raw const CTRL_USB_POWER_FN)?;
+    Some(f(enable))
 }
 
 /// Get the _sceSysconCommonWrite function address based on Tachyon version.

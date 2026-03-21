@@ -1,21 +1,10 @@
 //! GPIO register read/write for VBUS MOSFET discovery.
 //!
-//! Uses `psp::sys` for NID-linked GPIO functions (resolved at module load)
+//! Uses `psp::gpio` for NID-resolved GPIO functions (via find_function)
 //! and `psp::hw` for direct MMIO register snapshots.
-//!
-//! GPIO block base: 0xBE240000
-//!   +0x00  Port 0 data read
-//!   +0x04  Port 1 data read
-//!   +0x08  Port 1 set
-//!   +0x0C  Port 1 clear
-//!   +0x10  Port 0 direction (0=input, 1=output)
-//!   +0x14  Port 0 set (write 1 to set bits)
-//!   +0x18  Port 0 clear (write 1 to clear bits)
-//!   +0x24  Output enable (silicon-locked on TA-090v2)
-//!   +0x40  Alternate function select (silicon-locked on TA-090v2)
 
 use psp::hw::{
-    self, hw_read32, hw_write32,
+    hw_read32, hw_write32,
     GPIO_BASE, GPIO_PORT0_READ, GPIO_PORT0_DIR, GPIO_PORT0_SET,
     GPIO_PORT0_CLEAR, GPIO_OUTPUT_EN, GPIO_PORT0_ALTFUNC,
 };
@@ -62,48 +51,35 @@ pub fn diff(before: &GpioSnapshot, after: &GpioSnapshot) -> GpioDiff {
     }
 }
 
-/// No-op for backwards compatibility. GPIO functions are now linked at
-/// module load via `psp::sys::sceGpio*` — no runtime NID resolution needed.
-///
-/// Returns 4 (all functions available) to match old API contract.
+/// Initialize GPIO NID resolution via psp::gpio.
+/// Returns number of resolved functions (0-6).
 pub unsafe fn resolve_nids() -> u32 {
-    4
+    psp::gpio::init()
 }
 
-/// Read GPIO port via psp::sys (linked at module load).
+/// Read GPIO port via psp::gpio (find_function resolved).
 pub unsafe fn port_read() -> Option<u32> {
-    Some(psp::sys::sceGpioPortRead() as u32)
+    psp::gpio::read_port()
 }
 
-/// Set GPIO port bits via psp::sys.
+/// Set GPIO port bits via psp::gpio.
 pub fn port_set(mask: u32) -> Option<i32> {
-    let ret = unsafe { psp::sys::sceGpioPortSet(mask as i32) };
-    Some(ret)
+    psp::gpio::set_pins(mask)
 }
 
-/// Clear GPIO port bits via psp::sys.
+/// Clear GPIO port bits via psp::gpio.
 pub fn port_clear(mask: u32) -> Option<i32> {
-    let ret = unsafe { psp::sys::sceGpioPortClear(mask as i32) };
-    Some(ret)
+    psp::gpio::clear_pins(mask)
 }
 
-/// Set GPIO pin direction (0=input, 1=output) via psp::sys.
-///
-/// Uses `sceGpioSetPortMode` (NID 0xFBC85E74) which controls the
-/// Direction register. For full output enable (direction + output MUX),
-/// use `set_port_mode2` instead.
+/// Set GPIO pin direction (0=input, 1=output) via psp::gpio.
 pub fn set_port_mode(pin: u32, mode: u32) -> Option<i32> {
-    let ret = unsafe { psp::sys::sceGpioSetPortMode(pin as i32, mode as i32) };
-    Some(ret)
+    psp::gpio::set_pin_mode(pin, mode as i32)
 }
 
-/// Set GPIO pin full output mode (0=disable, 2=output enable) via psp::sys.
-///
-/// Uses `sceGpioSetPortMode2` (NID 0x317D9D2C) — the function used by
-/// `usb.prx` for VBUS control. Writes to both Direction and Output Enable.
+/// Set GPIO pin full output mode (0=disable, 2=output enable) via psp::gpio.
 pub fn set_port_mode2(pin: u32, mode: u32) -> Option<i32> {
-    let ret = unsafe { psp::sys::sceGpioSetPortMode2(pin as i32, mode as i32) };
-    Some(ret)
+    psp::gpio::set_pin_mode2(pin, mode as i32)
 }
 
 /// Direct MMIO write to GPIO set register (no NID needed, kernel-mode only).
