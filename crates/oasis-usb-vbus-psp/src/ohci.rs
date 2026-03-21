@@ -13,8 +13,8 @@
 //!   BD800060 — MUSBMHDRC DevCtl (session/host mode)
 
 use psp::hw::{
-    self, hw_read32, hw_write32,
-    SYS_CTRL_BASE, OHCI_BASE, MUSB_BASE, SYSREG_TACHYON_VER,
+    hw_read32, hw_write32,
+    OHCI_BASE, MUSB_BASE, SYSREG_TACHYON_VER,
     SYSREG_PERIPH_CLK1, SYSREG_PERIPH_CLK2, SYSREG_USB_CLK,
 };
 

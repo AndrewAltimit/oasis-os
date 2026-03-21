@@ -6,7 +6,7 @@
 use psp::hw::{
     hw_read32, hw_write32,
     GPIO_BASE, GPIO_PORT0_READ, GPIO_PORT0_DIR, GPIO_PORT0_SET,
-    GPIO_PORT0_CLEAR, GPIO_OUTPUT_EN, GPIO_PORT0_ALTFUNC,
+    GPIO_PORT0_CLEAR, GPIO_PORT0_ALTFUNC,
 };
 
 // Additional offsets not in psp::hw (used only for MMIO snapshots)
