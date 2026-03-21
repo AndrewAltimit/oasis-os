@@ -466,16 +466,43 @@ If pin 23 is NOT in this mask, all Direction/Set/Clear writes for that pin are s
 | +0x04 | Port 1 Read | |
 | +0x08 | Port 1 Set | NOT Port 0 Output! |
 | +0x0C | Port 1 Clear | |
-| +0x10 | Port 0 Direction | Masked by writable-pins |
-| +0x14 | Port 0 Set | Masked by writable-pins |
-| +0x18 | Port 0 Clear | Masked by writable-pins |
+| +0x10 | Port 0 Direction | Accepts writes for pin 23 |
+| +0x14 | Port 0 Set | Accepts writes for pin 23 |
+| +0x18 | Port 0 Clear | |
 | +0x1C | Port 1 Direction | |
 | +0x20 | Port 0 Interrupt? | Read in FUN_000033f4 |
-| **+0x24** | **Port 0 Output Enable** | **Written by SetPortMode2 with 1<<pin** |
+| **+0x24** | **Port 0 Output Enable** | **REJECTS writes on TA-090v2** (stays 0) |
 | +0x30 | Interrupt config 0 | Cleared during init |
 | +0x34 | Interrupt config 1 | Cleared during init |
-| +0x40 | Port 0 AltFunc | Locked on TA-090v2 (0x05000010) |
-| +0x48 | Port 1 AltFunc | Polled for busy (bits 0-1) |
+| +0x40 | Port 0 AltFunc | LOCKED on TA-090v2 (0x05000010) |
+| +0x48 | Port 1 AltFunc | Polled for busy (bits 0-1), reads 0 |
+
+### On-Device Test of Output Enable Register (2026-03-21)
+
+Tested writing `0xBE240024 = 0x00800000` (output enable for pin 23):
+```
+BEFORE: +24 OutEn = 00000000
+WRITE:  0x00800000
+AFTER:  +24 OutEn = 00000000  ← REJECTED
+```
+
+The TA-090v2 GPIO hardware has a **write-lock mechanism** on three critical registers:
+- `+0x24` (Output Enable) — rejects writes, stays 0
+- `+0x40` (AltFunc) — locked at 0x05000010
+- `BC1000C4` (sceSysreg bus gate) — rejects writes, stays 0
+
+Direction (`+0x10`) and Set (`+0x14`) accept writes, but without the Output Enable register being set, the output flip-flop never latches. This is a **hardware security feature** added in later PSP revisions — the writable-pins mask loaded during GPIO init excludes pin 23 on TA-090v2.
+
+### Final Assessment
+
+VBUS power output on PSP-3001 (TA-090v2) **cannot be enabled from software alone**. The GPIO output enable for pin 23 is hardware-locked and can only be unlocked by:
+1. **Syscon microcontroller** — detecting Go!Cam hardware on the USB port triggers a privileged Syscon command that unlocks the GPIO output MUX
+2. **Tachyon boot ROM** — the firmware reboot sequence may configure these registers during early boot before the lock takes effect
+
+Remaining paths:
+- **Acquire Go!Cam PSP-300** — Sony's own accessory triggers the Syscon unlock sequence
+- **Find undocumented Syscon command** — scan remaining Syscon command space (0x50-0xFF) for a GPIO unlock
+- **Hardware mod** — bypass the MOSFET gate with a direct wire from 5V rail
 
 ---
 

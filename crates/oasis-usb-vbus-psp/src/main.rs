@@ -1535,18 +1535,65 @@ fn phase6_step4_full_chain_vbus() {
         sceKernelDelayThread(50_000);
     }
 
-    // Step 7: GPIO pin 23 VBUS enable — MMIO only
+    // Step 7: GPIO pin 23 VBUS enable — NEW from Ghidra lowio.prx analysis
+    // sceGpioSetPortMode2 writes to 0xBE240024 (output enable!) which
+    // we never did before. Also 0xBE240008 is Port 1 Set, NOT Port 0 Output.
     Logger::log("");
-    Logger::log("--- Step 7: GPIO pin 23 VBUS (MMIO) ---");
+    Logger::log("--- Step 7: GPIO VBUS (Ghidra method) ---");
     unsafe {
+        // Dump all GPIO registers BEFORE
+        Logger::log("BEFORE:");
+        lr("  +00 P0Read =", psp::hw::hw_read32(0xBE24_0000));
+        lr("  +04 P1Read =", psp::hw::hw_read32(0xBE24_0004));
+        lr("  +08 P1Set  =", psp::hw::hw_read32(0xBE24_0008));
+        lr("  +0C P1Clr  =", psp::hw::hw_read32(0xBE24_000C));
+        lr("  +10 Dir    =", psp::hw::hw_read32(0xBE24_0010));
+        lr("  +14 P0Set  =", psp::hw::hw_read32(0xBE24_0014));
+        lr("  +18 P0Clr  =", psp::hw::hw_read32(0xBE24_0018));
+        lr("  +1C P1Dir  =", psp::hw::hw_read32(0xBE24_001C));
+        lr("  +20 Intr?  =", psp::hw::hw_read32(0xBE24_0020));
+        lr("  +24 OutEn  =", psp::hw::hw_read32(0xBE24_0024));
+        lr("  +40 AltFn0 =", psp::hw::hw_read32(0xBE24_0040));
+        lr("  +48 AltFn1 =", psp::hw::hw_read32(0xBE24_0048));
+        sceKernelDelayThread(50_000);
+
+        // Wait for AltFunc Port 1 busy (like firmware does)
+        Logger::log("Waiting for +48 busy...");
+        let mut tries = 0u32;
+        while (psp::hw::hw_read32(0xBE24_0048) & 3) != 0 {
+            tries += 1;
+            if tries > 10000 { break; }
+        }
+        lr("  +48 after wait=", psp::hw::hw_read32(0xBE24_0048));
+
+        // Step A: Set Direction for pin 23 (output)
+        Logger::log("A) Direction |= pin23...");
         let dir = psp::hw::hw_read32(0xBE24_0010);
         psp::hw::hw_write32(0xBE24_0010, dir | 0x0080_0000);
-        lr("  Dir=", psp::hw::hw_read32(0xBE24_0010));
+        lr("  +10 Dir=", psp::hw::hw_read32(0xBE24_0010));
+
+        // Step B: Write OUTPUT ENABLE register (THE NEW DISCOVERY!)
+        Logger::log("B) OutEn = pin23 (0xBE240024)...");
+        psp::hw::hw_write32(0xBE24_0024, 0x0080_0000);
+        sceKernelDelayThread(1_000);
+        lr("  +24 OutEn=", psp::hw::hw_read32(0xBE24_0024));
+
+        // Step C: Set pin 23 high
+        Logger::log("C) P0Set = pin23...");
         psp::hw::hw_write32(0xBE24_0014, 0x0080_0000);
-        let out = psp::hw::hw_read32(0xBE24_0008);
-        psp::hw::hw_write32(0xBE24_0008, out | 0x0080_0000);
-        lr("  Out=", psp::hw::hw_read32(0xBE24_0008));
-        lr("  Read=", psp::hw::hw_read32(0xBE24_0000));
+        sceKernelDelayThread(1_000);
+        lr("  +14 P0Set=", psp::hw::hw_read32(0xBE24_0014));
+
+        // Step D: Read back everything
+        Logger::log("AFTER:");
+        lr("  +00 P0Read =", psp::hw::hw_read32(0xBE24_0000));
+        lr("  +04 P1Read =", psp::hw::hw_read32(0xBE24_0004));
+        lr("  +08 P1Set  =", psp::hw::hw_read32(0xBE24_0008));
+        lr("  +10 Dir    =", psp::hw::hw_read32(0xBE24_0010));
+        lr("  +14 P0Set  =", psp::hw::hw_read32(0xBE24_0014));
+        lr("  +20 Intr?  =", psp::hw::hw_read32(0xBE24_0020));
+        lr("  +24 OutEn  =", psp::hw::hw_read32(0xBE24_0024));
+        lr("  +40 AltFn0 =", psp::hw::hw_read32(0xBE24_0040));
     }
 
     unsafe { sceKernelDelayThread(500_000) };
