@@ -1,0 +1,15 @@
+[package]
+name = "oasis-usb-host"
+description = "USB host for PSP thin client — sends frames, receives input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "oasis-usb-host"
+path = "src/main.rs"
+
+[dependencies]
+rusb = "0.9"

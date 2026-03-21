@@ -1,0 +1,28 @@
+# Standalone crate -- excluded from the oasis_os workspace because it
+# requires the mipsel-sony-psp target and the rust-psp SDK.
+#
+# Builds a kernel-mode PRX that registers a custom USB device driver
+# for thin-client communication with a Luckfox Pico (or any USB host).
+# The PSP acts as a USB device with bulk IN/OUT endpoints.
+#
+# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+[workspace]
+
+[package]
+name = "oasis-usb-client-psp"
+description = "PSP USB thin client PRX: bulk transfer device driver for external compute"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AndrewAltimit/oasis-os"
+authors = ["AndrewAltimit"]
+
+[dependencies]
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "1dd6f00", features = ["kernel"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
