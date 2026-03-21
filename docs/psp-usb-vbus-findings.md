@@ -396,6 +396,87 @@ GPIO pin 23 output **will not latch on TA-090v2** regardless of:
 
 The output gate is controlled by either the **MUSB OTG controller** (inaccessible — bus-faults) or a hardware path in the **firmware reboot sequence**. A Go!Cam camera accessory is needed to trigger the firmware's own VBUS enable path and observe what additional register writes occur.
 
+## Ghidra Decompilation Results (2026-03-21, via Docker amd64 container)
+
+### usb.prx — VBUS Enable/Disable Functions
+
+**VBUS Disable (`FUN_00008bd0`):**
+```c
+int FUN_00008bd0(void) {
+    int ret = sceGpioSetPortMode2(23, 0);  // mode 0 = disable
+    if (ret >= 0) {
+        sceGpioPortClear(0x800000);         // clear pin 23
+        ret = 0;
+    }
+    return ret;
+}
+```
+
+**VBUS Enable (`FUN_00008c0c`):**
+```c
+void FUN_00008c0c(void) {
+    sceGpioSetPortMode2(23, 2);  // mode 2 = enable output
+    // NOTE: PortSet is called separately by the caller via vtable
+}
+```
+
+**Vtable callback system (`FUN_00008afc`):**
+```c
+void FUN_00008afc(void) {
+    if (driver_state != 0 && vbus_active != 0) {
+        (*(callback_table + 0xc))();  // calls VBUS enable/disable via vtable
+        vbus_active = 0;
+    }
+}
+```
+
+### lowio.prx — GPIO Driver Internals (CRITICAL)
+
+**`sceGpioSetPortMode2` (`FUN_00002fd0`) — the function usb.prx calls for VBUS:**
+```c
+// mode 0: Direction=1, Set=1, Clear=0 (output + drive high)
+// mode 2: Direction=0, Set=0, Clear=0 (input/disable)
+// mode 3: Direction=0, Set=0, Clear=1 (input + clear)
+
+// Critically:
+do {} while ((_DAT_be240048 & 3) != 0);  // WAIT for AltFunc Port 1 busy flag!
+_DAT_be240010 = Direction (MASKED by writable-pins mask)
+_DAT_be240024 = 1 << pin;                // OUTPUT ENABLE REGISTER!
+_DAT_be240014 = Set (MASKED)
+_DAT_be240018 = Clear (MASKED)
+```
+
+**Key finding: `0xBE240024` is the OUTPUT ENABLE register!** Written with `1 << pin` during SetPortMode2.
+Our register dumps showed `+0x24 = 0x00000000` — this register was never written during our tests.
+
+**`sceGpioSetPortMode` (`FUN_00002e24`):**
+- Mode 0 = input, AltFunc=1
+- Mode 1 = output, AltFunc=0
+- Mode 2 = input, AltFunc=0
+- Writes to `0xBE240000` (Read shadow) and `0xBE240040` (AltFunc) — but AltFunc is LOCKED on TA-090v2
+
+**Writable-pins mask (`_UNK_00000240`):**
+Loaded from hardware via `FUN_0000b214()` callback during GPIO init (`FUN_00002cfc`).
+If pin 23 is NOT in this mask, all Direction/Set/Clear writes for that pin are silently masked out.
+
+### Corrected GPIO Register Map
+| Offset | Function | Notes |
+|---|---|---|
+| +0x00 | Port 0 Read | Pin state readback |
+| +0x04 | Port 1 Read | |
+| +0x08 | Port 1 Set | NOT Port 0 Output! |
+| +0x0C | Port 1 Clear | |
+| +0x10 | Port 0 Direction | Masked by writable-pins |
+| +0x14 | Port 0 Set | Masked by writable-pins |
+| +0x18 | Port 0 Clear | Masked by writable-pins |
+| +0x1C | Port 1 Direction | |
+| +0x20 | Port 0 Interrupt? | Read in FUN_000033f4 |
+| **+0x24** | **Port 0 Output Enable** | **Written by SetPortMode2 with 1<<pin** |
+| +0x30 | Interrupt config 0 | Cleared during init |
+| +0x34 | Interrupt config 1 | Cleared during init |
+| +0x40 | Port 0 AltFunc | Locked on TA-090v2 (0x05000010) |
+| +0x48 | Port 1 AltFunc | Polled for busy (bits 0-1) |
+
 ---
 
 ## Phase 2 Plan — Next Steps
