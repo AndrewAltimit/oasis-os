@@ -64,10 +64,37 @@ Without step 3, the output flip-flop never latches regardless of Direction and S
 |---|---|---|
 | 3 | LCD backlight | Toggling turns off screen |
 | 4 | Critical (crash) | Unknown function |
+| 6 | Unknown (writable) | `SetPortMode2` returns 0 (Output Enable accepts) |
+| 7 | Unknown (writable) | `SetPortMode2` returns 0 (Output Enable accepts) |
 | 19 | USB PHY transceiver | Disrupts USB |
 | 23 | **VBUS MOSFET** | Controls 5V USB power output |
 | 24 | Critical (crash) | Unknown function |
+| 25 | Unknown (writable) | `SetPortMode2` returns 0 (Output Enable accepts) |
 | 26 | Critical (crash) | Crashes during SetPortMode |
+| 29-31 | Critical (crash) | Crash when driven via `sceGpioPortSet` NID import |
+
+### sceGpioSetPortMode vs sceGpioSetPortMode2
+
+These are **two different functions** with different NIDs and semantics:
+
+| Function | NID | Mode values | Effect |
+|---|---|---|---|
+| `sceGpioSetPortMode` | 0xFBC85E74 | 0=input, 1=output | Direction register (+0x10) only |
+| `sceGpioSetPortMode2` | 0x317D9D2C | 0=disable, 2=enable | Direction + Output Enable MUX (+0x24) |
+
+`sceGpioSetPortMode` with mode=1 **actually drives pins** and can crash on pins connected to critical hardware (29-31 confirmed, 4/24/26 previously known). `sceGpioSetPortMode2` is safer for probing because the Output Enable register (+0x24) is silicon-locked on TA-090v2 — writes are accepted but the MUX never latches, so pins are never actually driven.
+
+### sceGpioPortSet NID Import Crash
+
+`sceGpioPortSet` (NID 0x310F0CCF) when linked as a strong import via `psp_extern!` crashes on pins 29-31 (confirmed 2026-03-21). The same operation via direct MMIO write to the Set register (+0x14) does **not** crash. The NID-linked function may perform additional validation or hardware interaction beyond the raw register write. Safe approach for GPIO sweeps: use `sceGpioSetPortMode2` (safe no-op) + MMIO Set register writes.
+
+### GPIO Sweep Results (2026-03-21, TA-090v2)
+
+Full sweep of pins 0-31 using `SetPortMode2` + MMIO Set:
+- **SetPortMode2 returns 0** (Output Enable accepted): pins 6, 7, 25
+- **SetPortMode2 returns 2** (no change / already configured): all other pins
+- **All pins**: Read register reflects Set writes, Output register stays 0
+- **Conclusion**: Output Enable MUX is locked even for pins 6/7/25 — accepts the write but doesn't propagate to actual output
 
 ### Writable-Pins Mask
 
@@ -190,13 +217,15 @@ Communication via `_sceSysconCommonWrite` at 0x880A6E4C (PSP-3001) / 0x880A6D4C 
 
 ## usb.prx NID Import Table
 
-### sceGpio_driver (3 NIDs)
+### sceGpio_driver (5 NIDs)
 
 | NID | Function | Stub Offset | Purpose |
 |---|---|---|---|
 | 0x103C3EB2 | sceGpioPortClear | 0x8FB0 | Clear GPIO pin (write 1 to clear) |
-| 0x310F0CCF | sceGpioPortSet | 0x8FB8 | Set GPIO pin (write 1 to set) |
-| 0x317D9D2C | sceGpioSetPortMode2 | 0x8FC0 | Set pin mode (0=disable, 2=output enable) |
+| 0x310F0CCF | sceGpioPortSet | 0x8FB8 | Set GPIO pin (write 1 to set). **Crashes on pins 29-31 via NID import** |
+| 0x317D9D2C | sceGpioSetPortMode2 | 0x8FC0 | Set pin mode (0=disable, 2=output enable). Safe — Output Enable silicon-locked |
+| 0x4250D44A | sceGpioPortRead | — | Read GPIO port 0 pin state |
+| 0xFBC85E74 | sceGpioSetPortMode | — | Set pin direction (0=input, 1=output). **Crashes on pins 29-31** |
 
 ### sceSysreg_driver (14 NIDs)
 
@@ -228,6 +257,8 @@ Communication via `_sceSysconCommonWrite` at 0x880A6E4C (PSP-3001) / 0x880A6D4C 
 ### sceSyscon_driver (NID resolution issue)
 
 NID 0xC8D97773 (`sceSysconCtrlUsbPower`) resolves to 0x880A7690 on PSP-3001, but this points to a **getter stub region** (consecutive `LUI`/`LW`/`JR $ra` sequences), not the real function. The real sceSysconCtrlUsbPower is at a different address not reachable via NID resolution on this firmware.
+
+When linked as a strong import via `psp_extern!`, calling `sceSysconCtrlUsbPower(1)` returns `0xCCE56536` (garbage/uninitialized) — confirming it resolves to the getter stub, not the control function. The raw Syscon SPI path (command 0x47 via `_sceSysconCommonWrite`) is the only reliable way to send USB power SET commands.
 
 ---
 

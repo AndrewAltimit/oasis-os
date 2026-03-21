@@ -1,26 +1,17 @@
 //! Syscon command helpers for USB power control.
 //!
-//! Syscon is the PMU/power controller on PSP. It communicates via a custom
-//! packet protocol through a shared memory region. The kernel function
-//! `_sceSysconCommonWrite` at a Tachyon-version-dependent address handles
-//! the actual SPI transaction.
+//! Uses `psp::sys::sceSyscon*` for NID-linked functions (resolved at module
+//! load) and raw packet construction for direct Syscon SPI commands.
 //!
 //! Key USB power commands:
 //!   0x44 — GET USB power status
-//!   0x45 — SET USB power prepare
+//!   0x45 — SET USB power prepare (DANGEROUS: causes shutdown)
 //!   0x46 — GET USB power state
 //!   0x47 — SET USB power activate
-//!
-//! NID for official API: sceSysconCtrlUsbPower = 0xC8D97773
 
 use psp::hw::hw_read32;
 
-/// NID for sceSysconCtrlUsbPower (may not be exported on all FW versions)
-const NID_SYSCON_CTRL_USB_POWER: u32 = 0xC8D97773;
-
-/// Resolved sceSysconCtrlUsbPower function pointer
-type SysconCtrlUsbPowerFn = unsafe extern "C" fn(enable: i32) -> i32;
-static mut SYSCON_CTRL_USB_POWER_FN: Option<SysconCtrlUsbPowerFn> = None;
+static mut CTRL_USB_POWER_FN: Option<unsafe extern "C" fn(i32) -> i32> = None;
 static mut RESOLVED_ADDR: u32 = 0;
 
 /// Get the resolved function address (for logging).
@@ -28,45 +19,43 @@ pub fn resolved_addr() -> u32 {
     unsafe { core::ptr::read_volatile(&raw const RESOLVED_ADDR) }
 }
 
-/// Attempt to resolve sceSysconCtrlUsbPower via NID.
+/// Resolve sceSysconCtrlUsbPower via find_function.
 /// Returns true if found.
 pub unsafe fn resolve_nids() -> bool {
-    let modules: [(*const u8, *const u8); 2] = [
-        (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
-        (b"sceSYSCON_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+    let modules: [&[u8]; 2] = [
+        psp::sys::syscon::SYSCON_MODULE,
+        psp::sys::syscon::SYSCON_MODULE_ALT,
     ];
+    let library = psp::sys::syscon::SYSCON_LIBRARY.as_ptr();
+    let nid = psp::sys::syscon::NID_SYSCON_CTRL_USB_POWER;
 
-    for (module, library) in &modules {
-        if let Some(addr) =
-            psp::hook::find_function(*module, *library, NID_SYSCON_CTRL_USB_POWER)
-        {
-            // SAFETY: NID-resolved function pointer from kernel Syscon driver.
+    for module in &modules {
+        if let Some(addr) = psp::hook::find_function(module.as_ptr(), library, nid) {
             core::ptr::write_volatile(
-                &raw mut SYSCON_CTRL_USB_POWER_FN,
+                &raw mut CTRL_USB_POWER_FN,
                 Some(core::mem::transmute(addr)),
             );
-            core::ptr::write_volatile(
-                &raw mut RESOLVED_ADDR,
-                addr as u32,
-            );
+            core::ptr::write_volatile(&raw mut RESOLVED_ADDR, addr as u32);
             return true;
         }
     }
-
     false
 }
 
-/// Call sceSysconCtrlUsbPower(enable) if resolved.
-/// Returns Some(ret_code) or None if NID not found.
+/// Call sceSysconCtrlUsbPower(enable) via resolved function pointer.
+///
+/// Note: On PSP-3001 6.61, this NID resolves to a getter stub — it reads
+/// a cached value but may not actually control USB power. The raw Syscon
+/// command path (syscon_set 0x47) is more reliable for testing.
 pub unsafe fn ctrl_usb_power(enable: i32) -> Option<i32> {
-    let f = core::ptr::read_volatile(&raw const SYSCON_CTRL_USB_POWER_FN);
-    f.map(|func| func(enable))
+    let f = core::ptr::read_volatile(&raw const CTRL_USB_POWER_FN)?;
+    Some(f(enable))
 }
 
 /// Get the _sceSysconCommonWrite function address based on Tachyon version.
 fn syscon_common_write_addr() -> u32 {
     // SAFETY: reading Tachyon version register (read-only MMIO).
-    let tachyon = unsafe { hw_read32(0xBC10_0040) } & 0xFF00_0000;
+    let tachyon = unsafe { hw_read32(psp::hw::SYSREG_TACHYON_VER) } & 0xFF00_0000;
     if tachyon >= 0x0050_0000 {
         0x880A6E4C // PSP-3001 (Tachyon TA-090v2+)
     } else {

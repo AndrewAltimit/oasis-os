@@ -19,7 +19,7 @@ authors = ["AndrewAltimit"]
 
 [dependencies]
 # Pinned to specific commit for reproducible builds.
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "4370415", features = ["kernel"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d833e94", features = ["kernel"] }
 
 # unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
 # a lookup table issue. This fork patches the panic for the MIPS target.
