@@ -12,23 +12,27 @@
 //!   BD101038 — HcRhPortStatus (port power + enable)
 //!   BD800060 — MUSBMHDRC DevCtl (session/host mode)
 
-use psp::hw::{hw_read32, hw_write32};
+use psp::hw::{
+    self, hw_read32, hw_write32,
+    SYS_CTRL_BASE, OHCI_BASE, MUSB_BASE, SYSREG_TACHYON_VER,
+    SYSREG_PERIPH_CLK1, SYSREG_PERIPH_CLK2, SYSREG_USB_CLK,
+};
 
-// Clock registers
-const SYS_CLK1: u32 = 0xBC10_0050;
-const SYS_CLK2: u32 = 0xBC10_0058;
-const OHCI_CLK: u32 = 0xBC10_0078;
-const TACHYON_REG: u32 = 0xBC10_0040;
+// Clock registers (using psp::hw constants where available)
+const SYS_CLK1: u32 = SYSREG_PERIPH_CLK1;
+const SYS_CLK2: u32 = SYSREG_PERIPH_CLK2;
+const OHCI_CLK: u32 = SYSREG_USB_CLK;
+const TACHYON_REG: u32 = SYSREG_TACHYON_VER;
 
-// OHCI registers
-const OHCI_REVISION: u32 = 0xBD10_0000;
-const OHCI_CONTROL: u32 = 0xBD10_0004;
-const OHCI_CMDSTATUS: u32 = 0xBD10_0008;
-const OHCI_RH_STATUS: u32 = 0xBD10_1034;
-const OHCI_RH_PORT_STATUS: u32 = 0xBD10_1038;
+// OHCI registers (offsets from OHCI_BASE)
+const OHCI_REVISION: u32 = OHCI_BASE;
+const OHCI_CONTROL: u32 = OHCI_BASE + 0x004;
+const OHCI_CMDSTATUS: u32 = OHCI_BASE + 0x008;
+const OHCI_RH_STATUS: u32 = OHCI_BASE + 0x1034;
+const OHCI_RH_PORT_STATUS: u32 = OHCI_BASE + 0x1038;
 
-// MUSBMHDRC registers
-const MUSB_DEVCTL: u32 = 0xBD80_0060;
+// MUSBMHDRC registers (offsets from MUSB_BASE)
+const MUSB_DEVCTL: u32 = MUSB_BASE + 0x060;
 
 /// Snapshot of USB controller registers.
 #[derive(Clone, Copy)]

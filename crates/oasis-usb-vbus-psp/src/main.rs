@@ -805,11 +805,17 @@ fn phase4_step1_gpio_toggle() {
     log_gpio_snapshot("Baseline:", &snap);
     Logger::log("");
 
-    // Known dangerous pins:
+    // Known dangerous pins (crash with SetPortMode which actually drives them):
     //   3  = LCD backlight/power (screen turns off)
+    //   4  = critical (crash)
     //   19 = USB PHY transceiver (disrupts USB)
-    //   23 = crash
-    // Test safe pins, high pins first (more likely USB-related)
+    //   23 = VBUS MOSFET (tested separately in phase 5)
+    //   24 = critical (crash)
+    //   26 = critical (crash during SetPortMode)
+    //   30-31 = crash when driven via SetPortMode (discovered 2026-03-21)
+    // Using SetPortMode2 + MMIO Set for sweep. NID-linked sceGpioPortSet
+    // crashes on high pins (29-31+), so we use direct MMIO for the Set
+    // register which is safe (Output Enable MUX is silicon-locked).
     let skip: [u32; 6] = [3, 4, 19, 23, 24, 26];
     for pin in (0..32u32).rev() {
         if skip.contains(&pin) {
@@ -836,24 +842,17 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     Logger::log(f.s());
 
     unsafe {
-        // Method 1: Try NID functions (preferred)
-        if let Some(ret) = gpio::set_port_mode(pin, 1) {
-            lr("  NID SetMode ret=", ret as u32);
-            if let Some(ret) = gpio::port_set(mask) {
-                lr("  NID PortSet ret=", ret as u32);
-            }
-        } else {
-            // Method 2: MMIO — set direction + write output directly
-            let dir = psp::hw::hw_read32(0xBE24_0010);
-            // SAFETY: kernel-mode MMIO write to GPIO direction.
-            psp::hw::hw_write32(0xBE24_0010, dir | mask);
-            // Write to Set register AND Output register
-            // SAFETY: kernel-mode MMIO write to GPIO set + output.
-            psp::hw::hw_write32(0xBE24_0014, mask); // Set
-            let out = psp::hw::hw_read32(0xBE24_0008);
-            psp::hw::hw_write32(0xBE24_0008, out | mask); // Output
-            Logger::log("  MMIO dir+set+out");
+        // NID-linked sceGpioPortSet crashes on high pins (29-31 confirmed,
+        // likely others). Use SetPortMode2 (safe no-op on silicon-locked
+        // Output Enable) + MMIO for the actual Set register write.
+        if let Some(ret) = gpio::set_port_mode2(pin, 2) {
+            lr("  NID SetMode2 ret=", ret as u32);
         }
+        // MMIO set — write directly to GPIO Set register (0xBE240014).
+        // This is safe: the Output Enable MUX is locked, so the pin
+        // won't actually drive even if Set is written.
+        psp::hw::hw_write32(psp::hw::GPIO_PORT0_SET, mask);
+        Logger::log("  MMIO Set written");
     }
 
     // Wait and check
@@ -869,17 +868,11 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
         Logger::log("  *** CHANGE DETECTED ***");
     }
 
-    // Restore
+    // Restore via MMIO
     unsafe {
-        if gpio::port_clear(mask).is_none() {
-            psp::hw::hw_write32(0xBE24_0018, mask); // Clear
-            let out = psp::hw::hw_read32(0xBE24_0008);
-            // SAFETY: kernel-mode MMIO write to restore GPIO output.
-            psp::hw::hw_write32(0xBE24_0008, out & !mask);
-        }
-        if gpio::set_port_mode(pin, 0).is_none() {
-            // SAFETY: kernel-mode MMIO write to restore GPIO direction.
-            psp::hw::hw_write32(0xBE24_0010, original.direction);
+        psp::hw::hw_write32(psp::hw::GPIO_PORT0_CLEAR, mask);
+        if let Some(_) = gpio::set_port_mode2(pin, 0) {
+            // restored
         }
     }
 

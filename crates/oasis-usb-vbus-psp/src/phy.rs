@@ -11,13 +11,13 @@
 //!   BE4C0030 — PHY mode (bit 0 = host enable, bits 8-9 = mode)
 //!   BE4C0044 — Feature enable bitmask
 
-use psp::hw::{hw_read32, hw_write32};
+use psp::hw::{hw_read32, hw_write32, USB_PHY_BASE};
 
-const PHY_CLK_DIV: u32 = 0xBE4C_0024;
-const PHY_CLK_DIV_HI: u32 = 0xBE4C_0028;
-const PHY_CONFIG: u32 = 0xBE4C_002C;
-const PHY_MODE: u32 = 0xBE4C_0030;
-const PHY_FEATURE: u32 = 0xBE4C_0044;
+const PHY_CLK_DIV: u32 = USB_PHY_BASE + 0x24;
+const PHY_CLK_DIV_HI: u32 = USB_PHY_BASE + 0x28;
+const PHY_CONFIG: u32 = USB_PHY_BASE + 0x2C;
+const PHY_MODE: u32 = USB_PHY_BASE + 0x30;
+const PHY_FEATURE: u32 = USB_PHY_BASE + 0x44;
 
 /// Snapshot of USB PHY registers.
 #[derive(Clone, Copy)]
