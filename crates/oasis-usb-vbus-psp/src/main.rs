@@ -1587,7 +1587,143 @@ fn phase6_step4_full_chain_vbus() {
     Logger::log("Done.");
 }
 
-/// Step 6.5: Scan Syscon commands 0x50-0xFF for GPIO unlock.
+/// Step 6.5: Live monitor — plug/unplug OTG adapter while watching registers.
+///
+/// Polls GPIO OutEn, AltFunc, Syscon USB status, and key registers
+/// every 500ms for 60 seconds. Plug in OTG adapter during monitoring
+/// to see if Syscon detects the grounded ID pin.
+fn phase6_step5_live_monitor() {
+    Logger::log("=== 6.5: Live OTG Monitor (60s) ===");
+    Logger::log("Plug OTG adapter in/out during test!");
+    Logger::log("");
+
+    // Enable everything we can first
+    unsafe {
+        // sceSysreg enables
+        let m = b"sceLowIO_Driver\0".as_ptr();
+        let l = b"sceSysreg_driver\0".as_ptr();
+        type F = unsafe extern "C" fn(i32) -> i32;
+        for nid in [0xEC03F6E2u32, 0x72C1CA96, 0x1561BCD2,
+                     0x9306F27B, 0x9A6E7BB8] {
+            if let Some(addr) = psp::hook::find_function(m, l, nid) {
+                let func: F = core::mem::transmute(addr);
+                func(0);
+            }
+        }
+        // BC10007C port enable for pin 23
+        let v7c = hw_read32(0xBC10_007C);
+        psp::hw::hw_write32(0xBC10_007C, v7c | 0x0080_0000);
+        sceKernelDelayThread(10_000);
+    }
+
+    // Get baselines
+    let base_outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+    let base_altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+    let base_read = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+    let base_p1read = unsafe { psp::hw::hw_read32(0xBE24_0004) };
+    let base_50 = unsafe { hw_read32(0xBC10_0050) };
+    let base_4c = unsafe { hw_read32(0xBC10_004C) };
+    let base_c4 = unsafe { hw_read32(0xBC10_00C4) };
+    let base_b8 = unsafe { hw_read32(0xBC10_00B8) };
+    let base_be50_18 = unsafe { hw_read32(0xBE50_0018) };
+    let base_be50_2c = unsafe { hw_read32(0xBE50_002C) };
+
+    lr("Base P0Read=", base_read);
+    lr("Base P1Read=", base_p1read);
+    lr("Base OutEn =", base_outen);
+    lr("Base AltFn =", base_altfn);
+    lr("Base BC50  =", base_50);
+    lr("Base BC4C  =", base_4c);
+    lr("Base BCC4  =", base_c4);
+    lr("Base BCB8  =", base_b8);
+    lr("Base BE5018=", base_be50_18);
+    lr("Base BE502C=", base_be50_2c);
+
+    // Also poll Syscon USB status
+    let (_, base_rx) = syscon::syscon_get(0x46);
+    let mut f = Fmt::new();
+    f.p("Base Syscon46=[");
+    for i in 0..6 { if i > 0 { f.p(" "); } f.h2(base_rx[i]); }
+    f.p("]");
+    Logger::log(f.s());
+
+    Logger::log("");
+    Logger::log("Monitoring 60s — PLUG OTG NOW!");
+
+    // Monitor loop — 120 polls at 500ms
+    for tick in 0u32..120 {
+        unsafe { sceKernelDelayThread(500_000) };
+
+        let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+        let p0read = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        let p1read = unsafe { psp::hw::hw_read32(0xBE24_0004) };
+        let v50 = unsafe { hw_read32(0xBC10_0050) };
+        let v4c = unsafe { hw_read32(0xBC10_004C) };
+        let vc4 = unsafe { hw_read32(0xBC10_00C4) };
+        let vb8 = unsafe { hw_read32(0xBC10_00B8) };
+        let be18 = unsafe { hw_read32(0xBE50_0018) };
+        let be2c = unsafe { hw_read32(0xBE50_002C) };
+
+        // Check for ANY change
+        let changed = outen != base_outen || altfn != base_altfn
+            || p0read != base_read || p1read != base_p1read
+            || v50 != base_50 || v4c != base_4c
+            || vc4 != base_c4 || vb8 != base_b8
+            || be18 != base_be50_18 || be2c != base_be50_2c;
+
+        if changed {
+            let sec = tick / 2;
+            let mut f = Fmt::new();
+            f.p("!! t="); f.decimal(sec); f.p("s CHANGE:");
+            Logger::log(f.s());
+
+            if p0read != base_read { lr("  P0Read=", p0read); }
+            if p1read != base_p1read { lr("  P1Read=", p1read); }
+            if outen != base_outen { lr("  OutEn=", outen); }
+            if altfn != base_altfn { lr("  AltFn=", altfn); }
+            if v50 != base_50 { lr("  BC50=", v50); }
+            if v4c != base_4c { lr("  BC4C=", v4c); }
+            if vc4 != base_c4 { lr("  BCC4=", vc4); }
+            if vb8 != base_b8 { lr("  BCB8=", vb8); }
+            if be18 != base_be50_18 { lr("  BE5018=", be18); }
+            if be2c != base_be50_2c { lr("  BE502C=", be2c); }
+
+            // Also check Syscon
+            let (_, rx) = syscon::syscon_get(0x46);
+            let mut f = Fmt::new();
+            f.p("  Syscon46=[");
+            for i in 0..6 { if i > 0 { f.p(" "); } f.h2(rx[i]); }
+            f.p("]");
+            Logger::log(f.s());
+        }
+
+        // Log a heartbeat every 10s
+        if tick % 20 == 0 && tick > 0 {
+            let sec = tick / 2;
+            let mut f = Fmt::new();
+            f.p("  t="); f.decimal(sec); f.p("s ok");
+            Logger::log(f.s());
+        }
+
+        // Triangle to exit early
+        let mut p = SceCtrlData::default();
+        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
+        if p.buttons.intersects(CtrlButtons::TRIANGLE) {
+            Logger::log("  (stopped)");
+            break;
+        }
+    }
+
+    Logger::log("");
+    Logger::log("Final state:");
+    lr("OutEn =", unsafe { psp::hw::hw_read32(0xBE24_0024) });
+    lr("AltFn =", unsafe { psp::hw::hw_read32(0xBE24_0040) });
+    lr("P0Read=", unsafe { psp::hw::hw_read32(0xBE24_0000) });
+    lr("P1Read=", unsafe { psp::hw::hw_read32(0xBE24_0004) });
+}
+
+/// Step 6.6: Scan Syscon commands 0x50-0xFF for GPIO unlock.
 ///
 /// Sends each GET command and checks if GPIO OutEn (+0x24) or
 /// AltFunc (+0x40) changed. Skips known dangerous commands.
@@ -1860,12 +1996,13 @@ const MENU: &[MenuItem] = &[
     MenuItem { label: "6.2 Probe 0xBE500000 block", func: phase6_step2_probe_be500000 },
     MenuItem { label: "6.3 Full sceSysreg init (14 NIDs)", func: phase6_step3_full_sysreg_init },
     MenuItem { label: "6.4 FULL CHAIN + VBUS", func: phase6_step4_full_chain_vbus },
-    MenuItem { label: "6.5 Syscon scan 0x50-0xFF", func: phase6_step5_syscon_scan },
-    MenuItem { label: "6.6 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
+    MenuItem { label: "6.5 Live OTG monitor (60s)", func: phase6_step5_live_monitor },
+    MenuItem { label: "6.6 Syscon scan 0x50-0xFF", func: phase6_step5_syscon_scan },
+    MenuItem { label: "6.7 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
 ];
 
 /// Collect menu labels into a fixed array for screen rendering.
-const MENU_LABELS: [&str; 20] = [
+const MENU_LABELS: [&str; 21] = [
     "1.1 Dump GPIO registers",
     "1.2 Resolve GPIO NIDs",
     "1.3 Monitor GPIO (needs camera)",
@@ -1884,8 +2021,9 @@ const MENU_LABELS: [&str; 20] = [
     "6.2 Probe 0xBE500000 block",
     "6.3 Full sceSysreg init (14 NIDs)",
     "6.4 FULL CHAIN + VBUS",
-    "6.5 Syscon scan 0x50-0xFF",
-    "6.6 Hook sceUsbActivate trace",
+    "6.5 Live OTG monitor (60s)",
+    "6.6 Syscon scan 0x50-0xFF",
+    "6.7 Hook sceUsbActivate trace",
 ];
 
 fn psp_main() {
