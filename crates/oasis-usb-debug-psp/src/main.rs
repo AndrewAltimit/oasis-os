@@ -114,8 +114,11 @@ fn fmt_to_buf(buf: &mut [u8; 256], args: core::fmt::Arguments<'_>) -> usize {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
             let bytes = s.as_bytes();
             let remaining = 256 - self.pos;
-            let to_copy = bytes.len().min(remaining);
-            self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+            // Truncate at a UTF-8 character boundary to avoid splitting
+            // a multibyte codepoint (which would make from_utf8_unchecked UB).
+            let to_copy = s.floor_char_boundary(bytes.len().min(remaining));
+            self.buf[self.pos..self.pos + to_copy]
+                .copy_from_slice(&bytes[..to_copy]);
             self.pos += to_copy;
             Ok(())
         }

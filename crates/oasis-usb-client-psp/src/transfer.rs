@@ -192,11 +192,12 @@ unsafe fn handle_thin_client_recv(size: usize) {
         // Parse header: [type, flags, len_lo, len_hi]
         let msg_type = core::ptr::read(buf);
         let flags = core::ptr::read(buf.add(1));
-        let _payload_len = core::ptr::read(buf.add(2)) as u16
-            | ((core::ptr::read(buf.add(3)) as u16) << 8);
-
         let payload = buf.add(MSG_HEADER_SIZE);
-        let payload_size = size - MSG_HEADER_SIZE;
+        // Use the header's payload_len (not raw USB transfer size) to
+        // exclude any ZLP-avoidance padding byte the host may have added.
+        let payload_len = core::ptr::read(buf.add(2)) as usize
+            | ((core::ptr::read(buf.add(3)) as usize) << 8);
+        let payload_size = payload_len.min(size - MSG_HEADER_SIZE);
 
         match msg_type {
             CMD_FRAME_CHUNK => {

@@ -74,10 +74,12 @@ fn syscon_common_write_addr() -> u32 {
     }
 }
 
-/// Send a Syscon SET command (length=3 packet: cmd, len, value, checksum).
+/// Prepare a Syscon packet, send it via _sceSysconCommonWrite, and
+/// return (return_code, response_bytes[16]).
 ///
-/// Returns (return_code, response_bytes[16]).
-pub fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
+/// `data` contains the payload bytes AFTER the command byte. For GET
+/// commands this is empty; for SET commands it contains the value byte.
+fn syscon_cmd(cmd: u8, data: &[u8]) -> (i32, [u8; 16]) {
     let mut pkt = [0u8; 128];
     // Pre-fill response regions with 0xFF
     for b in pkt[0x0C..0x1C].iter_mut() {
@@ -87,11 +89,18 @@ pub fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
         *b = 0xFF;
     }
 
+    // Build packet: [cmd, length, ...data, checksum]
+    let pkt_len = 2 + data.len(); // cmd + len_byte + data
     pkt[0x0C] = cmd;
-    pkt[0x0D] = 3; // length for SET commands
-    pkt[0x0E] = value;
-    let sum = pkt[0x0C].wrapping_add(pkt[0x0D]).wrapping_add(pkt[0x0E]);
-    pkt[0x0F] = !sum;
+    pkt[0x0D] = pkt_len as u8;
+    for (i, &b) in data.iter().enumerate() {
+        pkt[0x0E + i] = b;
+    }
+    let mut sum = 0u8;
+    for i in 0..pkt_len {
+        sum = sum.wrapping_add(pkt[0x0C + i]);
+    }
+    pkt[0x0C + pkt_len] = !sum;
 
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let addr = syscon_common_write_addr();
@@ -104,30 +113,16 @@ pub fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
     (ret, rx)
 }
 
-/// Send a Syscon GET command (length=2 packet: cmd, len, checksum).
+/// Send a Syscon SET command (cmd, value).
+///
+/// Returns (return_code, response_bytes[16]).
+pub fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
+    syscon_cmd(cmd, &[value])
+}
+
+/// Send a Syscon GET command (cmd only, no payload).
 ///
 /// Returns (return_code, response_bytes[16]).
 pub fn syscon_get(cmd: u8) -> (i32, [u8; 16]) {
-    let mut pkt = [0u8; 128];
-    for b in pkt[0x0C..0x1C].iter_mut() {
-        *b = 0xFF;
-    }
-    for b in pkt[0x1C..0x2C].iter_mut() {
-        *b = 0xFF;
-    }
-
-    pkt[0x0C] = cmd;
-    pkt[0x0D] = 2; // length for GET commands
-    let sum = pkt[0x0C].wrapping_add(pkt[0x0D]);
-    pkt[0x0E] = !sum;
-
-    type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
-    let addr = syscon_common_write_addr();
-    // SAFETY: calling kernel Syscon driver function at known address.
-    let func: F = unsafe { core::mem::transmute(addr) };
-    let ret = unsafe { func(pkt.as_mut_ptr(), 0) };
-
-    let mut rx = [0u8; 16];
-    rx.copy_from_slice(&pkt[0x1C..0x2C]);
-    (ret, rx)
+    syscon_cmd(cmd, &[])
 }

@@ -96,21 +96,29 @@ impl PspDevice {
 
     /// Send an echo request and verify the response matches.
     pub fn echo(&self, data: &[u8]) -> Result<bool, String> {
-        // Avoid sending exact multiples of 512 (ZLP issue)
-        let len = if data.len().is_multiple_of(512) && !data.is_empty() {
-            data.len() - 1
+        // Avoid sending exact multiples of 512 — USB bulk transfers
+        // require a Zero Length Packet (ZLP) to signal completion when
+        // the payload is an exact multiple of max packet size. Append a
+        // padding byte instead of truncating the payload.
+        let mut send_buf;
+        let send_data = if data.len().is_multiple_of(512) && !data.is_empty() {
+            send_buf = vec![0u8; data.len() + 1];
+            send_buf[..data.len()].copy_from_slice(data);
+            &send_buf[..]
         } else {
-            data.len()
+            data
         };
-        self.write(&data[..len], TIMEOUT)
+        let send_len = send_data.len();
+        self.write(send_data, TIMEOUT)
             .map_err(|e| format!("Echo write: {e}"))?;
 
-        let mut buf = vec![0u8; len + 64];
+        let mut buf = vec![0u8; send_len + 64];
         let n = self
             .read(&mut buf, TIMEOUT)
             .map_err(|e| format!("Echo read: {e}"))?;
 
-        Ok(n == len && buf[..len] == data[..len])
+        // The device echoes back exactly what it received (including padding)
+        Ok(n == send_len && buf[..data.len()] == data[..])
     }
 
     /// Send a framed message (header + payload) to the PSP.
