@@ -1115,6 +1115,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=d833e94#d833e9429c3ab769b3d7d12ef7b02f9a7945de43"
 dependencies = [
  "bitflags 2.10.0",
  "libm",
