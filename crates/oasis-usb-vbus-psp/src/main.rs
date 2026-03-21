@@ -1493,43 +1493,45 @@ fn phase6_step4_full_chain_vbus() {
     }
     log_phy_snapshot("PHY:", &phy::snapshot());
 
-    // Step 5: Check register state + try MUSB access
-    // BC10004C changed from 0x40 to 0x10020 after sceSysreg init —
-    // this might have enabled the MUSB bus gate!
+    // Step 5: Set BC1000C4 bit 0 — firmware does this!
+    // usb.prx offset 0x5918: BC1000C4 |= 1 (possible MUSB bus gate)
+    // Our tests showed BC1000C4 = 0 — this bit is NOT set!
     Logger::log("");
-    Logger::log("--- Step 5: post-init state ---");
+    Logger::log("--- Step 5: BC1000C4 bus gate ---");
+    unsafe {
+        lr("  BC1000C4 before=", hw_read32(0xBC10_00C4));
+        lr("  BC1000F0 before=", hw_read32(0xBC10_00F0));
+
+        // Set bit 0 of BC1000C4 (from firmware disasm)
+        let c4 = hw_read32(0xBC10_00C4);
+        psp::hw::hw_write32(0xBC10_00C4, c4 | 1);
+        sceKernelDelayThread(10_000);
+        lr("  BC1000C4 after |=1: ", hw_read32(0xBC10_00C4));
+
+        // Also set BC1000B8 — firmware writes this too (4 refs)
+        let b8 = hw_read32(0xBC10_00B8);
+        psp::hw::hw_write32(0xBC10_00B8, b8 | 1);
+        sceKernelDelayThread(10_000);
+        lr("  BC1000B8 after |=1: ", hw_read32(0xBC10_00B8));
+
+        // Check GPIO state after bus gate change
+        lr("  GPIO Out=", psp::hw::hw_read32(0xBE24_0008));
+        lr("  GPIO Read=", psp::hw::hw_read32(0xBE24_0000));
+        sceKernelDelayThread(50_000);
+    }
+
+    // Step 6: Dump registers after all init
+    Logger::log("");
+    Logger::log("--- Step 6: post-init state ---");
     unsafe {
         lr("  BC10004C=", hw_read32(0xBC10_004C));
         lr("  BC100050=", hw_read32(0xBC10_0050));
+        lr("  BC1000C4=", hw_read32(0xBC10_00C4));
+        lr("  BC1000B8=", hw_read32(0xBC10_00B8));
         lr("  BC1000F0=", hw_read32(0xBC10_00F0));
         lr("  BC100080=", hw_read32(0xBC10_0080));
         lr("  BE500018=", hw_read32(0xBE50_0018));
         lr("  BE50002C=", hw_read32(0xBE50_002C));
-        sceKernelDelayThread(50_000);
-    }
-
-    // Step 6: Scan more sceSysreg offsets for MUSB bus gate
-    // MUSB at 0xBD80xxxx still bus-faults after sceSysreg init.
-    // Scan BC100xxx for potential MUSB enable bits.
-    Logger::log("");
-    Logger::log("--- Step 6: sceSysreg scan ---");
-    unsafe {
-        // Dump BC100040-BC1000FF to find what changed
-        let offsets: [u32; 16] = [
-            0x40, 0x44, 0x48, 0x4C,
-            0x50, 0x54, 0x58, 0x5C,
-            0x74, 0x78, 0x7C, 0x80,
-            0xB8, 0xC4, 0xF0, 0xF4,
-        ];
-        for off in &offsets {
-            let addr = 0xBC10_0000 + off;
-            let val = hw_read32(addr);
-            if val != 0 {
-                let mut f = Fmt::new();
-                f.p("  BC10"); f.h8(*off); f.p("="); f.h8(val);
-                Logger::log(f.s());
-            }
-        }
         sceKernelDelayThread(50_000);
     }
 
