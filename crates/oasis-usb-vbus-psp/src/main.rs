@@ -842,17 +842,16 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     Logger::log(f.s());
 
     unsafe {
-        // NID-linked sceGpioPortSet crashes on high pins (29-31 confirmed,
-        // likely others). Use SetPortMode2 (safe no-op on silicon-locked
-        // Output Enable) + MMIO for the actual Set register write.
+        // Test: use find_function()-resolved sceGpioPortSet.
+        // psp_extern! stubs crashed on pins 29-31; find_function() should work.
         if let Some(ret) = gpio::set_port_mode2(pin, 2) {
-            lr("  NID SetMode2 ret=", ret as u32);
+            lr("  SetMode2 ret=", ret as u32);
         }
-        // MMIO set — write directly to GPIO Set register (0xBE240014).
-        // This is safe: the Output Enable MUX is locked, so the pin
-        // won't actually drive even if Set is written.
-        psp::hw::hw_write32(psp::hw::GPIO_PORT0_SET, mask);
-        Logger::log("  MMIO Set written");
+        if let Some(ret) = gpio::port_set(mask) {
+            lr("  PortSet ret=", ret as u32);
+        } else {
+            Logger::log("  PortSet: NID not resolved");
+        }
     }
 
     // Wait and check
@@ -868,12 +867,10 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
         Logger::log("  *** CHANGE DETECTED ***");
     }
 
-    // Restore via MMIO
+    // Restore via find_function()-resolved NID calls
     unsafe {
-        psp::hw::hw_write32(psp::hw::GPIO_PORT0_CLEAR, mask);
-        if let Some(_) = gpio::set_port_mode2(pin, 0) {
-            // restored
-        }
+        let _ = gpio::port_clear(mask);
+        let _ = gpio::set_port_mode2(pin, 0);
     }
 
     unsafe { sceKernelDelayThread(50_000) };
