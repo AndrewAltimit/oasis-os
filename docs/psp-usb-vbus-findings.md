@@ -265,6 +265,68 @@ The firmware's `usb.prx` calls GPIO functions in the middle of a larger USB init
 
 ---
 
+## Phase 2 NID Analysis Results (standalone, no Ghidra needed)
+
+Script: `scripts/psp_nid_analyze.py`
+
+### usb.prx (43,402 bytes, PRX type 0xFFA0)
+
+**Entry point:** 0x00002D48
+
+**NID import table confirmed (all 14 sceSysreg_driver at 0x9728-0x975C):**
+
+| NID | Name | Offset |
+|---|---|---|
+| 0x1561BCD2 | sceSysregUsbClkEnable | 0x9728 |
+| 0x1D233EF9 | sceSysregUsbClkDisable | 0x972C |
+| 0x30C0A141 | sceSysregUsbQueryIntr | 0x9730 |
+| 0x6C0EE043 | sceSysregUsbAcquireIntr | 0x9734 |
+| 0x6F3B6D7D | sceSysregUsbResetDisable | 0x9738 |
+| 0x72C1CA96 | sceSysregGpioIoEnable | 0x973C |
+| 0x84A279A4 | sceSysregUsbResetEnable | 0x9740 |
+| 0x87B61303 | sceSysregUsbGetConnectStatus | 0x9744 |
+| 0x9275DD37 | sceSysregUsbSetConnectStatus | 0x9748 |
+| 0x9306F27B | sceSysregUsbIoEnable | 0x974C |
+| 0x9A6E7BB8 | sceSysregUsbBusClockEnable | 0x9750 |
+| 0xD7AD9705 | sceSysregUsbBusClockDisable | 0x9754 |
+| 0xE2A5D1EE | sceSysregUsbIoDisable | 0x9758 |
+| 0xEC03F6E2 | sceSysregGpioClkEnable | 0x975C |
+
+**GPIO NIDs (3):** PortClear (0x103C3EB2), PortSet (0x310F0CCF), SetPortMode2 (0x317D9D2C)
+
+**VBUS pin 23 code locations:**
+- 0x008C74: `ADDIU $4, $zero, 23` (pin number)
+- 0x008C8C: `LUI $4, 0x0080` (mask 0x00800000)
+- 0x008CB0: `ADDIU $4, $zero, 23` (disable path)
+- 0x008CDC: `LUI $4, 0x0080` (disable mask)
+
+**CRITICAL: 143 MUSB accesses (0xBD80xxxx), NOT OHCI!**
+- usb.prx uses MUSB controller (Mentor USB OTG), not OHCI
+- This explains why MUSB at 0xBD80xxxx bus-faults — the controller is powered down
+- MUSB bus enable is likely through a sceSysreg register we haven't tried
+
+**sceSysreg registers directly written by usb.prx:**
+- BC1000B8 (15 references — our VBUS experiments showed this resets to 0)
+- BC1000C4 (2 references — new, untested)
+- BC1000F0 (3 references — new, untested)
+
+### lowio.prx (56,052 bytes) — GPIO Driver
+
+**Key findings:**
+- 50 GPIO (0xBE24xxxx) accesses — the actual GPIO hardware driver
+- 90 sceSysreg (0xBC10xxxx) accesses — GPIO output goes through sceSysreg
+- New sceSysreg offsets: **BC100080** and **BC1000B0** (not tested in Phase 1)
+- 82 OHCI references (0xBD10xxxx) — lowio includes the OHCI driver too
+
+### syscon.prx (22,036 bytes) — Syscon Controller
+
+**CRITICAL:** syscon.prx also has GPIO NIDs AND the 0x00800000 VBUS mask!
+- Accesses GPIO+0x08 (Output register) directly
+- Accesses BC100083 (sceSysreg — GPIO output MUX?)
+- The Syscon controller may be the one that actually drives GPIO pin 23
+
+---
+
 ## Conclusions
 
 1. **GPIO pin 23 is confirmed** as the VBUS MOSFET control in `usb.prx` firmware
@@ -273,36 +335,97 @@ The firmware's `usb.prx` calls GPIO functions in the middle of a larger USB init
 4. **sceSysreg GPIO enables (IoEnable, ClkEnable) resolve and return success** but are insufficient alone
 5. **The full USB host init chain in usb.prx must be traced** — the GPIO set is the LAST step; preceding sceSysreg/sceSyscon calls are needed to unlock the output stage
 6. **PRX decryption is complete** — 15 decrypted ELFs available for Ghidra analysis
+7. **usb.prx uses MUSB (0xBD80xxxx), not OHCI** — 143 MUSB accesses vs 0 OHCI
+8. **BC1000C4 and BC1000F0** are new sceSysreg registers written by usb.prx (untested)
+9. **BC100080 and BC1000B0** are referenced by lowio.prx GPIO driver (untested)
+10. **syscon.prx directly controls GPIO pin 23** via the Output register and BC100083
+
+## Phase 2 On-Device Test Results (2026-03-21)
+
+### Step 6.1: sceSysconCtrlUsbPower NID Analysis
+- NID 0xC8D97773 resolves to **0x880A7690** — this is a **getter stub** region, NOT the actual function
+- Instruction at +12 (0x880A769C) = `0x03E00008` (`jr $ra` — return), confirms it's a stub
+- The real sceSysconCtrlUsbPower is elsewhere, not reachable via NID resolution
+- Syscon SET 0x47 v=4 accepted but no effect (same as v=1,2)
+
+### Step 6.1 Method C: New sceSysreg Registers
+| Register | Value | Notes |
+|---|---|---|
+| BC1000C4 | 0x00000000 | Zero |
+| BC1000F0 | 0x0000008A | Active — usb.prx writes this (3 refs) |
+| BC1000F4 | 0x0000008A | Same value as F0 |
+| BC100080 | 0x00000100 | Active — lowio.prx GPIO driver uses this |
+| BC1000B0 | 0x00000000 | Zero |
+| BC1000C0/C8/CC/F8 | 0x00000000 | All zero |
+
+### Step 6.3: Full sceSysreg Init (14/14 NIDs resolved)
+All 14 sceSysreg_driver NIDs resolved and called successfully:
+- **BC100050 changed**: 0x0000DC1D → 0x0000DE1D (bit 9 = 0x200 set)
+- UsbIoEn returns 1 (already enabled), UsbResetEn returns 9
+- NID_E2A5D1EE (UsbIoDisable) returns 0x00820000
+
+### Step 6.4: Full Chain + VBUS (consistent across 4 runs)
+| Register | Before | After | Change |
+|---|---|---|---|
+| BC100050 | 0x0000DC1D | 0x0000DD1D | bit 8 (0x100) set |
+| BC10004C | 0x00000040 | 0x00010020 | Major change! |
+| BC100074 | 0x00000000 | 0x00000100 | bit 8 set |
+| P1 Dir | 0x05000010 | 0x04000010 | bit 24 cleared |
+| P0 Output | 0x00000000 | 0x00000000 | **STILL ZERO** |
+
+- **scePower NID 0x0442D852 = scePowerRequestColdReset** — caused clean reboot (now skipped)
+- **MUSB (0xBD800060) still bus-faults** even after BC10004C change — NOT the MUSB bus gate
+- **PHY host mode init disrupts MS I/O** — screen flashes, log writes lost during step 4-7
+- **sceCtrlPeekBufferPositive crashes** after USB sceSysreg init — input polling corrupted
+
+### Step 6.5: sceUsbActivate Trace
+- All USB modules load successfully (UsbPspCm, UsbAcc, UsbCam = 0)
+- USBBusDriver + USBCamDriver start OK
+- **sceUsbActivate(0x282) returns 0x80243002** — error, no camera connected
+- **Zero GPIO changes** across entire module load/start/activate sequence
+- USB state = 0x111 (driver loaded, no connection)
+- VBUS enable only triggers when activation succeeds with real camera hardware
+
+### Blocking Conclusion
+GPIO pin 23 output **will not latch on TA-090v2** regardless of:
+- All 14 sceSysreg enables called
+- Syscon SET 0x47 commands
+- PHY host mode configuration
+- OHCI port power
+- Direct MMIO writes to GPIO Direction/Set/Output registers
+
+The output gate is controlled by either the **MUSB OTG controller** (inaccessible — bus-faults) or a hardware path in the **firmware reboot sequence**. A Go!Cam camera accessory is needed to trigger the firmware's own VBUS enable path and observe what additional register writes occur.
 
 ---
 
-## Next Steps (Priority Order)
+## Phase 2 Plan — Next Steps
 
-### 1. Ghidra Analysis of Decrypted usb.prx
-- Load into Ghidra as MIPS LE 32-bit ELF
-- Map all 14 sceSysreg_driver imports, 6 sceSyscon_driver imports
-- Trace the USB host mode init call chain from entry to GPIO pin 23 set
-- Identify every register write and function call that precedes the GPIO set
-- Pay special attention to sceSysreg NIDs that might unlock GPIO output
+### Phase A: Ghidra Deep Analysis (OFFLINE)
 
-### 2. Ghidra Analysis of Decrypted lowio.prx
-- Find the actual sceGpioPortSet implementation
-- Understand how the Set register is supposed to propagate to Output
-- Check if there's a GPIO output enable bit in sceSysreg registers (BC100xxx)
+Scripts: `scripts/ghidra_usb_vbus.py` and `scripts/ghidra_lowio_gpio.py`
 
-### 3. Fix sceSysconCtrlUsbPower Alignment
-- Call 0x880A769C directly (4 bytes past the NID resolution result)
-- The inner function at 0x880A7A7C takes a Syscon sub-command table
-- May need to pass correct arguments (arg3=4 seen in firmware)
+1. **usb.prx analysis** — Load into Ghidra as MIPS LE 32-bit ELF, run `ghidra_usb_vbus.py`
+   - Maps all 14 sceSysreg_driver NIDs, 6 sceSyscon_driver, 3 scePower_driver
+   - Traces USB host init call chain from entry to GPIO pin 23 set
+   - Identifies every register write and function call preceding GPIO set
+   - Scans for function pointer tables (VBUS enable/disable called via vtable)
 
-### 4. Investigate 0xBE500000 Register Block
-- 20 references in kernel dump, heavily used around 0x88172xxx
-- Offsets: 0x00, 0x18, 0x2C, 0x40, 0x300
-- Could be USB OTG controller or power management with VBUS control
+2. **lowio.prx analysis** — Run `ghidra_lowio_gpio.py`
+   - Finds sceGpioPortSet implementation (how Set→Output works)
+   - Checks for GPIO output enable in sceSysreg (BC100xxx)
+   - Looks for TA-090v2 specific code paths
 
-### 5. Acquire Go!Cam USB Camera Accessory
-- The camera driver sequence would reveal the exact VBUS enable path
-- Step 1.3 monitors GPIO before/after each USB camera init step
+### Phase B: On-Device Testing (new menu steps 6.1–6.5)
+
+3. **Fix sceSysconCtrlUsbPower (step 6.1)** — Call 0x880A769C directly, try inner 0x880A7A7C
+4. **Probe 0xBE500000 (step 6.2)** — Read offsets 0x00, 0x18, 0x2C, 0x40, 0x300
+5. **Full sceSysreg init (step 6.3)** — Resolve and call all 14 sceSysreg NIDs
+6. **Full chain + VBUS (step 6.4)** — Complete init: sceSysreg → sceSyscon → scePower → PHY → OHCI → GPIO
+7. **Hook sceUsbActivate (step 6.5)** — Load USB camera modules, trace register changes
+
+### Phase C: Hardware Acquisition
+
+8. **Acquire Go!Cam** — Camera driver triggers VBUS enable, step 1.3 monitors changes
 
 ---
 
@@ -339,6 +462,10 @@ The firmware's `usb.prx` calls GPIO functions in the middle of a larger USB init
 | usbgps.prx | 25,176 | ELF | LOW |
 | usbdmb.prx | 9,691 | KL4E | LOW |
 | usb1seg.prx | 23,542 | ELF | LOW |
+
+### Analysis Scripts
+- `scripts/ghidra_usb_vbus.py` — Ghidra headless script for usb.prx: NID mapping, GPIO trace, init chain
+- `scripts/ghidra_lowio_gpio.py` — Ghidra headless script for lowio.prx: GPIO driver, Set→Output, AltFunc
 
 ### Analysis Data
 - `/home/mikunpc/Downloads/USBTRACE/psp_kernel_4mb.bin` — 4MB kernel memory dump (decrypted drivers in memory)

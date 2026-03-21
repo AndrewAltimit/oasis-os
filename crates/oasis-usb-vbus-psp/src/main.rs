@@ -1085,6 +1085,656 @@ fn dump_all_gpio() {
     }
 }
 
+// ── Phase 6: Alternative Approaches ──────────────────────────────────
+
+/// Step 6.1: Fix sceSysconCtrlUsbPower call alignment.
+///
+/// NID 0xC8D97773 resolves to 0x880A7690 but the real prologue is at
+/// 0x880A769C (4 bytes later). Also try the inner function at 0x880A7A7C
+/// with the correct arg3=4 (from firmware disassembly).
+fn phase6_step1_fix_syscon_alignment() {
+    Logger::log("=== 6.1: Fix sceSysconCtrlUsbPower ===");
+
+    let gpio_before = gpio::snapshot();
+
+    // Method A: Use NID resolution + 12-byte offset correction
+    // NID 0xC8D97773 resolves to 0x880A7690 but the real prologue is
+    // 12 bytes later. Use find_function to get the base, then add 0xC.
+    Logger::log("");
+    Logger::log("A) NID + 12-byte offset correction...");
+    unsafe {
+        let modules: [(*const u8, *const u8); 2] = [
+            (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+            (b"sceSYSCON_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+        ];
+        let mut found = false;
+        for (module, library) in &modules {
+            if let Some(addr) = psp::hook::find_function(
+                *module, *library, 0xC8D97773,
+            ) {
+                let resolved = addr as u32;
+                lr("  NID resolves to: ", resolved);
+                // Add 12 to skip epilogue of previous function
+                let corrected = resolved + 12;
+                lr("  Corrected (+12): ", corrected);
+
+                // Verify instruction at corrected addr looks like prologue
+                // ADDIU $sp, $sp, -0x10 = 0x27BDFFF0
+                let instr = psp::hw::hw_read32(corrected);
+                lr("  Instruction:     ", instr);
+                if instr == 0x27BD_FFF0 {
+                    Logger::log("  Looks like prologue! Calling...");
+                    type F = unsafe extern "C" fn(i32) -> i32;
+                    let func: F = core::mem::transmute(corrected);
+                    let ret = func(1);
+                    lr("  ret=", ret as u32);
+                } else {
+                    Logger::log("  NOT a prologue, skipping call");
+                }
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            Logger::log("  NID not found");
+        }
+        sceKernelDelayThread(500_000);
+    }
+
+    let gpio_a = gpio::snapshot();
+    Logger::log("GPIO changes (method A):");
+    log_gpio_diff(&gpio_before, &gpio_a);
+    lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
+
+    // Method B: Direct Syscon SET 0x47 with different values
+    Logger::log("");
+    Logger::log("B) Syscon SET 0x47 v=4...");
+    let (r, rx) = syscon::syscon_set(0x47, 4);
+    log_cmd("  result", r, &rx);
+    unsafe { sceKernelDelayThread(500_000) };
+
+    let gpio_b = gpio::snapshot();
+    Logger::log("GPIO changes (method B):");
+    log_gpio_diff(&gpio_a, &gpio_b);
+
+    // Method C: Probe new sceSysreg registers found by NID analyzer
+    // BC1000C4 (2 refs in usb.prx), BC1000F0 (3 refs in usb.prx)
+    // BC100080/B0 (lowio.prx GPIO driver)
+    // NOTE: BC100083 from syscon.prx is offset 0x80 read as byte —
+    //       we read the aligned 0x80 word instead (already done above).
+    Logger::log("");
+    Logger::log("C) New sceSysreg registers...");
+    unsafe {
+        lr("  BC1000C4=", hw_read32(0xBC10_00C4));
+        lr("  BC1000F0=", hw_read32(0xBC10_00F0));
+        lr("  BC100080=", hw_read32(0xBC10_0080));
+        lr("  BC1000B0=", hw_read32(0xBC10_00B0));
+        lr("  BC1000C0=", hw_read32(0xBC10_00C0));
+        lr("  BC1000C8=", hw_read32(0xBC10_00C8));
+        lr("  BC1000CC=", hw_read32(0xBC10_00CC));
+        lr("  BC1000F4=", hw_read32(0xBC10_00F4));
+        lr("  BC1000F8=", hw_read32(0xBC10_00F8));
+    }
+
+    // Method D: Scan NID-resolved sceSysconCtrlUsbPower neighborhood
+    // for the real prologue (scan +0 to +32 bytes)
+    Logger::log("");
+    Logger::log("D) Scan NID neighborhood...");
+    unsafe {
+        let modules: [(*const u8, *const u8); 2] = [
+            (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+            (b"sceSYSCON_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+        ];
+        for (module, library) in &modules {
+            if let Some(addr) = psp::hook::find_function(
+                *module, *library, 0xC8D97773,
+            ) {
+                let base = addr as u32;
+                // Dump instructions at base..base+48
+                for off in (0u32..48).step_by(4) {
+                    let a = base + off;
+                    let instr = psp::hw::hw_read32(a);
+                    let mut f = Fmt::new();
+                    f.p("  +"); f.decimal(off);
+                    f.p(" @"); f.h8(a);
+                    f.p(" = "); f.h8(instr);
+                    // Flag prologue pattern
+                    if instr & 0xFFFF_0000 == 0x27BD_0000 {
+                        f.p(" <-- ADDIU $sp");
+                    }
+                    if instr & 0xFC00_0000 == 0x0C00_0000 {
+                        f.p(" <-- JAL");
+                    }
+                    Logger::log(f.s());
+                }
+                break;
+            }
+        }
+    }
+
+    // Log final state
+    Logger::log("");
+    Logger::log("Final state:");
+    log_gpio_snapshot("GPIO:", &gpio_b);
+    lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
+    lr("BC100074=", unsafe { hw_read32(0xBC10_0074) });
+    lr("BC10004C=", unsafe { hw_read32(0xBC10_004C) });
+}
+
+/// Step 6.2: Probe 0xBE500000 register block.
+///
+/// 20 references in kernel dump at offsets 0x00, 0x18, 0x2C, 0x40, 0x300.
+/// Could be USB OTG controller or power management peripheral.
+fn phase6_step2_probe_be500000() {
+    Logger::log("=== 6.2: Probe 0xBE500000 Block ===");
+    Logger::log("WARNING: may bus-fault! Watch for freeze.");
+    Logger::log("X=proceed, TRIANGLE=skip");
+
+    let btn = wait_any_button();
+    if btn.intersects(CtrlButtons::TRIANGLE) {
+        Logger::log("Skipped.");
+        return;
+    }
+
+    let offsets: [(u32, &str); 8] = [
+        (0x00, "+0x000"),
+        (0x04, "+0x004"),
+        (0x18, "+0x018"),
+        (0x2C, "+0x02C"),
+        (0x40, "+0x040"),
+        (0x44, "+0x044"),
+        (0x48, "+0x048"),
+        (0x300, "+0x300"),
+    ];
+
+    // Try reading each offset. On PSP, kernel-mode bus faults from
+    // unmapped peripherals sometimes return garbage rather than crashing
+    // (unlike MUSB at 0xBD80xxxx which hard-faults).
+    for (offset, label) in &offsets {
+        let addr = 0xBE50_0000u32 + offset;
+        let mut f = Fmt::new();
+        f.p("  0xBE50");
+        f.p(label);
+        f.p(" = ");
+
+        // Read via MMIO — may fault
+        let val = unsafe { hw_read32(addr) };
+        f.h8(val);
+
+        // Flag if it looks like real register data vs bus default
+        if val == 0x8760624F {
+            f.p(" (bus default)");
+        } else if val == 0x0000_0000 {
+            f.p(" (zero)");
+        } else if val == 0xFFFF_FFFF {
+            f.p(" (all-ones)");
+        } else {
+            f.p(" (ACTIVE!)");
+        }
+        Logger::log(f.s());
+    }
+
+    Logger::log("");
+    Logger::log("If you see ACTIVE registers, these need further analysis.");
+    Logger::log("Try writes to see if any control VBUS or GPIO output enable.");
+}
+
+/// Step 6.3: Resolve ALL 14 sceSysreg NIDs from usb.prx imports.
+///
+/// Calls each resolved function to replicate the firmware init chain.
+/// Order based on Ghidra analysis of usb.prx entry point.
+fn phase6_step3_full_sysreg_init() {
+    Logger::log("=== 6.3: Full sceSysreg Init Chain ===");
+
+    let gpio_before = gpio::snapshot();
+    lr("BC100050 before=", unsafe { hw_read32(0xBC10_0050) });
+    lr("BC100058 before=", unsafe { hw_read32(0xBC10_0058) });
+    lr("BC100074 before=", unsafe { hw_read32(0xBC10_0074) });
+    lr("BC100078 before=", unsafe { hw_read32(0xBC10_0078) });
+    lr("BC10004C before=", unsafe { hw_read32(0xBC10_004C) });
+    lr("BC1000B8 before=", unsafe { hw_read32(0xBC10_00B8) });
+
+    let module = b"sceLowIO_Driver\0".as_ptr();
+    let lib = b"sceSysreg_driver\0".as_ptr();
+
+    // All 14 sceSysreg_driver NIDs from usb.prx, in likely init order:
+    // Enable sequence first, then query/connect functions
+    let nids: [(&str, u32); 14] = [
+        // Clock/IO enables (must be first)
+        ("GpioClkEn",       0xEC03F6E2),
+        ("GpioIoEn",        0x72C1CA96),
+        ("UsbClkEn",        0x1561BCD2),
+        ("UsbIoEn",         0x9306F27B),
+        ("UsbBusClkEn",     0x9A6E7BB8),
+        // Reset control
+        ("UsbResetEn",      0x84A279A4),
+        ("UsbResetDis",     0x6F3B6D7D),
+        // Status/connect
+        ("UsbGetConnect",   0x87B61303),
+        ("UsbSetConnect",   0x9275DD37),
+        ("UsbQueryIntr",    0x30C0A141),
+        ("UsbAcqIntr",      0x6C0EE043),
+        // Version/misc
+        ("NID_1D233EF9",    0x1D233EF9),
+        ("NID_D7AD9705",    0xD7AD9705),
+        ("NID_E2A5D1EE",    0xE2A5D1EE),
+    ];
+
+    Logger::log("");
+    Logger::log("Resolving and calling all 14 sceSysreg NIDs...");
+
+    let mut resolved = 0u32;
+    let mut failed = 0u32;
+
+    for (name, nid) in &nids {
+        unsafe {
+            if let Some(addr) = psp::hook::find_function(module, lib, *nid) {
+                // Call as: int func(int arg0) — most sceSysreg functions
+                // take a single argument (0 = USB subsystem index)
+                type F = unsafe extern "C" fn(i32) -> i32;
+                let func: F = core::mem::transmute(addr);
+                let ret = func(0);
+
+                let mut f = Fmt::new();
+                f.p("  ");
+                f.p(name);
+                f.p(" @");
+                f.h8(addr as u32);
+                f.p(" ret=");
+                f.h8(ret as u32);
+                Logger::log(f.s());
+                resolved += 1;
+
+                sceKernelDelayThread(5_000);
+            } else {
+                let mut f = Fmt::new();
+                f.p("  ");
+                f.p(name);
+                f.p(" NOT FOUND");
+                Logger::log(f.s());
+                failed += 1;
+            }
+        }
+    }
+
+    let mut f = Fmt::new();
+    f.p("Resolved ");
+    f.decimal(resolved);
+    f.p("/14, failed ");
+    f.decimal(failed);
+    Logger::log(f.s());
+
+    // Wait for hardware to settle
+    unsafe { sceKernelDelayThread(100_000) };
+
+    // Check results
+    Logger::log("");
+    Logger::log("After sceSysreg init:");
+    lr("BC100050 after=", unsafe { hw_read32(0xBC10_0050) });
+    lr("BC100058 after=", unsafe { hw_read32(0xBC10_0058) });
+    lr("BC100074 after=", unsafe { hw_read32(0xBC10_0074) });
+    lr("BC100078 after=", unsafe { hw_read32(0xBC10_0078) });
+    lr("BC10004C after=", unsafe { hw_read32(0xBC10_004C) });
+    lr("BC1000B8 after=", unsafe { hw_read32(0xBC10_00B8) });
+
+    let gpio_after = gpio::snapshot();
+    Logger::log("GPIO changes:");
+    log_gpio_diff(&gpio_before, &gpio_after);
+    log_gpio_snapshot("GPIO now:", &gpio_after);
+}
+
+/// Step 6.4: Full init chain + VBUS enable.
+///
+/// Runs the complete sequence from Ghidra analysis:
+/// 1. All sceSysreg enables (GPIO + USB clocks/IO/bus/reset)
+/// 2. All sceSyscon USB power commands
+/// 3. scePower functions
+/// 4. PHY host mode configuration
+/// 5. OHCI controller init
+/// 6. GPIO pin 23 VBUS enable
+fn phase6_step4_full_chain_vbus() {
+    Logger::log("=== 6.4: Full Chain + VBUS Enable ===");
+    Logger::log("WARNING: Calls ALL init functions then VBUS.");
+    Logger::log("X=proceed, TRIANGLE=skip");
+
+    let btn = wait_any_button();
+    if btn.intersects(CtrlButtons::TRIANGLE) {
+        Logger::log("Skipped.");
+        return;
+    }
+
+    let gpio_before = gpio::snapshot();
+    dump_all_gpio();
+
+    // Step 1: sceSysreg init (all 14 NIDs)
+    Logger::log("");
+    Logger::log("--- Step 1: sceSysreg init ---");
+    unsafe {
+        let m = b"sceLowIO_Driver\0".as_ptr();
+        let l = b"sceSysreg_driver\0".as_ptr();
+        type F = unsafe extern "C" fn(i32) -> i32;
+
+        // Enable clocks and IO in proper order
+        let enable_nids: [(u32, &str); 7] = [
+            (0xEC03F6E2, "GpioClkEn"),
+            (0x72C1CA96, "GpioIoEn"),
+            (0x1561BCD2, "UsbClkEn"),
+            (0x9306F27B, "UsbIoEn"),
+            (0x9A6E7BB8, "UsbBusClkEn"),
+            (0x84A279A4, "UsbResetEn"),
+            (0x6F3B6D7D, "UsbResetDis"),
+        ];
+
+        for (nid, name) in &enable_nids {
+            if let Some(addr) = psp::hook::find_function(m, l, *nid) {
+                let func: F = core::mem::transmute(addr);
+                let ret = func(0);
+                let mut f = Fmt::new();
+                f.p("  "); f.p(name); f.p("="); f.h8(ret as u32);
+                Logger::log(f.s());
+            }
+        }
+        sceKernelDelayThread(10_000);
+    }
+
+    // Step 2: sceSyscon USB power (raw Syscon packets only —
+    // NID 0xC8D97773 resolves to getter stubs, not the real function)
+    Logger::log("");
+    Logger::log("--- Step 2: Syscon USB power ---");
+
+    // Send Syscon SET 0x47 with multiple values
+    for val in [1u8, 2, 4] {
+        let mut f = Fmt::new();
+        f.p("  SET 0x47 v="); f.decimal(val as u32);
+        let (r, rx) = syscon::syscon_set(0x47, val);
+        log_cmd(f.s(), r, &rx);
+        unsafe { sceKernelDelayThread(200_000) };
+    }
+
+    // Step 3: scePower functions
+    // SKIP 0x0442D852 — that's scePowerRequestColdReset (causes reboot!)
+    Logger::log("");
+    Logger::log("--- Step 3: scePower (skip ColdReset) ---");
+    unsafe {
+        let m = b"scePower_Service\0".as_ptr();
+        let l = b"scePower_driver\0".as_ptr();
+        type F = unsafe extern "C" fn(i32) -> i32;
+
+        let power_nids: [(u32, &str); 2] = [
+            (0xD3075926, "Power_D3075926"),
+            // 0x0442D852 = scePowerRequestColdReset — SKIP!
+            (0x2875994B, "Power_2875994B"),
+        ];
+
+        for (nid, name) in &power_nids {
+            if let Some(addr) = psp::hook::find_function(m, l, *nid) {
+                let func: F = core::mem::transmute(addr);
+                let ret = func(1);
+                let mut f = Fmt::new();
+                f.p("  "); f.p(name); f.p("="); f.h8(ret as u32);
+                Logger::log(f.s());
+            } else {
+                let mut f = Fmt::new();
+                f.p("  "); f.p(name); f.p(" NOT FOUND");
+                Logger::log(f.s());
+            }
+        }
+        sceKernelDelayThread(100_000);
+    }
+
+    // Step 4: PHY host mode + clocks
+    Logger::log("");
+    Logger::log("--- Step 4: PHY host mode ---");
+    unsafe {
+        ohci::enable_clocks();
+        sceKernelDelayThread(10_000);
+        phy::configure_host_mode();
+        sceKernelDelayThread(10_000);
+    }
+    log_phy_snapshot("PHY:", &phy::snapshot());
+
+    // Step 5: Check register state + try MUSB access
+    // BC10004C changed from 0x40 to 0x10020 after sceSysreg init —
+    // this might have enabled the MUSB bus gate!
+    Logger::log("");
+    Logger::log("--- Step 5: post-init state ---");
+    unsafe {
+        lr("  BC10004C=", hw_read32(0xBC10_004C));
+        lr("  BC100050=", hw_read32(0xBC10_0050));
+        lr("  BC1000F0=", hw_read32(0xBC10_00F0));
+        lr("  BC100080=", hw_read32(0xBC10_0080));
+        lr("  BE500018=", hw_read32(0xBE50_0018));
+        lr("  BE50002C=", hw_read32(0xBE50_002C));
+        sceKernelDelayThread(50_000);
+    }
+
+    // Step 6: Scan more sceSysreg offsets for MUSB bus gate
+    // MUSB at 0xBD80xxxx still bus-faults after sceSysreg init.
+    // Scan BC100xxx for potential MUSB enable bits.
+    Logger::log("");
+    Logger::log("--- Step 6: sceSysreg scan ---");
+    unsafe {
+        // Dump BC100040-BC1000FF to find what changed
+        let offsets: [u32; 16] = [
+            0x40, 0x44, 0x48, 0x4C,
+            0x50, 0x54, 0x58, 0x5C,
+            0x74, 0x78, 0x7C, 0x80,
+            0xB8, 0xC4, 0xF0, 0xF4,
+        ];
+        for off in &offsets {
+            let addr = 0xBC10_0000 + off;
+            let val = hw_read32(addr);
+            if val != 0 {
+                let mut f = Fmt::new();
+                f.p("  BC10"); f.h8(*off); f.p("="); f.h8(val);
+                Logger::log(f.s());
+            }
+        }
+        sceKernelDelayThread(50_000);
+    }
+
+    // Step 7: GPIO pin 23 VBUS enable — MMIO only
+    Logger::log("");
+    Logger::log("--- Step 7: GPIO pin 23 VBUS (MMIO) ---");
+    unsafe {
+        let dir = psp::hw::hw_read32(0xBE24_0010);
+        psp::hw::hw_write32(0xBE24_0010, dir | 0x0080_0000);
+        lr("  Dir=", psp::hw::hw_read32(0xBE24_0010));
+        psp::hw::hw_write32(0xBE24_0014, 0x0080_0000);
+        let out = psp::hw::hw_read32(0xBE24_0008);
+        psp::hw::hw_write32(0xBE24_0008, out | 0x0080_0000);
+        lr("  Out=", psp::hw::hw_read32(0xBE24_0008));
+        lr("  Read=", psp::hw::hw_read32(0xBE24_0000));
+    }
+
+    unsafe { sceKernelDelayThread(500_000) };
+
+    // Results
+    Logger::log("");
+    Logger::log("--- RESULTS ---");
+    dump_all_gpio();
+
+    let gpio_after = gpio::snapshot();
+    Logger::log("GPIO changes (total):");
+    log_gpio_diff(&gpio_before, &gpio_after);
+
+    // Monitor
+    Logger::log("");
+    Logger::log("Monitoring 15s — watch FNB58!");
+    for sec in 0u32..15 {
+        unsafe { sceKernelDelayThread(1_000_000) };
+        let p0r = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
+        let mut f = Fmt::new();
+        f.p("  t="); f.decimal(sec + 1);
+        f.p(" R="); f.h8(p0r);
+        f.p(" O="); f.h8(p0o);
+        Logger::log(f.s());
+
+        let mut p = SceCtrlData::default();
+        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
+        if p.buttons.intersects(CtrlButtons::TRIANGLE) {
+            Logger::log("  (stopped)");
+            break;
+        }
+    }
+
+    // Cleanup — MMIO only, skip NID calls (they crash after
+    // sceSysreg register writes disrupt driver state)
+    Logger::log("");
+    Logger::log("Disabling VBUS (MMIO only)...");
+    unsafe {
+        psp::hw::hw_write32(0xBE24_0018, 0x0080_0000); // Clear pin 23
+        psp::hw::hw_write32(0xBE24_0010, 0x0000_0000); // Direction = all input
+    }
+    Logger::log("Done.");
+}
+
+/// Step 6.5: Hook sceUsbActivate to trace USB driver init.
+///
+/// Instead of replicating the init chain, hook the USB driver's own
+/// functions and log register state changes. Uses sceUsbStart +
+/// sceUsbActivate with USB camera PID to trigger the firmware's init.
+fn phase6_step5_hook_usb_activate() {
+    Logger::log("=== 6.5: Hook sceUsbActivate Trace ===");
+    Logger::log("Loads USB modules, traces register changes");
+    Logger::log("X=proceed, TRIANGLE=skip");
+
+    let btn = wait_any_button();
+    if btn.intersects(CtrlButtons::TRIANGLE) {
+        Logger::log("Skipped.");
+        return;
+    }
+
+    // Snapshot everything before
+    let gpio_before = gpio::snapshot();
+    let phy_before = phy::snapshot();
+
+    Logger::log("--- BEFORE ---");
+    dump_all_gpio();
+    log_phy_snapshot("PHY:", &phy_before);
+
+    // Load USB modules (camera path triggers VBUS)
+    Logger::log("");
+    Logger::log("1. Loading USB modules...");
+    let mut loaded_cam = false;
+    unsafe {
+        let r1 = sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbPspCm);
+        lr("  UsbPspCm=", r1 as u32);
+        let r2 = sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbAcc);
+        lr("  UsbAcc=", r2 as u32);
+        let r3 = sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbCam);
+        lr("  UsbCam=", r3 as u32);
+        if r3 == 0 { loaded_cam = true; }
+        sceKernelDelayThread(100_000);
+    }
+
+    let gpio_after_load = gpio::snapshot();
+    Logger::log("GPIO after module load:");
+    log_gpio_diff(&gpio_before, &gpio_after_load);
+
+    // Start USB bus driver
+    Logger::log("");
+    Logger::log("2. Starting USBBusDriver...");
+    let ret = unsafe {
+        sceUsbStart(
+            b"USBBusDriver\0".as_ptr(),
+            0,
+            core::ptr::null_mut::<c_void>(),
+        )
+    };
+    lr("  ret=", ret as u32);
+    unsafe { sceKernelDelayThread(100_000) };
+
+    let gpio_after_bus = gpio::snapshot();
+    Logger::log("GPIO after bus start:");
+    log_gpio_diff(&gpio_after_load, &gpio_after_bus);
+    dump_all_gpio();
+
+    // Start camera driver (if loaded)
+    if loaded_cam {
+        Logger::log("");
+        Logger::log("3. Starting USBCamDriver...");
+        let ret = unsafe {
+            sceUsbStart(
+                b"USBCamDriver\0".as_ptr(),
+                0,
+                core::ptr::null_mut::<c_void>(),
+            )
+        };
+        lr("  ret=", ret as u32);
+        unsafe { sceKernelDelayThread(100_000) };
+
+        let gpio_after_cam = gpio::snapshot();
+        Logger::log("GPIO after cam start:");
+        log_gpio_diff(&gpio_after_bus, &gpio_after_cam);
+    }
+
+    // Activate with camera PID
+    Logger::log("");
+    Logger::log("4. Activating USB (PID=0x282)...");
+    let ret = unsafe { sceUsbActivate(0x282) };
+    lr("  ret=", ret as u32);
+    unsafe { sceKernelDelayThread(1_000_000) };
+
+    let gpio_after_activate = gpio::snapshot();
+    Logger::log("GPIO after activate:");
+    log_gpio_diff(&gpio_before, &gpio_after_activate);
+
+    Logger::log("");
+    Logger::log("--- AFTER ACTIVATE ---");
+    dump_all_gpio();
+    log_phy_snapshot("PHY:", &phy::snapshot());
+
+    let bits = unsafe { sceUsbGetState() }.bits();
+    lr("USB state=", bits as u32);
+
+    // Monitor for 5s
+    Logger::log("");
+    Logger::log("Monitoring 5s...");
+    for sec in 0u32..5 {
+        unsafe { sceKernelDelayThread(1_000_000) };
+        let p0r = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
+        let mut f = Fmt::new();
+        f.p("  t="); f.decimal(sec + 1);
+        f.p(" R="); f.h8(p0r);
+        f.p(" O="); f.h8(p0o);
+        Logger::log(f.s());
+    }
+
+    // Cleanup
+    Logger::log("");
+    Logger::log("Cleaning up...");
+    unsafe {
+        sys::sceUsbDeactivate(0x282);
+        sceKernelDelayThread(100_000);
+        if loaded_cam {
+            sys::sceUsbStop(
+                b"USBCamDriver\0".as_ptr(),
+                0,
+                core::ptr::null_mut::<c_void>(),
+            );
+        }
+        sys::sceUsbStop(
+            b"USBBusDriver\0".as_ptr(),
+            0,
+            core::ptr::null_mut::<c_void>(),
+        );
+        sceKernelDelayThread(100_000);
+        if loaded_cam {
+            sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbCam);
+        }
+        sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbAcc);
+        sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbPspCm);
+    }
+
+    let gpio_final = gpio::snapshot();
+    Logger::log("GPIO after cleanup:");
+    log_gpio_diff(&gpio_before, &gpio_final);
+    Logger::log("Done.");
+}
+
 // ── Menu ────────────────────────────────────────────────────────────────
 
 struct MenuItem {
@@ -1107,10 +1757,15 @@ const MENU: &[MenuItem] = &[
     MenuItem { label: "4.1 GPIO sweep (all pins)", func: phase4_step1_gpio_toggle },
     MenuItem { label: "4.2 Syscon+clocks+GPIO sweep", func: phase4_step2_gpio_plus_init },
     MenuItem { label: "5.1 >>> VBUS ENABLE (pin 23) <<<", func: phase5_vbus_enable },
+    MenuItem { label: "6.1 Fix SysconCtrlUsbPower align", func: phase6_step1_fix_syscon_alignment },
+    MenuItem { label: "6.2 Probe 0xBE500000 block", func: phase6_step2_probe_be500000 },
+    MenuItem { label: "6.3 Full sceSysreg init (14 NIDs)", func: phase6_step3_full_sysreg_init },
+    MenuItem { label: "6.4 FULL CHAIN + VBUS", func: phase6_step4_full_chain_vbus },
+    MenuItem { label: "6.5 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
 ];
 
 /// Collect menu labels into a fixed array for screen rendering.
-const MENU_LABELS: [&str; 14] = [
+const MENU_LABELS: [&str; 19] = [
     "1.1 Dump GPIO registers",
     "1.2 Resolve GPIO NIDs",
     "1.3 Monitor GPIO (needs camera)",
@@ -1125,6 +1780,11 @@ const MENU_LABELS: [&str; 14] = [
     "4.1 GPIO sweep (all pins)",
     "4.2 Syscon+clocks+GPIO sweep",
     "5.1 >>> VBUS ENABLE (pin 23) <<<",
+    "6.1 Fix SysconCtrlUsbPower align",
+    "6.2 Probe 0xBE500000 block",
+    "6.3 Full sceSysreg init (14 NIDs)",
+    "6.4 FULL CHAIN + VBUS",
+    "6.5 Hook sceUsbActivate trace",
 ];
 
 fn psp_main() {
@@ -1181,8 +1841,10 @@ fn psp_main() {
             screen::clear_screen();
             (MENU[cursor].func)();
             Logger::log("");
-            Logger::log("--- Done. Press any button ---");
-            wait_any_button();
+            Logger::log("--- Done. 3s then menu ---");
+            // Use delay instead of wait_any_button() — sceSysreg
+            // init steps corrupt sceCtrl state and crash input polling.
+            unsafe { sceKernelDelayThread(3_000_000) };
         }
     }
 
