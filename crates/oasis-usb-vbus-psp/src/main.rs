@@ -1080,6 +1080,7 @@ fn dump_all_gpio() {
         lr("+0x44     =", psp::hw::hw_read32(0xBE24_0044));
         lr("BC1000B8  =", psp::hw::hw_read32(0xBC10_00B8));
         lr("BC100050  =", psp::hw::hw_read32(0xBC10_0050));
+        lr("BC10007C  =", psp::hw::hw_read32(0xBC10_007C));
         lr("BC100074  =", psp::hw::hw_read32(0xBC10_0074));
         lr("BC10004C  =", psp::hw::hw_read32(0xBC10_004C));
     }
@@ -1437,102 +1438,49 @@ fn phase6_step4_full_chain_vbus() {
         sceKernelDelayThread(10_000);
     }
 
-    // Step 2: sceSyscon USB power (raw Syscon packets only —
-    // NID 0xC8D97773 resolves to getter stubs, not the real function)
+    // Step 2: BC10007C GPIO port enable — BEFORE PHY (so it gets logged)
+    // iplsdk gpio_set_port_mode: BC10007C |= (1 << pin)
     Logger::log("");
-    Logger::log("--- Step 2: Syscon USB power ---");
-
-    // Send Syscon SET 0x47 with multiple values
-    for val in [1u8, 2, 4] {
-        let mut f = Fmt::new();
-        f.p("  SET 0x47 v="); f.decimal(val as u32);
-        let (r, rx) = syscon::syscon_set(0x47, val);
-        log_cmd(f.s(), r, &rx);
-        unsafe { sceKernelDelayThread(200_000) };
-    }
-
-    // Step 3: scePower functions
-    // SKIP 0x0442D852 — that's scePowerRequestColdReset (causes reboot!)
-    Logger::log("");
-    Logger::log("--- Step 3: scePower (skip ColdReset) ---");
+    Logger::log("--- Step 2: BC10007C port enable ---");
     unsafe {
-        let m = b"scePower_Service\0".as_ptr();
-        let l = b"scePower_driver\0".as_ptr();
-        type F = unsafe extern "C" fn(i32) -> i32;
+        lr("  BC10007C before=", hw_read32(0xBC10_007C));
 
-        let power_nids: [(u32, &str); 2] = [
-            (0xD3075926, "Power_D3075926"),
-            // 0x0442D852 = scePowerRequestColdReset — SKIP!
-            (0x2875994B, "Power_2875994B"),
-        ];
+        let v7c = hw_read32(0xBC10_007C);
+        psp::hw::hw_write32(0xBC10_007C, v7c | 0x0080_0000);
+        sceKernelDelayThread(10_000);
+        lr("  BC10007C after=", hw_read32(0xBC10_007C));
 
-        for (nid, name) in &power_nids {
-            if let Some(addr) = psp::hook::find_function(m, l, *nid) {
-                let func: F = core::mem::transmute(addr);
-                let ret = func(1);
-                let mut f = Fmt::new();
-                f.p("  "); f.p(name); f.p("="); f.h8(ret as u32);
-                Logger::log(f.s());
-            } else {
-                let mut f = Fmt::new();
-                f.p("  "); f.p(name); f.p(" NOT FOUND");
-                Logger::log(f.s());
-            }
-        }
-        sceKernelDelayThread(100_000);
+        // Also try writing OutEn and AltFunc AFTER port enable
+        psp::hw::hw_write32(0xBE24_0024, 0x0080_0000);
+        sceKernelDelayThread(1_000);
+        lr("  +24 OutEn=", psp::hw::hw_read32(0xBE24_0024));
+
+        let af = psp::hw::hw_read32(0xBE24_0040);
+        psp::hw::hw_write32(0xBE24_0040, af & !0x0080_0000);
+        sceKernelDelayThread(1_000);
+        lr("  +40 AltFn=", psp::hw::hw_read32(0xBE24_0040));
+
+        // BC1000B8 USB host gate
+        let b8 = hw_read32(0xBC10_00B8);
+        psp::hw::hw_write32(0xBC10_00B8, b8 | 1);
+        lr("  BC1000B8=", hw_read32(0xBC10_00B8));
+        sceKernelDelayThread(50_000);
     }
 
-    // Step 4: PHY host mode + clocks
+    // Step 3: Syscon + scePower (skip ColdReset)
     Logger::log("");
-    Logger::log("--- Step 4: PHY host mode ---");
+    Logger::log("--- Step 3: Syscon+Power ---");
+    let (r, _) = syscon::syscon_set(0x47, 1);
+    lr("  Syscon 0x47=", r as u32);
+
+    // Step 4: PHY + clocks (this disrupts MS I/O — do it last)
+    Logger::log("");
+    Logger::log("--- Step 4: PHY+clocks ---");
     unsafe {
         ohci::enable_clocks();
         sceKernelDelayThread(10_000);
         phy::configure_host_mode();
         sceKernelDelayThread(10_000);
-    }
-    log_phy_snapshot("PHY:", &phy::snapshot());
-
-    // Step 5: Set BC1000C4 bit 0 — firmware does this!
-    // usb.prx offset 0x5918: BC1000C4 |= 1 (possible MUSB bus gate)
-    // Our tests showed BC1000C4 = 0 — this bit is NOT set!
-    Logger::log("");
-    Logger::log("--- Step 5: BC1000C4 bus gate ---");
-    unsafe {
-        lr("  BC1000C4 before=", hw_read32(0xBC10_00C4));
-        lr("  BC1000F0 before=", hw_read32(0xBC10_00F0));
-
-        // Set bit 0 of BC1000C4 (from firmware disasm)
-        let c4 = hw_read32(0xBC10_00C4);
-        psp::hw::hw_write32(0xBC10_00C4, c4 | 1);
-        sceKernelDelayThread(10_000);
-        lr("  BC1000C4 after |=1: ", hw_read32(0xBC10_00C4));
-
-        // Also set BC1000B8 — firmware writes this too (4 refs)
-        let b8 = hw_read32(0xBC10_00B8);
-        psp::hw::hw_write32(0xBC10_00B8, b8 | 1);
-        sceKernelDelayThread(10_000);
-        lr("  BC1000B8 after |=1: ", hw_read32(0xBC10_00B8));
-
-        // Check GPIO state after bus gate change
-        lr("  GPIO Out=", psp::hw::hw_read32(0xBE24_0008));
-        lr("  GPIO Read=", psp::hw::hw_read32(0xBE24_0000));
-        sceKernelDelayThread(50_000);
-    }
-
-    // Step 6: Dump registers after all init
-    Logger::log("");
-    Logger::log("--- Step 6: post-init state ---");
-    unsafe {
-        lr("  BC10004C=", hw_read32(0xBC10_004C));
-        lr("  BC100050=", hw_read32(0xBC10_0050));
-        lr("  BC1000C4=", hw_read32(0xBC10_00C4));
-        lr("  BC1000B8=", hw_read32(0xBC10_00B8));
-        lr("  BC1000F0=", hw_read32(0xBC10_00F0));
-        lr("  BC100080=", hw_read32(0xBC10_0080));
-        lr("  BE500018=", hw_read32(0xBE50_0018));
-        lr("  BE50002C=", hw_read32(0xBE50_002C));
-        sceKernelDelayThread(50_000);
     }
 
     // Step 7: GPIO pin 23 VBUS enable — NEW from Ghidra lowio.prx analysis
