@@ -124,7 +124,7 @@ impl PspDevice {
     /// Send a framed message (header + payload) to the PSP.
     pub fn send_msg(&self, msg_type: u8, payload: &[u8]) -> Result<(), String> {
         let header = MsgHeader::new(msg_type, payload.len() as u16);
-        let mut packet = Vec::with_capacity(MsgHeader::SIZE + payload.len());
+        let mut packet = Vec::with_capacity(MsgHeader::SIZE + payload.len() + 1);
         packet.extend_from_slice(&header.to_bytes());
         packet.extend_from_slice(payload);
 
@@ -182,7 +182,7 @@ impl PspDevice {
             flags: chunk_index,
             payload_len: pixels.len() as u16,
         };
-        let mut packet = Vec::with_capacity(MsgHeader::SIZE + pixels.len());
+        let mut packet = Vec::with_capacity(MsgHeader::SIZE + pixels.len() + 1);
         packet.extend_from_slice(&header.to_bytes());
         packet.extend_from_slice(pixels);
 
