@@ -226,15 +226,84 @@ $ lsusb -v -d 054c:1337
     transferred in under 20ms, enabling 30+ FPS thin client rendering.
   </p>
 
+  <h2>Phase 2: VBUS Power Output Research (Ongoing)</h2>
+
+  <p>
+    While the thin client architecture works over USB device mode, the original goal of
+    powering a Luckfox Pico from the PSP's USB port remains compelling. We returned to
+    the VBUS problem with new tools.
+  </p>
+
+  <h3>On-Device PRX Decryption</h3>
+  <p>
+    Built a kernel-mode EBOOT (<code>oasis-prx-decrypt-psp</code>) that uses the PSP's own
+    Kirk hardware crypto engine (memlmd NID <code>0xEF73E85B</code>) to decrypt firmware
+    modules. Successfully decrypted all 15 USB/system PRX files from
+    <code>flash0:/kd/</code> &mdash; something desktop tools couldn't do with 6.61 keys.
+  </p>
+
+  <h3>NID Analysis: The MUSB Discovery</h3>
+  <p>
+    A standalone binary analyzer (<code>scripts/psp_nid_analyze.py</code>) scanned the
+    decrypted <code>usb.prx</code> and revealed a critical finding: <strong>the USB driver
+    has 143 references to the MUSB (Mentor USB OTG) controller at
+    <code>0xBD80xxxx</code></strong> and zero to the OHCI controller we'd been testing.
+    We'd been probing the wrong USB controller.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>PRX File</th><th>Key Finding</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>usb.prx</code></td>
+        <td>143 MUSB accesses, GPIO pin 23 VBUS enable at offset 0x8C74, 14 sceSysreg imports</td>
+      </tr>
+      <tr>
+        <td><code>lowio.prx</code></td>
+        <td>50 GPIO accesses, 90 sceSysreg &mdash; the actual GPIO hardware driver</td>
+      </tr>
+      <tr>
+        <td><code>syscon.prx</code></td>
+        <td>Also controls GPIO pin 23 directly, accesses <code>BC100083</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Interactive VBUS Test Tool</h3>
+  <p>
+    The 19-step interactive EBOOT (<code>oasis-usb-vbus-psp</code>) tested every accessible
+    approach to enabling VBUS on the PSP-3001 (TA-090v2):
+  </p>
+
+  <ul>
+    <li>All 14 <code>sceSysreg_driver</code> NIDs resolved and called (14/14)</li>
+    <li>Syscon SET commands (0x47 values 0&ndash;4) accepted but no VBUS effect</li>
+    <li>GPIO pin 23 direction and set registers accept writes, but <strong>output doesn't latch</strong></li>
+    <li>USB PHY already configured for host mode (<code>0x301</code>)</li>
+    <li>MUSB controller at <code>0xBD80xxxx</code> bus-faults &mdash; its bus gate is unknown</li>
+    <li><code>0xBE500000</code> peripheral alive (offsets +0x18=0x99, +0x2C=0x71) &mdash; purpose unknown</li>
+  </ul>
+
+  <p>
+    The blocker: on TA-090v2 hardware, the GPIO output flip-flop has an upstream gate
+    that prevents the Set register from propagating to the Output register. This gate
+    is likely controlled by the MUSB OTG controller (which we can't access) or a hardware
+    path in the firmware's reboot sequence. Ghidra analysis scripts are ready for the next
+    phase of reverse engineering.
+  </p>
+
   <h2>What's Next</h2>
 
   <ul>
-    <li><strong>Bulk transfer protocol:</strong> Implement the send/receive data path over
-        the registered endpoints using <code>sceUsbbdReqSend</code> and <code>sceUsbbdReqRecv</code></li>
-    <li><strong>Thin client protocol:</strong> Define a framed message format for
-        framebuffer data (host&rarr;PSP) and input events (PSP&rarr;host)</li>
-    <li><strong>Luckfox Pico integration:</strong> Linux-side <code>libusb</code> client that
-        renders OASIS_OS frames and streams them to the PSP for display</li>
+    <li><strong>Thin client streaming:</strong> The USB device driver achieves 105 FPS / 28 MB/s
+        framebuffer streaming &mdash; integrate with the Luckfox Pico for external AI compute</li>
+    <li><strong>Ghidra deep analysis:</strong> Run <code>ghidra_usb_vbus.py</code> on the decrypted
+        <code>usb.prx</code> to trace the complete VBUS enable call chain and find the MUSB
+        bus gate register</li>
+    <li><strong>Go!Cam acquisition:</strong> A real USB camera accessory would trigger the
+        firmware's own VBUS path, revealing which registers change</li>
     <li><strong>Convert to PRX:</strong> Move from game-slot EBOOT to kernel PRX loaded via
         <code>PLUGINS.TXT</code> for always-on USB device mode</li>
   </ul>
