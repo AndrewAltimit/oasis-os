@@ -286,12 +286,29 @@ $ lsusb -v -d 054c:1337
     <li><code>0xBE500000</code> peripheral alive (offsets +0x18=0x99, +0x2C=0x71) &mdash; purpose unknown</li>
   </ul>
 
+  <h3>The Verdict: Silicon-Level Lock</h3>
+
   <p>
-    The blocker: on TA-090v2 hardware, the GPIO output flip-flop has an upstream gate
-    that prevents the Set register from propagating to the Output register. This gate
-    is likely controlled by the MUSB OTG controller (which we can't access) or a hardware
-    path in the firmware's reboot sequence. Ghidra analysis scripts are ready for the next
-    phase of reverse engineering.
+    Ghidra decompilation of <code>lowio.prx</code> (run via an amd64 Docker container on
+    our ARM64 host) revealed the GPIO output enable register at <code>0xBE240024</code>
+    &mdash; written by <code>sceGpioSetPortMode2</code> with <code>1 &lt;&lt; pin</code>.
+    On-device testing confirmed this register <strong>rejects all writes</strong> on TA-090v2,
+    along with AltFunc (<code>0xBE240040</code>) and <code>BC1000C4</code>.
+  </p>
+
+  <p>
+    An exhaustive search followed: all 14 sceSysreg NIDs, every Syscon command 0x00&ndash;0xFF,
+    the sysreg GPIO port enable (<code>BC10007C</code>), USB bus gates, scePower functions,
+    OTG ID pin grounding with two different adapters, and live register monitoring during
+    cable plug/unplug. <strong>Nothing unlocks the GPIO output enable.</strong>
+  </p>
+
+  <p>
+    The lock is set by the Tachyon SoC's mask ROM during the earliest boot phase, before
+    any firmware code executes. It cannot be overridden from kernel mode. Sony's Go!Cam
+    accessory likely triggers VBUS through a hardware detection circuit in the Syscon or
+    Pommel chip that monitors USB connector pin voltages &mdash; not through any software
+    command or the standard OTG ID pin.
   </p>
 
   <h2>What's Next</h2>
@@ -299,11 +316,10 @@ $ lsusb -v -d 054c:1337
   <ul>
     <li><strong>Thin client streaming:</strong> The USB device driver achieves 105 FPS / 28 MB/s
         framebuffer streaming &mdash; integrate with the Luckfox Pico for external AI compute</li>
-    <li><strong>Ghidra deep analysis:</strong> Run <code>ghidra_usb_vbus.py</code> on the decrypted
-        <code>usb.prx</code> to trace the complete VBUS enable call chain and find the MUSB
-        bus gate register</li>
-    <li><strong>Go!Cam acquisition:</strong> A real USB camera accessory would trigger the
-        firmware's own VBUS path, revealing which registers change</li>
+    <li><strong>Go!Cam PSP-300:</strong> Acquiring the camera accessory would reveal whether
+        VBUS is triggered by hardware detection (likely) or a privileged command path</li>
+    <li><strong>Hardware mod:</strong> Bypass the MOSFET gate by soldering a wire from the
+        PSP's 5V rail to the USB VBUS pin &mdash; the simplest path to single-cable operation</li>
     <li><strong>Convert to PRX:</strong> Move from game-slot EBOOT to kernel PRX loaded via
         <code>PLUGINS.TXT</code> for always-on USB device mode</li>
   </ul>

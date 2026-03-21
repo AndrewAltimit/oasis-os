@@ -499,10 +499,40 @@ VBUS power output on PSP-3001 (TA-090v2) **cannot be enabled from software alone
 1. **Syscon microcontroller** — detecting Go!Cam hardware on the USB port triggers a privileged Syscon command that unlocks the GPIO output MUX
 2. **Tachyon boot ROM** — the firmware reboot sequence may configure these registers during early boot before the lock takes effect
 
+### Syscon Command Scan 0x50-0xFF (2026-03-21)
+Scanned all 176 GET + 40 SET commands. No command changes OutEn or AltFunc.
+GET 0x61-0x72 return battery/power telemetry. No GPIO unlock command exists.
+
+### Live OTG Monitor (2026-03-21)
+60-second register monitor while plugging/unplugging OTG cables and adapters.
+Only change: P1 Read bit 6 toggles (noisy input line, not USB-related).
+Syscon 0x46 response unchanged (`82 5D B7 02`) regardless of what's plugged in.
+**PSP-3001 Syscon does not monitor the USB Mini-B ID pin.**
+
+### Exhaustive Test Summary
+
+| Approach | Result |
+|---|---|
+| All 14 sceSysreg NIDs | Accepted, don't unlock GPIO |
+| Syscon commands 0x00-0xFF (GET+SET) | No GPIO unlock command |
+| BC10007C sysreg port enable | Write accepted, doesn't unlock OutEn |
+| BC1000C4/B8 bus gates | C4 rejects writes, B8 accepts, no effect |
+| GPIO OutEn (+0x24) direct write | Hardware-locked, stays 0 |
+| GPIO AltFunc (+0x40) direct write | Hardware-locked at 0x05000010 |
+| OTG ID pin grounding (2 adapters) | No register change detected |
+| USB module load + sceUsbActivate | No GPIO changes without camera |
+| scePower functions | 0x0442D852 = cold reset, others no effect |
+| PHY host mode + OHCI port power | Configured but doesn't unlock output |
+
+### Final Conclusion
+
+**VBUS power output on PSP-3001 (TA-090v2) cannot be enabled from software.**
+
+The GPIO output enable register (0xBE240024) and AltFunc register (0xBE240040) are locked at the Tachyon silicon level during mask ROM boot. No kernel-level code, Syscon command, sceSysreg NID, or USB ID pin signal can unlock them. The lock is set before any firmware code executes.
+
 Remaining paths:
-- **Acquire Go!Cam PSP-300** — Sony's own accessory triggers the Syscon unlock sequence
-- **Find undocumented Syscon command** — scan remaining Syscon command space (0x50-0xFF) for a GPIO unlock
-- **Hardware mod** — bypass the MOSFET gate with a direct wire from 5V rail
+- **Acquire Go!Cam PSP-300** — Sony's camera accessory likely triggers VBUS via a hardware detection circuit (not software), possibly through the Pommel chip or a dedicated Syscon GPIO sensing path that monitors USB connector pin voltage levels rather than the standard OTG ID pin
+- **Hardware mod** — bypass the MOSFET gate by soldering a wire from the PSP's 5V rail to the USB VBUS pin; requires opening the PSP and identifying the MOSFET near the USB connector
 
 ---
 
