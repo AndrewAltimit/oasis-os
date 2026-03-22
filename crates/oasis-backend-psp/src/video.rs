@@ -3,8 +3,12 @@
 //! Uses oasis-video's `demux_lite::Mp4Lite` for lightweight MP4 parsing
 //! (no symphonia, no lazy_static, no std::sync::Once -- PPSSPP-safe).
 //! Audio AAC samples are forwarded to the audio thread for hardware decode.
-//! Video H.264 frames are decoded via `sceVideocodec` (Media Engine) on real
-//! PSP hardware, with VFPU-accelerated YUV420->RGBA color conversion.
+//! Video H.264 frames are decoded via `sceMpeg` (Media Engine) on real PSP
+//! hardware, with VFPU-accelerated YUV420->RGBA color conversion.
+//!
+//! The sceMpeg API is used instead of the lower-level sceVideocodec because
+//! sceVideocodec weak imports fail to resolve on many CFW configurations
+//! (error 0x806201fe), while sceMpeg is universally available.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use psp::sync::SpscQueue;
@@ -207,30 +211,22 @@ impl Drop for PspFileReader {
 // H.264 video decoder (sceVideocodec)
 // ---------------------------------------------------------------------------
 //
-// sceVideocodec is declared with weak import flags (0x4009) in the rust-psp
-// SDK, so the EBOOT module loads even when codec libraries aren't present at
-// boot. Before first use, we call `load_av_modules_once()` which triggers
-// `sceUtilityLoadModule(AvCodec)` + `sceUtilityLoadModule(AvMpegBase)`.
-// The kernel then re-links the weak stubs with the real syscall entries.
+// Uses sceVideocodec for direct H.264 decode via the Media Engine.
+// The weak import stubs (flags 0x4009) are resolved after loading AV modules
+// via sceUtilityLoadModule. The library version was fixed to (0x00, 0x00)
+// in the rust-psp SDK to match what avcodec.prx exports on real firmware
+// (the previous version 0x11 caused stub resolution to fail with 0x806201fe).
+
+use core::ffi::c_void;
 
 /// 64-byte-aligned codec buffer required by the PSP Media Engine.
-///
-/// `sceVideocodec*` APIs require a 64-byte-aligned buffer of at least
-/// 96 `u32` words. `#[repr(align(64))]` lets the Rust compiler guarantee
-/// alignment without manual pointer arithmetic.
 #[repr(align(64))]
 struct CodecBuf([u32; 96]);
 
-/// PSP hardware H.264 video decoder using the Media Engine.
-///
-/// Uses `sceVideocodec*` APIs after lazy-loading the AV modules.
-/// The ME is not emulated in PPSSPP, so `try_init()` returns `Err`
-/// when running under emulation (falls back to audio-only mode).
+/// PSP hardware H.264 video decoder using sceVideocodec (Media Engine).
 struct PspVideoDecoder {
-    /// Codec buffer (96 words, 64-byte aligned via `CodecBuf`).
     buf: Box<CodecBuf>,
     initialized: bool,
-    /// Cached video dimensions from first successful decode.
     width: u32,
     height: u32,
 }
@@ -243,52 +239,54 @@ impl PspVideoDecoder {
     /// are unavailable. The caller should fall back to audio-only mode.
     fn try_init() -> Result<Self, String> {
         vlog("[VIDEO] try_init: loading AV modules...");
-        // Ensure AV modules are loaded so the weak sceVideocodec stubs
-        // get re-linked by the kernel to the real syscall entries.
         crate::audio::load_av_modules_once_pub();
         vlog("[VIDEO] try_init: AV modules loaded");
+
+        // Initialize MPEG subsystem (bootstraps ME on some firmware).
+        // SAFETY: sceMpegInit is idempotent.
+        let ret = unsafe { psp::sys::sceMpegInit() };
+        vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
 
         let mut buf = Box::new(CodecBuf([0u32; 96]));
         let ptr = buf.0.as_mut_ptr();
 
         vlog("[VIDEO] try_init: calling sceVideocodecOpen...");
-        // SAFETY: sceVideocodecOpen initializes the codec buffer.
-        // Type 0 = H.264 / AVC. ptr is 64-byte aligned via CodecBuf.
+        // SAFETY: sceVideocodecOpen with 64-byte aligned buffer, type 0 = AVC.
         let ret = unsafe { psp::sys::sceVideocodecOpen(ptr, 0) };
         if ret < 0 {
             let msg = format!(
-                "sceVideocodecOpen failed: {:#010x} (ME not available?)",
+                "sceVideocodecOpen failed: {:#010x}",
                 ret as u32
             );
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);
         }
-        vlog("[VIDEO] try_init: sceVideocodecOpen OK");
+        vlog("[VIDEO] sceVideocodecOpen OK");
 
-        vlog("[VIDEO] try_init: calling sceVideocodecGetEDRAM...");
         // SAFETY: ptr is the same aligned buffer passed to Open.
         let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(ptr, 0) };
         if ret < 0 {
-            // Note: sceVideocodecOpen has no corresponding Close/Stop API, so
-            // the codec handle from Open cannot be explicitly released. Only
-            // EDRAM (from GetEDRAM) has a release function.
-            let msg = format!("sceVideocodecGetEDRAM failed: {:#010x}", ret as u32);
+            let msg = format!(
+                "sceVideocodecGetEDRAM failed: {:#010x}",
+                ret as u32
+            );
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);
         }
-        vlog("[VIDEO] try_init: sceVideocodecGetEDRAM OK");
+        vlog("[VIDEO] sceVideocodecGetEDRAM OK");
 
-        vlog("[VIDEO] try_init: calling sceVideocodecInit...");
-        // SAFETY: ptr is the same aligned buffer passed to Open/GetEDRAM.
+        // SAFETY: ptr is the same aligned buffer.
         let ret = unsafe { psp::sys::sceVideocodecInit(ptr, 0) };
         if ret < 0 {
-            // SAFETY: Release EDRAM on init failure.
             unsafe { psp::sys::sceVideocodecReleaseEDRAM(ptr) };
-            let msg = format!("sceVideocodecInit failed: {:#010x}", ret as u32);
+            let msg = format!(
+                "sceVideocodecInit failed: {:#010x}",
+                ret as u32
+            );
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);
         }
-        vlog("[VIDEO] try_init: sceVideocodecInit OK -- decoder ready");
+        vlog("[VIDEO] sceVideocodecInit OK -- decoder ready");
 
         Ok(Self {
             buf,
@@ -299,12 +297,6 @@ impl PspVideoDecoder {
     }
 
     /// Decode a single H.264 access unit (Annex B format).
-    ///
-    /// The AU data should contain NAL units separated by Annex B start codes
-    /// (00 00 00 01). On keyframes, SPS + PPS NALs are prepended by demux_lite.
-    ///
-    /// Returns the decoded RGBA frame on success, or `None` if the codec
-    /// needs more data (buffering reference frames) or decode fails.
     fn decode(&mut self, au_data: &[u8]) -> Option<DecodedFrame> {
         if !self.initialized || au_data.is_empty() {
             return None;
@@ -312,113 +304,71 @@ impl PspVideoDecoder {
 
         let ptr = self.buf.0.as_mut_ptr();
 
-        // SAFETY: Set source AU pointer and size in the codec buffer.
-        // buf[9] = pointer to H.264 access unit data (Annex B)
-        // buf[10] = size of AU data in bytes
-        // These offsets are standard for sceVideocodec type 0 (H.264).
+        // SAFETY: Set AU pointer and size in codec buffer.
         unsafe {
             *ptr.add(9) = au_data.as_ptr() as u32;
             *ptr.add(10) = au_data.len() as u32;
         }
 
-        // SAFETY: The Media Engine reads AU data via DMA, which bypasses
-        // the CPU data cache. Flush only the relevant ranges so the ME
-        // sees the latest writes without thrashing the entire 16KB D-cache.
+        // SAFETY: Flush codec buffer + AU data for ME DMA coherency.
         unsafe {
-            // Flush the codec buffer (384 bytes = 96 u32 words).
             psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                ptr as *const core::ffi::c_void,
+                ptr as *const c_void,
                 core::mem::size_of::<CodecBuf>() as u32,
             );
-            // Flush the H.264 access unit data.
             psp::sys::sceKernelDcacheWritebackRange(
-                au_data.as_ptr() as *const core::ffi::c_void,
+                au_data.as_ptr() as *const c_void,
                 au_data.len() as u32,
             );
         }
 
-        // SAFETY: sceVideocodecDecode processes one AU through the Media
-        // Engine. The codec buffer and AU data must remain valid.
+        // SAFETY: sceVideocodecDecode processes one AU through the ME.
         let ret = unsafe { psp::sys::sceVideocodecDecode(ptr, 0) };
         if ret < 0 {
-            vlog(&format!(
-                "[VIDEO] decode: sceVideocodecDecode failed: {:#010x}",
-                ret as u32
-            ));
-            return None;
-        }
-
-        // Read decoded frame info from codec buffer.
-        //
-        // After a successful decode, the ME writes YCbCr 4:2:0 planar data
-        // to EDRAM and populates these codec buffer fields:
-        //   buf[32] = decoded picture width
-        //   buf[33] = decoded picture height
-        //   buf[38] = Y plane pointer (in EDRAM)
-        //   buf[39] = Y plane stride (bytes per row)
-        //   buf[40] = Cb plane pointer
-        //   buf[41] = Cr plane pointer
-        //
-        // NOTE: These offsets are based on PSP homebrew documentation (PMP
-        // Mod, cooleyes MP4 player). If decode succeeds but dimensions are
-        // zero, we log the full buffer for diagnosis on real hardware.
-        let width;
-        let height;
-        let y_ptr;
-        let y_stride;
-        let cb_ptr;
-        let cr_ptr;
-
-        // SAFETY: Reading codec buffer fields populated by sceVideocodecDecode.
-        unsafe {
-            width = *ptr.add(32);
-            height = *ptr.add(33);
-            y_ptr = *ptr.add(38);
-            y_stride = *ptr.add(39);
-            cb_ptr = *ptr.add(40);
-            cr_ptr = *ptr.add(41);
-        }
-
-        // No output frame yet (codec buffering reference frames).
-        if width == 0 || height == 0 {
-            // On first decode, log the buffer to help diagnose offset issues.
-            if self.width == 0 {
-                psp::dprintln!("video: no frame yet, probing buffer...");
-                self.log_codec_buffer();
+            static ERR_COUNT: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            let c = ERR_COUNT.fetch_add(1, Ordering::Relaxed);
+            if c < 5 {
+                vlog(&format!(
+                    "[VIDEO] sceVideocodecDecode failed: {:#010x}",
+                    ret as u32
+                ));
             }
             return None;
         }
 
-        // Cache dimensions on first successful decode.
-        if self.width == 0 {
-            self.width = width;
-            self.height = height;
-            psp::dprintln!(
-                "video: first frame decoded: {}x{}, Y={:#010x} stride={} \
-                 Cb={:#010x} Cr={:#010x}",
-                width,
-                height,
-                y_ptr,
-                y_stride,
-                cb_ptr,
-                cr_ptr
-            );
-        }
+        // SAFETY: Read decoded frame info from codec buffer.
+        let (width, height, y_ptr, y_stride, cb_ptr, cr_ptr) = unsafe {
+            (
+                *ptr.add(32),
+                *ptr.add(33),
+                *ptr.add(38),
+                *ptr.add(39),
+                *ptr.add(40),
+                *ptr.add(41),
+            )
+        };
 
-        // Validate pointers -- EDRAM is at 0x04000000..0x04200000 on PSP.
-        if y_ptr < 0x0400_0000 || y_ptr >= 0x0420_0000 {
-            psp::dprintln!(
-                "video: Y pointer {:#010x} outside EDRAM, dumping buffer",
-                y_ptr
-            );
-            self.log_codec_buffer();
+        if width == 0 || height == 0 {
             return None;
         }
 
-        // Convert YCbCr 4:2:0 to RGBA using VFPU.
-        // SAFETY: EDRAM pointers are valid after successful decode.
-        // We access via uncached address (| 0x40000000) to bypass data cache
-        // since the ME writes directly to EDRAM.
+        if self.width == 0 {
+            self.width = width;
+            self.height = height;
+            vlog(&format!(
+                "[VIDEO] first frame: {width}x{height}, \
+                 Y={y_ptr:#010x} stride={y_stride} \
+                 Cb={cb_ptr:#010x} Cr={cr_ptr:#010x}"
+            ));
+        }
+
+        // Validate EDRAM range.
+        if y_ptr < 0x0400_0000 || y_ptr >= 0x0420_0000 {
+            return None;
+        }
+
+        // SAFETY: EDRAM pointers via uncached address for DMA coherency.
         let frame = unsafe {
             yuv420_to_rgba_vfpu(
                 (y_ptr | 0x4000_0000) as *const u8,
@@ -432,49 +382,15 @@ impl PspVideoDecoder {
 
         Some(frame)
     }
-
-    /// Log all 96 words of the codec buffer for debugging on real hardware.
-    fn log_codec_buffer(&self) {
-        let ptr = self.buf.0.as_ptr();
-        for row in 0..12 {
-            let base = row * 8;
-            // SAFETY: Reading within the 96-word buffer.
-            let vals: [u32; 8] = unsafe {
-                [
-                    *ptr.add(base),
-                    *ptr.add(base + 1),
-                    *ptr.add(base + 2),
-                    *ptr.add(base + 3),
-                    *ptr.add(base + 4),
-                    *ptr.add(base + 5),
-                    *ptr.add(base + 6),
-                    *ptr.add(base + 7),
-                ]
-            };
-            psp::dprintln!(
-                "  buf[{:02}..{:02}]: {:08x} {:08x} {:08x} {:08x} \
-                 {:08x} {:08x} {:08x} {:08x}",
-                base,
-                base + 8,
-                vals[0],
-                vals[1],
-                vals[2],
-                vals[3],
-                vals[4],
-                vals[5],
-                vals[6],
-                vals[7],
-            );
-        }
-    }
 }
 
 impl Drop for PspVideoDecoder {
     fn drop(&mut self) {
         if self.initialized {
             // SAFETY: Release EDRAM allocated by sceVideocodecGetEDRAM.
-            // buf.0.as_mut_ptr() is the same 64-byte-aligned pointer.
-            unsafe { psp::sys::sceVideocodecReleaseEDRAM(self.buf.0.as_mut_ptr()) };
+            unsafe {
+                psp::sys::sceVideocodecReleaseEDRAM(self.buf.0.as_mut_ptr());
+            }
         }
     }
 }
