@@ -26,11 +26,15 @@ pub(crate) fn render_desktop(
     pv: &PhotoViewerState,
     mp: &MusicPlayerState,
     audio: &oasis_backend_psp::AudioHandle,
-    _br: &BrowserState,
+    br: &mut BrowserState,
 ) {
     let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
     let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);
     let current_vol = backend.volatile_mem_info();
+
+    // Grab browser info before the closure borrows everything.
+    let br_url = br.url().to_string();
+    let br_status = br.status_msg.clone();
 
     backend.force_bitmap_font = true;
     let _ = wm.draw_with_clips_noalloc(
@@ -85,7 +89,18 @@ pub(crate) fn render_desktop(
                 ch,
                 be,
             ),
-            "browser" => desktop::draw_browser_windowed(cx, cy, cw, ch, be),
+            "browser" => {
+                if let Some(ref mut w) = br.widget {
+                    // Resize browser viewport to fit the window content area.
+                    w.set_window(cx, cy, cw, ch);
+                    let _ = w.paint(be);
+                    Ok(())
+                } else {
+                    desktop::draw_browser_windowed_with_url(
+                        &br_url, &br_status, cx, cy, cw, ch, be,
+                    )
+                }
+            },
             "packages" => desktop::draw_packages_windowed(cx, cy, cw, ch, be),
             "radio" => desktop::draw_radio_windowed(audio, cx, cy, cw, ch, be),
             _ => Ok(()),

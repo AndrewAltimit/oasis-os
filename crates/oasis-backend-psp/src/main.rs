@@ -1,26 +1,24 @@
 //! PSP entry point for OASIS_OS.
 //!
-//! PSIX-style dashboard with document icons, tabbed status bar, chrome bezel
-//! bottom bar, terminal mode, and windowed desktop mode with floating windows
-//! managed by the oasis-core WindowManager.
+//! Unified desktop with dashboard icons, windowed WM, kiosk fullscreen apps,
+//! and a taskbar showing running windows.
 //!
 //! Audio playback and file I/O run on background threads to prevent frame drops.
 //!
 //! Major subsystems are split into modules:
 //! - `app_states` -- per-app mutable state structs
 //! - `dashboard` -- dashboard init and SDI helpers
-//! - `input_dispatch` -- input event routing for Classic and Desktop modes
+//! - `input_dispatch` -- unified input event routing
 //! - `getrandom` -- custom getrandom backends for PSP entropy
 //! - `io_poll` -- async I/O response polling
-//! - `render_classic` -- classic full-screen view rendering
+//! - `render_classic` -- kiosk fullscreen view rendering
 //! - `render_desktop` -- windowed desktop mode rendering
-//! - `url_text` -- URL/path text computation for status bar
 
 #![feature(restricted_std)]
 #![no_main]
 
 use oasis_backend_psp::{
-    CURSOR_H, CURSOR_W, Color, InputEvent, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry,
+    CURSOR_H, CURSOR_W, Color, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry,
     StatusBarInfo, SystemInfo, TextureId, WindowManager,
 };
 
@@ -28,6 +26,7 @@ use oasis_backend_psp::{
 use oasis_core::bottombar::BottomBar;
 use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
 use oasis_core::statusbar::StatusBar;
+use oasis_core::taskbar::Taskbar;
 use oasis_core::terminal_sdi;
 
 mod app_states;
@@ -44,7 +43,6 @@ mod render_desktop;
 mod skins;
 mod theme;
 mod types;
-mod url_text;
 mod views;
 mod views_sdi;
 
@@ -130,6 +128,7 @@ fn psp_main() {
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard_state.page_count();
+    let mut taskbar = Taskbar::new();
 
     boot::show_boot_screen(&mut backend, "Generating textures...", 40);
     dbg_log("[EBOOT] textures phase");
@@ -155,10 +154,9 @@ fn psp_main() {
     let mut sdi = SdiRegistry::new();
     dbg_log("[EBOOT] SDI registry created");
 
-    // -- App mode --
-    let mut app_mode = AppMode::Classic;
-    let mut classic_view = ClassicView::Dashboard;
-    let mut prev_classic_view = ClassicView::Dashboard;
+    // -- Kiosk app tracking (unified desktop) --
+    let mut kiosk_app = KioskApp::None;
+    let mut prev_kiosk_app = KioskApp::None;
 
     let mut icons_hidden: bool = false;
     let mut viz_frame: u32 = 0;
@@ -299,46 +297,15 @@ fn psp_main() {
             }
         }
 
-        // -- Input dispatch --
+        // -- Input dispatch (unified) --
         let events = backend.poll_events_inner();
         let mut should_quit = false;
 
         for event in &events {
-            if app_mode == AppMode::Desktop {
-                match event {
-                    InputEvent::ButtonRelease(oasis_backend_psp::Button::Confirm) => {
-                        _confirm_held = false;
-                    },
-                    InputEvent::ButtonPress(oasis_backend_psp::Button::Confirm) => {
-                        _confirm_held = true;
-                    },
-                    _ => {},
-                }
-                match input_dispatch::dispatch_desktop(
-                    event,
-                    &mut backend,
-                    &mut app_mode,
-                    &mut classic_view,
-                    &mut dashboard_state,
-                    &mut wm,
-                    &mut sdi,
-                    &mut term,
-                    &audio,
-                ) {
-                    DispatchResult::Quit => {
-                        should_quit = true;
-                        break;
-                    },
-                    DispatchResult::SkipRest | DispatchResult::Continue => continue,
-                }
-            }
-
-            // Classic mode input.
-            match input_dispatch::dispatch_classic(
+            match input_dispatch::dispatch_unified(
                 event,
                 &mut backend,
-                &mut app_mode,
-                &mut classic_view,
+                &mut kiosk_app,
                 &mut dashboard_state,
                 &mut wm,
                 &mut sdi,
@@ -441,97 +408,106 @@ fn psp_main() {
         // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
         backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-        match app_mode {
-            AppMode::Classic => {
-                render_classic::render_classic(
+        // -- Unified render path --
+        if kiosk_app != KioskApp::None {
+            // Hide all floating window decorations during fullscreen.
+            wm.hide_all_window_sdi(&mut sdi);
+
+            // Kiosk app active: render it fullscreen using Classic renderers.
+            render_classic::render_classic(
+                &mut backend,
+                &mut sdi,
+                &mut dashboard_state,
+                &active_theme,
+                kiosk_app,
+                &mut prev_kiosk_app,
+                icons_hidden,
+                &mut fm,
+                &mut pv,
+                &mut mp,
+                &mut br,
+                &mut radio,
+                &mut tv,
+                &mut term,
+                &audio,
+                viz_frame,
+                &dbg_log,
+            );
+        } else {
+            // No kiosk app: show dashboard + any windowed WM windows.
+            dashboard::hide_dashboard_sdi(&mut dashboard_state, &mut sdi);
+            terminal_sdi::set_terminal_visible(&mut sdi, false);
+
+            // Draw desktop icons directly (bypasses SDI, cheaper on GU).
+            if !icons_hidden {
+                chrome::draw_dashboard(
                     &mut backend,
-                    &mut sdi,
-                    &mut dashboard_state,
-                    &active_theme,
-                    classic_view,
-                    &mut prev_classic_view,
-                    icons_hidden,
-                    &mut fm,
-                    &mut pv,
-                    &mut mp,
-                    &mut br,
-                    &mut radio,
-                    &mut tv,
-                    &mut term,
-                    &audio,
+                    dashboard_state.selected,
+                    dashboard_state.page,
                     viz_frame,
-                    &dbg_log,
                 );
-            },
+            }
 
-            AppMode::Desktop => {
-                // Always hide SDI dashboard icons in Desktop mode -- drawing
-                // ~108 SDI objects (HashMap lookups + z-sort + prefix filter)
-                // eats the frame budget. Instead, draw icons directly via the
-                // backend which is much cheaper (direct GU calls, no SDI overhead).
-                dashboard::hide_dashboard_sdi(&mut dashboard_state, &mut sdi);
-                terminal_sdi::set_terminal_visible(&mut sdi, false);
+            // Kiosk transition: hide old SDI objects, restore window decorations.
+            if prev_kiosk_app != KioskApp::None {
+                views_sdi::hide_all(&mut sdi);
+                wm.show_all_window_sdi(&mut sdi);
+                prev_kiosk_app = KioskApp::None;
+            }
 
-                // Draw desktop icons directly (bypasses SDI entirely).
-                if !icons_hidden {
-                    chrome::draw_dashboard(
-                        &mut backend,
-                        dashboard_state.selected,
-                        dashboard_state.page,
-                        viz_frame,
-                    );
+            // Throttle kernel heap queries (~4Hz).
+            if viz_frame % 15 == 0 {
+                // SAFETY: scalar FFI returning available memory stats.
+                unsafe {
+                    cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
+                    cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
                 }
+            }
 
-                // Throttle kernel heap queries (~4Hz). These walk kernel
-                // memory structures and are expensive on every frame.
-                if viz_frame % 15 == 0 {
-                    // SAFETY: scalar FFI returning available memory stats.
-                    unsafe {
-                        cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
-                        cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
-                    }
-                }
-
-                render_desktop::render_desktop(
-                    &mut backend,
-                    &mut wm,
-                    &mut sdi,
-                    &config,
-                    &status,
-                    &sysinfo,
-                    fps,
-                    usb_active,
-                    cached_free_kb,
-                    cached_max_blk_kb,
-                    &term,
-                    &fm,
-                    &pv,
-                    &mp,
-                    &audio,
-                    &br,
-                );
-            },
+            // Render windowed WM windows (if any are open).
+            render_desktop::render_desktop(
+                &mut backend,
+                &mut wm,
+                &mut sdi,
+                &config,
+                &status,
+                &sysinfo,
+                fps,
+                usb_active,
+                cached_free_kb,
+                cached_max_blk_kb,
+                &term,
+                &fm,
+                &pv,
+                &mp,
+                &audio,
+                &mut br,
+            );
         }
 
-        // Status bar + bottom bar (always visible, drawn on top via SDI).
-        active_theme.bar.url_text =
-            url_text::compute_url_text(app_mode, classic_view, &fm, fm.umd_activated, &audio, &tv);
+        // Status bar + bottom bar + taskbar (always visible via SDI overlay).
+        active_theme.bar.url_text.clear();
         status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
         bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+        taskbar.update_sdi(
+            &mut sdi,
+            &active_theme,
+            wm.windows(),
+            wm.active_window(),
+            false,
+        );
 
-        // On PSP, draw SDI in two passes to control cost:
-        // - Base layer only when dashboard/terminal are active (icons, term lines)
-        // - Overlay layer always (status bar, bottom bar at z=900)
-        let needs_base = match app_mode {
-            AppMode::Classic => {
-                let is_direct_only = (classic_view == ClassicView::MusicPlayer
-                    && audio.is_playing())
-                    || (classic_view == ClassicView::Radio && radio.status != RadioStatus::Stopped)
-                    || (classic_view == ClassicView::TvGuide
-                        && (tv.tuned.is_some() || !tv.error_msg.is_empty()));
-                !is_direct_only
-            },
-            AppMode::Desktop => false,
+        // SDI two-pass rendering for PSP performance:
+        // - Base layer for kiosk apps that use SDI (file manager, terminal, etc.)
+        // - Overlay layer always (status bar, bottom bar, taskbar at z=900+)
+        let needs_base = if kiosk_app != KioskApp::None {
+            let is_direct_only = (kiosk_app == KioskApp::MusicPlayer && audio.is_playing())
+                || (kiosk_app == KioskApp::Radio && radio.status != RadioStatus::Stopped)
+                || (kiosk_app == KioskApp::TvGuide
+                    && (tv.tuned.is_some() || !tv.error_msg.is_empty()));
+            !is_direct_only
+        } else {
+            false
         };
         if needs_base {
             let _ = sdi.draw_base_layer(&mut backend);
@@ -539,30 +515,25 @@ fn psp_main() {
         let _ = sdi.draw_overlay_layer(&mut backend);
 
         // Post-SDI overlays drawn directly on the backend.
-        if app_mode == AppMode::Classic {
-            match classic_view {
-                ClassicView::Dashboard
-                    if !icons_hidden
-                        && (active_theme.icon.style == "vector"
-                            || !active_theme.background_layers.is_empty()) =>
-                {
-                    dashboard::render_vector_overlays(
-                        &mut backend,
-                        &mut dashboard_state,
-                        &active_theme,
-                        viz_frame,
-                    );
-                },
-                ClassicView::Terminal => {
-                    let _ = terminal_sdi::paint_terminal_scrollbar(
-                        &mut backend,
-                        term.lines.len(),
-                        term.scroll,
-                        &active_theme,
-                    );
-                },
-                _ => {},
+        if kiosk_app == KioskApp::None {
+            if !icons_hidden
+                && (active_theme.icon.style == "vector"
+                    || !active_theme.background_layers.is_empty())
+            {
+                dashboard::render_vector_overlays(
+                    &mut backend,
+                    &mut dashboard_state,
+                    &active_theme,
+                    viz_frame,
+                );
             }
+        } else if kiosk_app == KioskApp::Terminal {
+            let _ = terminal_sdi::paint_terminal_scrollbar(
+                &mut backend,
+                term.lines.len(),
+                term.scroll,
+                &active_theme,
+            );
         }
 
         viz_frame = viz_frame.wrapping_add(1);

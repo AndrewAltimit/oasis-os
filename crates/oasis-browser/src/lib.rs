@@ -571,6 +571,10 @@ impl BrowserWidget {
         if w != self.window_w || h != self.window_h {
             self.layout_dirty = true;
         }
+        // Position change requires display list rebuild (absolute coords).
+        if x != self.window_x || y != self.window_y {
+            self.full_repaint_needed = true;
+        }
         self.window_x = x;
         self.window_y = y;
         self.window_w = w;

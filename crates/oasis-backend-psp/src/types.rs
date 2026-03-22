@@ -67,21 +67,14 @@ pub(crate) static APPS: &[AppEntry] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// App modes (Classic = full-screen, Desktop = windowed WM)
+// Kiosk app tracking -- which app (if any) is in full-screen kiosk mode.
+// Dashboard is the default state (no kiosk app active).
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) enum AppMode {
-    /// Classic PSIX full-screen dashboard (existing behavior, default).
-    Classic,
-    /// Windowed desktop mode with floating windows managed by WM.
-    Desktop,
-}
-
-// Classic sub-modes (within AppMode::Classic).
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum ClassicView {
-    Dashboard,
+pub(crate) enum KioskApp {
+    /// No kiosk app -- dashboard is visible.
+    None,
     Terminal,
     FileManager,
     PhotoViewer,
@@ -89,6 +82,36 @@ pub(crate) enum ClassicView {
     Browser,
     Radio,
     TvGuide,
+}
+
+impl KioskApp {
+    /// The WM window ID for this kiosk app, if any.
+    pub(crate) fn window_id(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Terminal => Some("terminal"),
+            Self::FileManager => Some("filemgr"),
+            Self::PhotoViewer => Some("photos"),
+            Self::MusicPlayer => Some("music"),
+            Self::Browser => Some("browser"),
+            Self::Radio => Some("radio"),
+            Self::TvGuide => Some("tvguide"),
+        }
+    }
+
+    /// Map a WM window ID to a KioskApp variant.
+    pub(crate) fn from_window_id(id: &str) -> Self {
+        match id {
+            "terminal" => Self::Terminal,
+            "filemgr" => Self::FileManager,
+            "photos" => Self::PhotoViewer,
+            "music" => Self::MusicPlayer,
+            "browser" => Self::Browser,
+            "radio" => Self::Radio,
+            "tvguide" => Self::TvGuide,
+            _ => Self::None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
