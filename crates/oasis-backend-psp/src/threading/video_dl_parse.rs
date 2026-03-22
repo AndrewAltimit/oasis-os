@@ -1,7 +1,8 @@
 //! MP4 parsing and stream demux helpers for video downloads: moov atom
 //! detection, sample table traversal, and interleaved sample extraction.
 
-use super::{AUDIO_QUEUE, AudioCmd};
+use super::{AUDIO_QUEUE, AudioCmd, io_log_verbose};
+use crate::video::{StreamFrame, try_push_stream_frame};
 
 // ---------------------------------------------------------------------------
 // MP4 box parsing
@@ -86,8 +87,13 @@ pub(super) fn next_sample_target(
     }
 }
 
-/// Process a chunk of HTTP data, extracting complete samples and pushing
-/// them to the video/audio decode threads.
+/// Process a chunk of HTTP data, extracting complete audio AND video
+/// samples and pushing them to the respective decode threads.
+///
+/// Video samples are converted from AVCC to Annex B format and pushed
+/// to the video thread via `VIDEO_STREAM_QUEUE`. Audio samples are
+/// pushed to the audio thread via `AUDIO_QUEUE`. Both use backpressure
+/// to throttle the I/O thread when consumers can't keep up.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn process_stream_chunk(
     chunk: &[u8],
@@ -97,6 +103,7 @@ pub(super) fn process_stream_chunk(
     sample_size: &mut u32,
     sample_is_video: &mut bool,
     sample_data: &mut Vec<u8>,
+    video_sample_data: &mut Vec<u8>,
     v_idx: &mut usize,
     a_idx: &mut usize,
     video_track: &Option<oasis_video::demux_lite::TrackInfo>,
@@ -113,7 +120,11 @@ pub(super) fn process_stream_chunk(
                     *sample_size = sz;
                     *sample_is_video = is_v;
                     *have_target = true;
-                    sample_data.clear();
+                    if is_v {
+                        video_sample_data.clear();
+                    } else {
+                        sample_data.clear();
+                    }
                 },
                 None => {
                     // All samples extracted; skip remaining data.
@@ -137,16 +148,18 @@ pub(super) fn process_stream_chunk(
         }
 
         if *sample_is_video {
-            // Skip video sample data — just advance stream position.
-            // sample_data is unused for video; track progress via offset.
-            let sample_end = *sample_offset + *sample_size as u64;
+            // Buffer video sample data for ME H.264 decode.
+            let remaining = *sample_size as usize - video_sample_data.len();
             let available = chunk.len() - chunk_pos;
-            let remaining = (sample_end - *http_pos) as usize;
-            let skip = core::cmp::min(remaining, available);
-            chunk_pos += skip;
-            *http_pos += skip as u64;
+            let take = core::cmp::min(remaining, available);
+            video_sample_data.extend_from_slice(&chunk[chunk_pos..chunk_pos + take]);
+            chunk_pos += take;
+            *http_pos += take as u64;
 
-            if *http_pos >= sample_end {
+            if video_sample_data.len() == *sample_size as usize {
+                // Convert AVCC→Annex B and push to video thread.
+                let raw_data = core::mem::take(video_sample_data);
+                push_video_sample(&raw_data, *v_idx, video_track);
                 *v_idx += 1;
                 *have_target = false;
             }
@@ -162,9 +175,11 @@ pub(super) fn process_stream_chunk(
             if sample_data.len() == *sample_size as usize {
                 let data = core::mem::take(sample_data);
                 // Blocking push with backpressure: retry until the audio
-                // queue has space, sleeping 2ms between attempts. This
-                // throttles the I/O thread to match the audio decode rate,
-                // preventing frame drops and choppy playback.
+                // queue has space, sleeping 8ms between attempts. This
+                // throttles the I/O thread to match the audio decode rate
+                // (~23ms per AAC frame at 44.1kHz/1024 samples). A 2ms
+                // sleep caused ~11 futile wakeups per frame; 8ms reduces
+                // this to ~3, freeing CPU for the audio decode thread.
                 let mut cmd = AudioCmd::VideoAudioAac { data };
                 loop {
                     match AUDIO_QUEUE.push(cmd) {
@@ -178,7 +193,7 @@ pub(super) fn process_stream_chunk(
                             }
                             // SAFETY: sceKernelDelayThread sleeps thread.
                             unsafe {
-                                psp::sys::sceKernelDelayThread(2_000);
+                                psp::sys::sceKernelDelayThread(8_000);
                             }
                         },
                     }
@@ -187,6 +202,63 @@ pub(super) fn process_stream_chunk(
                 *have_target = false;
                 sample_data.clear();
             }
+        }
+    }
+}
+
+/// Convert a raw AVCC video sample to Annex B and push it to the video
+/// decode thread via `VIDEO_STREAM_QUEUE` with backpressure.
+fn push_video_sample(
+    raw_data: &[u8],
+    v_idx: usize,
+    video_track: &Option<oasis_video::demux_lite::TrackInfo>,
+) {
+    let Some(vt) = video_track.as_ref() else {
+        return;
+    };
+
+    let is_keyframe = vt.sample_is_keyframe(v_idx);
+    let timestamp_secs = vt.sample_timestamp(v_idx);
+
+    // Convert AVCC to Annex B (prepends SPS/PPS on keyframes).
+    let annex_b = match vt.avcc.as_ref() {
+        Some(avcc) => match oasis_video::demux_lite::avcc_to_annex_b(raw_data, avcc, is_keyframe)
+        {
+            Ok(data) => data,
+            Err(e) => {
+                io_log_verbose(&format!(
+                    "[IO-DL] AVCC→Annex B error at v_idx={v_idx}: {e}"
+                ));
+                return;
+            },
+        },
+        None => {
+            // No AVCC config — assume data is already Annex B.
+            raw_data.to_vec()
+        },
+    };
+
+    // Blocking push with backpressure (same pattern as audio queue).
+    let mut frame = StreamFrame {
+        data: annex_b,
+        timestamp_secs,
+        is_keyframe,
+    };
+    loop {
+        match try_push_stream_frame(frame) {
+            Ok(()) => break,
+            Err(returned) => {
+                frame = returned;
+                if !crate::video::is_video_playing() {
+                    break;
+                }
+                // SAFETY: sceKernelDelayThread sleeps the current thread.
+                // Sleep 8ms — video frames arrive less frequently than
+                // audio (~30fps vs ~43fps), so backpressure is rare.
+                unsafe {
+                    psp::sys::sceKernelDelayThread(8_000);
+                }
+            },
         }
     }
 }

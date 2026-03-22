@@ -6,7 +6,10 @@ use core::sync::atomic::Ordering;
 use super::tls_http::TlsHttpReader;
 use super::video_dl_http::{HttpDataSource, http_open_with_redirect};
 use super::video_dl_parse::{find_moov_end, process_stream_chunk};
-use super::{AudioCmd, DOWNLOAD_CANCEL, IO_RESP_QUEUE, IoResponse, io_log, send_audio_cmd};
+use super::{
+    AudioCmd, DOWNLOAD_CANCEL, IO_RESP_QUEUE, IoResponse, io_log, io_log_verbose, send_audio_cmd,
+    set_streaming_active,
+};
 
 // ---------------------------------------------------------------------------
 // Video download handler
@@ -113,7 +116,9 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
     // Phase 1: buffer data until moov atom is fully received.
     let mut moov_buf: Vec<u8> = Vec::new();
     let mut moov_end: Option<u64> = None;
-    let mut buf = [0u8; 8192];
+    // 32KB read buffer: reduces sceHttp/TLS syscall overhead and better
+    // utilizes PSP's 16-32KB TCP receive buffer per read.
+    let mut buf = [0u8; 32768];
     let mut downloaded: u64 = 0;
     let mut last_progress: u64 = 0;
 
@@ -249,7 +254,19 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
     let mut a_idx = 0usize;
     let mut http_pos: u64;
 
-    let mut sample_data: Vec<u8> = Vec::new();
+    // Pre-allocate sample buffers with capacity based on the largest
+    // sample sizes to avoid per-sample reallocation during streaming.
+    let max_audio_sample = audio_track
+        .as_ref()
+        .map(|t| t.max_sample_size())
+        .unwrap_or(0) as usize;
+    let max_video_sample = video_track
+        .as_ref()
+        .map(|t| t.max_sample_size())
+        .unwrap_or(0) as usize;
+    let mut sample_data: Vec<u8> = Vec::with_capacity(max_audio_sample.max(4096));
+    let mut video_sample_data: Vec<u8> =
+        Vec::with_capacity(max_video_sample.max(16384));
     let mut sample_offset: u64 = 0;
     let mut sample_size: u32 = 0;
     let mut sample_is_video = false;
@@ -278,6 +295,7 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
             &mut sample_size,
             &mut sample_is_video,
             &mut sample_data,
+            &mut video_sample_data,
             &mut v_idx,
             &mut a_idx,
             &video_track,
@@ -290,6 +308,10 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
     drop(moov_buf);
     io_log("[IO-DL] entering phase 2 loop");
 
+    // Suppress verbose logging during streaming to avoid Memory Stick
+    // I/O stalls on the I/O thread (~5-20ms per log write).
+    set_streaming_active(true);
+
     let mut loop_iter = 0u32;
     loop {
         if !crate::video::is_video_playing() || DOWNLOAD_CANCEL.load(Ordering::Acquire) {
@@ -298,7 +320,7 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
         }
 
         if loop_iter < 3 {
-            io_log(&format!("[IO-DL] phase2 read #{loop_iter}..."));
+            io_log_verbose(&format!("[IO-DL] phase2 read #{loop_iter}..."));
         }
         let n = source.read_data(&mut buf);
         if n < 0 {
@@ -309,7 +331,9 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
             break; // EOF
         }
         if loop_iter < 3 {
-            io_log(&format!("[IO-DL] phase2 read #{loop_iter}: {n} bytes"));
+            io_log_verbose(&format!(
+                "[IO-DL] phase2 read #{loop_iter}: {n} bytes"
+            ));
         }
 
         downloaded += n as u64;
@@ -323,6 +347,7 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
             &mut sample_size,
             &mut sample_is_video,
             &mut sample_data,
+            &mut video_sample_data,
             &mut v_idx,
             &mut a_idx,
             &video_track,
@@ -339,6 +364,7 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
         }
     }
 
+    set_streaming_active(false);
     source.cleanup();
 
     io_log(&format!(

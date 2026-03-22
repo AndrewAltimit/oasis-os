@@ -67,6 +67,20 @@ pub fn cancel_video_download() {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming log suppression
+// ---------------------------------------------------------------------------
+
+/// Set to `true` during active audio/video streaming. When active,
+/// `io_log_verbose()` calls are suppressed to avoid Memory Stick I/O
+/// stalls (each `sceIoOpen+Write+Close` costs ~5-20ms).
+static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Mark streaming as active (suppress verbose I/O logging).
+pub fn set_streaming_active(active: bool) {
+    STREAMING_ACTIVE.store(active, Ordering::Release);
+}
+
+// ---------------------------------------------------------------------------
 // Audio commands
 // ---------------------------------------------------------------------------
 
@@ -340,6 +354,15 @@ fn io_log(msg: &str) {
             psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const _, 1);
             psp::sys::sceIoClose(fd);
         }
+    }
+}
+
+/// Verbose log — suppressed during active streaming to avoid Memory Stick
+/// I/O stalls (~5-20ms per `sceIoOpen+Write+Close`). Errors should still
+/// use `io_log()` directly.
+fn io_log_verbose(msg: &str) {
+    if !STREAMING_ACTIVE.load(Ordering::Relaxed) {
+        io_log(msg);
     }
 }
 

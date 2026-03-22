@@ -75,7 +75,9 @@ static VIDEO_CMD_QUEUE: SpscQueue<VideoCmd, 4> = SpscQueue::new();
 /// Decoded frames: video thread -> main thread (double-buffered).
 static VIDEO_FRAME_QUEUE: SpscQueue<DecodedFrame, 2> = SpscQueue::new();
 /// Pre-demuxed H.264 frames: I/O thread -> video thread (streaming mode).
-static VIDEO_STREAM_QUEUE: SpscQueue<StreamFrame, 4> = SpscQueue::new();
+/// 8 slots provide enough buffering to absorb I/O jitter while keeping
+/// memory usage bounded (~8 × avg H.264 AU ≈ 200KB for 480p content).
+static VIDEO_STREAM_QUEUE: SpscQueue<StreamFrame, 8> = SpscQueue::new();
 /// Whether video is currently playing.
 static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// Set by I/O thread to signal video thread to enter streaming mode.
@@ -846,7 +848,7 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 ///
 /// Returns `true` if Shutdown was received (caller should exit thread).
 fn play_stream() -> bool {
-    vlog("[VIDEO] play_stream: starting streaming decode (audio-only)");
+    vlog("[VIDEO] play_stream: starting streaming decode");
 
     // Drain stale commands that may have been queued during moov buffering
     // (e.g., user pressed Cancel while I/O thread was still downloading).
@@ -860,11 +862,24 @@ fn play_stream() -> bool {
         vlog("[VIDEO] play_stream: drained stale command");
     }
 
-    // Skip H.264 hardware decoder init for streaming mode.
-    // The I/O thread skips all video samples (audio-only streaming),
-    // so initializing the ME coprocessor is unnecessary and can cause
-    // hard crashes on some PSP firmware if the ME isn't available.
-    let mut h264: Option<PspVideoDecoder> = None;
+    // Attempt H.264 hardware decoder init for streaming mode.
+    // On real PSP hardware the ME is available and frames are decoded.
+    // On PPSSPP the ME is not emulated — try_init() returns Err and
+    // playback continues as audio-only (the I/O thread still pushes
+    // video samples, but they are drained without decode).
+    vlog("[VIDEO] play_stream: attempting H.264 init...");
+    let mut h264 = match PspVideoDecoder::try_init() {
+        Ok(dec) => {
+            vlog("[VIDEO] play_stream: H.264 hardware decoder initialized");
+            Some(dec)
+        },
+        Err(e) => {
+            vlog(&format!(
+                "[VIDEO] play_stream: H.264 disabled ({e}), audio-only"
+            ));
+            None
+        },
+    };
 
     // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
     // SAFETY: Read-only kernel syscall returning 64-bit system timer.
