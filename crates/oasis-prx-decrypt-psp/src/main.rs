@@ -423,6 +423,37 @@ const TARGETS: &[PrxTarget] = &[
         output_name: b"ms0:/PSP/GAME/PRXDEC/dec/usb1seg.prx\0",
         label: "usb1seg.prx",
     },
+    // Video/audio codec modules — for analyzing sceVideocodec 0x806201fe error.
+    PrxTarget {
+        flash_path: b"flash0:/kd/videocodec.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/videocodec.prx\0",
+        label: "videocodec.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/avcodec.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/avcodec.prx\0",
+        label: "avcodec.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpeg.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpeg.prx\0",
+        label: "mpeg.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpegbase.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpegbase.prx\0",
+        label: "mpegbase.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpeg_vsh.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpeg_vsh.prx\0",
+        label: "mpeg_vsh.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mediaman.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mediaman.prx\0",
+        label: "mediaman.prx",
+    },
 ];
 
 // ── Input helpers ───────────────────────────────────────────────────────
