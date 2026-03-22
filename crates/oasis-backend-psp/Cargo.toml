@@ -42,8 +42,8 @@ kernel-me-clock = ["psp/kernel"]
 kernel-me = ["psp/kernel"]
 
 [dependencies]
-# Pinned to specific commit for reproducible builds.
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d833e94", features = ["std"] }
+# Using local path for sceVideocodecScanHeader binding.
+psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }

@@ -13,8 +13,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
-use psp::vfpu_asm;
-
 use crate::threading::{AudioCmd, send_audio_cmd};
 
 /// File-based debug logging (works from video thread, unlike psp::dprintln).
@@ -223,9 +221,115 @@ use core::ffi::c_void;
 #[repr(align(64))]
 struct CodecBuf([u32; 96]);
 
+/// Bootstrap the Media Engine by creating a temporary sceMpeg context.
+///
+/// Ghidra analysis of avcodec.prx reveals its ME submission functions are
+/// empty stubs. The real implementations are loaded by mpeg.prx, which
+/// patches avcodec.prx when `sceMpegCreate` initializes the ME firmware.
+/// We create and delete a minimal MPEG context to trigger this patching.
+#[inline(never)]
+fn bootstrap_me() {
+    use core::ffi::c_void;
+
+    // SAFETY: sceMpegInit is idempotent.
+    let ret = unsafe { psp::sys::sceMpegInit() };
+    vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
+
+    vlog("[VIDEO] bootstrap: querying mem size...");
+    // Query required memory size for MPEG context.
+    let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(0) };
+    if mem_size <= 0 {
+        vlog(&format!("[VIDEO] sceMpegQueryMemSize = {mem_size} (skip)"));
+        return;
+    }
+
+    // Allocate ringbuffer (minimum viable: 8 packets).
+    let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(8) };
+    if rb_size <= 0 {
+        vlog(&format!("[VIDEO] RingbufferQueryMemSize = {rb_size} (skip)"));
+        return;
+    }
+
+    // Allocate aligned memory for MPEG context.
+    let mut mpeg_data = vec![0u8; mem_size as usize + 64];
+    let mpeg_data_aligned = {
+        let p = mpeg_data.as_mut_ptr();
+        let off = p.align_offset(64);
+        unsafe { p.add(off) }
+    };
+
+    // Allocate ringbuffer data.
+    let mut rb_data = vec![0u8; rb_size as usize];
+
+    // Construct ringbuffer (no callback needed — we won't feed data).
+    let mut ringbuffer = unsafe {
+        core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
+    };
+    let ret = unsafe {
+        psp::sys::sceMpegRingbufferConstruct(
+            &mut ringbuffer,
+            8,
+            rb_data.as_mut_ptr() as *mut c_void,
+            rb_size,
+            None, // no callback
+            core::ptr::null_mut(),
+        )
+    };
+    if ret < 0 {
+        vlog(&format!("[VIDEO] RingbufferConstruct = {ret:#x} (skip)"));
+        return;
+    }
+
+    // Create MPEG handle — this loads ME firmware and patches stubs.
+    // SceMpeg is *mut *mut c_void — must point to valid heap storage.
+    let mut mpeg_storage: *mut c_void = core::ptr::null_mut();
+    let mpeg: psp::sys::SceMpeg = unsafe {
+        core::mem::transmute(&mut mpeg_storage as *mut *mut c_void)
+    };
+    let ret = unsafe {
+        psp::sys::sceMpegCreate(
+            mpeg,
+            mpeg_data_aligned as *mut c_void,
+            mem_size as i32,
+            &mut ringbuffer,
+            512, // frame width
+            0,
+            0,
+        )
+    };
+    vlog(&format!("[VIDEO] sceMpegCreate = {ret:#x}"));
+
+    if ret >= 0 {
+        // Delete context — we only needed the side effect of ME loading.
+        unsafe { psp::sys::sceMpegDelete(mpeg) };
+        vlog("[VIDEO] sceMpegDelete OK (ME bootstrapped)");
+    }
+
+    unsafe { psp::sys::sceMpegRingbufferDestruct(&mut ringbuffer) };
+    // Don't call sceMpegFinish — keep ME subsystem alive for sceVideocodec.
+}
+
+/// Pre-initialize codec buffer scratch pointers for sceVideocodecOpen.
+#[inline(never)]
+fn init_codec_scratch(p: *mut u32) {
+    // Allocate 64-byte aligned scratch for ME DMA compatibility.
+    #[repr(align(64))]
+    struct Scratch([u8; 256]);
+    let s = Box::new(Scratch([0u8; 256]));
+    let a = Box::into_raw(s) as u32;
+    unsafe { *p.add(4) = a; *p.add(21) = a; }
+}
+
+/// 64-byte aligned AU buffer for ME DMA compatibility.
+/// sceVideocodecDecode validates buf[9] (AU pointer) via k1 and
+/// requires aligned memory. 128KB covers typical TV Guide H.264 AUs.
+#[repr(align(64))]
+struct AuBuf([u8; 128 * 1024]);
+
 /// PSP hardware H.264 video decoder using sceVideocodec (Media Engine).
 struct PspVideoDecoder {
     buf: Box<CodecBuf>,
+    au_buf: Box<AuBuf>,
     initialized: bool,
     width: u32,
     height: u32,
@@ -242,13 +346,21 @@ impl PspVideoDecoder {
         crate::audio::load_av_modules_once_pub();
         vlog("[VIDEO] try_init: AV modules loaded");
 
-        // Initialize MPEG subsystem (bootstraps ME on some firmware).
-        // SAFETY: sceMpegInit is idempotent.
-        let ret = unsafe { psp::sys::sceMpegInit() };
-        vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
+        // Initialize MPEG subsystem and create a temporary MPEG context.
+        // Ghidra RE of avcodec.prx revealed that the ME submission functions
+        // are EMPTY STUBS — the real codec implementation is in mpeg.prx,
+        // which patches avcodec.prx's stubs when sceMpegCreate loads the
+        // ME firmware binary. We create and immediately delete an MPEG
+        // context just to trigger this patching.
+        bootstrap_me();
 
         let mut buf = Box::new(CodecBuf([0u32; 96]));
         let ptr = buf.0.as_mut_ptr();
+
+        // Pre-initialize codec buffer fields required by sceVideocodecOpen.
+        // Ghidra analysis: sceVideocodecSetMemory validates buf[4] and
+        // buf[21] as pointers to scratch memory.
+        init_codec_scratch(ptr);
 
         vlog("[VIDEO] try_init: calling sceVideocodecOpen...");
         // SAFETY: sceVideocodecOpen with 64-byte aligned buffer, type 0 = AVC.
@@ -290,6 +402,7 @@ impl PspVideoDecoder {
 
         Ok(Self {
             buf,
+            au_buf: Box::new(AuBuf([0u8; 128 * 1024])),
             initialized: true,
             width: 0,
             height: 0,
@@ -304,10 +417,29 @@ impl PspVideoDecoder {
 
         let ptr = self.buf.0.as_mut_ptr();
 
-        // SAFETY: Set AU pointer and size in codec buffer.
+        // Copy AU data into aligned buffer for ME DMA compatibility.
+        let au_len = au_data.len();
+        if au_len > self.au_buf.0.len() {
+            return None; // AU too large
+        }
+        self.au_buf.0[..au_len].copy_from_slice(au_data);
+        let au_ptr = self.au_buf.0.as_ptr() as u32;
+
+        // Set AU pointer and size in codec buffer.
+        // Also write the AU pointer into the scratch metadata at buf[4]+0
+        // and AU size at buf[4]+4, in case the ME reads from scratch.
         unsafe {
-            *ptr.add(9) = au_data.as_ptr() as u32;
-            *ptr.add(10) = au_data.len() as u32;
+            // Standard AU pointer fields
+            *ptr.add(9) = au_ptr;
+            *ptr.add(10) = au_len as u32;
+            // Also set buf[3] area (offset 0x0C) with AU pointer — some
+            // PSP homebrew documentation puts AU info here instead of buf[9]
+            // Write AU pointer into scratch metadata structure
+            let scratch = *ptr.add(4) as *mut u32;
+            if !scratch.is_null() {
+                *scratch = au_ptr;             // scratch[0] = AU pointer
+                *scratch.add(1) = au_len as u32; // scratch[1] = AU size
+            }
         }
 
         // SAFETY: Flush codec buffer + AU data for ME DMA coherency.
@@ -322,16 +454,22 @@ impl PspVideoDecoder {
             );
         }
 
-        // SAFETY: sceVideocodecDecode processes one AU through the ME.
+        // Scan the AU header first — this submits data to the ME and must
+        // be called before Decode. Ghidra shows ScanHeader flushes buf[4]
+        // metadata, submits to ME via FUN_00004424, and Decode reads the
+        // result via a jump table.
+        let scan_ret = unsafe { psp::sys::sceVideocodecScanHeader(ptr, 0) };
+
+        // SAFETY: sceVideocodecDecode reads the ME result.
         let ret = unsafe { psp::sys::sceVideocodecDecode(ptr, 0) };
-        if ret < 0 {
+        if ret < 0 || scan_ret < 0 {
             static ERR_COUNT: core::sync::atomic::AtomicU32 =
                 core::sync::atomic::AtomicU32::new(0);
             let c = ERR_COUNT.fetch_add(1, Ordering::Relaxed);
             if c < 5 {
                 vlog(&format!(
-                    "[VIDEO] sceVideocodecDecode failed: {:#010x}",
-                    ret as u32
+                    "[VIDEO] scan={:#010x} decode={:#010x}",
+                    scan_ret as u32, ret as u32,
                 ));
             }
             return None;
@@ -387,7 +525,6 @@ impl PspVideoDecoder {
 impl Drop for PspVideoDecoder {
     fn drop(&mut self) {
         if self.initialized {
-            // SAFETY: Release EDRAM allocated by sceVideocodecGetEDRAM.
             unsafe {
                 psp::sys::sceVideocodecReleaseEDRAM(self.buf.0.as_mut_ptr());
             }
@@ -418,44 +555,17 @@ impl Drop for PspVideoDecoder {
 // At ~20 VFPU cycles per pixel, a 480x272 frame converts in ~2.6M cycles
 // = ~8ms at 333MHz. This is well within the 33ms budget for 30fps video.
 
-/// BT.601 YUV->RGB conversion matrix, 16-byte aligned for VFPU loads.
-/// Row-major: each row contains coefficients for one output channel.
-#[repr(C, align(16))]
-struct Bt601Matrix([[f32; 4]; 4]);
-
-/// The BT.601 conversion matrix (constant).
-static BT601: Bt601Matrix = Bt601Matrix([
-    [1.164, 0.0, 1.596, 0.0],     // R = 1.164*(Y-16) + 1.596*(Cr-128)
-    [1.164, -0.392, -0.813, 0.0], // G = 1.164*(Y-16) - 0.392*(Cb-128) - 0.813*(Cr-128)
-    [1.164, 2.017, 0.0, 0.0],     // B = 1.164*(Y-16) + 2.017*(Cb-128)
-    [0.0, 0.0, 0.0, 1.0],         // A = passthrough (input[3] = 255)
-]);
-
-/// Bias vector subtracted from input: [16, 128, 128, 0].
-/// After subtraction: [Y-16, Cb-128, Cr-128, 255-0=255].
-#[repr(C, align(16))]
-struct BiasVec([f32; 4]);
-
-static YUV_BIAS: BiasVec = BiasVec([16.0, 128.0, 128.0, 0.0]);
-
-/// Convert a YUV420P frame to RGBA using VFPU matrix multiply.
+/// Convert a YUV420P frame to RGBA using BT.601 integer fixed-point math.
 ///
-/// Processes 2 horizontally adjacent pixels per iteration: since YUV420
-/// subsamples chroma 2:1 horizontally, each Cb/Cr value covers two luma
-/// pixels, so we share the chroma read. RGBA output is packed as u32 and
-/// written with a single word store instead of 4 byte stores per pixel.
-///
-/// Performance: ~12 VFPU instructions per pixel (vs ~18 in the 1-pixel
-/// version), plus halved chroma reads and 75% fewer memory stores.
-/// 480x272 frame converts in ~4-5ms at 333MHz.
+/// Uses scalar integer arithmetic instead of VFPU inline asm to avoid
+/// LLVM MIPS register allocation issues with `vfpu_asm!` that trigger
+/// "expected relocatable expression" errors on nightly.
 ///
 /// # Safety
 ///
-/// - `y_ptr`, `cb_ptr`, `cr_ptr` must point to valid YUV420P plane data
-///   with the given dimensions.
-/// - Y plane: `height` rows of `y_stride` bytes (only first `width` used).
-/// - Cb/Cr planes: `height/2` rows of `y_stride/2` bytes each.
+/// - `y_ptr`, `cb_ptr`, `cr_ptr` must point to valid YUV420P plane data.
 /// - Pointers should use uncached addresses for EDRAM data.
+#[inline(never)]
 unsafe fn yuv420_to_rgba_vfpu(
     y_ptr: *const u8,
     y_stride: usize,
@@ -467,193 +577,40 @@ unsafe fn yuv420_to_rgba_vfpu(
     let w = width as usize;
     let h = height as usize;
     let chroma_stride = y_stride / 2;
-    // Allocate as u32 slice for word-aligned writes.
-    let mut rgba_u32 = vec![0u32; w * h];
-
-    let mat_ptr = BT601.0.as_ptr() as *const u8;
-    let bias_ptr = YUV_BIAS.0.as_ptr() as *const u8;
-    let clamp_255: u32 = 255.0f32.to_bits();
-
-    // SAFETY: Load the BT.601 matrix into VFPU M000 and bias into C130.
-    // These registers persist across the pixel loop since Rust's scalar
-    // code doesn't touch VFPU registers.
-    //
-    // Register allocation:
-    //   M000 (C000-C030): BT.601 conversion matrix (persistent)
-    //   C130:             Bias vector [16, 128, 128, 0] (persistent)
-    //   S200:             255.0 constant for clamping (persistent)
-    //   C100:             Pixel 0 input [Y0, Cb, Cr, 255]
-    //   C110:             Pixel 0 output [R0, G0, B0, A0]
-    //   C120:             Temp for clamping (shared)
-    //   C210:             Pixel 1 input [Y1, Cb, Cr, 255]
-    //   C220:             Pixel 1 output [R1, G1, B1, A1]
-    vfpu_asm!(
-        "lv.q C000, 0({m})",
-        "lv.q C010, 16({m})",
-        "lv.q C020, 32({m})",
-        "lv.q C030, 48({m})",
-        "lv.q C130, 0({b})",
-        "mtv {c255}, S200",
-        m = in(reg) mat_ptr,
-        b = in(reg) bias_ptr,
-        c255 = in(reg) clamp_255,
-        options(nostack),
-    );
-
-    // Process width in pairs of 2 (shared chroma).
-    let w_pairs = w / 2;
-    let w_tail = w & 1; // 1 if odd width, 0 if even
+    let mut rgba = vec![0u8; w * h * 4];
 
     for row in 0..h {
         let chroma_row = row / 2;
-        let y_row_base = row * y_stride;
-        let c_row_base = chroma_row * chroma_stride;
-        let out_row_base = row * w;
-
-        for pair in 0..w_pairs {
-            let col = pair * 2;
-            let chroma_col = pair; // col/2 == pair
-
-            // SAFETY: Pointers are valid EDRAM (uncached) addresses for the
-            // decoded frame. Indices are within plane dimensions.
-            let y0 = unsafe { *y_ptr.add(y_row_base + col) } as u32;
-            let y1 = unsafe { *y_ptr.add(y_row_base + col + 1) } as u32;
-            let cb = unsafe { *cb_ptr.add(c_row_base + chroma_col) } as u32;
-            let cr = unsafe { *cr_ptr.add(c_row_base + chroma_col) } as u32;
-            let alpha: u32 = 255;
-
-            let r0: u32;
-            let g0: u32;
-            let b0: u32;
-            let r1: u32;
-            let g1: u32;
-            let b1: u32;
-
-            // SAFETY: VFPU conversion for 2 pixels sharing the same
-            // Cb/Cr. Each pixel is a separate vfpu_asm! block to stay
-            // within MIPS register pressure limits (7 operands each).
-            // The chroma read is shared in Rust, halving EDRAM loads.
-            vfpu_asm!(
-                "mtv {y}, S100",
-                "mtv {cb}, S101",
-                "mtv {cr}, S102",
-                "mtv {a}, S103",
-                "vi2f.q C100, C100, 0",
-                "vsub.q C100, C100, C130",
-                "vtfm4.q C110, M000, C100",
-                "vzero.q C120",
-                "vmax.q C110, C110, C120",
-                "vone.q C120",
-                "vscl.q C120, C120, S200",
-                "vmin.q C110, C110, C120",
-                "vf2iz.q C110, C110, 0",
-                "mfv {ro}, S110",
-                "mfv {go}, S111",
-                "mfv {bo}, S112",
-                y = in(reg) y0,
-                cb = in(reg) cb,
-                cr = in(reg) cr,
-                a = in(reg) alpha,
-                ro = out(reg) r0,
-                go = out(reg) g0,
-                bo = out(reg) b0,
-                options(nostack),
-            );
-
-            vfpu_asm!(
-                "mtv {y}, S100",
-                "mtv {cb}, S101",
-                "mtv {cr}, S102",
-                "mtv {a}, S103",
-                "vi2f.q C100, C100, 0",
-                "vsub.q C100, C100, C130",
-                "vtfm4.q C110, M000, C100",
-                "vzero.q C120",
-                "vmax.q C110, C110, C120",
-                "vone.q C120",
-                "vscl.q C120, C120, S200",
-                "vmin.q C110, C110, C120",
-                "vf2iz.q C110, C110, 0",
-                "mfv {ro}, S110",
-                "mfv {go}, S111",
-                "mfv {bo}, S112",
-                y = in(reg) y1,
-                cb = in(reg) cb,
-                cr = in(reg) cr,
-                a = in(reg) alpha,
-                ro = out(reg) r1,
-                go = out(reg) g1,
-                bo = out(reg) b1,
-                options(nostack),
-            );
-
-            // Pack RGBA as u32 (little-endian: byte order R, G, B, A).
-            let pix0 = r0 | (g0 << 8) | (b0 << 16) | 0xFF00_0000;
-            let pix1 = r1 | (g1 << 8) | (b1 << 16) | 0xFF00_0000;
-
-            let idx = out_row_base + col;
-            rgba_u32[idx] = pix0;
-            rgba_u32[idx + 1] = pix1;
-        }
-
-        // Handle odd-width tail pixel (rare for video, but correct).
-        if w_tail != 0 {
-            let col = w - 1;
+        for col in 0..w {
             let chroma_col = col / 2;
-
-            let y_val = unsafe { *y_ptr.add(y_row_base + col) } as u32;
+            let y_val = unsafe { *y_ptr.add(row * y_stride + col) } as u32;
             let cb_val =
-                unsafe { *cb_ptr.add(c_row_base + chroma_col) } as u32;
+                unsafe { *cb_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
             let cr_val =
-                unsafe { *cr_ptr.add(c_row_base + chroma_col) } as u32;
-            let alpha: u32 = 255;
+                unsafe { *cr_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
+            // BT.601 YUV→RGB conversion (integer fixed-point).
+            // Uses 16.16 fixed point to avoid VFPU inline asm which
+            // triggers LLVM MIPS register allocation issues.
+            let y_adj = y_val as i32 - 16;
+            let cb_adj = cb_val as i32 - 128;
+            let cr_adj = cr_val as i32 - 128;
 
-            let r: u32;
-            let g: u32;
-            let b: u32;
+            // Fixed-point coefficients (×256):
+            // R = 1.164*Y + 1.596*Cr = (298*Y + 409*Cr) >> 8
+            // G = 1.164*Y - 0.392*Cb - 0.813*Cr = (298*Y - 100*Cb - 208*Cr) >> 8
+            // B = 1.164*Y + 2.017*Cb = (298*Y + 516*Cb) >> 8
+            let r = ((298 * y_adj + 409 * cr_adj + 128) >> 8).clamp(0, 255);
+            let g = ((298 * y_adj - 100 * cb_adj - 208 * cr_adj + 128) >> 8)
+                .clamp(0, 255);
+            let b = ((298 * y_adj + 516 * cb_adj + 128) >> 8).clamp(0, 255);
 
-            vfpu_asm!(
-                "mtv {y}, S100",
-                "mtv {cb}, S101",
-                "mtv {cr}, S102",
-                "mtv {a}, S103",
-                "vi2f.q C100, C100, 0",
-                "vsub.q C100, C100, C130",
-                "vtfm4.q C110, M000, C100",
-                "vzero.q C120",
-                "vmax.q C110, C110, C120",
-                "vone.q C120",
-                "vscl.q C120, C120, S200",
-                "vmin.q C110, C110, C120",
-                "vf2iz.q C110, C110, 0",
-                "mfv {ro}, S110",
-                "mfv {go}, S111",
-                "mfv {bo}, S112",
-                y = in(reg) y_val,
-                cb = in(reg) cb_val,
-                cr = in(reg) cr_val,
-                a = in(reg) alpha,
-                ro = out(reg) r,
-                go = out(reg) g,
-                bo = out(reg) b,
-                options(nostack),
-            );
-
-            let pix = r | (g << 8) | (b << 16) | 0xFF00_0000;
-            rgba_u32[out_row_base + col] = pix;
+            let pix = (row * w + col) * 4;
+            rgba[pix] = r as u8;
+            rgba[pix + 1] = g as u8;
+            rgba[pix + 2] = b as u8;
+            rgba[pix + 3] = 255;
         }
     }
-
-    // Reinterpret Vec<u32> as Vec<u8> without copying.
-    let rgba = {
-        let ptr = rgba_u32.as_mut_ptr() as *mut u8;
-        let len = rgba_u32.len() * 4;
-        let cap = rgba_u32.capacity() * 4;
-        core::mem::forget(rgba_u32);
-        // SAFETY: u32 and u8 have compatible layouts when multiplied.
-        // The pointer, length, and capacity are correctly scaled.
-        unsafe { Vec::from_raw_parts(ptr, len, cap) }
-    };
 
     DecodedFrame {
         rgba,
