@@ -1,7 +1,8 @@
-//! Classic mode rendering (full-screen PSIX dashboard views).
+//! Kiosk fullscreen view rendering.
 //!
 //! Handles lazy-loading of directory entries and dispatches rendering
 //! to view-specific SDI update functions and direct backend drawing.
+//! Used when a kiosk app fills the screen.
 
 use oasis_backend_psp::{Color, PspBackend, SdiRegistry};
 
@@ -9,21 +10,21 @@ use crate::app_states::*;
 use crate::chrome;
 use crate::dashboard;
 use crate::desktop;
-use crate::types::{ClassicView, RadioStatus};
+use crate::types::{KioskApp, RadioStatus};
 use crate::views;
 use crate::views_sdi;
 
 use oasis_core::terminal_sdi;
 
-/// Render the current classic-mode view.
+/// Render the current kiosk fullscreen view.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_classic(
     backend: &mut PspBackend,
     sdi: &mut SdiRegistry,
     dashboard_state: &mut oasis_core::dashboard::DashboardState,
     active_theme: &oasis_core::active_theme::ActiveTheme,
-    classic_view: ClassicView,
-    prev_classic_view: &mut ClassicView,
+    kiosk_app: KioskApp,
+    prev_kiosk_app: &mut KioskApp,
     icons_hidden: bool,
     fm: &mut FileManagerState,
     pv: &mut PhotoViewerState,
@@ -37,19 +38,19 @@ pub(crate) fn render_classic(
     dbg_log: &dyn Fn(&str),
 ) {
     // Lazy-load directory entries for browser modes.
-    if classic_view == ClassicView::FileManager && !fm.left.loaded {
+    if kiosk_app == KioskApp::FileManager && !fm.left.loaded {
         fm.left.entries = oasis_backend_psp::list_directory(&fm.left.path);
         fm.left.selected = 0;
         fm.left.scroll = 0;
         fm.left.loaded = true;
     }
-    if classic_view == ClassicView::FileManager && !fm.right.loaded {
+    if kiosk_app == KioskApp::FileManager && !fm.right.loaded {
         fm.right.entries = oasis_backend_psp::list_directory(&fm.right.path);
         fm.right.selected = 0;
         fm.right.scroll = 0;
         fm.right.loaded = true;
     }
-    if classic_view == ClassicView::PhotoViewer && !pv.loaded && !pv.viewing {
+    if kiosk_app == KioskApp::PhotoViewer && !pv.loaded && !pv.viewing {
         let all = oasis_backend_psp::list_directory(&pv.path);
         pv.entries = all
             .into_iter()
@@ -64,7 +65,7 @@ pub(crate) fn render_classic(
         pv.scroll = 0;
         pv.loaded = true;
     }
-    if classic_view == ClassicView::MusicPlayer && !mp.loaded && !audio.is_playing() {
+    if kiosk_app == KioskApp::MusicPlayer && !mp.loaded && !audio.is_playing() {
         let all = oasis_backend_psp::list_directory(&mp.path);
         mp.entries = all
             .into_iter()
@@ -80,41 +81,26 @@ pub(crate) fn render_classic(
         mp.loaded = true;
     }
 
-    // Show or hide dashboard icons based on current view.
-    let show_dashboard = classic_view == ClassicView::Dashboard && !icons_hidden;
-    if show_dashboard {
-        dashboard::show_dashboard_sdi(dashboard_state, sdi, active_theme);
-    } else {
-        dashboard::hide_dashboard_sdi(dashboard_state, sdi);
-    }
+    // Hide dashboard icons when a kiosk app is fullscreen.
+    dashboard::hide_dashboard_sdi(dashboard_state, sdi);
 
-    // Show or hide terminal SDI objects.
-    if classic_view != ClassicView::Terminal {
+    // Hide terminal SDI objects when not in terminal.
+    if kiosk_app != KioskApp::Terminal {
         terminal_sdi::set_terminal_visible(sdi, false);
     }
 
     // View transition: hide old SDI objects, set up new ones.
-    if classic_view != *prev_classic_view {
+    if kiosk_app != *prev_kiosk_app {
         views_sdi::hide_all(sdi);
-        views_sdi::setup_view(sdi, classic_view);
-        *prev_classic_view = classic_view;
+        views_sdi::setup_kiosk(sdi, kiosk_app);
+        *prev_kiosk_app = kiosk_app;
     }
 
-    match classic_view {
-        ClassicView::Dashboard => {
-            backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[
-                    ("X", "Open"),
-                    ("L/R", "Window"),
-                    ("Start", "Term"),
-                    ("Sel", "Desktop"),
-                ],
-            );
-            backend.force_bitmap_font = false;
+    match kiosk_app {
+        KioskApp::None => {
+            // Should not reach here -- caller skips render_classic when None.
         },
-        ClassicView::Terminal => {
+        KioskApp::Terminal => {
             terminal_sdi::setup_terminal_objects(
                 sdi,
                 &term.lines,
@@ -131,12 +117,12 @@ pub(crate) fn render_classic(
                     ("X", "Run"),
                     ("[]", "OSK"),
                     ("Up/Dn", "Scroll"),
-                    ("Start", "Back"),
+                    ("Start", "Win"),
                 ],
             );
             backend.force_bitmap_font = false;
         },
-        ClassicView::FileManager => {
+        KioskApp::FileManager => {
             views_sdi::update_file_manager(
                 sdi,
                 &fm.left.path,
@@ -157,7 +143,7 @@ pub(crate) fn render_classic(
             );
             backend.force_bitmap_font = false;
         },
-        ClassicView::PhotoViewer => {
+        KioskApp::PhotoViewer => {
             if pv.viewing {
                 views_sdi::update_photo_view(sdi, pv.tex, pv.img_w, pv.img_h);
                 backend.force_bitmap_font = true;
@@ -179,7 +165,7 @@ pub(crate) fn render_classic(
                 backend.force_bitmap_font = false;
             }
         },
-        ClassicView::MusicPlayer => {
+        KioskApp::MusicPlayer => {
             if audio.is_playing() {
                 backend.force_bitmap_font = true;
                 views::draw_music_player_threaded(backend, &mp.file_name, audio, viz_frame);
@@ -202,13 +188,13 @@ pub(crate) fn render_classic(
                 backend.force_bitmap_font = false;
             }
         },
-        ClassicView::Browser => {
+        KioskApp::Browser => {
             if let Some(ref mut w) = br.widget {
+                // Restore fullscreen viewport (windowed mode may have resized it).
+                w.set_window(0, 0, 480, 272);
                 if br.loading || w.loading_state() == oasis_browser::LoadingState::Loading {
                     desktop::draw_loading_indicator(backend, "Loading page...");
                 } else if w.loading_state() == oasis_browser::LoadingState::Error {
-                    // Show error as simple text (avoid paint crash on PSP).
-                    // Cache wrapped lines to avoid per-frame allocation.
                     let msg = w.error_message().unwrap_or("Unknown error");
                     if br.cached_error_msg != msg {
                         br.cached_error_msg = msg.to_string();
@@ -223,7 +209,6 @@ pub(crate) fn render_classic(
                     let _ = w.paint(backend);
                 }
             } else {
-                // Widget not yet initialized -- show status message.
                 backend.force_bitmap_font = true;
                 backend.draw_text_inner(&br.status_msg, 4, 30, 8, Color::WHITE);
                 backend.force_bitmap_font = false;
@@ -235,7 +220,7 @@ pub(crate) fn render_classic(
             );
             backend.force_bitmap_font = false;
         },
-        ClassicView::Radio => {
+        KioskApp::Radio => {
             backend.force_bitmap_font = true;
             match radio.status {
                 RadioStatus::Stopped => {
@@ -269,7 +254,7 @@ pub(crate) fn render_classic(
             }
             backend.force_bitmap_font = false;
         },
-        ClassicView::TvGuide => {
+        KioskApp::TvGuide => {
             if viz_frame < 3 || viz_frame % 60 == 0 {
                 dbg_log(&format!("[TV] render frame {}", viz_frame));
             }

@@ -18,17 +18,20 @@ use crate::commands;
 use crate::desktop;
 use crate::skins;
 use crate::theme::*;
-use crate::types::*;
+use crate::types::{APPS, KioskApp};
 
 // ---------------------------------------------------------------------------
 // Helper: Dashboard Confirm (app launch)
 // ---------------------------------------------------------------------------
 
+/// Launch an app from the dashboard.
+///
+/// Apps with fullscreen views open as kiosk WM windows.  Apps without
+/// fullscreen views open as regular floating windows.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_dashboard_confirm(
     title: &str,
-    classic_view: &mut ClassicView,
-    app_mode: &mut AppMode,
+    kiosk_app: &mut KioskApp,
     _dashboard: &mut DashboardState,
     wm: &mut WindowManager,
     sdi: &mut SdiRegistry,
@@ -45,41 +48,45 @@ pub(super) fn dispatch_dashboard_confirm(
 ) {
     match title {
         "Terminal" => {
-            *classic_view = ClassicView::Terminal;
+            desktop::open_app_window(wm, sdi, "terminal", "Terminal", true);
+            *kiosk_app = KioskApp::Terminal;
         },
         "File Manager" => {
-            *classic_view = ClassicView::FileManager;
             fm.left.path = String::from("ms0:/");
             fm.left.loaded = false;
             fm.right.path = fm.left.path.clone();
             fm.right.loaded = false;
             fm.active_panel = 0;
+            desktop::open_app_window(wm, sdi, "filemgr", "File Manager", true);
+            *kiosk_app = KioskApp::FileManager;
         },
         "Photo Viewer" => {
-            *classic_view = ClassicView::PhotoViewer;
             pv.viewing = false;
             pv.loaded = false;
+            desktop::open_app_window(wm, sdi, "photos", "Photo Viewer", true);
+            *kiosk_app = KioskApp::PhotoViewer;
         },
         "Music Player" => {
-            *classic_view = ClassicView::MusicPlayer;
             mp.loaded = false;
+            desktop::open_app_window(wm, sdi, "music", "Music Player", true);
+            *kiosk_app = KioskApp::MusicPlayer;
         },
         "Browser" => {
             dbg_log("[Browser] entering browser view");
-            *classic_view = ClassicView::Browser;
-            // Initialize widget immediately so the chrome is visible.
             br.ensure_widget();
             br.loading = false;
             br.status_msg = String::from("Press [] to enter URL, X to navigate");
+            desktop::open_app_window(wm, sdi, "browser", "Browser", true);
+            *kiosk_app = KioskApp::Browser;
         },
         "Radio" => {
-            *classic_view = ClassicView::Radio;
             radio.selected = 0;
             radio.scroll = 0;
+            desktop::open_app_window(wm, sdi, "radio", "Radio", true);
+            *kiosk_app = KioskApp::Radio;
         },
         "TV Guide" => {
             dbg_log("[TV] entering TV Guide view");
-            *classic_view = ClassicView::TvGuide;
             if tv.channels.is_empty() {
                 if !oasis_backend_psp::network::is_net_initialized() {
                     dbg_log("[TV] init network...");
@@ -121,12 +128,13 @@ pub(super) fn dispatch_dashboard_confirm(
             }
             tv.selected = 0;
             tv.scroll = 0;
+            desktop::open_app_window(wm, sdi, "tvguide", "TV Guide", true);
+            *kiosk_app = KioskApp::TvGuide;
         },
         _ => {
-            // Apps without a Classic view: open in Desktop mode.
+            // Apps without a kiosk view: open as regular windowed app.
             if let Some(app) = APPS.iter().find(|a| a.title == title) {
-                *app_mode = AppMode::Desktop;
-                desktop::open_app_window(wm, sdi, app.id, app.title);
+                desktop::open_app_window(wm, sdi, app.id, app.title, false);
             }
         },
     }

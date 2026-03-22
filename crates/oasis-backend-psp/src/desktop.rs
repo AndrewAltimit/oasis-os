@@ -6,7 +6,7 @@ use oasis_backend_psp::{
 };
 
 use crate::theme::*;
-use crate::types::{APPS, AppMode, ClassicView};
+use crate::types::APPS;
 
 /// Check if coordinates are over a dashboard icon, returning the global index.
 pub(crate) fn hit_test_dashboard_icon(x: i32, y: i32, page: usize) -> Option<usize> {
@@ -31,14 +31,22 @@ pub(crate) fn hit_test_dashboard_icon(x: i32, y: i32, page: usize) -> Option<usi
 }
 
 /// Open an app as a floating window (or focus if already open).
+///
+/// When `kiosk` is true the window is created and immediately enters
+/// fullscreen kiosk mode (fills screen, no decorations).
 pub(crate) fn open_app_window(
     wm: &mut WindowManager,
     sdi: &mut SdiRegistry,
     app_id: &str,
     title: &str,
+    kiosk: bool,
 ) {
     if wm.get_window(app_id).is_some() {
         let _ = wm.focus_window(app_id, sdi);
+        if kiosk {
+            let _ = wm.enter_fullscreen(app_id, sdi);
+            hide_kiosk_content_bg(sdi, app_id);
+        }
         return;
     }
     let config = WindowConfig {
@@ -53,14 +61,36 @@ pub(crate) fn open_app_window(
         modal: false,
     };
     let _ = wm.create_window(&config, sdi);
+    if kiosk {
+        let _ = wm.enter_fullscreen(app_id, sdi);
+        hide_kiosk_content_bg(sdi, app_id);
+    }
+}
+
+/// Hide the WM content background SDI object for a kiosk window.
+///
+/// In kiosk mode the PSP renders app content directly via `render_classic`,
+/// so the WM's dark content background would cause an unwanted tint.
+fn hide_kiosk_content_bg(sdi: &mut SdiRegistry, app_id: &str) {
+    let mut buf = [0u8; 64];
+    let id_bytes = app_id.as_bytes();
+    let suffix = b".content";
+    let total = id_bytes.len() + suffix.len();
+    if total <= buf.len() {
+        buf[..id_bytes.len()].copy_from_slice(id_bytes);
+        buf[id_bytes.len()..total].copy_from_slice(suffix);
+        // SAFETY: both parts are valid UTF-8.
+        let name = unsafe { core::str::from_utf8_unchecked(&buf[..total]) };
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
 }
 
 /// Handle WM events (window closed, desktop click opens apps, etc.).
 pub(crate) fn handle_wm_event(
     event: &WmEvent,
     term_lines: &mut Vec<String>,
-    _classic_view: &mut ClassicView,
-    _app_mode: &mut AppMode,
     wm: &mut WindowManager,
     sdi: &mut SdiRegistry,
     page: usize,
@@ -75,7 +105,7 @@ pub(crate) fn handle_wm_event(
         WmEvent::DesktopClick(x, y) => {
             if let Some(idx) = hit_test_dashboard_icon(*x, *y, page) {
                 if idx < APPS.len() {
-                    open_app_window(wm, sdi, APPS[idx].id, APPS[idx].title);
+                    open_app_window(wm, sdi, APPS[idx].id, APPS[idx].title, false);
                 }
             }
         },
@@ -558,13 +588,44 @@ pub(crate) fn draw_browser_windowed(
     let mut y = cy + 20;
     be.draw_text("Web browser for PSP.", cx + 4, y, 8, lbl)?;
     y += 14;
-    be.draw_text("Use Terminal to browse:", cx + 4, y, 8, lbl)?;
-    y += 12;
-    be.draw_text("  open <url>", cx + 4, y, 8, Color::rgb(120, 200, 255))?;
-    y += 12;
-    be.draw_text("  gemini <url>", cx + 4, y, 8, Color::rgb(120, 200, 255))?;
+    be.draw_text("Press Start for fullscreen.", cx + 4, y, 8, lbl)?;
+    Ok(())
+}
+
+pub(crate) fn draw_browser_windowed_with_url(
+    url: &str,
+    status: &str,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(5, 10, 25, 220))?;
+    be.draw_text("BROWSER", cx + 4, cy + 2, 8, Color::rgb(50, 120, 200))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let hi = Color::rgb(120, 200, 255);
+    let lbl = Color::rgb(160, 160, 160);
+    let mut y = cy + 18;
+
+    // Truncate URL to fit window width.
+    let max_chars = (cw as usize / 5).min(url.len());
+    let display_url = if url.len() > max_chars {
+        let start = url.floor_char_boundary(url.len() - max_chars);
+        &url[start..]
+    } else {
+        url
+    };
+    be.draw_text(display_url, cx + 4, y, 8, hi)?;
     y += 14;
-    be.draw_text("Supports HTML, CSS, Gemini.", cx + 4, y, 8, lbl)?;
+
+    if !status.is_empty() {
+        be.draw_text(status, cx + 4, y, 8, lbl)?;
+        y += 14;
+    }
+
+    be.draw_text("Start = fullscreen", cx + 4, y, 8, lbl)?;
     Ok(())
 }
 

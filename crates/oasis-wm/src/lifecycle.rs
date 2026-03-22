@@ -289,6 +289,38 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Hide all SDI objects for every window (decorations + content).
+    ///
+    /// Used when a kiosk/fullscreen app is active so floating window
+    /// chrome doesn't bleed through.
+    pub fn hide_all_window_sdi(&self, sdi: &mut SdiRegistry) {
+        for window in &self.windows {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+    }
+
+    /// Show SDI objects for all non-minimized windows.
+    ///
+    /// Call when returning from kiosk mode to restore window decorations.
+    pub fn show_all_window_sdi(&self, sdi: &mut SdiRegistry) {
+        for window in &self.windows {
+            if window.state == crate::window::WindowState::Minimized {
+                continue;
+            }
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = true;
+                }
+            }
+        }
+    }
+
     /// Advance the cascade position for the next window.
     pub(crate) fn advance_cascade(&mut self) {
         self.next_cascade_x += CASCADE_OFFSET;

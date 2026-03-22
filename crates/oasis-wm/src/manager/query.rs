@@ -43,6 +43,29 @@ impl WindowManager {
         self.windows.iter().any(|w| w.fullscreen_kiosk)
     }
 
+    /// Find the topmost window whose outer rect contains `(px, py)`.
+    ///
+    /// Iterates in reverse z-order so the topmost window wins.
+    pub fn window_at(&self, px: i32, py: i32) -> Option<&str> {
+        self.windows
+            .iter()
+            .rev()
+            .filter(|w| w.state != crate::window::WindowState::Minimized)
+            .find(|w| {
+                px >= w.x && py >= w.y && px < w.x + w.outer_w as i32 && py < w.y + w.outer_h as i32
+            })
+            .map(|w| w.id.as_str())
+    }
+
+    /// Return the topmost non-minimized window id.
+    pub fn topmost_visible(&self) -> Option<&str> {
+        self.windows
+            .iter()
+            .rev()
+            .find(|w| w.state != crate::window::WindowState::Minimized)
+            .map(|w| w.id.as_str())
+    }
+
     /// Get a reference to the current theme.
     pub fn theme(&self) -> &WmTheme {
         &self.theme

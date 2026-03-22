@@ -18,7 +18,7 @@ mod tv_guide;
 
 use oasis_core::sdi::SdiRegistry;
 
-use crate::types::ClassicView;
+use crate::types::KioskApp;
 
 // Re-export all public view functions.
 // Browser SDI views retained for potential future fallback use.
@@ -33,23 +33,23 @@ pub(crate) use photo::{
 pub(crate) use radio::{setup_radio, update_radio};
 pub(crate) use tv_guide::{setup_tv_channels, update_tv_channels};
 
-/// Set up SDI objects for the given view.  Idempotent -- safe to call every
-/// time a view is entered.
-pub(crate) fn setup_view(sdi: &mut SdiRegistry, view: ClassicView) {
-    match view {
-        ClassicView::Radio => setup_radio(sdi),
-        ClassicView::TvGuide => setup_tv_channels(sdi),
-        ClassicView::PhotoViewer => {
+/// Set up SDI objects for the given kiosk app.  Idempotent -- safe to call
+/// every time a view is entered.
+pub(crate) fn setup_kiosk(sdi: &mut SdiRegistry, app: KioskApp) {
+    match app {
+        KioskApp::Radio => setup_radio(sdi),
+        KioskApp::TvGuide => setup_tv_channels(sdi),
+        KioskApp::PhotoViewer => {
             setup_photo_browser(sdi);
             setup_photo_view(sdi);
         },
-        ClassicView::MusicPlayer => setup_music_browser(sdi),
-        ClassicView::Browser => {
+        KioskApp::MusicPlayer => setup_music_browser(sdi),
+        KioskApp::Browser => {
             // Browser now uses BrowserWidget::paint() directly.
             // No SDI objects needed.
         },
-        ClassicView::FileManager => setup_file_manager(sdi),
-        // Dashboard and Terminal already have their own SDI setup.
-        ClassicView::Dashboard | ClassicView::Terminal => {},
+        KioskApp::FileManager => setup_file_manager(sdi),
+        // Terminal has its own SDI setup; None = dashboard.
+        KioskApp::Terminal | KioskApp::None => {},
     }
 }

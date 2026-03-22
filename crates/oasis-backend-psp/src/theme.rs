@@ -5,7 +5,7 @@ use oasis_backend_psp::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 // Bar geometry.
 pub(crate) const STATUSBAR_H: u32 = 18;
-pub(crate) const BOTTOMBAR_H: u32 = 32;
+pub(crate) const BOTTOMBAR_H: u32 = 16;
 pub(crate) const BOTTOMBAR_Y: i32 = (SCREEN_HEIGHT - BOTTOMBAR_H) as i32;
 pub(crate) const CONTENT_TOP: u32 = STATUSBAR_H;
 pub(crate) const CONTENT_H: u32 = SCREEN_HEIGHT - CONTENT_TOP - BOTTOMBAR_H;

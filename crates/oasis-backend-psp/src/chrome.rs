@@ -42,30 +42,7 @@ pub(crate) fn draw_dashboard(
         backend.draw_text_inner(app.title, label_x, label_y, 8, LABEL_CLR);
     }
 
-    // Pulsing border around selected icon.
-    if page_count > 0 && selected < page_count {
-        let sel_col = (selected % GRID_COLS) as i32;
-        let sel_row = (selected / GRID_COLS) as i32;
-        let cell_x = GRID_PAD_X + sel_col * CELL_W;
-        let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + sel_row * CELL_H;
-        let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
-        let iy = cell_y + 1;
-
-        let pulse = ((libm::sinf(viz_frame as f32 * 0.08) + 1.0) * 0.5 * 80.0) as u8;
-        let sel_clr = Color::rgba(255, 255, 255, 60 + pulse);
-        let bx = ix - CURSOR_PAD;
-        let by = iy - CURSOR_PAD;
-        let bw = ICON_W + CURSOR_PAD as u32 * 2;
-        let bh = ICON_H + CURSOR_PAD as u32 * 2;
-        // Top edge.
-        backend.fill_rect_inner(bx, by, bw, 2, sel_clr);
-        // Bottom edge.
-        backend.fill_rect_inner(bx, by + bh as i32 - 2, bw, 2, sel_clr);
-        // Left edge.
-        backend.fill_rect_inner(bx, by, 2, bh, sel_clr);
-        // Right edge.
-        backend.fill_rect_inner(bx + bw as i32 - 2, by, 2, bh, sel_clr);
-    }
+    // Icon selection is now cursor-based (no grid selector box).
 }
 
 /// Draw a PSIX document-style icon with 6 layers:

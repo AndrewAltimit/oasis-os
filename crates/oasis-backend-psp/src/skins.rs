@@ -219,6 +219,9 @@ impl PspSkinPreset {
         f.grid_cols = 4;
         f.grid_rows = 3;
         f.icons_per_page = 12;
+        // Unified desktop: bottom bar shows taskbar buttons, not media tabs.
+        f.show_media_tabs = false;
+        f.show_page_dots = false;
         f
     }
 }
