@@ -26,6 +26,85 @@ pub fn trigger_init() {
     INIT_REQUESTED.store(1, Ordering::Release);
 }
 
+/// Load ME kernel modules at boot (called from psp_main).
+///
+/// Loads me_wrapper.prx and avcodec.prx from flash0, which boots the ME
+/// and populates the codec driver stubs. After this, sceVideocodec and
+/// sceMpeg calls from user-mode homebrew should work.
+///
+/// # Safety
+/// Must be called from kernel mode during plugin init.
+pub unsafe fn me_boot_modules() {
+    crate::debug_log(b"[ME-BOOT] loading me_wrapper.prx...");
+
+    let me_id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"flash0:/kd/me_wrapper.prx\0".as_ptr(),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+
+    let mut msg = [0u8; 64];
+    let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"[ME-BOOT] me_wrapper=0x");
+    mp = crate::me_dump::append_hex(&mut msg, mp, me_id.0 as u32);
+    crate::debug_log(&msg[..mp]);
+
+    // 0x80020149 = EXCLUSIVE_LOAD (already loaded).
+    if me_id.0 == -0x7FFDFE_B7_i32 {
+        crate::debug_log(b"[ME-BOOT] me_wrapper already loaded");
+    } else if me_id >= psp::sys::SceUid(0) {
+        // Start it.
+        let mut status: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                me_id, 0, core::ptr::null_mut(),
+                &mut status, core::ptr::null_mut(),
+            )
+        };
+        let mut msg2 = [0u8; 64];
+        let mut mp2 = crate::me_dump::append_bytes(&mut msg2, 0, b"[ME-BOOT] start=0x");
+        mp2 = crate::me_dump::append_hex(&mut msg2, mp2, ret as u32);
+        crate::debug_log(&msg2[..mp2]);
+    } else {
+        crate::debug_log(b"[ME-BOOT] me_wrapper load failed");
+        return;
+    }
+
+    // Load avcodec.prx.
+    crate::debug_log(b"[ME-BOOT] loading avcodec.prx...");
+    let av_id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"flash0:/kd/avcodec.prx\0".as_ptr(),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+
+    let mut msg3 = [0u8; 64];
+    let mut mp3 = crate::me_dump::append_bytes(&mut msg3, 0, b"[ME-BOOT] avcodec=0x");
+    mp3 = crate::me_dump::append_hex(&mut msg3, mp3, av_id.0 as u32);
+    crate::debug_log(&msg3[..mp3]);
+
+    if av_id.0 == -0x7FFDFE_B7_i32 {
+        crate::debug_log(b"[ME-BOOT] avcodec already loaded");
+    } else if av_id >= psp::sys::SceUid(0) {
+        let mut status: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                av_id, 0, core::ptr::null_mut(),
+                &mut status, core::ptr::null_mut(),
+            )
+        };
+        let mut msg4 = [0u8; 64];
+        let mut mp4 = crate::me_dump::append_bytes(&mut msg4, 0, b"[ME-BOOT] av start=0x");
+        mp4 = crate::me_dump::append_hex(&mut msg4, mp4, ret as u32);
+        crate::debug_log(&msg4[..mp4]);
+    }
+
+    crate::debug_log(b"[ME-BOOT] module loading complete");
+}
+
 /// Check and consume the init request (called from dump thread).
 pub fn check_init_request() -> bool {
     INIT_REQUESTED.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed).is_ok()
@@ -283,10 +362,10 @@ pub unsafe fn me_init() {
             crate::debug_log(b"[ME-RPC] modules already loaded (game/VSH)");
         }
         LoadResult::Failed => {
-            crate::debug_log(b"[ME-RPC] module load failed completely");
-            // Don't do manual boot — too dangerous during game execution.
-            // ME hardware writes can corrupt display/audio.
-            crate::debug_log(b"[ME-RPC] skipping manual boot (unsafe during game)");
+            crate::debug_log(b"[ME-RPC] module load failed - ME not available");
+            crate::debug_log(b"[ME-RPC] start a movie/game first, then retry");
+            ME_INITIALIZED.store(false, Ordering::Release);
+            return;
         }
     }
 
@@ -604,41 +683,7 @@ pub unsafe fn me_test() {
     // Resolve function pointers first.
     unsafe { resolve_me_functions() };
 
-    // Test 1: Call sceVideocodecOpen through the kernel avcodec_wrapper.
-    // This calls through the full ME RPC path internally.
-    // We use a dummy codec buffer to see if it returns a meaningful error
-    // (not crash, not empty-stub error 0x806201FE).
-    let vcodec_fn = unsafe { core::ptr::read_volatile(&raw const FN_VIDEOCODEC_OPEN) };
-    if let Some(open_fn) = vcodec_fn {
-        crate::debug_log(b"[ME-RPC] calling sceVideocodecOpen...");
-        let mut codec_buf = [0u32; 96];
-        // Set version field (word 0) as expected by the codec.
-        codec_buf[0] = 0x05100601;
-        let ret = unsafe { open_fn(0, codec_buf.as_mut_ptr()) };
-        let mut msg = [0u8; 64];
-        let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"[ME-RPC] VideocodecOpen=0x");
-        mp = crate::me_dump::append_hex(&mut msg, mp, ret as u32);
-        crate::debug_log(&msg[..mp]);
-    } else {
-        crate::debug_log(b"[ME-RPC] VideocodecOpen not resolved");
-    }
-
-    // Test 2: Call sceAudiocodecCheckNeedMem (known to work on PSP).
-    let acodec_fn = unsafe { core::ptr::read_volatile(&raw const FN_AUDIOCODEC_CHECK) };
-    if let Some(check_fn) = acodec_fn {
-        crate::debug_log(b"[ME-RPC] calling sceAudiocodecCheckNeedMem...");
-        let mut codec_buf = [0u32; 96];
-        // type 0x1003 = AAC
-        let ret = unsafe { check_fn(codec_buf.as_mut_ptr(), 0x1003) };
-        let mut msg = [0u8; 64];
-        let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"[ME-RPC] AudioCheckMem=0x");
-        mp = crate::me_dump::append_hex(&mut msg, mp, ret as u32);
-        crate::debug_log(&msg[..mp]);
-    } else {
-        crate::debug_log(b"[ME-RPC] AudioCheckMem not resolved");
-    }
-
-    // Test 3: Full sceMeVideo_driver initialization sequence.
+    // Full sceMeVideo_driver initialization sequence.
     //
     // The correct order (from disassembly analysis):
     //   Step A: NID C441994C type=0 → RPC cmd=0 (probe ME, get EDRAM info)

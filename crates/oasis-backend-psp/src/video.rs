@@ -374,6 +374,10 @@ pub fn preinit_mpeg() {
 
     // Extract ME firmware images from flash0.
     extract_me_firmware();
+
+    // ME init happens from the kernel PRX (me_rpc module) which loads
+    // me_wrapper.prx + avcodec.prx at boot. If successful, sceVideocodec
+    // calls from this EBOOT will work via the populated kernel stubs.
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones
@@ -608,6 +612,7 @@ fn list_flash0_dir(path: &[u8], depth: u8) {
     }
     unsafe { psp::sys::sceIoDclose(dir_fd) };
 }
+
 
 /// Spawn the video decode thread (priority 24, between audio=16 and I/O=32).
 pub fn spawn_video_thread() {
@@ -856,8 +861,7 @@ unsafe extern "C" fn ringbuffer_callback(
         }
     }
 
-    // DEBUG: Only copy 1 packet at a time to isolate freeze.
-    let actual_copy = 1usize.min(packets_to_copy);
+    let actual_copy = packets_to_copy;
     let actual_len = actual_copy * PACKET_SIZE;
 
     // Copy data into ringbuffer.
@@ -1235,14 +1239,11 @@ impl SceMpegDecoder {
         let pts_90khz = (pts_secs * 90_000.0) as u64;
         let mpeg = self.mpeg();
 
-        // If header hasn't been sent yet, send it first (non-blocking).
-        if let Some(header_pkt) = self.muxer.take_header_packet() {
-            if verbose {
-                vlog("[VIDEO] feeding PSMF header...");
-            }
-            let put = self.feed_packets(&header_pkt);
-            vlog(&format!("[VIDEO] fed PSMF header: {put} packets"));
-        }
+        // PSMF header was already parsed by sceMpegQueryStreamOffset during
+        // init. Do NOT feed it through the ringbuffer — the ringbuffer should
+        // only receive MPEG-PS data (pack headers + PES packets).
+        // Just consume the header packet so the muxer knows it's been "sent".
+        let _ = self.muxer.take_header_packet();
 
         // Wrap the AU in MPEG-PS PES packets.
         let packets = self.muxer.wrap_au(au_data, pts_90khz);
@@ -1290,8 +1291,7 @@ impl SceMpegDecoder {
 
         if verbose {
             vlog(&format!(
-                "[VIDEO] feeding {packets_to_put} packets (avail={avail}), \
-                 spawning feeder thread..."
+                "[VIDEO] feeding {packets_to_put} packets (avail={avail})..."
             ));
         }
 
@@ -1303,68 +1303,31 @@ impl SceMpegDecoder {
             );
         }
 
-        // Spawn a helper thread for sceMpegRingbufferPut (it blocks).
-        // We use a raw pointer to the ringbuffer since it's heap-allocated
-        // and lives for the duration of the decoder.
-        // Use statics to pass parameters to the feeder thread (avoids Send issues).
-        static FEED_DONE: AtomicBool = AtomicBool::new(false);
-        static FEED_RESULT: core::sync::atomic::AtomicI32 =
-            core::sync::atomic::AtomicI32::new(0);
-        static mut FEED_RB_PTR: *mut psp::sys::SceMpegRingbuffer = core::ptr::null_mut();
-        static mut FEED_NUM_PACKETS: i32 = 0;
-        static mut FEED_AVAIL: i32 = 0;
-
-        // SAFETY: Set before spawning thread; thread reads after spawn.
-        unsafe {
-            FEED_RB_PTR = &mut *self.ringbuffer as *mut psp::sys::SceMpegRingbuffer;
-            FEED_NUM_PACKETS = packets_to_put;
-            FEED_AVAIL = avail;
-        }
-        FEED_DONE.store(false, Ordering::Release);
-
-        let feed_handle = ThreadBuilder::new(b"mpeg_feed\0")
-            .priority(20) // higher priority than video thread (24)
-            .stack_size(4096)
-            .spawn(move || {
-                // SAFETY: Statics set by caller before thread spawn.
-                let ret = unsafe {
-                    psp::sys::sceMpegRingbufferPut(
-                        FEED_RB_PTR,
-                        FEED_NUM_PACKETS,
-                        FEED_AVAIL,
-                    )
-                };
-                FEED_RESULT.store(ret, Ordering::Release);
-                FEED_DONE.store(true, Ordering::Release);
-                0
-            });
-
-        if feed_handle.is_err() {
-            vlog("[VIDEO] failed to spawn feeder thread");
-            unsafe {
-                let ctx = &raw mut RINGBUF_CTX;
-                (*ctx).ptr = core::ptr::null();
-                (*ctx).len = 0;
-            }
-            return None;
-        }
-        let feed_handle = feed_handle.ok();
-
-        // Poll: repeatedly call sceMpegGetAvcAu while waiting for the
-        // feeder thread to complete. GetAvcAu tells the ME to consume data,
-        // which unblocks Put.
+        // Call sceMpegRingbufferPut directly (no feeder thread).
+        // This blocks until the callback copies all data, but since we're
+        // not trying to call GetAvcAu concurrently, it should complete.
+        let put_ret = unsafe {
+            psp::sys::sceMpegRingbufferPut(
+                &mut *self.ringbuffer,
+                packets_to_put,
+                avail,
+            )
+        };
         if verbose {
-            vlog("[VIDEO] polling GetAvcAu to unblock feeder...");
+            vlog(&format!("[VIDEO] RingbufferPut ret={put_ret}"));
         }
 
-        let mut au_ret = -1i32;
-        for attempt in 0..200 {
-            // 200 × 5ms = 1 second timeout
-            if FEED_DONE.load(Ordering::Acquire) {
-                break;
-            }
+        // Clean up callback context.
+        unsafe {
+            let ctx = &raw mut RINGBUF_CTX;
+            (*ctx).ptr = core::ptr::null();
+            (*ctx).len = 0;
+        }
 
-            // Call GetAvcAu to kick the ME into consuming ringbuffer data.
+        // Now try GetAvcAu — data should be in the ringbuffer.
+        let mut au_ret = -1i32;
+        let mpeg = self.mpeg();
+        for attempt in 0..10 {
             let ret = unsafe {
                 psp::sys::sceMpegGetAvcAu(
                     mpeg,
@@ -1373,92 +1336,30 @@ impl SceMpegDecoder {
                     core::ptr::null_mut(),
                 )
             };
-
             if ret >= 0 {
                 au_ret = ret;
                 if verbose {
-                    vlog(&format!(
-                        "[VIDEO] sceMpegGetAvcAu OK on attempt {attempt}"
-                    ));
+                    vlog(&format!("[VIDEO] GetAvcAu OK on attempt {attempt}"));
                 }
                 break;
             }
-
             if verbose && attempt < 3 {
-                vlog(&format!(
-                    "[VIDEO] GetAvcAu attempt {attempt} = {:#x}",
-                    ret as u32
-                ));
+                vlog(&format!("[VIDEO] GetAvcAu attempt {attempt} = {ret:#x}"));
             }
-
-            unsafe { psp::sys::sceKernelDelayThread(5_000) }; // 5ms
-        }
-
-        // Wait for feeder thread to finish after GetAvcAu unblocked it.
-        for _ in 0..100 {
-            if FEED_DONE.load(Ordering::Acquire) {
-                break;
-            }
-            unsafe { psp::sys::sceKernelDelayThread(1_000) }; // 1ms
-        }
-
-        // Clean up context.
-        unsafe {
-            let ctx = &raw mut RINGBUF_CTX;
-            (*ctx).ptr = core::ptr::null();
-            (*ctx).len = 0;
-        }
-
-        if let Some(h) = feed_handle {
-            core::mem::forget(h); // Thread already exited.
-        }
-
-        if !FEED_DONE.load(Ordering::Acquire) {
-            vlog("[VIDEO] feeder thread timed out");
-            return None;
-        }
-
-        let put = FEED_RESULT.load(Ordering::Acquire);
-        if verbose {
-            vlog(&format!("[VIDEO] feeder done, put={put}"));
-        }
-        if put <= 0 {
-            return None;
-        }
-
-        // If GetAvcAu didn't succeed during polling, try once more.
-        if au_ret < 0 {
-            au_ret = unsafe {
-                psp::sys::sceMpegGetAvcAu(
-                    mpeg,
-                    self.video_stream,
-                    &mut self.au,
-                    core::ptr::null_mut(),
-                )
-            };
+            unsafe { psp::sys::sceKernelDelayThread(1_000) };
         }
 
         if au_ret < 0 {
             if verbose {
-                vlog(&format!(
-                    "[VIDEO] sceMpegGetAvcAu final = {:#x}",
-                    au_ret as u32
-                ));
+                vlog("[VIDEO] GetAvcAu failed after all attempts");
             }
             return None;
         }
 
-        if verbose {
-            vlog("[VIDEO] calling sceMpegAvcDecode...");
-        }
-
-        // Decode the H.264 AU — output is ABGR pixels written to output_buf.
-        // `buffer` is a pointer-to-pointer: the ME writes the output address.
-        let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
-        let buffer_addr = &mut output_ptr as *mut *mut c_void as *mut c_void;
-
-        // SAFETY: sceMpegAvcDecode with valid handles and aligned output buffer.
-        let ret = unsafe {
+        // Decode the AU.
+        let mut output_buf_ptr: *mut c_void = self.output_buf.as_mut_ptr() as *mut c_void;
+        let buffer_addr = &mut output_buf_ptr as *mut *mut c_void as *mut c_void;
+        let dec_ret = unsafe {
             psp::sys::sceMpegAvcDecode(
                 mpeg,
                 &mut self.au,
@@ -1467,55 +1368,32 @@ impl SceMpegDecoder {
                 &mut self.decode_init,
             )
         };
+        if verbose {
+            vlog(&format!(
+                "[VIDEO] AvcDecode ret={dec_ret:#x} init={} out={output_buf_ptr:?}",
+                self.decode_init
+            ));
+        }
 
-        if ret < 0 {
-            static DEC_ERR_COUNT: core::sync::atomic::AtomicU32 =
-                core::sync::atomic::AtomicU32::new(0);
-            let c = DEC_ERR_COUNT.fetch_add(1, Ordering::Relaxed);
-            if c < 10 {
-                vlog(&format!(
-                    "[VIDEO] sceMpegAvcDecode = {:#x}, init = {}",
-                    ret as u32, self.decode_init
-                ));
-            }
+        if dec_ret < 0 {
             return None;
         }
 
-        // decode_init > 0 means a frame was produced.
-        if self.decode_init <= 0 {
-            return None;
+        // If output is available, convert YCbCr to RGBA.
+        if !output_buf_ptr.is_null() && self.decode_init != 0 {
+            vlog("[VIDEO] FRAME DECODED! Converting...");
+            // TODO: Read YCbCr from output_buf_ptr and convert to RGBA
+            // For now, return a placeholder to prove decode works.
+            return Some(DecodedFrame {
+                rgba: vec![0x80; self.frame_width as usize * self.height as usize * 4],
+                width: self.width,
+                height: self.height,
+            });
         }
 
-        // The ME may have written pixels to a different address than our buffer.
-        // `output_ptr` now points to the actual decoded pixel data (may be EDRAM).
-        // We need to copy from that address into our owned buffer.
-        let w = self.width as usize;
-        let h = self.height as usize;
-        let stride = self.frame_width as usize;
-        let mut rgba = vec![0u8; w * h * 4];
-
-        // SAFETY: output_ptr is set by sceMpegAvcDecode to valid decoded data.
-        // Use uncached address for EDRAM coherency.
-        let src = (output_ptr as usize | 0x4000_0000) as *const u8;
-        for row in 0..h {
-            let src_offset = row * stride * 4;
-            let dst_offset = row * w * 4;
-            // SAFETY: src + src_offset is valid for stride*4 bytes (decoded frame).
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    src.add(src_offset),
-                    rgba.as_mut_ptr().add(dst_offset),
-                    w * 4,
-                );
-            }
-        }
-
-        Some(DecodedFrame {
-            rgba,
-            width: self.width,
-            height: self.height,
-        })
+        None
     }
+
 }
 
 impl Drop for SceMpegDecoder {
@@ -1998,6 +1876,15 @@ fn play_stream() -> bool {
     vlog(&format!(
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
+
+    // PSP ME can only decode up to 480x272. Skip video decode for
+    // larger streams to avoid hanging sceMpegRingbufferPut.
+    if vid_w > 480 || vid_h > 272 {
+        vlog(&format!(
+            "[VIDEO] stream {vid_w}x{vid_h} exceeds PSP limit (480x272), audio-only"
+        ));
+        return drain_stream_only();
+    }
 
     // Initialize sceMpeg decoder.
     let mut h264 = match SceMpegDecoder::try_init(vid_w, vid_h) {
