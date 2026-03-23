@@ -375,9 +375,9 @@ pub fn preinit_mpeg() {
     // Extract ME firmware images from flash0.
     extract_me_firmware();
 
-    // ME init happens from the kernel PRX (me_rpc module) which loads
-    // me_wrapper.prx + avcodec.prx at boot. If successful, sceVideocodec
-    // calls from this EBOOT will work via the populated kernel stubs.
+    // sceMpegRingbufferPut hangs even with real PMF data — the empty
+    // avcodec stubs block the ME submission. We must use sceMeVideo_driver
+    // directly (from kernel PRX) to bypass the broken avcodec layer.
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones
@@ -1877,16 +1877,7 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
-    // PSP ME can only decode up to 480x272. Skip video decode for
-    // larger streams to avoid hanging sceMpegRingbufferPut.
-    if vid_w > 480 || vid_h > 272 {
-        vlog(&format!(
-            "[VIDEO] stream {vid_w}x{vid_h} exceeds PSP limit (480x272), audio-only"
-        ));
-        return drain_stream_only();
-    }
-
-    // Initialize sceMpeg decoder.
+    // Initialize sceMpeg decoder (PSP ME can decode up to 720x480 for D1).
     let mut h264 = match SceMpegDecoder::try_init(vid_w, vid_h) {
         Ok(dec) => {
             vlog("[VIDEO] play_stream: sceMpeg decoder initialized");

@@ -166,6 +166,35 @@ impl PsmfMuxer {
         *pos = p + 18;
     }
 
+    /// Write a Private Stream 2 (0xBF) navigation packet.
+    ///
+    /// Real PMF files include this between the system header and the first
+    /// video PES packet. The firmware's MPEG-PS demuxer may require it.
+    /// Content is stream info + padding (matches real PMF structure).
+    fn write_private_stream2(&self, pkt: &mut [u8; PACKET_SIZE], pos: &mut usize) {
+        let p = *pos;
+        let remaining = PACKET_SIZE - p - 6; // 6 = start code + length
+        // Cap at 254 bytes (like real PMF) or whatever fits.
+        let data_len = remaining.min(254);
+
+        pkt[p] = 0x00; pkt[p + 1] = 0x00;
+        pkt[p + 2] = 0x01; pkt[p + 3] = 0xBF; // Private Stream 2
+        pkt[p + 4] = (data_len >> 8) as u8;
+        pkt[p + 5] = data_len as u8;
+
+        // First byte: sub-stream ID (0x01 = video info in real PMFs).
+        if data_len > 0 {
+            pkt[p + 6] = 0x01;
+        }
+        // Second byte: stream_id reference (0xE0 = video).
+        if data_len > 1 {
+            pkt[p + 7] = PES_VIDEO_STREAM_ID;
+        }
+        // Rest is zero-filled (navigation/padding data).
+
+        *pos = p + 6 + data_len;
+    }
+
     /// Wrap H.264 AU into 2048-byte PSMF sectors matching real PMF format.
     pub fn wrap_au(&mut self, au_data: &[u8], pts_90khz: u64) -> Vec<[u8; PACKET_SIZE]> {
         let mut packets = Vec::new();
@@ -180,6 +209,7 @@ impl PsmfMuxer {
 
             if self.first_au_sector && is_first_sector_of_au && packets.is_empty() {
                 self.write_system_header(&mut pkt, &mut pos);
+                self.write_private_stream2(&mut pkt, &mut pos);
                 self.first_au_sector = false;
             }
 
