@@ -835,36 +835,40 @@ unsafe fn check_patch_request() {
         return;
     }
 
-    // Patch the single empty stub at offset 0x2388.
-    // This is likely the ME submission function that sends decode
-    // commands to the ME coprocessor. Try redirecting to
-    // sceMeCore::RPC_dispatch (NID 0xFA398D71) which is the central
-    // ME command sender.
-    let stub_off: u32 = 0x2388;
-    let stub_addr = avcodec_base + stub_off;
+    // Patch ALL 20 ME driver import stubs at offsets 0x439C-0x4434.
+    // These stubs have J instructions to stale user-space addresses from
+    // a previous session. We re-resolve each NID and write the correct
+    // J target for the CURRENT sceMeCodecWrapper location.
+    //
+    // Also patch the empty stub at +0x2388.
 
-    // Verify it's still empty.
-    let insn0 = core::ptr::read_volatile(stub_addr as *const u32);
-    if insn0 != 0x03E0_0008 {
-        crate::debug_log(b"[ME-PATCH] stub not empty anymore?");
-        write_done_file(false);
-        return;
-    }
-
-    // Try the ME video decode function (sceMeVideo::6D68B223, RPC cmd 0x27).
-    // sceMpegAvcDecode calls through avcodec, hits the empty stub, fails.
-    // Patching it with the actual ME decode function should fix it.
-    let candidates: &[(u32, &[u8], &[u8])] = &[
-        // sceMeVideo decode/step — RPC cmd 0x27 (most likely for AvcDecode)
-        (0x6D68B223, b"sceMeVideo_driver\0", b"MeVideoDecode"),
-        // sceMeVideo init — RPC cmd 0x24 (fallback)
-        (0xC441994C, b"sceMeVideo_driver\0", b"MeVideoInit"),
-        // sceMeCore RPC dispatch — generic fallback
-        (0xFA398D71, b"sceMeCore_driver\0", b"RpcDispatch"),
+    // (offset, NID, library)
+    let me_stubs: [(u32, u32, &[u8]); 20] = [
+        (0x439C, 0x6AD33F60, b"sceMeAudio_driver\0"),
+        (0x43A4, 0x81956A0B, b"sceMeAudio_driver\0"),
+        (0x43AC, 0x9A9E21EE, b"sceMeAudio_driver\0"),
+        (0x43B4, 0xB57F033A, b"sceMeAudio_driver\0"),
+        (0x43BC, 0xC300D466, b"sceMeAudio_driver\0"),
+        (0x43C4, 0x635397BB, b"sceMeCore_driver\0"),
+        (0x43CC, 0x905A7500, b"sceMeCore_driver\0"),
+        (0x43D4, 0xFA398D71, b"sceMeCore_driver\0"),
+        (0x43DC, 0x6ED69327, b"sceMeMemory_driver\0"),
+        (0x43E4, 0x92D3BAA1, b"sceMeMemory_driver\0"),
+        (0x43EC, 0xC4EDA9F4, b"sceMeMemory_driver\0"),
+        (0x43F4, 0x984E2608, b"sceMePower_driver\0"),
+        (0x43FC, 0xB37562AA, b"sceMePower_driver\0"),
+        (0x4404, 0x21521BE5, b"sceMeVideo_driver\0"),
+        (0x440C, 0x4D78330C, b"sceMeVideo_driver\0"),
+        (0x4414, 0x6D68B223, b"sceMeVideo_driver\0"),
+        (0x441C, 0x8768915D, b"sceMeVideo_driver\0"),
+        (0x4424, 0x8DD56014, b"sceMeVideo_driver\0"),
+        (0x442C, 0xC441994C, b"sceMeVideo_driver\0"),
+        (0x4434, 0xE8CD3C75, b"sceMeVideo_driver\0"),
     ];
 
-    let mut patched = false;
-    for &(nid, library, label) in candidates {
+    let mut patched = 0u32;
+    for (offset, nid, library) in me_stubs {
+        let stub_addr = avcodec_base + offset;
         let me_fn = psp::hook::find_function(
             b"sceMeCodecWrapper\0".as_ptr(),
             library.as_ptr(),
@@ -873,37 +877,45 @@ unsafe fn check_patch_request() {
         if let Some(target_ptr) = me_fn {
             let target = target_ptr as u32;
             let j_insn = 0x0800_0000 | ((target >> 2) & 0x03FF_FFFF);
-
-            let mut msg = [0u8; 80];
-            let mut mp = append_bytes(&mut msg, 0, b"[ME-PATCH] +0x2388 -> ");
-            mp = append_bytes(&mut msg, mp, label);
-            mp = append_bytes(&mut msg, mp, b" @0x");
-            mp = append_hex(&mut msg, mp, target);
-            crate::debug_log(&msg[..mp]);
-
-            // Write the J instruction.
             core::ptr::write_volatile(stub_addr as *mut u32, j_insn);
-
-            // Flush caches.
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                stub_addr as *const core::ffi::c_void, 8,
-            );
-            psp::sys::sceKernelIcacheInvalidateRange(
-                stub_addr as *const core::ffi::c_void, 8,
-            );
-
-            patched = true;
-            break; // Use first available
+            patched += 1;
         }
     }
 
-    if patched {
-        crate::debug_log(b"[ME-PATCH] stub patched OK!");
-    } else {
-        crate::debug_log(b"[ME-PATCH] no ME fn found to patch with");
+    // Also patch the empty stub at +0x2388.
+    let empty_addr = avcodec_base + 0x2388;
+    let empty_insn = core::ptr::read_volatile(empty_addr as *const u32);
+    if empty_insn == 0x03E0_0008 {
+        // Patch with RPC dispatch.
+        if let Some(ptr) = psp::hook::find_function(
+            b"sceMeCodecWrapper\0".as_ptr(),
+            b"sceMeCore_driver\0".as_ptr(),
+            0xFA398D71,
+        ) {
+            let j = 0x0800_0000 | ((ptr as u32 >> 2) & 0x03FF_FFFF);
+            core::ptr::write_volatile(empty_addr as *mut u32, j);
+            patched += 1;
+        }
     }
 
-    write_done_file(patched);
+    // Flush caches for the entire stub region.
+    psp::sys::sceKernelDcacheWritebackInvalidateRange(
+        (avcodec_base + 0x2388) as *const core::ffi::c_void, 8,
+    );
+    psp::sys::sceKernelDcacheWritebackInvalidateRange(
+        (avcodec_base + 0x439C) as *const core::ffi::c_void,
+        0x4434 - 0x439C + 8,
+    );
+    psp::sys::sceKernelIcacheInvalidateRange(
+        (avcodec_base + 0x2388) as *const core::ffi::c_void, 8,
+    );
+    psp::sys::sceKernelIcacheInvalidateRange(
+        (avcodec_base + 0x439C) as *const core::ffi::c_void,
+        0x4434 - 0x439C + 8,
+    );
+
+    log_dec(b"[ME-PATCH] patched stubs: ", patched);
+    write_done_file(patched >= 20);
     PATCH_DONE_FLAG.store(true, core::sync::atomic::Ordering::Release);
 }
 

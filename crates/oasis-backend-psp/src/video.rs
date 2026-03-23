@@ -1252,8 +1252,8 @@ struct Mp4AvcNalStruct {
 struct NalDecoder {
     mpeg_storage: *mut c_void,
     mpeg_data: Vec<u8>,
-    ddr_top: Vec<u8>,
-    au_buffer: *mut c_void,
+    ddr_block: psp::sys::SceUid,
+    es_buf: *mut c_void,
     au: psp::sys::SceMpegAu,
     sps: Vec<u8>,
     pps: Vec<u8>,
@@ -1321,14 +1321,24 @@ impl NalDecoder {
             unsafe { p.add(p.align_offset(64)) }
         };
 
-        // DDR-top: 2MB aligned to 4MB boundary (cooleyes pattern).
-        let mut ddr_top = vec![0u8; 0x20_0000 + 0x40_0000]; // 2MB + alignment
-        let ddr_aligned = {
-            let p = ddr_top.as_mut_ptr() as usize;
-            let aligned = (p + 0x3F_FFFF) & !0x3F_FFFF; // 4MB align
-            aligned as *mut c_void
+        // DDR-top: 2MB for ME decode output, must be aligned.
+        // Use sceKernelAllocPartitionMemory for efficient aligned allocation.
+        let ddr_block = unsafe {
+            psp::sys::sceKernelAllocPartitionMemory(
+                2, // partition 2 (user)
+                b"MeDdrTop\0".as_ptr(),
+                1, // type: low address
+                0x20_0000, // 2MB
+                core::ptr::null_mut(),
+            )
         };
-        let au_buffer = unsafe { (ddr_aligned as *mut u8).add(0x10000) as *mut c_void };
+        if ddr_block < psp::sys::SceUid(0) {
+            unsafe { psp::sys::sceMpegDelete(mpeg); let _ = Box::from_raw(mpeg_storage); }
+            return Err(format!("DDR-top alloc failed: {:#x}", ddr_block.0));
+        }
+        let ddr_ptr = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
+        vlog(&format!("[VIDEO] NAL: DDR-top @{ddr_ptr:?}"));
+        let ddr_aligned = ddr_ptr as i32;
 
         // Create sceMpeg handle (no ringbuffer needed for NAL approach).
         let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
@@ -1346,9 +1356,9 @@ impl NalDecoder {
                 mpeg_data_aligned as *mut c_void,
                 mem_size as i32,
                 &mut ringbuffer,
-                512, // cooleyes always uses 512 for sceMpegCreate
+                512,
                 mpeg_mode,
-                ddr_aligned as i32,
+                ddr_aligned,
             )
         };
         if ret < 0 {
@@ -1357,12 +1367,17 @@ impl NalDecoder {
         }
         vlog("[VIDEO] NAL: sceMpegCreate OK");
 
-        // Init AU.
+        // Allocate ES buffer and init AU.
+        let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
+        if es_buf.is_null() {
+            unsafe { psp::sys::sceMpegDelete(mpeg); let _ = Box::from_raw(mpeg_storage); }
+            return Err("sceMpegMallocAvcEsBuf failed".to_string());
+        }
+        vlog("[VIDEO] NAL: ES buffer allocated");
+
         let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
-        // Allocate AU struct with 64-byte alignment (cooleyes uses malloc_64).
-        let mut au_mem = vec![0xFFu8; 64];
         let ret = unsafe {
-            psp::sys::sceMpegInitAu(mpeg, au_buffer, &mut au)
+            psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au)
         };
         if ret < 0 {
             unsafe {
@@ -1383,8 +1398,8 @@ impl NalDecoder {
         Ok(Self {
             mpeg_storage: mpeg_storage as *mut c_void,
             mpeg_data,
-            ddr_top,
-            au_buffer,
+            ddr_block,
+            es_buf,
             au,
             sps,
             pps,
@@ -1508,13 +1523,15 @@ impl NalDecoder {
             vlog("[VIDEO] NAL: GetAvcNalAu OK");
         }
 
-        // Decode.
+        // Decode. Provide output buffer pointer (firmware may require it).
+        let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
+        let buf_arg = &mut output_ptr as *mut *mut c_void as *mut c_void;
         let ret = unsafe {
             psp::sys::sceMpegAvcDecode(
                 mpeg,
                 &mut self.au,
-                512, // cooleyes always uses 512
-                core::ptr::null_mut(), // output handled by DecodeDetail2
+                512,
+                buf_arg,
                 &mut self.pic_num,
             )
         };
@@ -1637,8 +1654,14 @@ impl Drop for NalDecoder {
     fn drop(&mut self) {
         let mpeg = self.mpeg();
         unsafe {
+            if !self.es_buf.is_null() {
+                psp::sys::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
+            }
             psp::sys::sceMpegDelete(mpeg);
-            let _ = Box::from_raw(self.mpeg_storage);
+            let _ = Box::from_raw(self.mpeg_storage as *mut *mut c_void);
+            if self.ddr_block >= psp::sys::SceUid(0) {
+                psp::sys::sceKernelFreePartitionMemory(self.ddr_block);
+            }
             psp::sys::sceMpegFinish();
         }
     }
