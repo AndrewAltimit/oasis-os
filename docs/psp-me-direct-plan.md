@@ -33,35 +33,45 @@ The ME runs its own firmware binary (loaded by mpeg.prx during sceMpegCreate).
 The firmware implements H.264/MPEG-4 decode. The main CPU sends commands
 via shared memory structures, and the ME writes decoded frames to EDRAM.
 
-## Research Needed
+## Research Findings (Phase 1 Complete — 2026-03-23)
 
-### 1. ME Firmware Binary
+### 1. ME Firmware Binary — LOCATED
 
-- Where is it? Likely embedded in `mpeg.prx` or `avcodec.prx`, or loaded
-  from flash0 at runtime
-- How to extract it? Memory dump after sceMpegCreate (ME firmware is
-  loaded to a known address range)
-- What format? Raw MIPS code for the ME core
+ME firmware is NOT embedded in mpeg.prx or avcodec.prx. It is loaded from
+**flash0** by the kernel module `sceMeCodecWrapper`:
 
-### 2. ME Boot Protocol
+- `flash0:/kd/resource/meimg.img` — Main ME firmware (H.264/MPEG-4/AAC)
+- `flash0:/kd/resource/me_blimg.img` — ME bootloader
+- `flash0:/kd/resource/me_sdimg.img` — ME shutdown image
+- `flash0:/kd/resource/me_t2img.img` — ME type-2 variant
 
-From our Ghidra analysis of mpeg.prx:
-- `FUN_08c0c940` (codec init) calls through to sceVideocodec
-- 4-step ME init: `FUN_08c0d5e4` → `FUN_08c0d594` → `FUN_08c0d5a4` → `FUN_08c0d5cc`
-- These are syscall stubs jumping to kernel addresses
+These are encrypted images. `sceMesgLed` (42KB crypto module) handles
+decryption during loading.
 
-From rust-psp's `me` module:
-- `psp::me::start()` can boot the ME with custom code
-- `psp::me::stop()` halts the ME
-- Requires kernel mode
+### 2. ME Driver Architecture — DISCOVERED
 
-### 3. Command Protocol
+Runtime dump of 68 modules during UMD Video playback (Spider-Man 2) revealed
+the complete ME driver chain. See `docs/psp-me-firmware-analysis.md` for full
+NID tables and analysis.
 
-The main CPU sends decode commands via shared memory:
-- Command buffer in uncached EDRAM (0x04000000 | 0x40000000)
-- Structure: AU data pointer, AU size, output buffer pointer, codec params
-- ME polls or is interrupted for new commands
-- ME writes decoded YCbCr/ABGR to output buffer
+**Key insight**: Homebrew ME stubs are empty because the kernel-side modules
+`sceMeCodecWrapper` and `sceAvcodec_wrapper` are only loaded by VSH/game boot,
+not by `sceUtilityLoadModule`.
+
+**Driver stack**:
+```
+sceAvcodec_wrapper (kernel) → sceMeVideo/Audio/Core/Memory/Power_driver
+  → sceMeCodecWrapper (kernel) → loads ME firmware from flash0
+    → communicates via RPC (SceMeRpc semaphore)
+```
+
+### 3. Command Protocol — RPC-based
+
+The ME uses Remote Procedure Call, not direct shared-memory polling:
+- Semaphore: `SceMeRpc`
+- Events: `SceMediaEngineRpc`, `SceMediaEngineRpcWait`, `SceMediaEngineAvcPower`
+- `sceMeWrapper_driver` has 23 functions covering all ME operations
+- `sceMeVideo_driver` has 7 functions specific to video decode
 
 ### 4. Existing Resources
 
@@ -73,34 +83,55 @@ The main CPU sends decode commands via shared memory:
 - **psdevwiki**: ME documentation at https://www.psdevwiki.com/psp/Media_Engine
 - **Our kernel PRX**: Can run code in kernel mode, access ME registers
 
-## Implementation Strategy
+## Implementation Strategy (Updated with Phase 1 Findings)
 
-### Phase 1: ME Firmware Extraction
+### Phase 1: ME Firmware Extraction — COMPLETE
 
-1. Use our kernel PRX to dump the ME firmware after a game loads it
-   (hook sceDisplaySetFrameBuf during game boot, dump ME memory region)
-2. Or: extract from decrypted mpeg.prx binary (look for embedded firmware)
-3. Disassemble the ME firmware to understand the command protocol
+Runtime dump of all 68 loaded modules during UMD Video playback. Key modules
+dumped to `ms0:/seplugins/me_dump/` and `/home/mikunpc/Downloads/me_dump/`.
 
-### Phase 2: ME Boot from Homebrew
+### Phase 2: Load Kernel ME Modules from Homebrew (Preferred Path)
 
-1. Use `psp::me::start(entry_point)` from kernel mode
-2. Load the extracted ME firmware to the correct address
-3. Verify ME is running (read shared memory status register)
+The simplest fix: have our kernel PRX load the same kernel modules that
+VSH/games load. This would populate the ME stubs without any custom code.
 
-### Phase 3: Direct Decode Commands
+1. From our kernel PRX (`oasis-plugin-psp`), load `sceMeCodecWrapper` module
+   - It will load ME firmware from flash0 automatically
+   - It will register the sceMeWrapper/Video/Audio/etc driver libraries
+2. Load `sceAvcodec_wrapper` module
+   - It will register sceVideocodec/sceAudiocodec/sceMpegbase exports
+   - User-mode avcodec.prx stubs will now have real implementations to call
+3. Test: homebrew `sceVideocodecOpen` should now succeed
 
-1. Implement the command buffer protocol (from ME firmware RE)
-2. Copy H.264 AU data to uncached shared memory
-3. Signal ME to decode
-4. Wait for completion (poll status or wait for interrupt)
-5. Read decoded frame from EDRAM
+Challenge: these modules may be encrypted on flash0 and require
+`sceMesgLed` to decrypt. May need to extract them from a running game
+instead of flash0.
+
+### Phase 2b: Call ME Drivers Directly (Fallback)
+
+If module loading fails, use the NID tables from Phase 1 to call ME
+driver functions directly from kernel mode:
+
+1. Resolve functions via `sctrlHENFindFunction` using discovered module names
+   (`sceMeCodecWrapper`, `sceAvcodec_wrapper`)
+2. Call `sceMeCore_driver` NIDs to boot the ME (4 functions)
+3. Call `sceMeVideo_driver` NIDs for H.264 decode (7 functions)
+4. Call `sceMeMemory_driver` NIDs for buffer management (3 functions)
+
+### Phase 3: Extract ME Firmware from Flash0
+
+If Phase 2 requires the firmware images directly:
+
+1. Mount flash0 (user already demonstrated access via USB)
+2. Copy `meimg.img`, `me_blimg.img`, `me_sdimg.img`, `me_t2img.img`
+3. May need decryption via `sceMesgLed` (42KB, also dumped)
+4. Disassemble with Ghidra to understand RPC command structures
 
 ### Phase 4: Integration
 
-1. Replace SceMpegDecoder with DirectMeDecoder
-2. Feed streaming H.264 AUs directly to ME
-3. Convert decoded YCbCr to RGBA (VFPU or ME's CSC)
+1. Replace SceMpegDecoder with working video decode path
+2. Feed streaming H.264 AUs to ME via the working API
+3. Convert decoded YCbCr to RGBA (VFPU or sceMpegBaseCsc)
 4. Push frames to the video texture queue
 
 ## Risk Assessment

@@ -28,6 +28,7 @@ mod audio;
 mod config;
 mod font;
 mod hook;
+mod me_dump;
 mod overlay;
 mod render;
 mod video;
@@ -78,6 +79,9 @@ fn psp_main() {
         // Must be created here in psp_main where kernel syscalls work --
         // the display hook context does not support sceKernelCreateThread.
         video::start_video_thread();
+
+        // Start ME firmware dump thread (idles until overlay triggers it).
+        me_dump::start_dump_thread();
 
         // If pip_enabled is set in config, send the initial toggle command
         // so PIP starts automatically.
