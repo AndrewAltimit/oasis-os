@@ -21,6 +21,70 @@ use psp::thread::ThreadBuilder;
 use crate::psmf::{PACKET_SIZE, PsmfMuxer};
 use crate::threading::{AudioCmd, send_audio_cmd};
 
+// ---------------------------------------------------------------------------
+// VSH sceMpeg function pointer table (resolved by kernel PRX)
+// ---------------------------------------------------------------------------
+
+/// VSH sceMpeg function addresses, resolved from sceMpegVsh_library by the
+/// kernel PRX and passed via file IPC.
+///
+/// Index mapping (matches PRX write order):
+///   0: sceMpegInit           6: sceMpegMallocAvcEsBuf
+///   1: sceMpegFinish         7: sceMpegFreeAvcEsBuf
+///   2: sceMpegQueryMemSize   8: sceMpegGetAvcNalAu
+///   3: sceMpegCreate         9: sceMpegAvcDecode
+///   4: sceMpegDelete        10: sceMpegAvcDecodeDetail2
+///   5: sceMpegInitAu        11: sceMpegAvcDecodeMode
+///  12: sceMpegBaseCscAvc (separate)
+static mut VSH_MPEG_ADDRS: [u32; 13] = [0; 13];
+static VSH_LOADED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Load VSH sceMpeg addresses from the file written by the kernel PRX.
+fn load_vsh_mpeg_addrs() {
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.me_vsh_addrs\0".as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY, 0,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        vlog("[VIDEO] VSH addr file not found (PRX not running?)");
+        return;
+    }
+    let addrs = unsafe { &raw mut VSH_MPEG_ADDRS };
+    let n = unsafe {
+        psp::sys::sceIoRead(fd, addrs as *mut core::ffi::c_void, 52) // 13 * 4
+    };
+    unsafe { psp::sys::sceIoClose(fd) };
+
+    if n < 52 {
+        vlog("[VIDEO] VSH addr file short read");
+        return;
+    }
+
+    let count = unsafe {
+        let ptr = &raw const VSH_MPEG_ADDRS;
+        (*ptr).iter().filter(|&&a| a != 0).count()
+    };
+    vlog(&format!("[VIDEO] VSH mpeg: {count}/13 addrs loaded"));
+    if count > 0 {
+        VSH_LOADED.store(true, core::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Get a VSH sceMpeg function by index, transmuted to the given type.
+fn vsh_mpeg_fn<F>(index: usize) -> Option<F> {
+    if !VSH_LOADED.load(core::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let addr = unsafe { *(&raw const VSH_MPEG_ADDRS).cast::<[u32; 13]>() }[index];
+    if addr == 0 {
+        return None;
+    }
+    Some(unsafe { core::mem::transmute_copy(&addr) })
+}
+
 /// File-based debug logging (works from video thread, unlike psp::dprintln).
 fn vlog(msg: &str) {
     // SAFETY: sceIo calls with valid path and buffer pointers.
@@ -374,32 +438,11 @@ pub fn test_real_pmf() {
 pub fn preinit_mpeg() {
     crate::audio::load_av_modules_once_pub();
 
-    // Load mpeg_vsh370.prx — the VSH mpeg library from PMPlayer/cooleyes
-    // that properly connects to the ME via kernel avcodec. The standard
-    // sceMpeg_library doesn't work on ARK-4/FW 6.61 for H.264 decode.
-    // sceMeBootStart is called by our kernel PRX at boot.
-    vlog("[VIDEO] loading mpeg_vsh370.prx...");
-    let vsh_id = unsafe {
-        psp::sys::sceKernelLoadModule(
-            b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0".as_ptr(),
-            0, core::ptr::null_mut(),
-        )
-    };
-    vlog(&format!("[VIDEO] mpeg_vsh id={:#x}", vsh_id.0));
-    if vsh_id >= psp::sys::SceUid(0) {
-        let mut st: i32 = 0;
-        let ret = unsafe {
-            psp::sys::sceKernelStartModule(
-                vsh_id, 0, core::ptr::null_mut(),
-                &mut st, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] mpeg_vsh start={ret:#x}"));
-    } else {
-        vlog("[VIDEO] mpeg_vsh load failed — H.264 decode unavailable");
-    }
+    // The VSH sceMpeg function addresses are in the VSH process space
+    // (0x0A0Axxxx) and can't be called from our EBOOT process.
+    // Instead, just use the standard sceMpeg — the ME stubs are the issue,
+    // not the sceMpeg library itself.
 
-    // Init sceMpeg (should use the mpeg_vsh library now).
     let ret = unsafe { psp::sys::sceMpegInit() };
     vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
 }
@@ -1097,20 +1140,20 @@ impl NalDecoder {
         let frame_width = if width > 480 { 768 } else { 512 };
         vlog(&format!("[VIDEO] NAL: {width}x{height}, stride={frame_width}"));
 
-        // Init sceMpeg.
+        // Use standard linked sceMpeg functions. The VSH addresses
+        // are in a different process space and can't be called.
+        // The kernel PRX handles ME boot + avcodec stub patching.
+        vlog("[VIDEO] NAL: using linked sceMpeg");
+
         let ret = unsafe { psp::sys::sceMpegInit() };
         if ret < 0 && ret != 0x80618003_u32 as i32 && ret != 0x80618005_u32 as i32 {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
 
-        // mpeg_mode: 5 for Main profile >480x272, 4 for others.
-        // From cooleyes: mode depends on profile + resolution.
-        // Always use mode 4 — mode 5 may not be supported on all firmware.
-        // UMD movies use mode 4 even for 720x480.
         let mpeg_mode = 4;
         let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
-            return Err(format!("sceMpegQueryMemSize({mpeg_mode}): {mem_size}"));
+            return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
         }
         vlog(&format!("[VIDEO] NAL: mem_size={mem_size}, mode={mpeg_mode}"));
 
@@ -1120,31 +1163,28 @@ impl NalDecoder {
             unsafe { p.add(p.align_offset(64)) }
         };
 
-        // DDR-top: 2MB for ME decode output, must be aligned.
-        // Use sceKernelAllocPartitionMemory for efficient aligned allocation.
+        // DDR-top: 2MB for ME decode output.
         let ddr_block = unsafe {
             psp::sys::sceKernelAllocPartitionMemory(
                 psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
                 b"MeDdrTop\0".as_ptr(),
                 psp::sys::SceSysMemBlockTypes::Low,
-                0x20_0000, // 2MB
+                0x20_0000,
                 core::ptr::null_mut(),
             )
         };
         if ddr_block < psp::sys::SceUid(0) {
-            return Err(format!("DDR-top alloc failed: {:#x}", ddr_block.0));
+            return Err(format!("DDR-top alloc: {:#x}", ddr_block.0));
         }
         let ddr_ptr = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
-        vlog(&format!("[VIDEO] NAL: DDR-top @{ddr_ptr:?}"));
+        vlog(&format!("[VIDEO] NAL: DDR @{ddr_ptr:?}"));
         let ddr_aligned = ddr_ptr as i32;
 
-        // Create sceMpeg handle (no ringbuffer needed for NAL approach).
         let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
         let mpeg: psp::sys::SceMpeg = unsafe {
             core::mem::transmute(mpeg_storage as *mut *mut c_void)
         };
 
-        // sceMpegCreate with DDR-top (7th param) — critical for NAL decode.
         let mut ringbuffer = unsafe {
             core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
         };
@@ -1168,15 +1208,12 @@ impl NalDecoder {
         // Allocate ES buffer and init AU.
         let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
         if es_buf.is_null() {
-            unsafe { psp::sys::sceMpegDelete(mpeg); let _ = Box::from_raw(mpeg_storage); }
-            return Err("sceMpegMallocAvcEsBuf failed".to_string());
+            return Err("MallocAvcEsBuf failed".to_string());
         }
         vlog("[VIDEO] NAL: ES buffer allocated");
 
         let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
-        let ret = unsafe {
-            psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au)
-        };
+        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
         if ret < 0 {
             unsafe {
                 psp::sys::sceMpegDelete(mpeg);
@@ -1304,9 +1341,7 @@ impl NalDecoder {
         // Feed NAL to ME.
         let ret = unsafe {
             psp::sys::sceMpegGetAvcNalAu(
-                mpeg,
-                &mut nal as *mut _ as *mut c_void,
-                &mut self.au,
+                mpeg, &mut nal as *mut _ as *mut c_void, &mut self.au,
             )
         };
         if ret < 0 {
@@ -1321,16 +1356,12 @@ impl NalDecoder {
             vlog("[VIDEO] NAL: GetAvcNalAu OK");
         }
 
-        // Decode. Provide output buffer pointer (firmware may require it).
+        // Decode.
         let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
         let buf_arg = &mut output_ptr as *mut *mut c_void as *mut c_void;
         let ret = unsafe {
             psp::sys::sceMpegAvcDecode(
-                mpeg,
-                &mut self.au,
-                512,
-                buf_arg,
-                &mut self.pic_num,
+                mpeg, &mut self.au, 512, buf_arg, &mut self.pic_num,
             )
         };
         if ret < 0 {

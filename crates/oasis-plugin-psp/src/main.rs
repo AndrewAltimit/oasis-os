@@ -61,6 +61,104 @@ fn debug_log(msg: &[u8]) {
     }
 }
 
+/// Resolve sceMpeg functions from the VSH library and write to file.
+///
+/// The VSH's sceMpegVsh_library exports the same sceMpeg NIDs but
+/// connects to the ME through the correct kernel path. We resolve
+/// these at runtime and write the addresses for the EBOOT to use.
+///
+/// Also boots the ME via sceMeBootStart.
+unsafe fn resolve_vsh_mpeg_functions() {
+    // NIDs we need to resolve from sceMpegVsh_library.
+    // Format: (NID, name for logging)
+    let nids: [(u32, &[u8]); 12] = [
+        (0x682A619B, b"Init"),
+        (0x874624D6, b"Finish"),
+        (0xC132E22F, b"QueryMemSize"),
+        (0xD8C5F121, b"Create"),
+        (0x606A4649, b"Delete"),
+        (0x167AFD9E, b"InitAu"),
+        (0xA780CF7E, b"MallocEsBuf"),
+        (0xCEB870B1, b"FreeEsBuf"),
+        (0x11F95CF1, b"GetNalAu"),
+        (0x0E3C2E9D, b"AvcDecode"),
+        (0xCF3547A2, b"DecDetail2"),
+        (0xA11C7026, b"DecMode"),
+    ];
+
+    let mut addrs = [0u32; 12];
+    let mut resolved = 0u32;
+
+    for (i, &(nid, _name)) in nids.iter().enumerate() {
+        let ptr = psp::hook::find_function(
+            b"sceMpegVsh_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            nid,
+        );
+        if let Some(p) = ptr {
+            addrs[i] = p as u32;
+            resolved += 1;
+        }
+    }
+
+    // Also resolve sceMpegBaseCscAvc from sceMpegbase.
+    let csc_ptr = psp::hook::find_function(
+        b"sceMpegVsh_library\0".as_ptr(),
+        b"sceMpegbase\0".as_ptr(),
+        0x91929A21, // sceMpegBaseCscAvc
+    );
+
+    // Log results.
+    let mut msg = [0u8; 48];
+    let mut mp = me_dump::append_bytes(&mut msg, 0, b"[OASIS] VSH mpeg: ");
+    mp = me_dump::append_dec(&mut msg, mp, resolved);
+    mp = me_dump::append_bytes(&mut msg, mp, b"/12 resolved");
+    debug_log(&msg[..mp]);
+
+    // Write addresses to file for EBOOT.
+    let fd = psp::sys::sceIoOpen(
+        b"ms0:/PSP/GAME/OASISOS/.me_vsh_addrs\0".as_ptr(),
+        psp::sys::IoOpenFlags::WR_ONLY
+            | psp::sys::IoOpenFlags::CREAT
+            | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if fd >= psp::sys::SceUid(0) {
+        // Write 12 u32 addresses + 1 u32 for CscAvc = 52 bytes.
+        psp::sys::sceIoWrite(
+            fd,
+            addrs.as_ptr() as *const _,
+            48, // 12 * 4
+        );
+        let csc_addr = csc_ptr.map(|p| p as u32).unwrap_or(0);
+        psp::sys::sceIoWrite(
+            fd,
+            &csc_addr as *const u32 as *const _,
+            4,
+        );
+        psp::sys::sceIoClose(fd);
+        debug_log(b"[OASIS] VSH addrs written");
+    }
+
+    // Boot the ME.
+    let boot_ptr = psp::hook::find_function(
+        b"sceMeCodecWrapper\0".as_ptr(),
+        b"sceMeCore_driver\0".as_ptr(),
+        0x5DFF5C50,
+    );
+    if let Some(fn_ptr) = boot_ptr {
+        let boot_fn: unsafe extern "C" fn(i32) -> i32 =
+            core::mem::transmute(fn_ptr);
+        let ret = boot_fn(1);
+        let mut m2 = [0u8; 48];
+        let mut p2 = me_dump::append_bytes(&mut m2, 0, b"[OASIS] MeBoot=0x");
+        p2 = me_dump::append_hex(&mut m2, p2, ret as u32);
+        debug_log(&m2[..p2]);
+    } else {
+        debug_log(b"[OASIS] MeBoot fn not found");
+    }
+}
+
 fn psp_main() {
     debug_log(b"[OASIS] psp_main entered");
 
@@ -87,65 +185,11 @@ fn psp_main() {
         // Start ME firmware dump thread (idles until overlay triggers it).
         me_dump::start_dump_thread();
 
-        // Load mpeg_vsh.prx — the VSH mpeg library that properly connects
-        // to the ME kernel drivers. The standard sceMpeg_library doesn't.
-        debug_log(b"[OASIS] loading mpeg_vsh.prx...");
-        unsafe {
-            let id = psp::sys::sceKernelLoadModule(
-                b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
-                0, core::ptr::null_mut(),
-            );
-            let mut msg = [0u8; 48];
-            msg[..24].copy_from_slice(b"[OASIS] mpeg_vsh id=0x00");
-            let hex = b"0123456789ABCDEF";
-            for i in 0..8 {
-                msg[20 + i] = hex[((id.0 as u32 >> ((7-i)*4)) & 0xF) as usize];
-            }
-            debug_log(&msg[..28]);
-
-            if id >= psp::sys::SceUid(0) {
-                let mut st: i32 = 0;
-                let r = psp::sys::sceKernelStartModule(
-                    id, 0, core::ptr::null_mut(),
-                    &mut st, core::ptr::null_mut(),
-                );
-                let mut m2 = [0u8; 48];
-                m2[..24].copy_from_slice(b"[OASIS] vsh start=0x000");
-                for i in 0..8 {
-                    m2[19 + i] = hex[((r as u32 >> ((7-i)*4)) & 0xF) as usize];
-                }
-                debug_log(&m2[..27]);
-            }
-        }
-
-        // Boot the Media Engine for codec use.
-        debug_log(b"[OASIS] calling sceMeBootStart...");
-        unsafe {
-            let ptr = psp::hook::find_function(
-                b"sceMeCodecWrapper\0".as_ptr(),
-                b"sceMeCore_driver\0".as_ptr(),
-                0x5DFF5C50,
-            );
-            if let Some(fn_ptr) = ptr {
-                let boot_fn: unsafe extern "C" fn(i32) -> i32 =
-                    core::mem::transmute(fn_ptr);
-                // Try mode 1 (cooleyesBridge default for older FW).
-                let ret = boot_fn(1);
-                let mut msg = [0u8; 48];
-                let mut p = 0;
-                let prefix = b"[OASIS] MeBootStart=0x";
-                msg[..prefix.len()].copy_from_slice(prefix);
-                p = prefix.len();
-                let hex = b"0123456789ABCDEF";
-                for shift in (0..8).rev() {
-                    msg[p] = hex[((ret as u32 >> (shift * 4)) & 0xF) as usize];
-                    p += 1;
-                }
-                debug_log(&msg[..p]);
-            } else {
-                debug_log(b"[OASIS] sceMeBootStart not found");
-            }
-        }
+        // Resolve sceMpeg functions from sceMpegVsh_library (loaded by VSH)
+        // and write addresses to a file for the EBOOT to read.
+        // Also boot the ME for codec use.
+        debug_log(b"[OASIS] resolving VSH mpeg + ME boot...");
+        unsafe { resolve_vsh_mpeg_functions() };
 
         // If pip_enabled is set in config, send the initial toggle command
         // so PIP starts automatically.
