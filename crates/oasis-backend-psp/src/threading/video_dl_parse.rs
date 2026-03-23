@@ -238,9 +238,17 @@ fn push_video_sample(
         },
     };
 
+    // Include raw AVCC data for the NAL decoder (avoids Annex B→AVCC roundtrip).
+    let (raw_avcc, prefix_size) = match vt.avcc.as_ref() {
+        Some(avcc) => (Some(raw_data.to_vec()), avcc.nal_length_size as u8),
+        None => (None, 4),
+    };
+
     // Blocking push with backpressure (same pattern as audio queue).
     let mut frame = StreamFrame {
         data: annex_b,
+        raw_avcc,
+        nal_prefix_size: prefix_size,
         timestamp_secs,
         is_keyframe,
     };

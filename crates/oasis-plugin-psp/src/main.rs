@@ -87,6 +87,38 @@ fn psp_main() {
         // Start ME firmware dump thread (idles until overlay triggers it).
         me_dump::start_dump_thread();
 
+        // Boot the Media Engine for codec use (sceMeBootStart660).
+        // This is required before sceMpegGetAvcNalAu can feed NALs.
+        // NID 0x5DFF5C50 = sceMeBootStart for FW 6.60/6.61.
+        debug_log(b"[OASIS] calling sceMeBootStart...");
+        unsafe {
+            let ptr = psp::hook::find_function(
+                b"sceMeCodecWrapper\0".as_ptr(),
+                b"sceMeCore_driver\0".as_ptr(),
+                0x5DFF5C50,
+            );
+            if let Some(fn_ptr) = ptr {
+                let boot_fn: unsafe extern "C" fn(i32) -> i32 =
+                    core::mem::transmute(fn_ptr);
+                // Try mode 4 first (from our disassembly — loads full codec firmware).
+                // cooleyesBridge used mode 1, but NID 0x5DFF5C50 accepts 1-4.
+                let ret = boot_fn(4);
+                let mut msg = [0u8; 48];
+                let mut p = 0;
+                let prefix = b"[OASIS] MeBootStart=0x";
+                msg[..prefix.len()].copy_from_slice(prefix);
+                p = prefix.len();
+                let hex = b"0123456789ABCDEF";
+                for shift in (0..8).rev() {
+                    msg[p] = hex[((ret as u32 >> (shift * 4)) & 0xF) as usize];
+                    p += 1;
+                }
+                debug_log(&msg[..p]);
+            } else {
+                debug_log(b"[OASIS] sceMeBootStart not found");
+            }
+        }
+
         // If pip_enabled is set in config, send the initial toggle command
         // so PIP starts automatically.
         let cfg = config::get_config();
