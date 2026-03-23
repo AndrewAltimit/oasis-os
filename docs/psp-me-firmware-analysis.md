@@ -56,19 +56,48 @@ Kernel-space:
 
 ## ME Firmware Images
 
-`sceMeCodecWrapper` loads the ME firmware from flash0. Four firmware images
-were identified from string analysis:
+`sceMeCodecWrapper` references four firmware paths in its strings, but on
+FW 6.61 (PSP-3001 TA-090v2), only ONE exists on flash0:
 
-| Image | Path | Purpose (inferred) |
-|-------|------|--------------------|
-| **meimg.img** | `flash0:/kd/resource/meimg.img` | Main ME firmware (H.264/MPEG-4/AAC decode) |
-| **me_blimg.img** | `flash0:/kd/resource/me_blimg.img` | ME bootloader (initial boot code) |
-| **me_sdimg.img** | `flash0:/kd/resource/me_sdimg.img` | ME shutdown image (safe halt sequence) |
-| **me_t2img.img** | `flash0:/kd/resource/me_t2img.img` | ME type-2 image (variant/update?) |
+| Image | Path | Status | Size |
+|-------|------|--------|------|
+| **meimg.img** | `flash0:/kd/resource/meimg.img` | **DOES NOT EXIST** | — |
+| **me_blimg.img** | `flash0:/kd/resource/me_blimg.img` | **DOES NOT EXIST** | — |
+| **me_sdimg.img** | `flash0:/kd/resource/me_sdimg.img` | **DOES NOT EXIST** | — |
+| **me_t2img.img** | `flash0:/kd/resource/me_t2img.img` | **EXTRACTED** | 391,792 bytes |
 
-These are encrypted firmware binaries stored on the PSP's internal flash.
-They are loaded by `sceMeCodecWrapper` during codec initialization and
-transferred to the ME core's local memory.
+The `me_t2img.img` file is encrypted (first 128 bytes are zeros, followed
+by encrypted payload). It requires `sceMesgLed` (the PSP crypto engine) to
+decrypt before loading onto the ME.
+
+`flash0:/kd/resource/` contains only 2 files: `me_t2img.img` and `impose.rsc`.
+
+The missing firmware images (meimg, me_blimg, me_sdimg) may have existed on
+earlier firmware versions but were consolidated into `me_t2img.img` by FW 6.61.
+The `sceMeCodecWrapper` code likely tries all four paths and uses whichever
+exists.
+
+## flash0:/kd/ Codec PRX Files (Extracted)
+
+All PRX files on flash0 are `~PSP` encrypted (magic `0x7E505350`).
+Extracted from kernel mode via our PRX plugin.
+
+| File | Size | Purpose |
+|------|------|---------|
+| **me_wrapper.prx** | 7,008 | sceMeCodecWrapper — ME firmware loader + RPC |
+| **avcodec.prx** | 11,856 | sceAvcodec — video/audio codec interface |
+| **mpeg.prx** | 18,160 | sceMpeg — kernel-side MPEG decoder |
+| **mpeg_vsh.prx** | 23,584 | sceMpeg VSH variant |
+| **videocodec_260.prx** | 2,864 | sceVideocodec stubs |
+| **codec_09g.prx** | 2,992 | Codec support for 09g hardware revision |
+| **mpegbase_260.prx** | 4,384 | MPEG-PS demuxer + color space conversion |
+
+### flash0:/kd/ Access Constraints
+
+- **User mode** (`sceIoDopen("flash0:/kd/")`) → `0x8001000d` (ENOENT) — ARK-4 CFW blocks access
+- **Kernel mode** (our PRX plugin) → full read access to all files
+- `flash0:/` root listing works from user mode (shows kd/, vsh/, font/, data/, dic/, codepage/)
+- `flash0:/vsh/resource/` is accessible from user mode (contains .rco UI resources)
 
 ## ME Communication Protocol: RPC
 
