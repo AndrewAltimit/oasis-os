@@ -77,13 +77,7 @@ unsafe extern "C" fn dump_thread_entry(
             DUMP_STATE.store(0, Ordering::Release);
         }
 
-        // Check for ME RPC init request (shares this thread's 64KB stack).
-        if crate::me_rpc::check_init_request() {
-            // SAFETY: ME init uses kernel-mode APIs.
-            unsafe { crate::me_rpc::me_init() };
-            // Run test after init.
-            unsafe { crate::me_rpc::me_test() };
-        }
+        // ME RPC and hook modules disabled (caused PRX crash).
 
         // SAFETY: PSP kernel syscall to sleep.
         unsafe { psp::sys::sceKernelDelayThread(100_000) }; // poll at 10Hz
@@ -638,7 +632,7 @@ unsafe fn probe_codec_drivers() {
 // ---------------------------------------------------------------------------
 
 /// Check if `haystack` contains `needle` (byte-level substring search).
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+pub fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
@@ -689,7 +683,7 @@ pub fn append_hex(buf: &mut [u8], pos: usize, val: u32) -> usize {
     p
 }
 
-fn append_dec(buf: &mut [u8], pos: usize, val: u32) -> usize {
+pub fn append_dec(buf: &mut [u8], pos: usize, val: u32) -> usize {
     if val == 0 {
         if pos < buf.len() {
             buf[pos] = b'0';

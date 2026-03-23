@@ -1877,7 +1877,10 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
-    // Initialize sceMpeg decoder (PSP ME can decode up to 720x480 for D1).
+    // Video decode disabled — sceMpegRingbufferPut hangs due to empty
+    // avcodec ME stubs. Kernel stub hooking is WIP.
+    vlog("[VIDEO] video decode disabled (ME stubs WIP), audio-only");
+    return drain_stream_only();
     let mut h264 = match SceMpegDecoder::try_init(vid_w, vid_h) {
         Ok(dec) => {
             vlog("[VIDEO] play_stream: sceMpeg decoder initialized");

@@ -253,10 +253,7 @@ unsafe fn execute_menu_action(item: u8) {
             me_dump::trigger_dump();
             show_osd(b"ME dump started...");
         },
-        11 => {
-            crate::me_rpc::trigger_init();
-            show_osd(b"ME RPC init...");
-        },
+        11 => show_osd(b"ME RPC disabled"),
         12 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
         _ => {},
     }

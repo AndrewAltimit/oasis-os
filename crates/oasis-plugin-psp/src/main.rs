@@ -29,7 +29,10 @@ mod config;
 mod font;
 mod hook;
 mod me_dump;
-mod me_rpc;
+// me_hook and me_rpc disabled — their static buffers + me_boot_modules
+// caused the PRX to crash the EBOOT at launch. Need lighter approach.
+// mod me_hook;
+// mod me_rpc;
 mod overlay;
 mod render;
 mod video;
@@ -83,12 +86,6 @@ fn psp_main() {
 
         // Start ME firmware dump thread (idles until overlay triggers it).
         me_dump::start_dump_thread();
-
-        // Load ME kernel modules (me_wrapper.prx + avcodec.prx) at boot.
-        // This populates the ME driver stubs so sceVideocodec/sceMpeg calls
-        // from homebrew will work. Must be done from kernel mode.
-        debug_log(b"[OASIS] loading ME modules...");
-        unsafe { me_rpc::me_boot_modules() };
 
         // If pip_enabled is set in config, send the initial toggle command
         // so PIP starts automatically.
