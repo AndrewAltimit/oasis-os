@@ -1,154 +1,176 @@
-# PSP H.264 Video Decode: Next Phase Plan
+# PSP H.264 Video Decode: sceMpeg + PSMF Implementation
 
 ## Status
 
-Audio streaming works great (Phase A fixes shipped). Video decode is blocked
-because `avcodec.prx` on PSP-3001 (ARK-4 CFW, FW 6.61) has empty ME stubs.
-The only viable path is the `sceMpeg` API with PSMF container format.
+**Phase 1 (complete):** Audio streaming works great. sceMpeg API fully initializes
+on real PSP-3001 hardware (ARK-4 CFW, FW 6.61).
 
-## Goal
+**Phase 2 (in progress):** PSMF container wrapping + sceMpegRingbufferPut. The
+firmware's kernel-side MPEG-PS parser hangs on our generated MPEG-PS data.
+Need a real PMF file as byte-level format reference.
 
-Wrap raw Annex B H.264 NALs from TV Guide streams in PSMF (PSP Movie Format)
-so `sceMpegRingbufferPut` accepts the data and `sceMpegAvcDecode` produces
-decoded frames.
+## Architecture: What We Learned
 
-## Background: Why PSMF?
+### sceMpeg on Real Firmware vs Emulators
 
-`sceMpegRingbufferPut` internally parses data looking for PSMF structure.
-Without PSMF headers, the parser enters an infinite loop (confirmed by testing
-raw Annex B, PES-wrapped, and MPEG-PS pack-wrapped data — all hang).
+The user-mode `sceMpeg_library` (dumped from RAM, 32KB at 0x08C05C00) is a
+**thin syscall wrapper**. All functions (RingbufferPut, GetAvcAu, AvcDecode)
+are 5-15 instruction stubs that call into kernel space via `j 0x88XXXXX`.
 
-PSP games use `.pmf` (PSMF) files for video. The format is well-documented
-in the PSP homebrew community (JPCSP, PPSSPP source code, psdevwiki).
+**On PPSSPP/JPCSP:** sceMpegRingbufferPut directly calls the user callback,
+runs `PostPutAction` to demux MPEG-PS, and returns synchronously.
 
-## PSMF Format Overview
+**On real firmware:** sceMpegRingbufferPut enters the kernel, the kernel
+invokes the callback, processes the data with its own MPEG-PS parser (runs
+on the ME or a kernel thread), and returns. The kernel-side parser is what
+hangs on our data.
 
-### Header (0x800 bytes, sent once at stream start)
+### NID → Function Address Map (from mpeg.prx memory dump)
 
+| NID | Address | Function |
+|-----|---------|----------|
+| 0xB240A59E | 0x08C0C080 | sceMpegRingbufferPut |
+| 0x37295ED8 | 0x08C0BE88 | sceMpegRingbufferConstruct |
+| 0xFE246728 | 0x08C0C0F0 | sceMpegGetAvcAu |
+| 0x0E3C2E9D | 0x08C0BF10 | sceMpegAvcDecode |
+| 0xD8C5F121 | 0x08C0C340 | sceMpegCreate |
+| 0x682A619B | 0x08C0BD20 | sceMpegInit |
+| 0xB5F6DC87 | 0x08C0C4B0 | sceMpegRingbufferAvailableSize |
+
+### sceMpegRingbufferPut Disassembly
+
+```mips
+# Wrapper: checks init state, calls real implementation
+sceMpegRingbufferPut:
+  jal  check_func       # returns init phase counter
+  slti $a0, $v0, 0x3f0  # if counter < 1008...
+  bnez $a0, return_zero  # ...return 0 (not ready)
+  jal  real_put          # else call real implementation
+  jr   $ra
+
+# Real implementation: enters kernel via syscall
+real_put:
+  jal  get_context       # → returns ptr to 0x08C0DE64
+  jal  lock_sema         # sceKernelWaitSema
+  jal  read_state_flag   # reads *(0x08C0DC40)
+  andi $v1, $v0, 4       # check bit 2
+  beqz $v1, skip         # if not set, return 0
+  lw   $s0, 4($s1)       # else load result from context
+  jal  unlock_sema       # sceKernelSignalSema
+  jr   $ra               # return result
 ```
-Offset  Size  Field
-0x000   4     Magic: "PSMF"
-0x004   4     Version: "0015" (FW 1.5+) or "0012"
-0x008   4     Header offset (big-endian, typically 0x00000800)
-0x00C   4     Stream data size (big-endian)
-0x010   4     reserved
-0x014   4     reserved
-0x050   2     Number of streams (big-endian)
-0x052   1     Stream 0 type: 0x00 = AVC video
-0x053   1     Stream 0 channel: 0x00
-0x054   1     Stream 0 specific[0]: AVC profile (0x42=Baseline, 0x4D=Main)
-0x055   1     Stream 0 specific[1]: AVC level
-0x056-7 2     Video width (big-endian)
-0x058-9 2     Video height (big-endian)
-...     ...   EPMap and other metadata
-0x800   ...   Stream data begins
-```
 
-### Stream Data (MPEG-PS packs with PES packets)
+The actual data processing happens in kernel space, triggered by the
+semaphore signal chain.
 
-Each video AU is wrapped as:
-```
-00 00 01 BA  [SCR fields]  [mux rate]  [stuffing]   — Pack header (14 bytes)
-00 00 01 BB  [header len]  [system header fields]    — System header (first pack only)
-00 00 01 E0  [PES len]  [flags]  [PTS/DTS]  [AU]    — PES video packet
-```
+### MPEG-PS Format Requirements (from PPSSPP MpegDemux.cpp)
 
-The key differences from generic MPEG-PS:
-1. PSMF header (0x800 bytes) must be present at the start
-2. Stream IDs must match those declared in the PSMF header
-3. PTS/DTS must be present in PES headers
-4. SCR in pack headers should be monotonically increasing
+The kernel's MPEG-PS demuxer:
 
-## Implementation Plan
+1. **Scans for start codes** byte-by-byte: `(code << 8) | read8()` until
+   `(code & 0xFFFFFF00) == 0x00000100`
 
-### Step 1: Research PSMF Format
+2. **Pack header validation** (`skipPackHeader`):
+   - Byte 4: `(val & 0xC4) == 0x44` (MPEG-2 marker)
+   - Byte 6: `(val & 0x04) == 0x04` (marker bit)
+   - Byte 8: `(val & 0x04) == 0x04` (marker bit)
+   - Byte 9: `(val & 0x01) == 0x01` (marker bit)
+   - Mux rate: `(read24() & 3) == 3` (marker bits)
+   - Stuffing: `read8() & 7` count, each byte must be 0xFF
 
-- Read PPSSPP's `Core/HLE/scePsmf.cpp` for the header parser
-- Read JPCSP's `jpcsp/HLE/modules/scePsmf.java` for validation rules
-- Find a sample `.pmf` file and hexdump the header for reference
-- Check if `sceMpegRingbufferPut` validates the PSMF header at the
-  start of the ringbuffer data, or if it's only validated by `scePsmf`
+3. **Video PES (0x1E0-0x1EF)**: reads `length = read16()`, then
+   `skip(length)`. **PES length MUST be non-zero** — with length=0 the
+   scanner enters the H.264 payload and finds NAL start codes (00 00 01)
+   that look like MPEG-PS codes, causing an infinite loop.
 
-### Step 2: Implement PSMF Header Generator
+4. **Padding stream (0x1BE)**: reads length, skips.
 
-Create `psmf.rs` in `crates/oasis-backend-psp/src/`:
-- `fn generate_psmf_header(width, height, fps, profile, level) -> [u8; 0x800]`
-- Takes H.264 SPS parameters (extracted from first keyframe's SPS NAL)
-- Produces a minimal valid PSMF header
+### What We Tried and Results
 
-### Step 3: Implement PSMF Stream Wrapper
+| Approach | Result |
+|----------|--------|
+| Raw Annex B in ringbuffer | Hangs (no PSMF structure) |
+| MPEG-PS PES wrapping (no PSMF header) | Hangs |
+| PSMF header + MPEG-PS with PES length=0 | Hangs (scanner enters H.264 data) |
+| PSMF header + MPEG-PS with correct PES lengths | Hangs (kernel parser still rejects) |
+| PSMF header + per-sector PES + padding stream | Hangs |
+| Two-thread: feeder + GetAvcAu polling | Hangs (both threads block) |
+| Callback returns 0 (no data) | Works! Audio plays, no freeze |
 
-Extend `psmf.rs`:
-- `fn wrap_psmf_pes(au_data, pts_90khz, is_first) -> Vec<u8>`
-- Wraps each H.264 AU in pack header + PES with proper timestamps
-- First packet includes system header
-- Monotonically increasing SCR
+### What Works
 
-### Step 4: Integrate with sceMpeg Decoder
+- `sceMpegInit()` — succeeds (with `preinit_mpeg()` before audio thread)
+- `sceMpegCreate()` — succeeds
+- `sceMpegRegistStream()` — succeeds
+- `sceMpegAvcDecodeMode(Psm8888)` — succeeds
+- `sceMpegMallocAvcEsBuf()` — succeeds
+- `sceMpegInitAu()` — succeeds
+- `sceMpegBaseCscInit()` — succeeds
+- `sceMpegQueryStreamOffset()` — validates our PSMF header (returns offset=2048)
+- `sceMpegQueryStreamSize()` — returns 67108864 (our declared size)
+- `sceMpegRingbufferPut()` with PSMF header packet — succeeds (returns 1)
+- `sceMpegRingbufferPut()` callback — invoked, data copies correctly
+- Audio playback via sceAudiocodec — fully working
 
-Replace the `PspVideoDecoder` (sceVideocodec-based) with `SceMpegDecoder`:
-- On first keyframe: parse SPS to get width/height/profile
-- Generate PSMF header and write to ringbuffer start
-- For each subsequent AU: wrap in PSMF PES and feed via ringbuffer
-- Use `sceMpegGetAvcAu` + `sceMpegAvcDecode` to get decoded frames
-- Convert YCbCr output to RGBA via scalar fixed-point (or VFPU once
-  the LLVM regression is resolved)
+### What Doesn't Work
 
-### Step 5: Handle sceMpeg Lifecycle
+- `sceMpegRingbufferPut()` with MPEG-PS AU data — kernel parser hangs
+  after callback completes. All data is correctly copied to ringbuffer
+  memory, D-cache flushed, callback returns correct count. The hang is
+  in the kernel's post-callback processing (MPEG-PS demuxing).
 
-The sceMpeg decoder is stateful:
-- `sceMpegCreate` with PSMF header info (width, height from header)
-- `sceMpegRegistStream` for video stream
-- Ringbuffer callback feeds PSMF-wrapped data
-- `sceMpegDelete` on channel change
+## Next Step: Real PMF File as Format Reference
 
-Channel switching requires tearing down and recreating the MPEG context
-since PSMF headers may differ between streams.
+The converter-generated `oasis_demo.pmf` is actually an MP4 file (starts
+with `ftypisom`). We need a **real PSMF file** (starts with `PSMF` magic)
+to hex-dump the exact MPEG-PS format byte-by-byte.
 
-### Step 6: Test and Iterate
+### Options
 
-- Build EBOOT, deploy to PSP-3001
-- Tune TV Guide channel
-- Check `eboot.log` for `sceMpegAvcDecode` results
-- If decode succeeds: verify YCbCr → RGBA conversion
-- If decode fails: check PSMF header validity against PPSSPP/JPCSP
+1. **MagicISO / UMDGen**: Extract PMF files from PSP game ISOs (game intros)
+2. **pmfenc / MPS2PMF**: Community tools that create real PSMF from raw streams
+3. **Sony's official tools**: PSP Movie Creator (discontinued)
+4. **Hex comparison**: Create minimal PSMF with known H.264 data, compare
+   byte-by-byte against our generated format
 
-## Key Risk: PSMF vs scePsmf
+### What to Compare
 
-There are TWO APIs:
-- `scePsmf` — PSMF header parsing (returns stream info)
-- `sceMpeg` — actual decode
+Once we have a real PMF, hex-dump offset 0x800+ and compare:
+- Pack header byte layout (SCR encoding, mux rate)
+- PES header flags, length encoding
+- Whether system headers are present
+- Padding between packs
+- PES length values for video packets
+- Any bytes between pack header and PES that we might be missing
 
-`sceMpegRingbufferPut` may or may not require PSMF headers in the
-ringbuffer data. It might only need valid MPEG-PS packs (which we
-already tried and hung). The hang could be from something else entirely:
+## Files
 
-**Alternative hypothesis:** `sceMpegRingbufferPut` hangs because it
-waits for the ME to consume data, but the ME isn't running because
-no decode was started. The proper flow might be:
+| File | Status |
+|------|--------|
+| `crates/oasis-backend-psp/src/psmf.rs` | NEW: PSMF header + MPEG-PS wrapper |
+| `crates/oasis-backend-psp/src/video.rs` | SceMpegDecoder replaces PspVideoDecoder |
+| `crates/oasis-backend-psp/src/main.rs` | preinit_mpeg() before workers |
+| `crates/oasis-backend-psp/src/lib.rs` | mod psmf added |
+| `crates/oasis-prx-decrypt-psp/src/main.rs` | MPEG module memory dump (Circle button) |
+| `scripts/ghidra_mpeg_ringbuffer.py` | Ghidra analysis script for mpeg.prx |
 
-1. Fill ringbuffer with SOME data via `sceMpegRingbufferPut`
-2. Call `sceMpegGetAvcAu` which starts the ME consumer
-3. ME consumes data, freeing ringbuffer space
-4. Repeat
+## Decrypted Firmware Dumps
 
-If `sceMpegRingbufferPut` blocks because the ringbuffer is "full"
-(from the ME's perspective), we need a non-blocking approach or a
-separate thread for feeding vs decoding.
+| Module | Location | Method |
+|--------|----------|--------|
+| sceMpeg_library (user) | `dec_mpeg.bin` on PSP | RAM dump via sceKernelGetModuleIdList |
+| mpeg.prx (encrypted) | flash0:/kd/mpeg.prx | Tag EA4E7B90, memlmd/pspdecrypt fail |
+| mpegbase_260.prx (encrypted) | flash0:/kd/mpegbase_260.prx | Tag 238EE957, decrypt fails |
 
-## Files to Create/Modify
-
-| File | Changes |
-|------|---------|
-| `crates/oasis-backend-psp/src/psmf.rs` | NEW: PSMF header generator + PES wrapper |
-| `crates/oasis-backend-psp/src/video.rs` | Replace PspVideoDecoder with SceMpegDecoder using PSMF |
-| `crates/oasis-backend-psp/src/lib.rs` | Add `mod psmf;` |
+Note: The kernel-side MPEG implementation cannot be dumped — it runs in
+protected kernel memory. The user-mode `sceMpeg_library` is just syscall
+wrappers (confirmed by disassembly).
 
 ## References
 
-- PPSSPP: `Core/HLE/scePsmf.cpp`, `Core/HLE/sceMpeg.cpp`
-- JPCSP: `jpcsp/HLE/modules/scePsmf.java`, `sceMpeg.java`
-- psdevwiki: https://www.psdevwiki.com/psp/PSMF
-- PSP Movie Format spec (community-documented)
-- Our Ghidra scripts: `scripts/ghidra_avcodec_*.py`
-- Our decrypted PRX: `/home/mikunpc/Downloads/avcodec_decrypted`
+- PPSSPP: `Core/HW/MpegDemux.cpp` — MPEG-PS parser (obtained, analyzed)
+- JPCSP: `SceMpegRingbuffer.java` — struct layout with field offsets
+- PSP-libpmfplayer: 4-thread model (Reader, Decoder, Video, Audio)
+- psdevwiki: PMF format spec
+- MultimediaWiki: PSMF format spec
+- uOFW: mpeg.prx listed as orphan (NOT reverse-engineered)

@@ -24,6 +24,7 @@ pub mod input;
 pub mod network;
 pub mod power;
 pub mod procedural;
+pub mod psmf;
 pub mod render;
 pub mod sfx;
 pub mod shapes;
