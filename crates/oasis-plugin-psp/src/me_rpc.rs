@@ -638,92 +638,149 @@ pub unsafe fn me_test() {
         crate::debug_log(b"[ME-RPC] AudioCheckMem not resolved");
     }
 
-    // Test 3: Call sceMeVideo::C441994C with proper codec buffer setup.
+    // Test 3: Full sceMeVideo_driver initialization sequence.
     //
-    // From disassembly, this function:
-    //   1. Checks buf[0] == 0x05100601 (version) → returns -2 if wrong
-    //   2. Checks buf[4] (offset 0x10) != NULL (scratch ptr) → returns -1 if NULL
-    //   3. If type==0: calls RPC_simple, reads scratch[1], stores results
-    //   4. If type==1: calls RPC_dispatch(cmd=0x24), then RPC_dispatch(cmd=0x23)
+    // The correct order (from disassembly analysis):
+    //   Step A: NID C441994C type=0 → RPC cmd=0 (probe ME, get EDRAM info)
+    //   Step B: NID 4D78330C → RPC cmd=0x21 (GetEDRAM — allocate ME EDRAM)
+    //   Step C: NID C441994C type=1 → RPC cmd=0x24 (init codec) + cmd=0x23
+    //   Step D: NID 8768915D → RPC cmd=0x20 (SetMemory — configure buffers)
     //
-    // We need to allocate a scratch buffer and set buf[4] to point to it.
-    let me_video_fn = unsafe {
-        psp::hook::find_function(
-            b"sceMeCodecWrapper\0".as_ptr(),
-            b"sceMeVideo_driver\0".as_ptr(),
-            0xC441994C,
-        )
-    };
-    if let Some(ptr) = me_video_fn {
-        crate::debug_log(b"[ME-RPC] MeVideo test with scratch buf...");
-        let f: unsafe extern "C" fn(i32, *mut u32) -> i32 =
-            unsafe { core::mem::transmute(ptr) };
+    // All functions take (type_or_cmd, codec_buf_ptr) and check:
+    //   buf[0] == 0x05100601 (version)
+    //   buf[4] (offset 0x10) != NULL (scratch pointer)
 
-        // Use raw pointers for static buffers (Rust 2024 static mut rules).
-        static mut SCRATCH1: [u32; 64] = [0u32; 64];
-        static mut SCRATCH2: [u32; 64] = [0u32; 64];
-        static mut CODEC_BUF: [u32; 96] = [0u32; 96];
+    crate::debug_log(b"[ME-RPC] === Full MeVideo init sequence ===");
 
-        unsafe {
-            let cbuf = &raw mut CODEC_BUF as *mut u32;
-            let s1 = &raw mut SCRATCH1 as *mut u32;
-            let s2 = &raw mut SCRATCH2 as *mut u32;
+    // Resolve all needed functions.
+    let fn_init = resolve_nid(b"sceMeVideo_driver\0", 0xC441994C);
+    let fn_get_edram = resolve_nid(b"sceMeVideo_driver\0", 0x4D78330C);
+    let fn_set_mem = resolve_nid(b"sceMeVideo_driver\0", 0x8768915D);
+    let fn_scan_hdr = resolve_nid(b"sceMeVideo_driver\0", 0x8DD56014);
+    let fn_decode = resolve_nid(b"sceMeVideo_driver\0", 0x6D68B223);
 
-            // Zero everything.
-            for i in 0..96 { cbuf.add(i).write_volatile(0); }
-            for i in 0..64 { s1.add(i).write_volatile(0); s2.add(i).write_volatile(0); }
+    if fn_init.is_none() {
+        crate::debug_log(b"[ME-RPC] MeVideo fns not found");
+        crate::debug_log(b"[ME-RPC] test complete");
+        return;
+    }
 
-            // Set version field.
-            cbuf.add(0).write_volatile(0x05100601);
+    // Static buffers (aligned, in BSS).
+    static mut SCRATCH1: [u32; 256] = [0u32; 256]; // 1KB
+    static mut SCRATCH2: [u32; 256] = [0u32; 256]; // 1KB
+    static mut CODEC_BUF: [u32; 96] = [0u32; 96];  // 384 bytes
 
-            // Set scratch pointer at buf[4] (offset 0x10).
-            cbuf.add(4).write_volatile(s1 as u32);
+    unsafe {
+        let cbuf = &raw mut CODEC_BUF as *mut u32;
+        let s1 = &raw mut SCRATCH1 as *mut u32;
+        let s2 = &raw mut SCRATCH2 as *mut u32;
 
-            // Set secondary scratch at buf[21] (offset 0x54).
-            cbuf.add(21).write_volatile(s2 as u32);
+        // Zero everything.
+        for i in 0..96 { cbuf.add(i).write_volatile(0); }
+        for i in 0..256 { s1.add(i).write_volatile(0); s2.add(i).write_volatile(0); }
 
-            // Flush cache on all buffers.
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                cbuf as *const c_void, 384,
-            );
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                s1 as *const c_void, 256,
-            );
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                s2 as *const c_void, 256,
-            );
+        // Setup codec buffer.
+        cbuf.add(0).write_volatile(0x05100601); // version
+        cbuf.add(4).write_volatile(s1 as u32);  // scratch ptr (offset 0x10)
+        cbuf.add(21).write_volatile(s2 as u32); // scratch2 ptr (offset 0x54)
+        flush_buf(cbuf, 384);
+        flush_buf(s1, 1024);
+        flush_buf(s2, 1024);
 
-            // Try type=0 first (simpler path — calls RPC_simple).
-            crate::debug_log(b"[ME-RPC] MeVideo type=0...");
-            let ret0 = f(0, cbuf);
-            log_result(b"[ME-RPC] MeVideo(0)=", ret0);
+        // Step A: Probe ME (type=0).
+        crate::debug_log(b"[ME-RPC] Step A: probe (type=0)...");
+        let f_init: unsafe extern "C" fn(i32, *mut u32) -> i32 =
+            core::mem::transmute(fn_init.unwrap());
+        let ret = f_init(0, cbuf);
+        log_result(b"[ME-RPC] probe=", ret);
+        dump_codec_buf(cbuf);
 
-            // Log codec buf state after call.
-            log_result(b"[ME-RPC] buf[2]=", cbuf.add(2).read_volatile() as i32);
-            log_result(b"[ME-RPC] buf[6]=", cbuf.add(6).read_volatile() as i32);
-            log_result(b"[ME-RPC] buf[8]=", cbuf.add(8).read_volatile() as i32);
+        // Step B: GetEDRAM.
+        if let Some(ptr) = fn_get_edram {
+            crate::debug_log(b"[ME-RPC] Step B: GetEDRAM...");
+            let f: unsafe extern "C" fn(i32, *mut u32) -> i32 =
+                core::mem::transmute(ptr);
+            let ret = f(0, cbuf);
+            log_result(b"[ME-RPC] GetEDRAM=", ret);
+            dump_codec_buf(cbuf);
 
-            // Now try type=1 (full init path — calls RPC_dispatch 0x24).
-            crate::debug_log(b"[ME-RPC] MeVideo type=1...");
-            for i in 1..96 { cbuf.add(i).write_volatile(0); }
-            cbuf.add(0).write_volatile(0x05100601);
-            cbuf.add(4).write_volatile(s1 as u32);
-            cbuf.add(21).write_volatile(s2 as u32);
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                cbuf as *const c_void, 384,
-            );
-            let ret1 = f(1, cbuf);
-            log_result(b"[ME-RPC] MeVideo(1)=", ret1);
-
-            log_result(b"[ME-RPC] buf[2]=", cbuf.add(2).read_volatile() as i32);
-            log_result(b"[ME-RPC] buf[6]=", cbuf.add(6).read_volatile() as i32);
-            log_result(b"[ME-RPC] buf[8]=", cbuf.add(8).read_volatile() as i32);
+            // If GetEDRAM fails, ME is busy (movie playing).
+            // Don't proceed — init would crash.
+            if ret < 0 {
+                crate::debug_log(b"[ME-RPC] ME busy (EDRAM in use), skipping init");
+                crate::debug_log(b"[ME-RPC] Try from OASIS OS (no movie playing)");
+                crate::debug_log(b"[ME-RPC] test complete");
+                return;
+            }
         }
-    } else {
-        crate::debug_log(b"[ME-RPC] MeVideo fn not found");
+
+        // Step C: Full init (type=1).
+        crate::debug_log(b"[ME-RPC] Step C: init (type=1)...");
+        let ret = f_init(1, cbuf);
+        log_result(b"[ME-RPC] init=", ret);
+        dump_codec_buf(cbuf);
+
+        if ret < 0 {
+            crate::debug_log(b"[ME-RPC] init failed, skipping SetMemory");
+            crate::debug_log(b"[ME-RPC] test complete");
+            return;
+        }
+
+        // Step D: SetMemory.
+        if let Some(ptr) = fn_set_mem {
+            crate::debug_log(b"[ME-RPC] Step D: SetMemory...");
+            let f: unsafe extern "C" fn(i32, *mut u32) -> i32 =
+                core::mem::transmute(ptr);
+            let ret = f(1, cbuf);
+            log_result(b"[ME-RPC] SetMem=", ret);
+            dump_codec_buf(cbuf);
+        }
     }
 
     crate::debug_log(b"[ME-RPC] test complete");
+}
+
+fn resolve_nid(library: &[u8], nid: u32) -> Option<*mut u8> {
+    unsafe {
+        psp::hook::find_function(
+            b"sceMeCodecWrapper\0".as_ptr(),
+            library.as_ptr(),
+            nid,
+        )
+    }
+}
+
+fn flush_buf(ptr: *mut u32, size: u32) {
+    unsafe {
+        psp::sys::sceKernelDcacheWritebackInvalidateRange(
+            ptr as *const c_void, size,
+        );
+    }
+}
+
+fn dump_codec_buf(cbuf: *mut u32) {
+    // Log key fields of the codec buffer.
+    unsafe {
+        for &(idx, label) in &[
+            (0, b"ver " as &[u8]),   // version
+            (2, b"flg "),   // flags/status (offset 0x08)
+            (3, b"edm "),   // EDRAM ptr (offset 0x0C)
+            (4, b"sc1 "),   // scratch ptr (offset 0x10)
+            (5, b"ed2 "),   // secondary EDRAM (offset 0x14)
+            (6, b"buf "),   // buf[6] (offset 0x18)
+            (8, b"out "),   // output (offset 0x20)
+        ] {
+            let val = cbuf.add(idx).read_volatile();
+            if val != 0 {
+                let mut msg = [0u8; 48];
+                let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"  ");
+                mp = crate::me_dump::append_bytes(&mut msg, mp, label);
+                mp = crate::me_dump::append_bytes(&mut msg, mp, b"0x");
+                mp = crate::me_dump::append_hex(&mut msg, mp, val);
+                crate::debug_log(&msg[..mp]);
+            }
+        }
+    }
 }
 
 fn log_result(prefix: &[u8], val: i32) {
