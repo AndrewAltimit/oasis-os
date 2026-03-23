@@ -233,11 +233,11 @@ fn psp_main() {
     // load AvMpegBase first, making sceMpegInit fail with 0x8002013a).
     oasis_backend_psp::video::preinit_mpeg();
 
-    // PMF test disabled — ffmpeg-generated MPEG-PS crashes the ME's video
-    // decoder. Need a real PSP game PMF (UMD Stream Composer output) to test.
-    // Init sequence is now correct per libpmfplayer analysis:
-    //   Create → AvcDecodeMode → QueryStreamOffset → QueryStreamSize →
-    //   seek(offset) → RegistStream → MallocAvcEsBuf → InitAu → Put
+    // PMF test disabled — even real Persona 3 PMSF crashes.
+    // Root cause (confirmed by Ghidra): sceMpeg internally calls
+    // sceVideocodec (avcodec.prx) for ME decode. The ME submission
+    // stubs in avcodec.prx are empty on PSP-3001/ARK-4/FW6.61.
+    // H.264 decode is blocked for homebrew on this firmware config.
     // oasis_backend_psp::video::test_real_pmf();
 
     // Background worker threads: audio, file I/O, and video decode.

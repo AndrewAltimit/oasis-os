@@ -17,7 +17,12 @@ from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 from ghidra.program.model.symbol import SourceType
 
-OUTPUT = "/data/output/mpeg_ringbuffer.txt"
+import os
+# Support both Docker (/data/output/) and native paths
+if os.path.isdir("/data/output"):
+    OUTPUT = "/data/output/mpeg_ringbuffer.txt"
+else:
+    OUTPUT = os.path.expanduser("~/Downloads/output/mpeg_ringbuffer.txt")
 BASE = 0x08c05c00
 
 # NID -> function name mapping for sceMpeg_library
