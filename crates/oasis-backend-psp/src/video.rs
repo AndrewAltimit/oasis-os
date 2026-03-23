@@ -129,6 +129,215 @@ pub fn try_push_stream_frame(frame: StreamFrame) -> Result<(), StreamFrame> {
     VIDEO_STREAM_QUEUE.push(frame)
 }
 
+/// Test sceMpeg decode with a real PMF file from the memory stick.
+/// This mirrors exactly how a PMF player works: open file, setup sceMpeg,
+/// feed via ringbuffer callback (sceIoRead), decode.
+pub fn test_real_pmf() {
+    vlog("[PMF-TEST] Starting real PMF test...");
+
+    crate::audio::load_av_modules_once_pub();
+    // Reset sceMpeg completely — preinit_mpeg may have left stale state.
+    unsafe { psp::sys::sceMpegFinish() };
+    let ret = unsafe { psp::sys::sceMpegInit() };
+    vlog(&format!("[PMF-TEST] sceMpegFinish+Init = {ret:#x}"));
+
+    // Open the real PMF file
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/test.pmf\0".as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY,
+            0,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        vlog("[PMF-TEST] Failed to open test.pmf");
+        return;
+    }
+    vlog("[PMF-TEST] Opened test.pmf");
+
+    // Read the PSMF header (first 2048 bytes)
+    let mut header = [0u8; 2048];
+    let n = unsafe {
+        psp::sys::sceIoRead(fd, header.as_mut_ptr() as *mut _, 2048)
+    };
+    vlog(&format!("[PMF-TEST] Read header: {n} bytes"));
+
+    // Store fd in a static for the callback
+    static mut PMF_FD: psp::sys::SceUid = psp::sys::SceUid(-1);
+    unsafe { PMF_FD = fd; }
+
+    // Seek back to 0 — the callback will read from the beginning
+    unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set); }
+
+    // Ringbuffer callback: reads from the PMF file (exactly like PMF players)
+    unsafe extern "C" fn pmf_callback(
+        data: *mut core::ffi::c_void,
+        num_packets: i32,
+        _param: *mut core::ffi::c_void,
+    ) -> i32 {
+        if num_packets <= 0 {
+            return 0;
+        }
+        let bytes = num_packets * 2048;
+        let n = psp::sys::sceIoRead(PMF_FD, data, bytes as u32);
+        if n < 0 {
+            return -1;
+        }
+        n / 2048
+    }
+
+    // Setup sceMpeg
+    let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(0) };
+    let mut mpeg_data = vec![0u8; mem_size as usize + 64];
+    let mpeg_data_aligned = {
+        let p = mpeg_data.as_mut_ptr();
+        unsafe { p.add(p.align_offset(64)) }
+    };
+
+    let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(32) };
+    let mut rb_data = vec![0u8; rb_size as usize];
+
+    let mut ringbuffer = Box::new(unsafe {
+        core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
+    });
+    let ret = unsafe {
+        psp::sys::sceMpegRingbufferConstruct(
+            &mut *ringbuffer,
+            32,
+            rb_data.as_mut_ptr() as *mut core::ffi::c_void,
+            rb_size,
+            Some(pmf_callback),
+            core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[PMF-TEST] RingbufferConstruct = {ret:#x}"));
+
+    let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<core::ffi::c_void>()));
+    let mpeg: psp::sys::SceMpeg = unsafe {
+        core::mem::transmute(mpeg_storage as *mut *mut core::ffi::c_void)
+    };
+
+    let ret = unsafe {
+        psp::sys::sceMpegCreate(
+            mpeg,
+            mpeg_data_aligned as *mut core::ffi::c_void,
+            mem_size as i32,
+            &mut *ringbuffer,
+            512,
+            0,
+            0,
+        )
+    };
+    vlog(&format!("[PMF-TEST] sceMpegCreate = {ret:#x}"));
+    if ret < 0 {
+        unsafe {
+            psp::sys::sceIoClose(fd);
+            let _ = Box::from_raw(mpeg_storage);
+            psp::sys::sceMpegRingbufferDestruct(&mut *ringbuffer);
+        }
+        return;
+    }
+
+    // Skip QueryStreamOffset — it may modify internal state.
+    // Register video stream — channel 0 = stream_id 0xE0.
+    let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
+    vlog("[PMF-TEST] Stream registered (channel 0 = 0xE0)");
+
+    // Allocate decode resources BEFORE any Put
+    let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
+    vlog(&format!("[PMF-TEST] MallocAvcEsBuf = {:#x}", es_buf as usize));
+    if es_buf.is_null() {
+        vlog("[PMF-TEST] ES buffer is NULL!");
+    }
+    let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
+    let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
+    vlog(&format!("[PMF-TEST] InitAu = {ret:#x}"));
+
+    // Flush all streams before feeding (some PMF players do this)
+    let ret = unsafe { psp::sys::sceMpegFlushAllStream(mpeg) };
+    vlog(&format!("[PMF-TEST] FlushAllStream = {ret:#x}"));
+
+    // Feed + decode loop: 1 packet at a time, GetAvcAu after each.
+    let mut total_put = 0i32;
+    let mut decode_init = 0i32;
+    let mut output_buf = vec![0u8; 512 * 288 * 4]; // 512 stride × 288 (rounded 272)
+    let mut frames_decoded = 0u32;
+
+    for round in 0..100 {
+        // Feed 1 packet
+        let avail = unsafe {
+            psp::sys::sceMpegRingbufferAvailableSize(&mut *ringbuffer)
+        };
+        if avail > 0 {
+            vlog(&format!("[PMF-TEST] round {round}: Put(1), avail={avail}"));
+            let ret = unsafe {
+                psp::sys::sceMpegRingbufferPut(&mut *ringbuffer, 1, avail)
+            };
+            vlog(&format!("[PMF-TEST] Put returned {ret}"));
+            if ret > 0 {
+                total_put += ret;
+            }
+            if ret < 0 {
+                vlog(&format!("[PMF-TEST] Put error, stopping"));
+                break;
+            }
+        }
+
+        // Try to get AU
+        let au_ret = unsafe {
+            psp::sys::sceMpegGetAvcAu(mpeg, stream, &mut au, core::ptr::null_mut())
+        };
+        if au_ret >= 0 {
+            vlog(&format!("[PMF-TEST] GetAvcAu OK! round {round}, total_put={total_put}"));
+
+            let mut out_ptr = output_buf.as_mut_ptr() as *mut core::ffi::c_void;
+            let buf_addr = &mut out_ptr as *mut *mut core::ffi::c_void
+                as *mut core::ffi::c_void;
+
+            // Flush output buffer
+            unsafe {
+                psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                    output_buf.as_ptr() as *const core::ffi::c_void,
+                    output_buf.len() as u32,
+                );
+            }
+
+            let dec_ret = unsafe {
+                psp::sys::sceMpegAvcDecode(
+                    mpeg, &mut au, 512, buf_addr, &mut decode_init,
+                )
+            };
+            vlog(&format!(
+                "[PMF-TEST] AvcDecode = {dec_ret:#x}, init = {decode_init}"
+            ));
+            if dec_ret >= 0 && decode_init > 0 {
+                frames_decoded += 1;
+                vlog(&format!(
+                    "[PMF-TEST] FRAME DECODED! ({frames_decoded} total)"
+                ));
+                if frames_decoded >= 3 {
+                    break; // enough to prove it works
+                }
+            }
+        }
+    }
+
+    vlog(&format!(
+        "[PMF-TEST] Done: {total_put} packets fed, {frames_decoded} frames decoded"
+    ));
+
+    // Cleanup
+    unsafe {
+        psp::sys::sceMpegFreeAvcEsBuf(mpeg, es_buf);
+        psp::sys::sceMpegUnRegistStream(mpeg, stream);
+        psp::sys::sceMpegDelete(mpeg);
+        let _ = Box::from_raw(mpeg_storage);
+        psp::sys::sceMpegRingbufferDestruct(&mut *ringbuffer);
+        psp::sys::sceIoClose(fd);
+    }
+    vlog("[PMF-TEST] Test complete!");
+}
+
 /// Pre-initialize the MPEG subsystem before any audio modules load.
 ///
 /// Must be called from the main thread before spawning the audio thread.
