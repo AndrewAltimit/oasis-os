@@ -77,6 +77,14 @@ unsafe extern "C" fn dump_thread_entry(
             DUMP_STATE.store(0, Ordering::Release);
         }
 
+        // Check for ME RPC init request (shares this thread's 64KB stack).
+        if crate::me_rpc::check_init_request() {
+            // SAFETY: ME init uses kernel-mode APIs.
+            unsafe { crate::me_rpc::me_init() };
+            // Run test after init.
+            unsafe { crate::me_rpc::me_test() };
+        }
+
         // SAFETY: PSP kernel syscall to sleep.
         unsafe { psp::sys::sceKernelDelayThread(100_000) }; // poll at 10Hz
     }
@@ -653,7 +661,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     false
 }
 
-fn append_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
+pub fn append_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
     let mut p = pos;
     for &b in s {
         if p >= buf.len() {
@@ -665,7 +673,7 @@ fn append_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
     p
 }
 
-fn append_hex(buf: &mut [u8], pos: usize, val: u32) -> usize {
+pub fn append_hex(buf: &mut [u8], pos: usize, val: u32) -> usize {
     let hex = b"0123456789ABCDEF";
     let mut p = pos;
     let mut i = 0;

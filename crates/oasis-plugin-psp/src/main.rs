@@ -29,6 +29,7 @@ mod config;
 mod font;
 mod hook;
 mod me_dump;
+mod me_rpc;
 mod overlay;
 mod render;
 mod video;
