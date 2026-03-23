@@ -87,9 +87,38 @@ fn psp_main() {
         // Start ME firmware dump thread (idles until overlay triggers it).
         me_dump::start_dump_thread();
 
-        // Boot the Media Engine for codec use (sceMeBootStart660).
-        // This is required before sceMpegGetAvcNalAu can feed NALs.
-        // NID 0x5DFF5C50 = sceMeBootStart for FW 6.60/6.61.
+        // Load mpeg_vsh.prx — the VSH mpeg library that properly connects
+        // to the ME kernel drivers. The standard sceMpeg_library doesn't.
+        debug_log(b"[OASIS] loading mpeg_vsh.prx...");
+        unsafe {
+            let id = psp::sys::sceKernelLoadModule(
+                b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
+                0, core::ptr::null_mut(),
+            );
+            let mut msg = [0u8; 48];
+            msg[..24].copy_from_slice(b"[OASIS] mpeg_vsh id=0x00");
+            let hex = b"0123456789ABCDEF";
+            for i in 0..8 {
+                msg[20 + i] = hex[((id.0 as u32 >> ((7-i)*4)) & 0xF) as usize];
+            }
+            debug_log(&msg[..28]);
+
+            if id >= psp::sys::SceUid(0) {
+                let mut st: i32 = 0;
+                let r = psp::sys::sceKernelStartModule(
+                    id, 0, core::ptr::null_mut(),
+                    &mut st, core::ptr::null_mut(),
+                );
+                let mut m2 = [0u8; 48];
+                m2[..24].copy_from_slice(b"[OASIS] vsh start=0x000");
+                for i in 0..8 {
+                    m2[19 + i] = hex[((r as u32 >> ((7-i)*4)) & 0xF) as usize];
+                }
+                debug_log(&m2[..27]);
+            }
+        }
+
+        // Boot the Media Engine for codec use.
         debug_log(b"[OASIS] calling sceMeBootStart...");
         unsafe {
             let ptr = psp::hook::find_function(

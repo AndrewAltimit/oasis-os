@@ -383,9 +383,8 @@ pub fn preinit_mpeg() {
     // Extract ME firmware images from flash0.
     extract_me_firmware();
 
-    // sceMpegRingbufferPut hangs even with real PMF data — the empty
-    // avcodec stubs block the ME submission. We must use sceMeVideo_driver
-    // directly (from kernel PRX) to bypass the broken avcodec layer.
+    // NAL file test disabled — DDR-top 2MB alloc OOMs during startup.
+    // The streaming path tests NAL decode when a channel is tuned.
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones
@@ -704,6 +703,225 @@ fn list_flash0_dir(path: &[u8], depth: u8) {
 }
 
 
+/// Lightweight NAL test — reads from file, tests 3 frames.
+fn test_nal_file_lite() {
+    vlog("[NAL-TEST] lite: opening test_video.mp4...");
+
+    // Wait for ME boot from PRX.
+    unsafe { psp::sys::sceKernelDelayThread(3_000_000) };
+
+    let mut reader = match PspFileReader::open(
+        "ms0:/PSP/GAME/OASISOS/test_video.mp4"
+    ) {
+        Some(r) => r,
+        None => {
+            vlog("[NAL-TEST] file not found");
+            return;
+        }
+    };
+
+    // Parse MP4 and extract track info (releases borrow on reader after).
+    let (avcc_sps, avcc_pps, prefix, samples) = {
+        let mp4 = match oasis_video::demux_lite::Mp4Lite::open(&mut reader) {
+            Ok(m) => m,
+            Err(e) => {
+                vlog(&format!("[NAL-TEST] parse: {e}"));
+                return;
+            }
+        };
+        let vt = match mp4.video_track_info() {
+            Some(t) => t,
+            None => { vlog("[NAL-TEST] no video"); return; }
+        };
+        let avcc = match &vt.avcc {
+            Some(a) => a,
+            None => { vlog("[NAL-TEST] no avcC"); return; }
+        };
+        vlog(&format!(
+            "[NAL-TEST] {} samples, sps={} pps={} prefix={}",
+            vt.sample_count(), avcc.sps.len(), avcc.pps.len(), avcc.nal_length_size
+        ));
+        // Collect sample info for first 3 frames.
+        let mut samples = Vec::new();
+        for i in 0..3usize.min(vt.sample_count()) {
+            if let Some((off, sz)) = vt.sample_offset_size(i) {
+                samples.push((off, sz, vt.sample_is_keyframe(i), vt.sample_timestamp(i)));
+            }
+        }
+        (avcc.sps.clone(), avcc.pps.clone(), avcc.nal_length_size as u8, samples)
+    }; // mp4 dropped here, reader is free
+
+    if samples.is_empty() {
+        vlog("[NAL-TEST] no samples"); return;
+    }
+
+    // Read first keyframe.
+    let (off, sz, _, _) = samples[0];
+    let mut raw = vec![0u8; sz as usize];
+    reader.seek_read(off, &mut raw);
+
+    // Build StreamFrame for init.
+    let frame = StreamFrame {
+        data: raw.clone(), // raw AVCC as data (NalDecoder uses raw_avcc anyway)
+        raw_avcc: Some(raw.clone()),
+        nal_prefix_size: prefix,
+        avcc_sps: Some(avcc_sps),
+        avcc_pps: Some(avcc_pps),
+        timestamp_secs: 0.0,
+        is_keyframe: true,
+    };
+
+    let mut dec = match NalDecoder::try_init(&frame) {
+        Ok(d) => d,
+        Err(e) => { vlog(&format!("[NAL-TEST] init: {e}")); return; }
+    };
+
+    // Decode frames.
+    let mut decoded = 0u32;
+    for (idx, &(o, s, _is_key, ts)) in samples.iter().enumerate() {
+        let mut buf = vec![0u8; s as usize];
+        reader.seek_read(o, &mut buf);
+
+        let result = dec.decode(&buf, ts, Some(&buf), prefix);
+        match result {
+            Some(_) => {
+                decoded += 1;
+                vlog(&format!("[NAL-TEST] DECODED frame {idx}!"));
+            }
+            None => {
+                vlog(&format!("[NAL-TEST] frame {idx}: no output"));
+            }
+        }
+    }
+    vlog(&format!("[NAL-TEST] done: {decoded}/{}", samples.len()));
+}
+
+/// Test NAL decode with a local 480x272 Baseline MP4 file (full memory version).
+#[allow(dead_code)]
+fn test_nal_file() {
+    vlog("[NAL-TEST] opening test_video.mp4...");
+
+    // Read the entire file into memory.
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/test_video.mp4\0".as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY, 0,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        vlog("[NAL-TEST] file not found");
+        return;
+    }
+    let file_size = unsafe {
+        let end = psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End);
+        psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set);
+        end as usize
+    };
+    vlog(&format!("[NAL-TEST] file size={file_size}"));
+
+    // Read entire file into memory for demux.
+    let mut file_data = vec![0u8; file_size];
+    let n = unsafe {
+        psp::sys::sceIoRead(fd, file_data.as_mut_ptr() as *mut _, file_size as u32)
+    };
+    unsafe { psp::sys::sceIoClose(fd) };
+    if (n as usize) < file_size {
+        vlog(&format!("[NAL-TEST] short read: {n}"));
+        return;
+    }
+
+    // Parse with demux_lite.
+    let mut cursor = std::io::Cursor::new(&file_data[..]);
+    let mp4 = match oasis_video::demux_lite::Mp4Lite::open(&mut cursor) {
+        Ok(m) => m,
+        Err(e) => {
+            vlog(&format!("[NAL-TEST] parse error: {e}"));
+            return;
+        }
+    };
+    let vt = match mp4.video_track_info() {
+        Some(t) => t,
+        None => {
+            vlog("[NAL-TEST] no video track");
+            return;
+        }
+    };
+    let avcc = match &vt.avcc {
+        Some(a) => a,
+        None => {
+            vlog("[NAL-TEST] no avcC config");
+            return;
+        }
+    };
+
+    vlog(&format!(
+        "[NAL-TEST] video: {} samples, sps={} pps={} prefix={}",
+        vt.sample_count(), avcc.sps.len(), avcc.pps.len(), avcc.nal_length_size
+    ));
+
+    // Build a fake StreamFrame for the first keyframe.
+    let mut first_idx = 0;
+    for i in 0..vt.sample_count() {
+        if vt.sample_is_keyframe(i) {
+            first_idx = i;
+            break;
+        }
+    }
+    let Some((offset, size)) = vt.sample_offset_size(first_idx) else {
+        vlog("[NAL-TEST] can't get first sample");
+        return;
+    };
+    let raw_data = &file_data[offset as usize..(offset + size as u64) as usize];
+
+    // Convert to Annex B for SPS parsing.
+    let annex_b = match oasis_video::demux_lite::avcc_to_annex_b(raw_data, avcc, true) {
+        Ok(d) => d,
+        Err(e) => {
+            vlog(&format!("[NAL-TEST] avcc_to_annex_b error: {e}"));
+            return;
+        }
+    };
+
+    let first_frame = StreamFrame {
+        data: annex_b,
+        raw_avcc: Some(raw_data.to_vec()),
+        nal_prefix_size: avcc.nal_length_size as u8,
+        avcc_sps: Some(avcc.sps.clone()),
+        avcc_pps: Some(avcc.pps.clone()),
+        timestamp_secs: 0.0,
+        is_keyframe: true,
+    };
+
+    // Init NAL decoder.
+    let mut dec = match NalDecoder::try_init(&first_frame) {
+        Ok(d) => d,
+        Err(e) => {
+            vlog(&format!("[NAL-TEST] init failed: {e}"));
+            return;
+        }
+    };
+
+    // Decode first 10 frames.
+    let max_frames = 10usize.min(vt.sample_count());
+    let mut decoded = 0u32;
+    for i in 0..max_frames {
+        let Some((off, sz)) = vt.sample_offset_size(i) else { continue };
+        let raw = &file_data[off as usize..(off + sz as u64) as usize];
+        let is_key = vt.sample_is_keyframe(i);
+        let ts = vt.sample_timestamp(i);
+
+        let result = dec.decode(
+            raw, ts,
+            Some(raw), first_frame.nal_prefix_size,
+        );
+        if let Some(_frame) = result {
+            decoded += 1;
+            vlog(&format!("[NAL-TEST] FRAME {i} DECODED!"));
+        }
+    }
+    vlog(&format!("[NAL-TEST] done: {decoded}/{max_frames} decoded"));
+}
+
 /// Spawn the video decode thread (priority 24, between audio=16 and I/O=32).
 pub fn spawn_video_thread() {
     if let Ok(handle) = ThreadBuilder::new(b"oasis_video\0")
@@ -727,6 +945,13 @@ struct PspFileReader {
 }
 
 impl PspFileReader {
+    fn seek_read(&mut self, offset: u64, buf: &mut [u8]) {
+        unsafe {
+            psp::sys::sceIoLseek(self.fd, offset as i64, psp::sys::IoWhence::Set);
+            psp::sys::sceIoRead(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32);
+        }
+    }
+
     fn open(path: &str) -> Option<Self> {
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0);
@@ -1057,8 +1282,14 @@ impl NalDecoder {
             extract_sps_pps(&first_frame.data)
                 .ok_or_else(|| "no SPS/PPS found".to_string())?
         };
+        // Log SPS profile/level (first 3 bytes: profile_idc, flags, level_idc).
+        let prof = if sps.len() >= 4 {
+            format!("profile={:#x} level={:#x}", sps[1], sps[3])
+        } else {
+            "short".to_string()
+        };
         vlog(&format!(
-            "[VIDEO] NAL: SPS={} bytes, PPS={} bytes", sps.len(), pps.len()
+            "[VIDEO] NAL: SPS={} PPS={} {prof}", sps.len(), pps.len()
         ));
 
         // Parse dimensions from SPS.
@@ -1075,7 +1306,9 @@ impl NalDecoder {
 
         // mpeg_mode: 5 for Main profile >480x272, 4 for others.
         // From cooleyes: mode depends on profile + resolution.
-        let mpeg_mode = if width > 480 || height > 272 { 5 } else { 4 };
+        // Always use mode 4 — mode 5 may not be supported on all firmware.
+        // UMD movies use mode 4 even for 720x480.
+        let mpeg_mode = 4;
         let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
             return Err(format!("sceMpegQueryMemSize({mpeg_mode}): {mem_size}"));
@@ -2434,9 +2667,11 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
+    // Request kernel avcodec stub patching from PRX.
+    // sceMpegAvcDecode still routes through avcodec even with NAL feeding.
+    request_me_stub_patch();
+
     // NAL-based decode (cooleyes/PMPlayer approach).
-    // Feeds raw H.264 NALs directly via sceMpegGetAvcNalAu, bypassing
-    // the MPEG-PS demuxer and broken avcodec stubs.
     let mut nal_dec = match NalDecoder::try_init(&first_frame) {
         Ok(dec) => {
             vlog("[VIDEO] NAL decoder initialized OK");
