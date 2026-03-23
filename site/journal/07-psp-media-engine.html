@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Reverse Engineering the PSP Media Engine - OASIS_OS Developer's Journal</title>
-  <meta name="description" content="Reverse engineering the PSP's Media Engine coprocessor for H.264 video decode &mdash; discovering hidden kernel modules, mapping the RPC protocol, and achieving the first documented direct ME communication from homebrew.">
+  <meta name="description" content="Reverse engineering the PSP's Media Engine coprocessor for H.264 video decode on ARK-4 CFW &mdash; discovering hidden kernel modules, mapping the RPC protocol, and achieving direct ME communication from a kernel PRX.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -28,11 +28,11 @@
     <a class="article-back" href="./">&larr; Developer's Journal</a>
     <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Direct RPC</h1>
     <p class="article-subtitle">
-      For nearly 20 years, H.264 video decode from PSP homebrew has been considered impossible.
-      The official <code>sceVideocodec</code> API returns a cryptic error, and no one knew why.
-      We traced the problem to empty firmware stubs, discovered hidden kernel modules loaded
-      only during UMD playback, reverse engineered the Media Engine&rsquo;s RPC protocol, and
-      achieved the first documented direct communication with the ME coprocessor from homebrew code.
+      On ARK-4 CFW, H.264 video decode from PSP homebrew fails with a cryptic error &mdash;
+      the official <code>sceVideocodec</code> API returns <code>0x806201FE</code> and nobody
+      has documented why. We traced the problem to empty firmware stubs, discovered hidden
+      kernel modules loaded only during UMD playback, reverse engineered the Media Engine&rsquo;s
+      RPC protocol, and achieved direct communication with the ME coprocessor from a kernel PRX.
     </p>
     <div class="article-meta">
       <span>Entry 07</span>
@@ -43,25 +43,30 @@
 
 <article class="article-content">
 
-  <h2>The Problem: 20 Years of Error 0x806201FE</h2>
+  <h2>The Problem: Error 0x806201FE on ARK-4 CFW</h2>
 
   <p>
     The PSP contains a dedicated coprocessor called the <strong>Media Engine</strong> (ME) &mdash;
     a second MIPS CPU clocked at up to 333 MHz, designed specifically for multimedia decode.
     Sony&rsquo;s games and UMD movies use it for H.264, MPEG-4, AAC, and ATRAC3+ decoding.
-    But homebrew applications have never been able to access it.
+    Early homebrew video players like PMPlayer and PMP Mod successfully used the ME on older
+    CFW configurations, proving it was accessible from homebrew in principle.
   </p>
 
   <p>
-    The official API, <code>sceVideocodec</code>, returns error <code>0x806201FE</code> on every
-    call. The higher-level <code>sceMpeg</code> API fails too &mdash; it internally delegates to
-    <code>sceVideocodec</code> and hits the same wall. Every homebrew video player on the PSP uses
-    software decode on the main CPU, struggling to reach even 15 FPS for low-resolution H.264.
+    On our hardware &mdash; a PSP-3001 (TA-090v2) running ARK-4 CFW on firmware 6.61 &mdash;
+    the official <code>sceVideocodec</code> API returns error <code>0x806201FE</code> on every
+    call. The higher-level <code>sceMpeg</code> API fails too, as it internally delegates to
+    <code>sceVideocodec</code> and hits the same wall. The root cause turned out to be
+    CFW-specific: the kernel modules that bridge user-mode codec calls to the Media Engine
+    are not loaded by <code>sceUtilityLoadModule</code> on this configuration.
   </p>
 
   <p>
-    We set out to understand <em>why</em> the API fails and whether there was a way around it.
-    The target hardware: a PSP-3001 (TA-090v2 motherboard) running ARK-4 CFW on firmware 6.61.
+    We set out to understand exactly <em>why</em> the API fails on ARK-4 and whether there
+    was a way to communicate with the ME directly &mdash; bypassing the broken stubs entirely.
+    What we found was a complete, previously undocumented kernel driver architecture and
+    RPC protocol that documents how Sony&rsquo;s codec firmware communicates with the ME.
   </p>
 
   <div class="diagram">
@@ -569,8 +574,9 @@ Offset  Size   Field
   <h2>Why This Matters</h2>
 
   <p>
-    This is, to our knowledge, the <strong>first documented successful direct communication with
-    the PSP Media Engine from homebrew</strong>. The implications are significant:
+    While earlier homebrew like PMPlayer achieved ME video decode on older CFW, the
+    internal kernel driver architecture and RPC protocol have remained largely undocumented.
+    Our findings have significant implications:
   </p>
 
   <ul>
@@ -585,10 +591,11 @@ Offset  Size   Field
       minimal additional work.
     </li>
     <li>
-      <strong>Custom ME firmware.</strong> The ME is a general-purpose MIPS CPU that loads its
-      firmware from an encrypted image. With the RPC protocol documented, it may be possible
-      to load custom firmware for arbitrary compute tasks &mdash; the ME has its own 2 MB of
-      dedicated eDRAM, separate from main memory.
+      <strong>Codec RPC documentation.</strong> Homebrew like Daedalus X64 has long used the ME
+      as a general-purpose coprocessor via <code>psp::me</code> APIs. What was missing was
+      documentation of Sony&rsquo;s internal codec RPC protocol &mdash; the specific command IDs,
+      buffer layouts, and driver chain that the firmware uses for video/audio decode. This
+      reference enables interacting with the ME&rsquo;s codec firmware rather than replacing it.
     </li>
     <li>
       <strong>OASIS_OS video playback.</strong> Our TV Guide app currently streams audio-only on

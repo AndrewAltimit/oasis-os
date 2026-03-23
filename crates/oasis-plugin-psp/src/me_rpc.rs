@@ -638,42 +638,98 @@ pub unsafe fn me_test() {
         crate::debug_log(b"[ME-RPC] AudioCheckMem not resolved");
     }
 
-    // Test 3: Call sceMeVideo_driver directly (bypass avcodec_wrapper).
-    // This is the REAL ME video driver that talks to the ME coprocessor.
+    // Test 3: Call sceMeVideo::C441994C with proper codec buffer setup.
+    //
+    // From disassembly, this function:
+    //   1. Checks buf[0] == 0x05100601 (version) → returns -2 if wrong
+    //   2. Checks buf[4] (offset 0x10) != NULL (scratch ptr) → returns -1 if NULL
+    //   3. If type==0: calls RPC_simple, reads scratch[1], stores results
+    //   4. If type==1: calls RPC_dispatch(cmd=0x24), then RPC_dispatch(cmd=0x23)
+    //
+    // We need to allocate a scratch buffer and set buf[4] to point to it.
     let me_video_fn = unsafe {
         psp::hook::find_function(
             b"sceMeCodecWrapper\0".as_ptr(),
             b"sceMeVideo_driver\0".as_ptr(),
-            0xC441994C, // VideocodecOpen equivalent
+            0xC441994C,
         )
     };
     if let Some(ptr) = me_video_fn {
-        crate::debug_log(b"[ME-RPC] calling MeVideo directly...");
-        // MeVideo::C441994C takes (type, codec_buf) like sceVideocodecOpen.
+        crate::debug_log(b"[ME-RPC] MeVideo test with scratch buf...");
         let f: unsafe extern "C" fn(i32, *mut u32) -> i32 =
             unsafe { core::mem::transmute(ptr) };
-        let mut codec_buf = [0u32; 96];
-        codec_buf[0] = 0x05100601; // version
-        let ret = unsafe { f(1, codec_buf.as_mut_ptr()) };
-        let mut msg = [0u8; 64];
-        let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"[ME-RPC] MeVideoInit=0x");
-        mp = crate::me_dump::append_hex(&mut msg, mp, ret as u32);
-        crate::debug_log(&msg[..mp]);
+
+        // Use raw pointers for static buffers (Rust 2024 static mut rules).
+        static mut SCRATCH1: [u32; 64] = [0u32; 64];
+        static mut SCRATCH2: [u32; 64] = [0u32; 64];
+        static mut CODEC_BUF: [u32; 96] = [0u32; 96];
+
+        unsafe {
+            let cbuf = &raw mut CODEC_BUF as *mut u32;
+            let s1 = &raw mut SCRATCH1 as *mut u32;
+            let s2 = &raw mut SCRATCH2 as *mut u32;
+
+            // Zero everything.
+            for i in 0..96 { cbuf.add(i).write_volatile(0); }
+            for i in 0..64 { s1.add(i).write_volatile(0); s2.add(i).write_volatile(0); }
+
+            // Set version field.
+            cbuf.add(0).write_volatile(0x05100601);
+
+            // Set scratch pointer at buf[4] (offset 0x10).
+            cbuf.add(4).write_volatile(s1 as u32);
+
+            // Set secondary scratch at buf[21] (offset 0x54).
+            cbuf.add(21).write_volatile(s2 as u32);
+
+            // Flush cache on all buffers.
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                cbuf as *const c_void, 384,
+            );
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                s1 as *const c_void, 256,
+            );
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                s2 as *const c_void, 256,
+            );
+
+            // Try type=0 first (simpler path — calls RPC_simple).
+            crate::debug_log(b"[ME-RPC] MeVideo type=0...");
+            let ret0 = f(0, cbuf);
+            log_result(b"[ME-RPC] MeVideo(0)=", ret0);
+
+            // Log codec buf state after call.
+            log_result(b"[ME-RPC] buf[2]=", cbuf.add(2).read_volatile() as i32);
+            log_result(b"[ME-RPC] buf[6]=", cbuf.add(6).read_volatile() as i32);
+            log_result(b"[ME-RPC] buf[8]=", cbuf.add(8).read_volatile() as i32);
+
+            // Now try type=1 (full init path — calls RPC_dispatch 0x24).
+            crate::debug_log(b"[ME-RPC] MeVideo type=1...");
+            for i in 1..96 { cbuf.add(i).write_volatile(0); }
+            cbuf.add(0).write_volatile(0x05100601);
+            cbuf.add(4).write_volatile(s1 as u32);
+            cbuf.add(21).write_volatile(s2 as u32);
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                cbuf as *const c_void, 384,
+            );
+            let ret1 = f(1, cbuf);
+            log_result(b"[ME-RPC] MeVideo(1)=", ret1);
+
+            log_result(b"[ME-RPC] buf[2]=", cbuf.add(2).read_volatile() as i32);
+            log_result(b"[ME-RPC] buf[6]=", cbuf.add(6).read_volatile() as i32);
+            log_result(b"[ME-RPC] buf[8]=", cbuf.add(8).read_volatile() as i32);
+        }
     } else {
         crate::debug_log(b"[ME-RPC] MeVideo fn not found");
     }
 
-    // Test 4: Try calling RPC_simple with video command directly.
-    let rpc_fn = unsafe { core::ptr::read_volatile(&raw const FN_RPC_SIMPLE) };
-    if let Some(rpc) = rpc_fn {
-        crate::debug_log(b"[ME-RPC] calling RPC cmd=0x82 (test)...");
-        // Command 0x82 is a simple unknown command — safe to probe.
-        let ret = unsafe { rpc(0x82i32, 0, 0, 0, 0, 0, 0, 0) };
-        let mut msg = [0u8; 64];
-        let mut mp = crate::me_dump::append_bytes(&mut msg, 0, b"[ME-RPC] RPC 0x82=0x");
-        mp = crate::me_dump::append_hex(&mut msg, mp, ret as u32);
-        crate::debug_log(&msg[..mp]);
-    }
-
     crate::debug_log(b"[ME-RPC] test complete");
+}
+
+fn log_result(prefix: &[u8], val: i32) {
+    let mut msg = [0u8; 64];
+    let mut mp = crate::me_dump::append_bytes(&mut msg, 0, prefix);
+    mp = crate::me_dump::append_bytes(&mut msg, mp, b"0x");
+    mp = crate::me_dump::append_hex(&mut msg, mp, val as u32);
+    crate::debug_log(&msg[..mp]);
 }
