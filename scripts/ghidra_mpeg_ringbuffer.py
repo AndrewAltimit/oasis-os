@@ -160,45 +160,124 @@ log("\n" + "=" * 72)
 log("Decompiling key functions")
 log("=" * 72)
 
-# Priority targets for understanding the ringbuffer freeze
+# Priority targets for understanding the ringbuffer and ME communication
 priority_funcs = [
     "sceMpegRingbufferPut",
     "sceMpegRingbufferConstruct",
+    "sceMpegRingbufferAvailableSize",
     "sceMpegGetAvcAu",
     "sceMpegCreate",
+    "sceMpegRegistStream",
     "sceMpegAvcDecode",
+    "sceMpegAvcDecodeMode",
+    "sceMpegInitAu",
+    "sceMpegInit",
 ]
 
-# Try to decompile by scanning for labeled functions
+# Decompile ALL functions (priority ones first, then the rest)
 listing = currentProgram.getListing()
-func_iter = listing.getFunctions(True)
-decompiled = set()
 
+# Build full function list
+func_iter = listing.getFunctions(True)
+all_funcs = []
 while func_iter.hasNext():
     func = func_iter.next()
-    name = func.getName()
-    if name in priority_funcs:
+    all_funcs.append((func.getEntryPoint().getOffset(), func.getName(),
+                     func.getBody().getNumAddresses()))
+all_funcs.sort()
+
+log("\n--- Function table (%d functions) ---" % len(all_funcs))
+for addr, name, size in all_funcs:
+    log("  0x%08X  %-35s  %d bytes" % (addr, name, size))
+
+# Decompile priority functions first
+decompiled = set()
+for pname in priority_funcs:
+    for addr, name, size in all_funcs:
+        if name == pname:
+            log("\n" + "-" * 72)
+            log("[PRIORITY] %s (0x%08X, %d bytes)" % (name, addr, size))
+            log("-" * 72)
+            code = decompile_at(addr)
+            log(code)
+            decompiled.add(addr)
+
+# Then decompile ALL remaining functions > 20 bytes (internal helpers)
+log("\n" + "=" * 72)
+log("Decompiling all remaining functions (internal helpers)")
+log("=" * 72)
+
+for addr, name, size in all_funcs:
+    if addr not in decompiled and size > 20:
         log("\n" + "-" * 72)
-        log("%s (0x%08X)" % (name, func.getEntryPoint().getOffset()))
+        log("%s (0x%08X, %d bytes)" % (name, addr, size))
         log("-" * 72)
-        code = decompile_at(func.getEntryPoint().getOffset())
+        code = decompile_at(addr)
         log(code)
-        decompiled.add(name)
+        decompiled.add(addr)
 
-# If we didn't find labeled functions, try all functions
-if len(decompiled) < len(priority_funcs):
-    log("\n--- Some functions not found by label, dumping all functions ---")
-    func_iter = listing.getFunctions(True)
-    func_list = []
-    while func_iter.hasNext():
-        func = func_iter.next()
-        func_list.append((func.getEntryPoint().getOffset(), func.getName(),
-                         func.getBody().getNumAddresses()))
+# Look for semaphore and ME-related syscalls in the binary
+log("\n" + "=" * 72)
+log("Searching for semaphore / ME / state validation patterns")
+log("=" * 72)
 
-    for addr, name, size in sorted(func_list):
-        if size > 20:  # Skip tiny stubs
-            log("  0x%08X  %-30s  %d bytes" % (addr, name, size))
+# Known PSP kernel syscall stubs patterns
+import struct
+# Search for "sema" in any strings
+str_results = []
+min_addr = currentProgram.getMinAddress()
+max_addr = currentProgram.getMaxAddress()
+cur = min_addr
+while cur is not None and cur.compareTo(max_addr) < 0:
+    found = memory.findBytes(cur, bytearray(b"sema"), None, True, ConsoleTaskMonitor())
+    if found is None or found.compareTo(max_addr) >= 0:
+        break
+    # Read surrounding bytes for context
+    try:
+        buf = bytearray(32)
+        memory.getBytes(found, buf)
+        txt = ""
+        for b in buf:
+            if 0x20 <= b < 0x7f:
+                txt += chr(b)
+            else:
+                txt += "."
+        str_results.append("  0x%08X: %s" % (found.getOffset(), txt))
+    except:
+        pass
+    cur = found.add(4)
+
+if str_results:
+    log("\nStrings containing 'sema':")
+    for s in str_results:
+        log(s)
+
+# Also search for "SceMpeg" strings
+cur = min_addr
+sce_results = []
+while cur is not None and cur.compareTo(max_addr) < 0:
+    found = memory.findBytes(cur, bytearray(b"SceMpeg"), None, True, ConsoleTaskMonitor())
+    if found is None or found.compareTo(max_addr) >= 0:
+        break
+    try:
+        buf = bytearray(48)
+        memory.getBytes(found, buf)
+        txt = ""
+        for b in buf:
+            if 0x20 <= b < 0x7f:
+                txt += chr(b)
+            else:
+                break
+        sce_results.append("  0x%08X: %s" % (found.getOffset(), txt))
+    except:
+        pass
+    cur = found.add(4)
+
+if sce_results:
+    log("\nStrings containing 'SceMpeg':")
+    for s in sce_results:
+        log(s)
 
 log("\n" + "=" * 72)
-log("Analysis complete.")
+log("Analysis complete. %d functions decompiled." % len(decompiled))
 log("=" * 72)

@@ -166,8 +166,9 @@ pub fn test_real_pmf() {
     static mut PMF_FD: psp::sys::SceUid = psp::sys::SceUid(-1);
     unsafe { PMF_FD = fd; }
 
-    // Seek back to 0 — the callback will read from the beginning
-    unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set); }
+    // DON'T seek to 0 — the callback must read MPEG-PS data only,
+    // NOT the PSMF header. The header is parsed by QueryStreamOffset.
+    // We'll seek to stream_offset (2048) after QueryStreamOffset.
 
     // Ringbuffer callback: reads from the PMF file (exactly like PMF players)
     unsafe extern "C" fn pmf_callback(
@@ -238,24 +239,42 @@ pub fn test_real_pmf() {
         return;
     }
 
-    // Skip QueryStreamOffset — it may modify internal state.
-    // Register video stream — channel 0 = stream_id 0xE0.
+    // CRITICAL: QueryStreamOffset MUST be called before any Put.
+    // It calls AnalyzeMpeg internally, initializing the kernel's demuxer.
+    let mut stream_offset: i32 = 0;
+    let ret = unsafe {
+        psp::sys::sceMpegQueryStreamOffset(
+            mpeg,
+            header.as_ptr() as *mut core::ffi::c_void,
+            &mut stream_offset,
+        )
+    };
+    vlog(&format!("[PMF-TEST] QueryStreamOffset = {ret:#x}, offset={stream_offset}"));
+
+    let mut stream_size: i32 = 0;
+    let ret = unsafe {
+        psp::sys::sceMpegQueryStreamSize(
+            header.as_ptr() as *mut core::ffi::c_void,
+            &mut stream_size,
+        )
+    };
+    vlog(&format!("[PMF-TEST] QueryStreamSize = {ret:#x}, size={stream_size}"));
+
+    // Seek file past PSMF header to stream data.
+    // The ringbuffer callback must read ONLY MPEG-PS data, not the header.
+    unsafe { psp::sys::sceIoLseek(fd, stream_offset as i64, psp::sys::IoWhence::Set) };
+    vlog(&format!("[PMF-TEST] Seeked to offset {stream_offset}"));
+
+    // Register video stream AFTER QueryStreamOffset (order matters!)
     let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
     vlog("[PMF-TEST] Stream registered (channel 0 = 0xE0)");
 
-    // Allocate decode resources BEFORE any Put
+    // Allocate ES buffer + init AU
     let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
     vlog(&format!("[PMF-TEST] MallocAvcEsBuf = {:#x}", es_buf as usize));
-    if es_buf.is_null() {
-        vlog("[PMF-TEST] ES buffer is NULL!");
-    }
     let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
     let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
     vlog(&format!("[PMF-TEST] InitAu = {ret:#x}"));
-
-    // Flush all streams before feeding (some PMF players do this)
-    let ret = unsafe { psp::sys::sceMpegFlushAllStream(mpeg) };
-    vlog(&format!("[PMF-TEST] FlushAllStream = {ret:#x}"));
 
     // Feed + decode loop: 1 packet at a time, GetAvcAu after each.
     let mut total_put = 0i32;

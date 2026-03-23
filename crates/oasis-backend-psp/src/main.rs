@@ -233,9 +233,11 @@ fn psp_main() {
     // load AvMpegBase first, making sceMpegInit fail with 0x8002013a).
     oasis_backend_psp::video::preinit_mpeg();
 
-    // PMF test disabled — crashes on Put when video PES matches registered
-    // stream. All init succeeds, ES buf allocated, but kernel crashes
-    // processing the first video PES. Needs Ghidra deep dive.
+    // PMF test disabled — ffmpeg-generated MPEG-PS crashes the ME's video
+    // decoder. Need a real PSP game PMF (UMD Stream Composer output) to test.
+    // Init sequence is now correct per libpmfplayer analysis:
+    //   Create → AvcDecodeMode → QueryStreamOffset → QueryStreamSize →
+    //   seek(offset) → RegistStream → MallocAvcEsBuf → InitAu → Put
     // oasis_backend_psp::video::test_real_pmf();
 
     // Background worker threads: audio, file I/O, and video decode.
