@@ -77,7 +77,10 @@ unsafe extern "C" fn dump_thread_entry(
             DUMP_STATE.store(0, Ordering::Release);
         }
 
-        // ME RPC and hook modules disabled (caused PRX crash).
+        // Check for ME stub patch request from EBOOT (file-based IPC).
+        // EBOOT writes ".me_patch" after loading AV modules, we patch
+        // the kernel avcodec stubs and write ".me_patched" when done.
+        unsafe { check_patch_request() };
 
         // SAFETY: PSP kernel syscall to sleep.
         unsafe { psp::sys::sceKernelDelayThread(100_000) }; // poll at 10Hz
@@ -724,4 +727,354 @@ fn log_dec(prefix: &[u8], val: u32) {
     let mut p = append_bytes(&mut buf, 0, prefix);
     p = append_dec(&mut buf, p, val);
     crate::debug_log(&buf[..p]);
+}
+
+// ---------------------------------------------------------------------------
+// ME stub patching via file-based IPC with EBOOT
+// ---------------------------------------------------------------------------
+
+const PATCH_REQUEST: &[u8] = b"ms0:/PSP/GAME/OASISOS/.me_patch\0";
+const PATCH_DONE: &[u8] = b"ms0:/PSP/GAME/OASISOS/.me_patched\0";
+
+static PATCH_DONE_FLAG: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Check for patch request file and perform kernel stub patching.
+unsafe fn check_patch_request() {
+    if PATCH_DONE_FLAG.load(core::sync::atomic::Ordering::Relaxed) {
+        return; // Already patched this session.
+    }
+
+    // Check if request file exists.
+    let fd = psp::sys::sceIoOpen(
+        PATCH_REQUEST.as_ptr(),
+        psp::sys::IoOpenFlags::RD_ONLY,
+        0,
+    );
+    if fd < psp::sys::SceUid(0) {
+        return; // No request yet.
+    }
+    psp::sys::sceIoClose(fd);
+
+    // Delete the request file.
+    psp::sys::sceIoRemove(PATCH_REQUEST.as_ptr());
+
+    crate::debug_log(b"[ME-PATCH] request received, patching stubs...");
+
+    // The kernel sceAvcodec_wrapper has DIFFERENT offsets than user-mode
+    // avcodec.prx (which we analyzed in Ghidra). We need to find the
+    // user-mode avcodec that our EBOOT loaded via sceUtilityLoadModule.
+    //
+    // Strategy: scan user memory near sceMpeg_library for the
+    // "Lib-PSP avcodec" version string, then dump the stub area.
+
+    crate::debug_log(b"[ME-PATCH] scanning user memory for avcodec...");
+
+    // Search 0x08800000 to 0x08D00000 for "Lib-PSP avcodec"
+    let needle = b"Lib-PSP avcodec";
+    let mut found_addr = 0u32;
+    let mut addr: u32 = 0x0880_0000;
+    while addr < 0x08D0_0000 - 16 {
+        let byte = core::ptr::read_volatile(addr as *const u8);
+        if byte == b'L' {
+            let slice = core::slice::from_raw_parts(addr as *const u8, 15);
+            if slice == needle {
+                found_addr = addr;
+                break;
+            }
+        }
+        addr += 1;
+    }
+
+    // No user-mode avcodec exists — it's kernel-only.
+    // Scan the kernel sceAvcodec_wrapper for empty stubs (jr $ra; nop).
+    dump_user_modules();
+
+    let avcodec_base = find_kernel_avcodec();
+    if avcodec_base == 0 {
+        crate::debug_log(b"[ME-PATCH] kernel avcodec not found");
+        write_done_file(false);
+        return;
+    }
+
+    let mut msg = [0u8; 64];
+    let mut mp = append_bytes(&mut msg, 0, b"[ME-PATCH] kernel avcodec @0x");
+    mp = append_hex(&mut msg, mp, avcodec_base);
+    crate::debug_log(&msg[..mp]);
+
+    // Get module size.
+    let avcodec_size = find_kernel_avcodec_size();
+    log_dec(b"[ME-PATCH] size=", avcodec_size);
+
+    // Scan for jr $ra; nop patterns (empty stubs).
+    let jr_ra: u32 = 0x03E0_0008;
+    let mut empty_count = 0u32;
+    let scan_end = avcodec_base + avcodec_size;
+    let mut a = avcodec_base;
+    while a < scan_end - 8 {
+        let insn0 = core::ptr::read_volatile(a as *const u32);
+        let insn1 = core::ptr::read_volatile((a + 4) as *const u32);
+        if insn0 == jr_ra && insn1 == 0 {
+            let off = a - avcodec_base;
+            let mut m = [0u8; 64];
+            let mut p = append_bytes(&mut m, 0, b"[ME-PATCH] empty @+0x");
+            p = append_hex(&mut m, p, off);
+            p = append_bytes(&mut m, p, b" (0x");
+            p = append_hex(&mut m, p, a);
+            p = append_bytes(&mut m, p, b")");
+            crate::debug_log(&m[..p]);
+            empty_count += 1;
+        }
+        a += 4;
+    }
+    log_dec(b"[ME-PATCH] empty stubs found: ", empty_count);
+
+    if empty_count == 0 {
+        crate::debug_log(b"[ME-PATCH] no empty stubs to patch");
+        write_done_file(false);
+        return;
+    }
+
+    // Patch the single empty stub at offset 0x2388.
+    // This is likely the ME submission function that sends decode
+    // commands to the ME coprocessor. Try redirecting to
+    // sceMeCore::RPC_dispatch (NID 0xFA398D71) which is the central
+    // ME command sender.
+    let stub_off: u32 = 0x2388;
+    let stub_addr = avcodec_base + stub_off;
+
+    // Verify it's still empty.
+    let insn0 = core::ptr::read_volatile(stub_addr as *const u32);
+    if insn0 != 0x03E0_0008 {
+        crate::debug_log(b"[ME-PATCH] stub not empty anymore?");
+        write_done_file(false);
+        return;
+    }
+
+    // Try multiple ME driver NIDs — we don't know which function
+    // this stub should map to. Try the RPC dispatch first.
+    let candidates: &[(u32, &[u8], &[u8])] = &[
+        // sceMeCore RPC dispatch — the main command sender
+        (0xFA398D71, b"sceMeCore_driver\0", b"RpcDispatch"),
+        // sceMeCore RPC simple — simpler variant
+        (0x635397BB, b"sceMeCore_driver\0", b"RpcSimple"),
+        // sceMeVideo init
+        (0xC441994C, b"sceMeVideo_driver\0", b"VideoInit"),
+    ];
+
+    let mut patched = false;
+    for &(nid, library, label) in candidates {
+        let me_fn = psp::hook::find_function(
+            b"sceMeCodecWrapper\0".as_ptr(),
+            library.as_ptr(),
+            nid,
+        );
+        if let Some(target_ptr) = me_fn {
+            let target = target_ptr as u32;
+            let j_insn = 0x0800_0000 | ((target >> 2) & 0x03FF_FFFF);
+
+            let mut msg = [0u8; 80];
+            let mut mp = append_bytes(&mut msg, 0, b"[ME-PATCH] +0x2388 -> ");
+            mp = append_bytes(&mut msg, mp, label);
+            mp = append_bytes(&mut msg, mp, b" @0x");
+            mp = append_hex(&mut msg, mp, target);
+            crate::debug_log(&msg[..mp]);
+
+            // Write the J instruction.
+            core::ptr::write_volatile(stub_addr as *mut u32, j_insn);
+
+            // Flush caches.
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                stub_addr as *const core::ffi::c_void, 8,
+            );
+            psp::sys::sceKernelIcacheInvalidateRange(
+                stub_addr as *const core::ffi::c_void, 8,
+            );
+
+            patched = true;
+            break; // Use first available
+        }
+    }
+
+    if patched {
+        crate::debug_log(b"[ME-PATCH] stub patched OK!");
+    } else {
+        crate::debug_log(b"[ME-PATCH] no ME fn found to patch with");
+    }
+
+    write_done_file(patched);
+    PATCH_DONE_FLAG.store(true, core::sync::atomic::Ordering::Release);
+}
+
+/// Dump all user-space modules (0x08xxxxxx) for debugging.
+unsafe fn dump_user_modules() {
+    let mut mod_ids = [psp::sys::SceUid(0); 128];
+    let mut count: i32 = 0;
+    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+    let ret = psp::sys::sceKernelGetModuleIdList(
+        mod_ids.as_mut_ptr(), buf_bytes, &mut count,
+    );
+    if ret < 0 || count <= 0 { return; }
+
+    for i in 0..count as usize {
+        let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
+        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+        if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
+            continue;
+        }
+        // Only log user-space modules
+        if info.text_addr < 0x0800_0000 || info.text_addr >= 0x0C00_0000 {
+            continue;
+        }
+        let name_len = info.name.iter().position(|&b| b == 0)
+            .unwrap_or(info.name.len());
+        let mut msg = [0u8; 80];
+        let mut mp = append_bytes(&mut msg, 0, b"[ME-PATCH] user mod: ");
+        mp = append_bytes(&mut msg, mp, &info.name[..name_len]);
+        mp = append_bytes(&mut msg, mp, b" @0x");
+        mp = append_hex(&mut msg, mp, info.text_addr);
+        mp = append_bytes(&mut msg, mp, b" sz=");
+        mp = append_dec(&mut msg, mp, info.text_size);
+        crate::debug_log(&msg[..mp]);
+    }
+}
+
+/// Find the kernel sceAvcodec_wrapper module size.
+fn find_kernel_avcodec_size() -> u32 {
+    let mut mod_ids = [psp::sys::SceUid(0); 128];
+    let mut count: i32 = 0;
+    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+    let ret = unsafe {
+        psp::sys::sceKernelGetModuleIdList(
+            mod_ids.as_mut_ptr(), buf_bytes, &mut count,
+        )
+    };
+    if ret < 0 || count <= 0 { return 0; }
+    for i in 0..count as usize {
+        let mut info: psp::sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
+        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+        if unsafe { psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) } < 0 {
+            continue;
+        }
+        let name_len = info.name.iter().position(|&b| b == 0).unwrap_or(info.name.len());
+        let name = &info.name[..name_len];
+        if contains_bytes(name, b"vcodec") && info.text_addr >= 0x8800_0000 {
+            return info.text_size + info.data_size;
+        }
+    }
+    0
+}
+
+/// Find the kernel sceAvcodec_wrapper module base address.
+fn find_kernel_avcodec() -> u32 {
+    let mut mod_ids = [psp::sys::SceUid(0); 128];
+    let mut count: i32 = 0;
+    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+
+    let ret = unsafe {
+        psp::sys::sceKernelGetModuleIdList(
+            mod_ids.as_mut_ptr(), buf_bytes, &mut count,
+        )
+    };
+    if ret < 0 || count <= 0 {
+        return 0;
+    }
+
+    for i in 0..count as usize {
+        let mut info: psp::sys::SceKernelModuleInfo = unsafe {
+            core::mem::zeroed()
+        };
+        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+        let ret = unsafe {
+            psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info)
+        };
+        if ret < 0 { continue; }
+
+        let name_len = info.name.iter().position(|&b| b == 0)
+            .unwrap_or(info.name.len());
+        let name = &info.name[..name_len];
+
+        // Match "sceAvcodec_wrapper" (kernel module, addr >= 0x88000000).
+        if contains_bytes(name, b"vcodec") && info.text_addr >= 0x8800_0000 {
+            return info.text_addr;
+        }
+    }
+    0
+}
+
+/// Patch the 5 ME submission stubs in kernel sceAvcodec_wrapper.
+///
+/// Replaces J instructions (that jump to user-space sceMpeg) with
+/// J instructions to the real sceMeVideo_driver functions.
+///
+/// Returns true if all stubs were patched successfully.
+unsafe fn patch_kernel_stubs(base: u32) -> bool {
+    // Stub offsets and their target sceMeVideo_driver NIDs.
+    let stubs: [(u32, u32); 5] = [
+        (0x4414, 0xC441994C), // me_open → MeVideo::Init
+        (0x4424, 0x8768915D), // me_scan → MeVideo::ScanHeader
+        (0x4434, 0xE8CD3C75), // me_init → MeVideo::Init2
+        (0x4394, 0x6D68B223), // me_worker → MeVideo::Decode
+        (0x438c, 0x4D78330C), // me_wait → MeVideo::GetEdram
+    ];
+
+    let mut patched = 0u32;
+
+    for (offset, nid) in stubs {
+        let stub_addr = base + offset;
+
+        // Log current instruction at this address.
+        let current = core::ptr::read_volatile(stub_addr as *const u32);
+        let mut pre = [0u8; 64];
+        let mut pp = append_bytes(&mut pre, 0, b"[ME-PATCH] +0x");
+        pp = append_hex(&mut pre, pp, offset);
+        pp = append_bytes(&mut pre, pp, b" was=0x");
+        pp = append_hex(&mut pre, pp, current);
+        crate::debug_log(&pre[..pp]);
+
+        // Resolve the real ME function.
+        let me_fn = psp::hook::find_function(
+            b"sceMeCodecWrapper\0".as_ptr(),
+            b"sceMeVideo_driver\0".as_ptr(),
+            nid,
+        );
+
+        if let Some(target_ptr) = me_fn {
+            let target = target_ptr as u32;
+            let j_insn = 0x0800_0000 | ((target >> 2) & 0x03FF_FFFF);
+
+            // Write the J instruction over the stub.
+            core::ptr::write_volatile(stub_addr as *mut u32, j_insn);
+
+            // Flush caches.
+            psp::sys::sceKernelDcacheWritebackInvalidateRange(
+                stub_addr as *const core::ffi::c_void, 8,
+            );
+            psp::sys::sceKernelIcacheInvalidateRange(
+                stub_addr as *const core::ffi::c_void, 8,
+            );
+
+            patched += 1;
+        }
+    }
+
+    log_dec(b"[ME-PATCH] patched ", patched);
+    crate::debug_log(b"[ME-PATCH] done");
+    patched == 5
+}
+
+/// Write the done file (EBOOT polls for this).
+unsafe fn write_done_file(success: bool) {
+    let fd = psp::sys::sceIoOpen(
+        PATCH_DONE.as_ptr(),
+        psp::sys::IoOpenFlags::WR_ONLY
+            | psp::sys::IoOpenFlags::CREAT
+            | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if fd >= psp::sys::SceUid(0) {
+        let msg: &[u8] = if success { b"OK" } else { b"FAIL" };
+        psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+        psp::sys::sceIoClose(fd);
+    }
 }

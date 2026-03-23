@@ -477,6 +477,88 @@ fn dump_loaded_modules() {
     }
 }
 
+/// Request the kernel PRX to patch avcodec ME submission stubs.
+///
+/// Creates a trigger file that the PRX's dump thread polls for.
+/// Waits up to 3 seconds for the PRX to respond with a done file.
+fn request_me_stub_patch() {
+    static PATCHED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    if PATCHED.load(core::sync::atomic::Ordering::Relaxed) {
+        vlog("[VIDEO] ME stubs already patched");
+        return;
+    }
+
+    vlog("[VIDEO] requesting ME stub patch from PRX...");
+
+    // Delete any stale done file.
+    unsafe {
+        psp::sys::sceIoRemove(
+            b"ms0:/PSP/GAME/OASISOS/.me_patched\0".as_ptr(),
+        );
+    }
+
+    // Write the request file.
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.me_patch\0".as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        )
+    };
+    if fd >= psp::sys::SceUid(0) {
+        unsafe {
+            psp::sys::sceIoWrite(fd, b"1".as_ptr() as *const _, 1);
+            psp::sys::sceIoClose(fd);
+        }
+    } else {
+        vlog("[VIDEO] failed to write patch request");
+        return;
+    }
+
+    // Poll for the done file (PRX patches stubs and creates it).
+    for attempt in 0..30 {
+        // 30 × 100ms = 3 seconds
+        unsafe { psp::sys::sceKernelDelayThread(100_000) };
+
+        let done_fd = unsafe {
+            psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/.me_patched\0".as_ptr(),
+                psp::sys::IoOpenFlags::RD_ONLY,
+                0,
+            )
+        };
+        if done_fd >= psp::sys::SceUid(0) {
+            // Read result.
+            let mut buf = [0u8; 8];
+            let n = unsafe {
+                psp::sys::sceIoRead(done_fd, buf.as_mut_ptr() as *mut _, 8)
+            };
+            unsafe { psp::sys::sceIoClose(done_fd) };
+
+            let ok = n >= 2 && buf[0] == b'O' && buf[1] == b'K';
+            if ok {
+                vlog(&format!("[VIDEO] ME stubs patched! (attempt {attempt})"));
+                PATCHED.store(true, core::sync::atomic::Ordering::Release);
+            } else {
+                vlog("[VIDEO] ME stub patch FAILED");
+            }
+
+            // Clean up files.
+            unsafe {
+                psp::sys::sceIoRemove(
+                    b"ms0:/PSP/GAME/OASISOS/.me_patched\0".as_ptr(),
+                );
+            }
+            return;
+        }
+    }
+
+    vlog("[VIDEO] ME stub patch timeout (PRX not running?)");
+}
+
 /// Extract ME firmware images from flash0 to memory stick.
 ///
 /// These are the encrypted firmware binaries that sceMeCodecWrapper loads
@@ -1877,10 +1959,12 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
-    // Video decode disabled — sceMpegRingbufferPut hangs due to empty
-    // avcodec ME stubs. Kernel stub hooking is WIP.
-    vlog("[VIDEO] video decode disabled (ME stubs WIP), audio-only");
+    // Video decode disabled — kernel stub patching approach inconclusive.
+    // Next: try cooleyes/PMPlayer NAL-based approach (sceMpegGetAvcNalAu)
+    // which bypasses the MPEG-PS demuxer and avcodec stubs entirely.
+    vlog("[VIDEO] video decode disabled (pivoting to NAL approach)");
     return drain_stream_only();
+
     let mut h264 = match SceMpegDecoder::try_init(vid_w, vid_h) {
         Ok(dec) => {
             vlog("[VIDEO] play_stream: sceMpeg decoder initialized");
