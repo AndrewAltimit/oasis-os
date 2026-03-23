@@ -371,6 +371,9 @@ pub fn preinit_mpeg() {
 
     // Dump loaded mpeg/codec modules from memory for Ghidra analysis.
     dump_loaded_modules();
+
+    // Extract ME firmware images from flash0.
+    extract_me_firmware();
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones
@@ -468,6 +471,142 @@ fn dump_loaded_modules() {
             }
         }
     }
+}
+
+/// Extract ME firmware images from flash0 to memory stick.
+///
+/// These are the encrypted firmware binaries that sceMeCodecWrapper loads
+/// onto the Media Engine coprocessor during codec initialization.
+/// First lists flash0 directories to find the actual paths, then copies.
+fn extract_me_firmware() {
+    // ARK-4 CFW intercepts flash0:/kd/ — try multiple device paths.
+    // The ME firmware may be on the raw flash (lflash0:) or a different
+    // partition that ARK doesn't redirect.
+    list_flash0_dir(b"flash0:/kd\0", 0);
+    list_flash0_dir(b"flash1:/\0", 0);
+    list_flash0_dir(b"flash2:/\0", 0);
+    list_flash0_dir(b"flash3:/\0", 0);
+
+    // Try all known paths for ME firmware images.
+    let files: &[(&str, &[u8], &[u8])] = &[
+        // Standard flash0 paths (Sony firmware)
+        ("meimg.img", b"flash0:/kd/resource/meimg.img\0", b"ms0:/PSP/GAME/OASISOS/meimg.img\0"),
+        ("me_blimg.img", b"flash0:/kd/resource/me_blimg.img\0", b"ms0:/PSP/GAME/OASISOS/me_blimg.img\0"),
+        ("me_sdimg.img", b"flash0:/kd/resource/me_sdimg.img\0", b"ms0:/PSP/GAME/OASISOS/me_sdimg.img\0"),
+        ("me_t2img.img", b"flash0:/kd/resource/me_t2img.img\0", b"ms0:/PSP/GAME/OASISOS/me_t2img.img\0"),
+        // Try without /resource/ subdirectory
+        ("meimg_kd", b"flash0:/kd/meimg.img\0", b"ms0:/PSP/GAME/OASISOS/meimg.img\0"),
+        // Try flash3 (some FW versions store ME images separately)
+        ("meimg_f3", b"flash3:/meimg.img\0", b"ms0:/PSP/GAME/OASISOS/meimg.img\0"),
+    ];
+
+    for &(name, src, dst) in files {
+        vlog(&format!("[ME-FW] extracting {name}..."));
+
+        let src_fd = unsafe {
+            psp::sys::sceIoOpen(src.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0)
+        };
+        if src_fd < psp::sys::SceUid(0) {
+            vlog(&format!("[ME-FW] open failed: {name} (fd={:#x})", src_fd.0));
+            continue;
+        }
+
+        // Get file size.
+        let file_size = unsafe {
+            let end = psp::sys::sceIoLseek(src_fd, 0, psp::sys::IoWhence::End);
+            psp::sys::sceIoLseek(src_fd, 0, psp::sys::IoWhence::Set);
+            end as usize
+        };
+        vlog(&format!("[ME-FW] {name}: {file_size} bytes"));
+
+        if file_size == 0 {
+            unsafe { psp::sys::sceIoClose(src_fd) };
+            continue;
+        }
+
+        let dst_fd = unsafe {
+            psp::sys::sceIoOpen(
+                dst.as_ptr(),
+                psp::sys::IoOpenFlags::WR_ONLY
+                    | psp::sys::IoOpenFlags::CREAT
+                    | psp::sys::IoOpenFlags::TRUNC,
+                0o777,
+            )
+        };
+        if dst_fd < psp::sys::SceUid(0) {
+            unsafe { psp::sys::sceIoClose(src_fd) };
+            vlog(&format!("[ME-FW] dst open failed: {name}"));
+            continue;
+        }
+
+        // Copy in 16KB chunks.
+        let mut buf = vec![0u8; 16384];
+        let mut total: usize = 0;
+        loop {
+            let n = unsafe {
+                psp::sys::sceIoRead(src_fd, buf.as_mut_ptr() as *mut _, buf.len() as u32)
+            };
+            if n <= 0 {
+                break;
+            }
+            let w = unsafe {
+                psp::sys::sceIoWrite(dst_fd, buf.as_ptr() as *const _, n as usize)
+            };
+            if w <= 0 {
+                break;
+            }
+            total += w as usize;
+        }
+
+        unsafe {
+            psp::sys::sceIoClose(src_fd);
+            psp::sys::sceIoClose(dst_fd);
+        }
+        vlog(&format!("[ME-FW] wrote {name}: {total} bytes"));
+    }
+}
+
+/// List contents of a flash0 directory via sceIoDopen/Dread/Dclose.
+fn list_flash0_dir(path: &[u8], depth: u8) {
+    let dir_fd = unsafe {
+        psp::sys::sceIoDopen(path.as_ptr())
+    };
+    let path_str = core::str::from_utf8(&path[..path.len() - 1]).unwrap_or("?");
+    if dir_fd < psp::sys::SceUid(0) {
+        vlog(&format!("[ME-FW] dir open failed: {path_str} ({:#x})", dir_fd.0));
+        return;
+    }
+    vlog(&format!("[ME-FW] listing {path_str}"));
+
+    let mut count = 0;
+    loop {
+        let mut entry: psp::sys::SceIoDirent = unsafe { core::mem::zeroed() };
+        let ret = unsafe { psp::sys::sceIoDread(dir_fd, &mut entry) };
+        if ret <= 0 {
+            break;
+        }
+        let name_len = entry.d_name.iter().position(|&b| b == 0)
+            .unwrap_or(entry.d_name.len());
+        let name = unsafe {
+            core::str::from_utf8_unchecked(
+                &*(&entry.d_name[..name_len] as *const [u8])
+            )
+        };
+        let is_dir = entry.d_stat.st_attr.contains(psp::sys::IoStatAttr::IFDIR);
+        let size = entry.d_stat.st_size as u64;
+        let prefix = if depth == 0 { "" } else if depth == 1 { "  " } else { "    " };
+        if is_dir {
+            vlog(&format!("[ME-FW] {prefix}{name}/"));
+        } else {
+            vlog(&format!("[ME-FW] {prefix}{name} ({size})"));
+        }
+        count += 1;
+        if count > 100 {
+            vlog("[ME-FW] (truncated at 100 entries)");
+            break;
+        }
+    }
+    unsafe { psp::sys::sceIoDclose(dir_fd) };
 }
 
 /// Spawn the video decode thread (priority 24, between audio=16 and I/O=32).

@@ -44,7 +44,7 @@ pub fn start_dump_thread() {
             b"OasisMEDump\0".as_ptr(),
             dump_thread_entry,
             0x20, // low priority (background)
-            0x4000, // 16KB stack (enough for module enumeration)
+            0x10000, // 64KB stack (needs room for file copy buffer)
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
         );
@@ -134,17 +134,267 @@ unsafe fn do_dump() {
     // SAFETY: Creating output directory.
     unsafe { ensure_dump_dir() };
 
-    // 1. Dump all loaded kernel modules (binaries + text index).
+    // 1. Extract ME firmware images from flash0 (kernel mode can access kd/).
+    // SAFETY: sceIo calls from kernel thread context.
+    unsafe { extract_me_firmware() };
+
+    // 2. Dump all loaded kernel modules (binaries + text index).
     // SAFETY: Kernel module enumeration and memory read.
     unsafe { dump_kernel_modules() };
 
-    // 2. Probe for codec driver functions via sctrlHENFindFunction.
-    // This finds functions across ALL loaded modules (including ones
-    // not visible to sceKernelGetModuleIdList).
+    // 3. Probe for codec driver functions via sctrlHENFindFunction.
     // SAFETY: CFW API calls.
     unsafe { probe_codec_drivers() };
 
     crate::debug_log(b"[ME-DUMP] dump complete!");
+}
+
+/// Extract ME firmware images from flash0:/kd/resource/ to memory stick.
+///
+/// These are the encrypted firmware binaries that sceMeCodecWrapper loads
+/// onto the Media Engine during codec initialization.
+unsafe fn extract_me_firmware() {
+    crate::debug_log(b"[ME-DUMP] extracting ME firmware...");
+
+    // List flash0:/kd/resource/ to find actual filenames.
+    unsafe { list_kd_resource() };
+
+    // Also list flash0:/kd/ to find all kernel modules.
+    unsafe { list_dir(b"flash0:/kd/\0", b"kd") };
+
+    // Copy ME firmware image (only me_t2img.img exists on FW 6.61).
+    crate::debug_log(b"[ME-DUMP] fw: me_t2img.img");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/resource/me_t2img.img\0",
+            b"ms0:/seplugins/me_dump/me_t2img.img\0",
+        );
+    }
+
+    // Copy all codec-related PRX files from flash0:/kd/.
+    crate::debug_log(b"[ME-DUMP] fw: me_wrapper.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/me_wrapper.prx\0",
+            b"ms0:/seplugins/me_dump/me_wrapper.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: avcodec.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/avcodec.prx\0",
+            b"ms0:/seplugins/me_dump/avcodec.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: mpeg.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/mpeg.prx\0",
+            b"ms0:/seplugins/me_dump/mpeg.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: mpeg_vsh.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/mpeg_vsh.prx\0",
+            b"ms0:/seplugins/me_dump/mpeg_vsh.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: videocodec_260.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/videocodec_260.prx\0",
+            b"ms0:/seplugins/me_dump/videocodec_260.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: codec_09g.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/codec_09g.prx\0",
+            b"ms0:/seplugins/me_dump/codec_09g.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] fw: mpegbase_260.prx");
+    unsafe {
+        copy_file(
+            b"flash0:/kd/mpegbase_260.prx\0",
+            b"ms0:/seplugins/me_dump/mpegbase_260.prx\0",
+        );
+    }
+
+    crate::debug_log(b"[ME-DUMP] firmware extraction done");
+}
+
+/// List a directory and write results to a text file + debug log.
+unsafe fn list_dir(path: &[u8], label: &[u8]) {
+    let dir_fd = unsafe {
+        psp::sys::sceIoDopen(path.as_ptr())
+    };
+    if dir_fd < psp::sys::SceUid(0) {
+        let mut msg = [0u8; 80];
+        let mut mp = append_bytes(&mut msg, 0, b"[ME-DUMP] dir fail: ");
+        mp = append_bytes(&mut msg, mp, label);
+        mp = append_bytes(&mut msg, mp, b" err=0x");
+        mp = append_hex(&mut msg, mp, dir_fd.0 as u32);
+        crate::debug_log(&msg[..mp]);
+        return;
+    }
+
+    let mut list = [0u8; 4096];
+    let mut lp = 0;
+    let mut count = 0u32;
+
+    loop {
+        let mut entry: psp::sys::SceIoDirent = unsafe { core::mem::zeroed() };
+        let ret = unsafe { psp::sys::sceIoDread(dir_fd, &mut entry) };
+        if ret <= 0 {
+            break;
+        }
+        let name_len = entry.d_name.iter().position(|&b| b == 0)
+            .unwrap_or(entry.d_name.len());
+        let name = &entry.d_name[..name_len];
+        let size = entry.d_stat.st_size as u32;
+
+        lp = append_bytes(&mut list, lp, name);
+        lp = append_bytes(&mut list, lp, b" (");
+        lp = append_dec(&mut list, lp, size);
+        lp = append_bytes(&mut list, lp, b")\n");
+
+        // Also log to debug.
+        let mut msg = [0u8; 80];
+        let mut mp = append_bytes(&mut msg, 0, b"[ME-DUMP] ");
+        mp = append_bytes(&mut msg, mp, label);
+        mp = append_bytes(&mut msg, mp, b"/ ");
+        mp = append_bytes(&mut msg, mp, name);
+        mp = append_bytes(&mut msg, mp, b" (");
+        mp = append_dec(&mut msg, mp, size);
+        mp = append_bytes(&mut msg, mp, b")");
+        crate::debug_log(&msg[..mp]);
+
+        count += 1;
+        if count > 200 {
+            break;
+        }
+    }
+    unsafe { psp::sys::sceIoDclose(dir_fd) };
+
+    // Write listing to file.
+    let mut out_path = [0u8; 64];
+    let mut op = append_bytes(&mut out_path, 0, b"ms0:/seplugins/me_dump/");
+    op = append_bytes(&mut out_path, op, label);
+    op = append_bytes(&mut out_path, op, b"_listing.txt\0");
+    let _ = op;
+    unsafe { write_file(&out_path, &list[..lp]) };
+}
+
+/// List flash0:/kd/resource/ specifically.
+unsafe fn list_kd_resource() {
+    unsafe { list_dir(b"flash0:/kd/resource/\0", b"kd_resource") };
+}
+
+/// Copy a file from src to dst using sceIo.
+/// Reads in 8KB chunks to avoid stack overflow in kernel thread.
+unsafe fn copy_file(src: &[u8], dst: &[u8]) {
+    crate::debug_log(b"[ME-DUMP] sceIoOpen src...");
+
+    // SAFETY: Opening source file for reading.
+    let src_fd = unsafe {
+        psp::sys::sceIoOpen(
+            src.as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY,
+            0,
+        )
+    };
+
+    log_hex(b"[ME-DUMP] src fd=", src_fd.0 as u32);
+
+    if src_fd < psp::sys::SceUid(0) {
+        crate::debug_log(b"[ME-DUMP] src open FAILED");
+        return;
+    }
+
+    crate::debug_log(b"[ME-DUMP] sceIoLseek...");
+
+    // Get file size via seek.
+    // SAFETY: sceIoLseek to end and back.
+    let file_size = unsafe {
+        let end = psp::sys::sceIoLseek(src_fd, 0, psp::sys::IoWhence::End);
+        psp::sys::sceIoLseek(src_fd, 0, psp::sys::IoWhence::Set);
+        end as usize
+    };
+
+    log_dec(b"[ME-DUMP] file size=", file_size as u32);
+
+    if file_size == 0 {
+        // SAFETY: Close source fd.
+        unsafe { psp::sys::sceIoClose(src_fd) };
+        crate::debug_log(b"[ME-DUMP] empty file, skipped");
+        return;
+    }
+
+    // SAFETY: Opening destination file for writing.
+    let dst_fd = unsafe {
+        psp::sys::sceIoOpen(
+            dst.as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        )
+    };
+    if dst_fd < psp::sys::SceUid(0) {
+        // SAFETY: Close source fd on error.
+        unsafe { psp::sys::sceIoClose(src_fd) };
+        crate::debug_log(b"[ME-DUMP] dst open FAILED");
+        return;
+    }
+
+    // Copy in 4KB chunks (stack buffer, safe with 64KB thread stack).
+    let mut buf = [0u8; 4096];
+    let mut total_written: usize = 0;
+
+    loop {
+        // SAFETY: Reading from flash0 file.
+        let n = unsafe {
+            psp::sys::sceIoRead(
+                src_fd,
+                buf.as_mut_ptr() as *mut _,
+                buf.len() as u32,
+            )
+        };
+        if n <= 0 {
+            break;
+        }
+        let n = n as usize;
+
+        // SAFETY: Writing to memory stick file.
+        let w = unsafe {
+            psp::sys::sceIoWrite(
+                dst_fd,
+                buf.as_ptr() as *const _,
+                n,
+            )
+        };
+        if w <= 0 {
+            crate::debug_log(b"[ME-DUMP] write error during copy");
+            break;
+        }
+        total_written += w as usize;
+    }
+
+    // SAFETY: Close both file descriptors.
+    unsafe {
+        psp::sys::sceIoClose(src_fd);
+        psp::sys::sceIoClose(dst_fd);
+    }
+
+    log_dec(b"[ME-DUMP] copied bytes=", total_written as u32);
 }
 
 /// Enumerate and dump ALL loaded kernel modules as binary files.
