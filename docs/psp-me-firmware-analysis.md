@@ -99,21 +99,123 @@ Extracted from kernel mode via our PRX plugin.
 - `flash0:/` root listing works from user mode (shows kd/, vsh/, font/, data/, dic/, codepage/)
 - `flash0:/vsh/resource/` is accessible from user mode (contains .rco UI resources)
 
-## ME Communication Protocol: RPC
+## ME Communication Protocol: RPC (Fully Reverse-Engineered)
 
-The ME uses a Remote Procedure Call (RPC) mechanism, evidenced by:
+Disassembly of `sceMeCore::0xFA398D71` (the RPC dispatch function) reveals
+the complete protocol:
 
-- Semaphore `SceMeRpc` — synchronization primitive for RPC calls
-- Event `SceMediaEngineRpc` — RPC command/response events
-- Event `SceMediaEngineRpcWait` — blocking wait for RPC completion
-- Event `SceMediaEngineAvcPower` — AVC-specific power state events
-- String `"old ME partition"` — references ME memory partition management
+### Command Buffer: 0xBFC00600
 
-The main CPU sends commands to the ME by:
-1. Writing command parameters to shared uncached memory
-2. Signaling the ME via the RPC event
-3. Waiting on `SceMediaEngineRpcWait` for completion
-4. Reading results from shared memory
+The ME command buffer is at physical address **0xBFC00600** (in the ME's
+boot ROM / shared memory region):
+
+```
+Offset  Size  Field
+0x00    4     Command ID (determines operation)
+0x04    4     (padding/unused)
+0x08    4     Parameter 1 (codec buffer pointer, etc.)
+0x0C    4     Parameter 2
+0x10    4     Parameter 3
+0x14    4     Parameter 4
+0x18    4     Parameter 5
+0x1C    4     Parameter 6
+0x20    4     Parameter 7
+0x24    4     Parameter 8
+0x28    4     Return value (written by ME after command completes)
+```
+
+### RPC Protocol Sequence
+
+```
+1. WaitSema(SceMeRpc, 1, 0)     — acquire exclusive ME access
+2. Write cmd ID to 0xBFC00600
+3. Write params to 0xBFC00608..0xBFC00624
+4. DcacheWritebackInvalidate(0xBFC00600, size)  — flush to physical RAM
+5. sceSysregMeResetEnable()      — trigger ME interrupt/wakeup
+6. WaitEventFlag(SceMediaEngineRpc, 1, WAIT_AND|CLEAR, timeout=0)
+7. Read return value from 0xBFC00628
+8. SignalSema(SceMeRpc, 1)       — release ME access
+```
+
+### Synchronization Primitives
+
+- **SceMeRpc** — semaphore (initial count 1), stored at module BSS + 0x7544
+- **SceMediaEngineRpc** — event flag, stored at module BSS + 0x7548
+- **SceMediaEngineAvcPower** — event flag for AVC power state
+- **0xBFC00718** — ME power state register (cached by sceMePower functions)
+
+### ME RPC Command Table
+
+Extracted from disassembly of all 47 ME driver functions:
+
+| CMD | Hex | Function | Driver |
+|-----|-----|----------|--------|
+| 2 | 0x0002 | VideocodecOpen | sceMeVideo |
+| 9 | 0x0009 | AudiocodecInit | sceMeAudio |
+| 36 | 0x0024 | VideocodecInit | sceMeVideo |
+| 37 | 0x0025 | VideocodecScanHeader | sceMeVideo |
+| 38 | 0x0026 | VideocodecDecode | sceMeVideo |
+| 96 | 0x0060 | AudiocodecInit2 | sceMeAudio |
+| 97 | 0x0061 | AudiocodecRelease | sceMeAudio |
+| 100 | 0x0064 | AudiocodecDecode | sceMeAudio |
+| 102 | 0x0066 | AudiocodecCheckNeedMem | sceMeAudio |
+| 103 | 0x0067 | AudiocodecReset | sceMeAudio |
+| 105 | 0x0069 | AudiocodecGetInfo | sceMeAudio |
+| 106 | 0x006A | MpegbaseCSC (color space convert) | sceMeVideo |
+| 115 | 0x0073 | AudiocodecStep | sceMeAudio |
+| 130 | 0x0082 | Unknown | — |
+| 138 | 0x008A | Unknown | — |
+| 146 | 0x0092 | Unknown | — |
+| 151 | 0x0097 | Unknown | — |
+| 225 | 0x00E1 | VideocodecRelease | sceMeVideo |
+| 384 | 0x0180 | ME_AllocMemory | sceMeMemory |
+| 385 | 0x0181 | ME_FreeMemory | sceMeMemory |
+| 387 | 0x0183 | ME_FreeMem2 | sceMePower |
+| 389 | 0x0185 | Unknown | — |
+
+### Version Check Constant
+
+All sceMeVideo functions check `buf[0]` against **0x05100601** before
+processing. This is the codec version identifier — the same value we saw
+in Ghidra analysis of `avcodec.prx`. If the codec buffer's version field
+doesn't match, the function returns -2 (invalid version).
+
+### ME Boot Sequence (MODULE_ENTRY at 0x88224900)
+
+The module entry point performs ME hardware initialization:
+
+```
+1. Read SysCtrl register 0xBC100000 — check if ME is already running
+2. If not running:
+   a. Write 0 to SysCtrl+0x40 (ME reset control)
+   b. Write 7 to SysCtrl+0x50 (ME clock enable: bus+ME+AW)
+   c. Write -1 to SysCtrl+0x04 (clear interrupt flags)
+   d. sync
+   e. Invalidate I-cache (16KB, 64-byte lines)
+   f. Invalidate D-cache (16KB, 64-byte lines)
+   g. Configure COP0 registers (Status, Cause)
+   h. Write 1 to 0xBCC00010 (ME power/clock controller)
+   i. Poll 0xBCC00010 until bit 0 clears (ME boot complete)
+   j. Configure ME memory controller (0xBCC00070, 0xBCC00030, 0xBCC00040)
+   k. Jump to module init at 0x882268A8 with SP=0x88400000
+```
+
+### Key Hardware Registers
+
+| Register | Purpose |
+|----------|---------|
+| 0xBC100000 | SysCtrl: ME running status |
+| 0xBC100004 | SysCtrl: interrupt flags |
+| 0xBC100040 | SysCtrl: ME reset control |
+| 0xBC100050 | SysCtrl: ME clock enable |
+| 0xBC100070 | SysCtrl: ME power state |
+| 0xBCC00010 | ME clock controller: boot trigger |
+| 0xBCC00030 | ME memory controller |
+| 0xBCC00040 | ME memory controller |
+| 0xBCC00070 | ME memory controller |
+| 0xBFC00600 | ME command buffer (40 bytes) |
+| 0xBFC00628 | ME return value |
+| 0xBFC00718 | ME power state cache |
 
 ## NID Tables: ME Driver Interfaces
 
