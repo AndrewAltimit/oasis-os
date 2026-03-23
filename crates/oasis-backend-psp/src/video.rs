@@ -63,6 +63,10 @@ pub struct StreamFrame {
     pub raw_avcc: Option<Vec<u8>>,
     /// AVCC NAL length prefix size (typically 4).
     pub nal_prefix_size: u8,
+    /// SPS from MP4 avcC atom (raw NAL, no start codes).
+    pub avcc_sps: Option<Vec<u8>>,
+    /// PPS from MP4 avcC atom (raw NAL, no start codes).
+    pub avcc_pps: Option<Vec<u8>>,
     pub timestamp_secs: f64,
     pub is_keyframe: bool,
 }
@@ -1038,23 +1042,27 @@ struct NalDecoder {
 }
 
 impl NalDecoder {
-    /// Initialize the NAL decoder from the first keyframe's data.
+    /// Initialize the NAL decoder from the first keyframe.
     ///
-    /// Extracts SPS/PPS from the H.264 stream and sets up sceMpeg
-    /// for NAL-based decode.
-    fn try_init(first_au: &[u8]) -> Result<Self, String> {
+    /// Uses SPS/PPS from the MP4 avcC atom if available (preferred),
+    /// otherwise extracts from the Annex B stream.
+    fn try_init(first_frame: &StreamFrame) -> Result<Self, String> {
         vlog("[VIDEO] NalDecoder::try_init");
         crate::audio::load_av_modules_once_pub();
 
-        // Extract SPS and PPS from the Annex B stream.
-        let (sps, pps) = extract_sps_pps(first_au)
-            .ok_or_else(|| "no SPS/PPS found in first AU".to_string())?;
+        // Prefer SPS/PPS from MP4 avcC atom (exact match for ME expectations).
+        let (sps, pps) = if let (Some(s), Some(p)) = (&first_frame.avcc_sps, &first_frame.avcc_pps) {
+            (s.clone(), p.clone())
+        } else {
+            extract_sps_pps(&first_frame.data)
+                .ok_or_else(|| "no SPS/PPS found".to_string())?
+        };
         vlog(&format!(
             "[VIDEO] NAL: SPS={} bytes, PPS={} bytes", sps.len(), pps.len()
         ));
 
         // Parse dimensions from SPS.
-        let (width, height) = parse_sps_dimensions(first_au)
+        let (width, height) = parse_sps_dimensions(&first_frame.data)
             .unwrap_or((480, 272));
         let frame_width = if width > 480 { 768 } else { 512 };
         vlog(&format!("[VIDEO] NAL: {width}x{height}, stride={frame_width}"));
@@ -1132,6 +1140,9 @@ impl NalDecoder {
         }
         vlog("[VIDEO] NAL: sceMpegInitAu OK");
 
+        // Skip AvcDecodeMode for NAL approach — cooleyes doesn't call it.
+        // The 0x80628002 error from AvcDecode may be about something else.
+
         // Output pixel buffer.
         let out_h = ((height + 15) / 16) * 16;
         let output_buf = vec![0u8; frame_width as usize * out_h as usize * 4];
@@ -1144,7 +1155,7 @@ impl NalDecoder {
             au,
             sps,
             pps,
-            nal_prefix_size: 0, // Annex B uses start codes, not length prefix
+            nal_prefix_size: first_frame.nal_prefix_size as i32,
             output_buf,
             pic_num: 0,
             frame_width,
@@ -1196,6 +1207,42 @@ impl NalDecoder {
             nal_size: nal_len,
             mode,
         };
+
+        // Always log first frame details.
+        if call_num == 0 {
+            vlog(&format!(
+                "[VIDEO] NAL: sps={} pps={} nal={} prefix={} mode={}",
+                self.sps.len(), self.pps.len(), nal_len, prefix, mode
+            ));
+            // Hex dump first 16 bytes.
+            let dump_len = (nal_len as usize).min(16);
+            let slice = unsafe { core::slice::from_raw_parts(nal_buf, dump_len) };
+            let hex_chars = b"0123456789abcdef";
+            let mut hex_buf = [0u8; 64];
+            let mut hp = 0;
+            for &b in slice {
+                if hp + 3 > hex_buf.len() { break; }
+                hex_buf[hp] = hex_chars[(b >> 4) as usize];
+                hex_buf[hp + 1] = hex_chars[(b & 0xF) as usize];
+                hex_buf[hp + 2] = b' ';
+                hp += 3;
+            }
+            let hex_str = core::str::from_utf8(&hex_buf[..hp]).unwrap_or("?");
+            vlog(&format!("[VIDEO] NAL: data={hex_str}"));
+            // Also log SPS first bytes.
+            let sps_dump = self.sps.len().min(8);
+            let mut sbuf = [0u8; 32];
+            let mut sp = 0;
+            for &b in &self.sps[..sps_dump] {
+                if sp + 3 > sbuf.len() { break; }
+                sbuf[sp] = hex_chars[(b >> 4) as usize];
+                sbuf[sp + 1] = hex_chars[(b & 0xF) as usize];
+                sbuf[sp + 2] = b' ';
+                sp += 3;
+            }
+            let sps_str = core::str::from_utf8(&sbuf[..sp]).unwrap_or("?");
+            vlog(&format!("[VIDEO] NAL: sps={sps_str}"));
+        }
 
         // Flush cache on NAL data + struct.
         unsafe {
@@ -2390,7 +2437,7 @@ fn play_stream() -> bool {
     // NAL-based decode (cooleyes/PMPlayer approach).
     // Feeds raw H.264 NALs directly via sceMpegGetAvcNalAu, bypassing
     // the MPEG-PS demuxer and broken avcodec stubs.
-    let mut nal_dec = match NalDecoder::try_init(&first_frame.data) {
+    let mut nal_dec = match NalDecoder::try_init(&first_frame) {
         Ok(dec) => {
             vlog("[VIDEO] NAL decoder initialized OK");
             dec

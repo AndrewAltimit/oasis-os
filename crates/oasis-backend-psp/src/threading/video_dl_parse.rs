@@ -238,10 +238,15 @@ fn push_video_sample(
         },
     };
 
-    // Include raw AVCC data for the NAL decoder (avoids Annex B→AVCC roundtrip).
-    let (raw_avcc, prefix_size) = match vt.avcc.as_ref() {
-        Some(avcc) => (Some(raw_data.to_vec()), avcc.nal_length_size as u8),
-        None => (None, 4),
+    // Include raw AVCC data + SPS/PPS for the NAL decoder.
+    let (raw_avcc, prefix_size, avcc_sps, avcc_pps) = match vt.avcc.as_ref() {
+        Some(avcc) => (
+            Some(raw_data.to_vec()),
+            avcc.nal_length_size as u8,
+            Some(avcc.sps.clone()),
+            Some(avcc.pps.clone()),
+        ),
+        None => (None, 4, None, None),
     };
 
     // Blocking push with backpressure (same pattern as audio queue).
@@ -249,6 +254,8 @@ fn push_video_sample(
         data: annex_b,
         raw_avcc,
         nal_prefix_size: prefix_size,
+        avcc_sps,
+        avcc_pps,
         timestamp_secs,
         is_keyframe,
     };

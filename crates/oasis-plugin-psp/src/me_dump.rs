@@ -851,15 +851,16 @@ unsafe fn check_patch_request() {
         return;
     }
 
-    // Try multiple ME driver NIDs — we don't know which function
-    // this stub should map to. Try the RPC dispatch first.
+    // Try the ME video decode function (sceMeVideo::6D68B223, RPC cmd 0x27).
+    // sceMpegAvcDecode calls through avcodec, hits the empty stub, fails.
+    // Patching it with the actual ME decode function should fix it.
     let candidates: &[(u32, &[u8], &[u8])] = &[
-        // sceMeCore RPC dispatch — the main command sender
+        // sceMeVideo decode/step — RPC cmd 0x27 (most likely for AvcDecode)
+        (0x6D68B223, b"sceMeVideo_driver\0", b"MeVideoDecode"),
+        // sceMeVideo init — RPC cmd 0x24 (fallback)
+        (0xC441994C, b"sceMeVideo_driver\0", b"MeVideoInit"),
+        // sceMeCore RPC dispatch — generic fallback
         (0xFA398D71, b"sceMeCore_driver\0", b"RpcDispatch"),
-        // sceMeCore RPC simple — simpler variant
-        (0x635397BB, b"sceMeCore_driver\0", b"RpcSimple"),
-        // sceMeVideo init
-        (0xC441994C, b"sceMeVideo_driver\0", b"VideoInit"),
     ];
 
     let mut patched = false;

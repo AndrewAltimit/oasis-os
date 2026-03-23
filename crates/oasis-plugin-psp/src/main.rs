@@ -100,9 +100,9 @@ fn psp_main() {
             if let Some(fn_ptr) = ptr {
                 let boot_fn: unsafe extern "C" fn(i32) -> i32 =
                     core::mem::transmute(fn_ptr);
-                // Try mode 4 first (from our disassembly — loads full codec firmware).
-                // cooleyesBridge used mode 1, but NID 0x5DFF5C50 accepts 1-4.
-                let ret = boot_fn(4);
+                // Try mode 2 — from our disassembly, mode 1=boot, 2=video,
+                // 3=shutdown, 4=special. Mode 2 might be "boot for video decode".
+                let ret = boot_fn(2);
                 let mut msg = [0u8; 48];
                 let mut p = 0;
                 let prefix = b"[OASIS] MeBootStart=0x";
