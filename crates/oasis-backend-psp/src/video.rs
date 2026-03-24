@@ -436,35 +436,11 @@ pub fn test_real_pmf() {
 /// is called, which would otherwise put the MPEG library in a state where
 /// `sceMpegInit` returns `0x8002013a` (library already exists).
 pub fn preinit_mpeg() {
-    // Exact PMPlayer sequence:
-    // 1. sceUtilityLoadAvModule(0)
-    // 2. kuKernelLoadModule("flash0:/kd/mpeg_vsh.prx")
-    // 3. sceKernelStartModule
-    // 4. sceMpegInit
-
-    let av = unsafe { psp::sys::sceUtilityLoadAvModule(psp::sys::AvModule::AvCodec) };
-    vlog(&format!("[VIDEO] LoadAvModule(0)={av:#x}"));
-
-    let vsh = unsafe {
-        psp::sys::kubridge::kuKernelLoadModule(
-            b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(), 0, core::ptr::null_mut(),
-        )
-    };
-    vlog(&format!("[VIDEO] ku mpeg_vsh={:#x}", vsh.0));
-
-    if vsh >= psp::sys::SceUid(0) {
-        let mut status: i32 = 0;
-        let r = unsafe {
-            psp::sys::sceKernelStartModule(
-                vsh, 0, 0 as *mut core::ffi::c_void,
-                &mut status, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] vsh start={r:#x} st={status}"));
-    }
-
-    let r = unsafe { psp::sys::sceMpegInit() };
-    vlog(&format!("[VIDEO] sceMpegInit={r:#x}"));
+    // Load AV modules normally. The kernel PRX hooks sceMpegAvcDecode
+    // to route through sceMeVideo_driver when the standard path fails.
+    crate::audio::load_av_modules_once_pub();
+    let ret = unsafe { psp::sys::sceMpegInit() };
+    vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones

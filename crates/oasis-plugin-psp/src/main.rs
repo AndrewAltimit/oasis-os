@@ -61,101 +61,134 @@ fn debug_log(msg: &[u8]) {
     }
 }
 
-/// Resolve sceMpeg functions from the VSH library and write to file.
-///
-/// The VSH's sceMpegVsh_library exports the same sceMpeg NIDs but
-/// connects to the ME through the correct kernel path. We resolve
-/// these at runtime and write the addresses for the EBOOT to use.
-///
-/// Also boots the ME via sceMeBootStart.
-unsafe fn resolve_vsh_mpeg_functions() {
-    // NIDs we need to resolve from sceMpegVsh_library.
-    // Format: (NID, name for logging)
-    let nids: [(u32, &[u8]); 12] = [
-        (0x682A619B, b"Init"),
-        (0x874624D6, b"Finish"),
-        (0xC132E22F, b"QueryMemSize"),
-        (0xD8C5F121, b"Create"),
-        (0x606A4649, b"Delete"),
-        (0x167AFD9E, b"InitAu"),
-        (0xA780CF7E, b"MallocEsBuf"),
-        (0xCEB870B1, b"FreeEsBuf"),
-        (0x11F95CF1, b"GetNalAu"),
-        (0x0E3C2E9D, b"AvcDecode"),
-        (0xCF3547A2, b"DecDetail2"),
-        (0xA11C7026, b"DecMode"),
-    ];
+/// Resolved sceMeVideo_driver::Decode function pointer.
+static mut ME_VIDEO_DECODE_FN: Option<unsafe extern "C" fn(i32, *mut u32) -> i32> = None;
 
-    let mut addrs = [0u32; 12];
-    let mut resolved = 0u32;
+/// Original sceMpegAvcDecode function pointer (for chaining).
+static mut ORIGINAL_AVC_DECODE: *mut u8 = core::ptr::null_mut();
 
-    for (i, &(nid, _name)) in nids.iter().enumerate() {
-        let ptr = psp::hook::find_function(
-            b"sceMpegVsh_library\0".as_ptr(),
-            b"sceMpeg\0".as_ptr(),
-            nid,
-        );
-        if let Some(p) = ptr {
-            addrs[i] = p as u32;
-            resolved += 1;
+/// Our hook for sceMpegAvcDecode.
+///
+/// When the EBOOT calls sceMpegAvcDecode, this intercept runs instead.
+/// We call the original first — if it returns AVC_DECODE_FATAL (0x80628002),
+/// we try calling sceMeVideo_driver::Decode directly as a fallback.
+unsafe extern "C" fn hooked_avc_decode(
+    mpeg: *mut core::ffi::c_void,
+    au: *mut core::ffi::c_void,
+    frame_width: i32,
+    buffer: *mut core::ffi::c_void,
+    init: *mut i32,
+) -> i32 {
+    // Call the original sceMpegAvcDecode.
+    let original: unsafe extern "C" fn(
+        *mut core::ffi::c_void, *mut core::ffi::c_void, i32,
+        *mut core::ffi::c_void, *mut i32,
+    ) -> i32 = core::mem::transmute(ORIGINAL_AVC_DECODE);
+    let ret = original(mpeg, au, frame_width, buffer, init);
+
+    // If it succeeds, great — return the result.
+    if ret >= 0 {
+        return ret;
+    }
+
+    // If FATAL (0x80628002), try ME direct decode.
+    if ret == 0x80628002_u32 as i32 {
+        if let Some(me_decode) = core::ptr::read_volatile(&raw const ME_VIDEO_DECODE_FN) {
+            // sceMeVideo::Decode takes (sub_cmd, codec_buf_ptr).
+            // The codec_buf is inside the sceMpeg AU structure.
+            // For now, just call with the AU pointer — the ME driver
+            // should extract what it needs.
+            // TODO: map sceMpeg AU → sceMeVideo codec_buf correctly
+            return me_decode(0x26, au as *mut u32); // cmd 0x26 = decode
         }
     }
 
-    // Also resolve sceMpegBaseCscAvc from sceMpegbase.
-    let csc_ptr = psp::hook::find_function(
-        b"sceMpegVsh_library\0".as_ptr(),
-        b"sceMpegbase\0".as_ptr(),
-        0x91929A21, // sceMpegBaseCscAvc
-    );
+    ret
+}
 
-    // Log results.
-    let mut msg = [0u8; 48];
-    let mut mp = me_dump::append_bytes(&mut msg, 0, b"[OASIS] VSH mpeg: ");
-    mp = me_dump::append_dec(&mut msg, mp, resolved);
-    mp = me_dump::append_bytes(&mut msg, mp, b"/12 resolved");
-    debug_log(&msg[..mp]);
-
-    // Write addresses to file for EBOOT.
-    let fd = psp::sys::sceIoOpen(
-        b"ms0:/PSP/GAME/OASISOS/.me_vsh_addrs\0".as_ptr(),
-        psp::sys::IoOpenFlags::WR_ONLY
-            | psp::sys::IoOpenFlags::CREAT
-            | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if fd >= psp::sys::SceUid(0) {
-        // Write 12 u32 addresses + 1 u32 for CscAvc = 52 bytes.
-        psp::sys::sceIoWrite(
-            fd,
-            addrs.as_ptr() as *const _,
-            48, // 12 * 4
-        );
-        let csc_addr = csc_ptr.map(|p| p as u32).unwrap_or(0);
-        psp::sys::sceIoWrite(
-            fd,
-            &csc_addr as *const u32 as *const _,
-            4,
-        );
-        psp::sys::sceIoClose(fd);
-        debug_log(b"[OASIS] VSH addrs written");
-    }
+/// Boot the ME and hook sceMpegAvcDecode syscall.
+unsafe fn setup_me_decode_hook() {
+    debug_log(b"[OASIS] setting up ME decode hook...");
 
     // Boot the ME.
     let boot_ptr = psp::hook::find_function(
         b"sceMeCodecWrapper\0".as_ptr(),
         b"sceMeCore_driver\0".as_ptr(),
-        0x5DFF5C50,
+        0x5DFF5C50, // sceMeBootStart660
     );
     if let Some(fn_ptr) = boot_ptr {
         let boot_fn: unsafe extern "C" fn(i32) -> i32 =
             core::mem::transmute(fn_ptr);
         let ret = boot_fn(1);
-        let mut m2 = [0u8; 48];
-        let mut p2 = me_dump::append_bytes(&mut m2, 0, b"[OASIS] MeBoot=0x");
-        p2 = me_dump::append_hex(&mut m2, p2, ret as u32);
-        debug_log(&m2[..p2]);
+        let mut m = [0u8; 48];
+        let mut p = me_dump::append_bytes(&mut m, 0, b"[OASIS] MeBoot=0x");
+        p = me_dump::append_hex(&mut m, p, ret as u32);
+        debug_log(&m[..p]);
     } else {
         debug_log(b"[OASIS] MeBoot fn not found");
+    }
+
+    // Resolve sceMeVideo_driver::Decode.
+    let decode_ptr = psp::hook::find_function(
+        b"sceMeCodecWrapper\0".as_ptr(),
+        b"sceMeVideo_driver\0".as_ptr(),
+        0x6D68B223, // Decode function
+    );
+    if let Some(ptr) = decode_ptr {
+        ME_VIDEO_DECODE_FN = Some(core::mem::transmute(ptr));
+        debug_log(b"[OASIS] MeVideoDecode resolved");
+    } else {
+        debug_log(b"[OASIS] MeVideoDecode NOT found");
+        return;
+    }
+
+    // Find sceMpegAvcDecode in the loaded sceMpeg_library.
+    // NID 0x0E3C2E9D
+    let avc_decode_ptr = psp::hook::find_function(
+        b"sceMpeg_library\0".as_ptr(),
+        b"sceMpeg\0".as_ptr(),
+        0x0E3C2E9D,
+    );
+    if let Some(ptr) = avc_decode_ptr {
+        ORIGINAL_AVC_DECODE = ptr;
+        let mut m = [0u8; 48];
+        let mut p = me_dump::append_bytes(&mut m, 0, b"[OASIS] AvcDecode @0x");
+        p = me_dump::append_hex(&mut m, p, ptr as u32);
+        debug_log(&m[..p]);
+
+        // Hook the syscall.
+        let ret = psp::sys::sctrlHENPatchSyscall(
+            ptr,
+            hooked_avc_decode as *mut u8,
+        );
+        let mut m2 = [0u8; 48];
+        let mut p2 = me_dump::append_bytes(&mut m2, 0, b"[OASIS] hook ret=0x");
+        p2 = me_dump::append_hex(&mut m2, p2, ret as u32);
+        debug_log(&m2[..p2]);
+
+        if ret >= 0 {
+            debug_log(b"[OASIS] AvcDecode HOOKED!");
+        }
+    } else {
+        // Try sceMpegVsh_library.
+        let vsh_ptr = psp::hook::find_function(
+            b"sceMpegVsh_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            0x0E3C2E9D,
+        );
+        if let Some(ptr) = vsh_ptr {
+            ORIGINAL_AVC_DECODE = ptr;
+            debug_log(b"[OASIS] found AvcDecode in VSH lib");
+            let ret = psp::sys::sctrlHENPatchSyscall(
+                ptr,
+                hooked_avc_decode as *mut u8,
+            );
+            if ret >= 0 {
+                debug_log(b"[OASIS] AvcDecode HOOKED (VSH)!");
+            }
+        } else {
+            debug_log(b"[OASIS] AvcDecode NOT found in any lib");
+        }
     }
 }
 
@@ -185,11 +218,8 @@ fn psp_main() {
         // Start ME firmware dump thread (idles until overlay triggers it).
         me_dump::start_dump_thread();
 
-        // Resolve sceMpeg functions from sceMpegVsh_library (loaded by VSH)
-        // and write addresses to a file for the EBOOT to read.
-        // Also boot the ME for codec use.
-        debug_log(b"[OASIS] resolving VSH mpeg + ME boot...");
-        unsafe { resolve_vsh_mpeg_functions() };
+        // Boot ME and hook sceMpegAvcDecode to use sceMeVideo_driver.
+        unsafe { setup_me_decode_hook() };
 
         // If pip_enabled is set in config, send the initial toggle command
         // so PIP starts automatically.
