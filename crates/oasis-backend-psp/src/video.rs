@@ -455,18 +455,55 @@ fn load_vsh_mpeg_module() {
         return;
     }
 
-    vlog("[VIDEO] loading AV modules + reading VSH syscalls...");
+    vlog("[VIDEO] loading sceMpegVsh_library (patched approach)...");
 
-    // Load AvMpegBase normally (provides sceMpeg_library for standard calls).
-    unsafe {
-        let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
-        vlog(&format!("[VIDEO] AvMpegBase = {r:#x}"));
+    // Try loading the patched mpeg_vsh370 with weak imports.
+    // The patch changes sceVideocodec + sceMpegbase import flags
+    // from 0x4001 (strong) to 0x4009 (weak), allowing unresolvable
+    // FW 3.71 NIDs to stay empty without blocking module start.
+    let vsh_paths: &[&[u8]] = &[
+        b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370_patched.prx\0",
+        b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0",
+    ];
+
+    let mut vsh_loaded = false;
+    for path in vsh_paths {
+        let vsh_id = unsafe {
+            psp::sys::kubridge::kuKernelLoadModule(
+                path.as_ptr(), 0, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] kuLoad = {:#x}", vsh_id.0));
+        if vsh_id < psp::sys::SceUid(0) {
+            continue;
+        }
+
+        let mut status: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                vsh_id, 0, core::ptr::null_mut(),
+                &mut status, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] start = {ret:#x}, status={status:#x}"));
+
+        if ret < 0 {
+            vlog("[VIDEO] start FAILED, unloading");
+            unsafe { psp::sys::sceKernelUnloadModule(vsh_id); }
+        } else {
+            vlog("[VIDEO] sceMpegVsh_library loaded OK!");
+            vsh_loaded = true;
+            break;
+        }
     }
 
-    // Read VSH syscall numbers written by PRX at boot time.
-    // The PRX extracts them from the VSH process stubs during XMB
-    // (before game launch, while 0x0A0A* addresses are accessible).
-    read_vsh_syscalls();
+    if !vsh_loaded {
+        vlog("[VIDEO] falling back to AvMpegBase");
+        unsafe {
+            let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
+            vlog(&format!("[VIDEO] AvMpegBase = {r:#x}"));
+        }
+    }
 }
 
 /// Read VSH syscall numbers from `.vsh_addrs` file written by PRX at boot.
