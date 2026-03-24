@@ -61,49 +61,79 @@ fn debug_log(msg: &[u8]) {
     }
 }
 
-/// Resolved sceMeVideo_driver::Decode function pointer.
-static mut ME_VIDEO_DECODE_FN: Option<unsafe extern "C" fn(i32, *mut u32) -> i32> = None;
-
 /// Original sceMpegAvcDecode function pointer (for chaining).
-static mut ORIGINAL_AVC_DECODE: *mut u8 = core::ptr::null_mut();
+pub static mut ORIGINAL_AVC_DECODE: *mut u8 = core::ptr::null_mut();
 
-/// Our hook for sceMpegAvcDecode.
-///
-/// When the EBOOT calls sceMpegAvcDecode, this intercept runs instead.
-/// We call the original first — if it returns AVC_DECODE_FATAL (0x80628002),
-/// we try calling sceMeVideo_driver::Decode directly as a fallback.
-unsafe extern "C" fn hooked_avc_decode(
+/// Resolved VSH function pointers for ALL critical sceMpeg functions.
+static mut VSH_FN: [*mut u8; 8] = [core::ptr::null_mut(); 8];
+// Index: 0=Create, 1=Delete, 2=InitAu, 3=MallocEsBuf, 4=FreeEsBuf,
+//        5=GetAvcNalAu, 6=AvcDecode, 7=QueryMemSize
+
+/// Generic hook that redirects any sceMpeg function to its VSH equivalent.
+/// Each hook function reads the VSH pointer from VSH_FN[index].
+macro_rules! make_vsh_hook {
+    ($name:ident, $idx:expr, ($($arg:ident: $ty:ty),*) -> $ret:ty) => {
+        pub unsafe extern "C" fn $name($($arg: $ty),*) -> $ret {
+            let vsh = core::ptr::read_volatile(
+                (&raw const VSH_FN).cast::<*mut u8>().add($idx)
+            );
+            if !vsh.is_null() {
+                let f: unsafe extern "C" fn($($ty),*) -> $ret =
+                    core::mem::transmute(vsh);
+                return f($($arg),*);
+            }
+            -1 as $ret // VSH not available
+        }
+    };
+}
+
+// Hook functions for each sceMpeg function.
+// These get installed via sctrlHENPatchSyscall on the sceMpeg_library entries.
+make_vsh_hook!(hook_create, 0,
+    (mpeg: *mut core::ffi::c_void, data: *mut core::ffi::c_void,
+     size: i32, rb: *mut core::ffi::c_void, fw: i32, mode: i32, ddr: i32) -> i32);
+make_vsh_hook!(hook_init_au, 2,
+    (mpeg: *mut core::ffi::c_void, es: *mut core::ffi::c_void,
+     au: *mut core::ffi::c_void) -> i32);
+pub unsafe extern "C" fn hook_malloc_es(
+    mpeg: *mut core::ffi::c_void,
+) -> *mut core::ffi::c_void {
+    let vsh = core::ptr::read_volatile(
+        (&raw const VSH_FN).cast::<*mut u8>().add(3)
+    );
+    if !vsh.is_null() {
+        let f: unsafe extern "C" fn(*mut core::ffi::c_void) -> *mut core::ffi::c_void =
+            core::mem::transmute(vsh);
+        return f(mpeg);
+    }
+    core::ptr::null_mut()
+}
+make_vsh_hook!(hook_get_nal_au, 5,
+    (mpeg: *mut core::ffi::c_void, nal: *mut core::ffi::c_void,
+     au: *mut core::ffi::c_void) -> i32);
+
+pub unsafe extern "C" fn hooked_avc_decode(
     mpeg: *mut core::ffi::c_void,
     au: *mut core::ffi::c_void,
     frame_width: i32,
     buffer: *mut core::ffi::c_void,
     init: *mut i32,
 ) -> i32 {
-    // Call the original sceMpegAvcDecode.
-    let original: unsafe extern "C" fn(
+    let vsh = core::ptr::read_volatile(
+        (&raw const VSH_FN).cast::<*mut u8>().add(6)
+    );
+    if !vsh.is_null() {
+        let f: unsafe extern "C" fn(
+            *mut core::ffi::c_void, *mut core::ffi::c_void, i32,
+            *mut core::ffi::c_void, *mut i32,
+        ) -> i32 = core::mem::transmute(vsh);
+        return f(mpeg, au, frame_width, buffer, init);
+    }
+    let orig: unsafe extern "C" fn(
         *mut core::ffi::c_void, *mut core::ffi::c_void, i32,
         *mut core::ffi::c_void, *mut i32,
     ) -> i32 = core::mem::transmute(ORIGINAL_AVC_DECODE);
-    let ret = original(mpeg, au, frame_width, buffer, init);
-
-    // If it succeeds, great — return the result.
-    if ret >= 0 {
-        return ret;
-    }
-
-    // If FATAL (0x80628002), try ME direct decode.
-    if ret == 0x80628002_u32 as i32 {
-        if let Some(me_decode) = core::ptr::read_volatile(&raw const ME_VIDEO_DECODE_FN) {
-            // sceMeVideo::Decode takes (sub_cmd, codec_buf_ptr).
-            // The codec_buf is inside the sceMpeg AU structure.
-            // For now, just call with the AU pointer — the ME driver
-            // should extract what it needs.
-            // TODO: map sceMpeg AU → sceMeVideo codec_buf correctly
-            return me_decode(0x26, au as *mut u32); // cmd 0x26 = decode
-        }
-    }
-
-    ret
+    orig(mpeg, au, frame_width, buffer, init)
 }
 
 /// Boot the ME and hook sceMpegAvcDecode syscall.
@@ -128,68 +158,81 @@ unsafe fn setup_me_decode_hook() {
         debug_log(b"[OASIS] MeBoot fn not found");
     }
 
-    // Resolve sceMeVideo_driver::Decode.
-    let decode_ptr = psp::hook::find_function(
-        b"sceMeCodecWrapper\0".as_ptr(),
-        b"sceMeVideo_driver\0".as_ptr(),
-        0x6D68B223, // Decode function
-    );
-    if let Some(ptr) = decode_ptr {
-        ME_VIDEO_DECODE_FN = Some(core::mem::transmute(ptr));
-        debug_log(b"[OASIS] MeVideoDecode resolved");
-    } else {
-        debug_log(b"[OASIS] MeVideoDecode NOT found");
+    // Resolve ALL critical sceMpeg functions from sceMpegVsh_library.
+    let vsh_nids: [(usize, u32, &[u8]); 8] = [
+        (0, 0xD8C5F121, b"Create"),       // sceMpegCreate
+        (1, 0x606A4649, b"Delete"),        // sceMpegDelete
+        (2, 0x167AFD9E, b"InitAu"),        // sceMpegInitAu
+        (3, 0xA780CF7E, b"MallocEs"),      // sceMpegMallocAvcEsBuf
+        (4, 0xCEB870B1, b"FreeEs"),        // sceMpegFreeAvcEsBuf
+        (5, 0x11F95CF1, b"GetNalAu"),      // sceMpegGetAvcNalAu
+        (6, 0x0E3C2E9D, b"AvcDecode"),     // sceMpegAvcDecode
+        (7, 0xC132E22F, b"QueryMem"),      // sceMpegQueryMemSize
+    ];
+
+    let mut vsh_resolved = 0u32;
+    for &(idx, nid, _name) in &vsh_nids {
+        let ptr = psp::hook::find_function(
+            b"sceMpegVsh_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            nid,
+        );
+        if let Some(p) = ptr {
+            VSH_FN[idx] = p;
+            vsh_resolved += 1;
+        }
+    }
+
+    let mut m = [0u8; 48];
+    let mut p = me_dump::append_bytes(&mut m, 0, b"[OASIS] VSH fns: ");
+    p = me_dump::append_dec(&mut m, p, vsh_resolved);
+    p = me_dump::append_bytes(&mut m, p, b"/8");
+    debug_log(&m[..p]);
+
+    if vsh_resolved < 6 {
+        debug_log(b"[OASIS] not enough VSH fns, skipping hooks");
         return;
     }
 
-    // Find sceMpegAvcDecode in the loaded sceMpeg_library.
-    // NID 0x0E3C2E9D
-    let avc_decode_ptr = psp::hook::find_function(
-        b"sceMpeg_library\0".as_ptr(),
-        b"sceMpeg\0".as_ptr(),
-        0x0E3C2E9D,
-    );
-    if let Some(ptr) = avc_decode_ptr {
-        ORIGINAL_AVC_DECODE = ptr;
-        let mut m = [0u8; 48];
-        let mut p = me_dump::append_bytes(&mut m, 0, b"[OASIS] AvcDecode @0x");
-        p = me_dump::append_hex(&mut m, p, ptr as u32);
-        debug_log(&m[..p]);
+    // Hook ALL sceMpeg functions in sceMpeg_library to redirect to VSH.
+    // NID → (hook function, name)
+    let hooks: [(u32, *mut u8, &[u8]); 5] = [
+        (0xD8C5F121, hook_create as *mut u8, b"Create"),
+        (0x167AFD9E, hook_init_au as *mut u8, b"InitAu"),
+        (0xA780CF7E, hook_malloc_es as *mut u8, b"MallocEs"),
+        (0x11F95CF1, hook_get_nal_au as *mut u8, b"GetNalAu"),
+        (0x0E3C2E9D, hooked_avc_decode as *mut u8, b"AvcDecode"),
+    ];
 
-        // Hook the syscall.
-        let ret = psp::sys::sctrlHENPatchSyscall(
-            ptr,
-            hooked_avc_decode as *mut u8,
-        );
-        let mut m2 = [0u8; 48];
-        let mut p2 = me_dump::append_bytes(&mut m2, 0, b"[OASIS] hook ret=0x");
-        p2 = me_dump::append_hex(&mut m2, p2, ret as u32);
-        debug_log(&m2[..p2]);
-
-        if ret >= 0 {
-            debug_log(b"[OASIS] AvcDecode HOOKED!");
-        }
-    } else {
-        // Try sceMpegVsh_library.
-        let vsh_ptr = psp::hook::find_function(
+    let mut hooked = 0u32;
+    for &(nid, hook_fn, name) in &hooks {
+        // Find in sceMpeg_library first, then VSH.
+        let orig = psp::hook::find_function(
+            b"sceMpeg_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            nid,
+        ).or_else(|| psp::hook::find_function(
             b"sceMpegVsh_library\0".as_ptr(),
             b"sceMpeg\0".as_ptr(),
-            0x0E3C2E9D,
-        );
-        if let Some(ptr) = vsh_ptr {
-            ORIGINAL_AVC_DECODE = ptr;
-            debug_log(b"[OASIS] found AvcDecode in VSH lib");
-            let ret = psp::sys::sctrlHENPatchSyscall(
-                ptr,
-                hooked_avc_decode as *mut u8,
-            );
-            if ret >= 0 {
-                debug_log(b"[OASIS] AvcDecode HOOKED (VSH)!");
+            nid,
+        ));
+
+        if let Some(ptr) = orig {
+            if nid == 0x0E3C2E9D {
+                ORIGINAL_AVC_DECODE = ptr;
             }
-        } else {
-            debug_log(b"[OASIS] AvcDecode NOT found in any lib");
+            let ret = psp::sys::sctrlHENPatchSyscall(ptr, hook_fn);
+            if ret >= 0 {
+                hooked += 1;
+            }
         }
     }
+
+    let mut m2 = [0u8; 48];
+    let mut p2 = me_dump::append_bytes(&mut m2, 0, b"[OASIS] hooked ");
+    p2 = me_dump::append_dec(&mut m2, p2, hooked);
+    p2 = me_dump::append_bytes(&mut m2, p2, b"/5 sceMpeg fns");
+    debug_log(&m2[..p2]);
 }
 
 fn psp_main() {
