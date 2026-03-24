@@ -68,6 +68,49 @@ unsafe extern "C" fn dump_thread_entry(
     // Load cooleyesBridge.prx early — PMPlayer requires it before mpeg_vsh.
     unsafe { load_cooleyes_bridge() };
 
+    // Patch kernel: NOP the "beq $a2, $zero" check in the module linking
+    // wrapper (sceKernelLinkLibraryEntriesWithModule) at 0x8805E620.
+    // This check returns 0x800200D3 when stubSize is 0, preventing child
+    // module starts from Rust EBOOTs. The patch allows modules with
+    // no imports to be linked without error.
+    unsafe {
+        let patch_addr = 0x8805E620 as *mut u32;
+        // PRECISE FIX: Patch the _PrologueModule function at 0x8805EA2C.
+        // This function validates the SceModule pointer (a kernel address
+        // 0x88xxxxxx) against the K1 user-mode flag. The K1 check always
+        // fails because the module manager thread has user-mode K1.
+        //
+        // The function uses a non-standard K1 shift pattern:
+        //   0x8805EA2C: sll $v1, $k1, 11  (0x001B1AC0)
+        //   0x8805EA3C: addu $k1, $v1, $zero
+        //
+        // Patch: sll $v1, $k1, 11 → sll $v1, $zero, 11 (v1=0, so K1=0)
+        // Patch BOTH instances of `sll $v1, $k1, 11` (0x001B1AC0) in modulemgr.
+        // These are non-standard K1 shifts that my earlier scans missed.
+        let expected = 0x001B1AC0u32;  // sll $v1, $k1, 11
+        let patched_val = 0x00001AC0u32;  // sll $v1, $zero, 11 (K1→0)
+
+        let addrs: &[u32] = &[0x8805EA2C, 0x8805FE80];
+        for &addr in addrs {
+            let ptr = addr as *mut u32;
+            let old = core::ptr::read_volatile(ptr);
+            if old == expected {
+                core::ptr::write_volatile(ptr, patched_val);
+                let mut m = [0u8; 50];
+                let mut p = append_bytes(&mut m, 0, b"[PATCH] fixed K1 @0x");
+                p = append_hex(&mut m, p, addr);
+                crate::debug_log(&m[..p]);
+            } else {
+                let mut m = [0u8; 50];
+                let mut p = append_bytes(&mut m, 0, b"[PATCH] skip @0x");
+                p = append_hex(&mut m, p, addr);
+                crate::debug_log(&m[..p]);
+            }
+        }
+        psp::sys::sceKernelDcacheWritebackInvalidateAll();
+        psp::sys::sceKernelIcacheInvalidateAll();
+    };
+
     loop {
         // Wait for trigger.
         if DUMP_STATE.compare_exchange(
@@ -87,6 +130,9 @@ unsafe extern "C" fn dump_thread_entry(
         // EBOOT writes ".me_patch" after loading AV modules, we hook
         // sceMpegAvcDecode syscall and write ".me_patched" when done.
         unsafe { check_patch_request() };
+
+        // Check for kernel-mode child module load test.
+        unsafe { check_kernel_load_test() };
 
         // Check for VSH module load + address resolution request from EBOOT.
         unsafe { check_vsh_load_request() };
@@ -1448,4 +1494,240 @@ unsafe fn write_done_file(success: bool) {
         psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
         psp::sys::sceIoClose(fd);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Kernel-mode child module load test
+// ---------------------------------------------------------------------------
+
+static KERNEL_LOAD_DONE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Check for kernel-mode module load test trigger file.
+/// EBOOT creates `.kload_test`, PRX loads+starts modules from kernel context.
+unsafe fn check_kernel_load_test() {
+    if KERNEL_LOAD_DONE.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    let trigger = b"ms0:/PSP/GAME/OASISOS/.kload_test\0";
+    let fd = psp::sys::sceIoOpen(trigger.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0);
+    if fd < psp::sys::SceUid(0) {
+        return;
+    }
+    psp::sys::sceIoClose(fd);
+    psp::sys::sceIoRemove(trigger.as_ptr());
+    KERNEL_LOAD_DONE.store(true, core::sync::atomic::Ordering::Relaxed);
+
+    crate::debug_log(b"[KLOAD] patching kernel linking wrapper");
+
+    // Patch the sceKernelLinkLibraryEntriesWithModule wrapper at 0x8805e5e8.
+    // At 0x8805e620: "beq $a2, $zero, 0x8805e658" returns 0x800200D3 when
+    // stubSize (a2) is 0. We NOP this check to allow modules with 0 imports.
+    // Also NOP the delay slot instruction at 0x8805e624.
+    let patch_addr1 = 0x8805E620 as *mut u32;
+    let patch_addr2 = 0x8805E624 as *mut u32;
+
+    let old1 = core::ptr::read_volatile(patch_addr1);
+    let old2 = core::ptr::read_volatile(patch_addr2);
+    let mut m = [0u8; 80];
+    let mut p = append_bytes(&mut m, 0, b"[KLOAD] old @0x8805E620=0x");
+    p = append_hex(&mut m, p, old1);
+    p = append_bytes(&mut m, p, b" @0x8805E624=0x");
+    p = append_hex(&mut m, p, old2);
+    crate::debug_log(&m[..p]);
+
+    // NOP both instructions
+    core::ptr::write_volatile(patch_addr1, 0x00000000u32); // nop
+    // DON'T nop the delay slot — it sets a3 = (K1<0)?1:0 which is needed later
+    // Just nop the branch itself
+
+    crate::debug_log(b"[KLOAD] patched beq $a2,$zero to NOP");
+
+    // Flush caches to ensure patch takes effect
+    psp::sys::sceKernelDcacheWritebackInvalidateAll();
+    psp::sys::sceKernelIcacheInvalidateAll();
+
+    // Read module ID from trigger file (EBOOT writes u32 module ID)
+    let fd = psp::sys::sceIoOpen(
+        b"ms0:/PSP/GAME/OASISOS/.kload_test\0".as_ptr(),
+        psp::sys::IoOpenFlags::RD_ONLY, 0,
+    );
+    // File was already removed above, so reopen the new version the EBOOT writes
+    // Actually: EBOOT writes .kload_modid with the module ID
+    let fd = psp::sys::sceIoOpen(
+        b"ms0:/PSP/GAME/OASISOS/.kload_modid\0".as_ptr(),
+        psp::sys::IoOpenFlags::RD_ONLY, 0,
+    );
+    if fd < psp::sys::SceUid(0) {
+        crate::debug_log(b"[KLOAD] no .kload_modid file");
+        return;
+    }
+    let mut mod_id_bytes = [0u8; 4];
+    psp::sys::sceIoRead(fd, mod_id_bytes.as_mut_ptr() as *mut _, 4);
+    psp::sys::sceIoClose(fd);
+    psp::sys::sceIoRemove(b"ms0:/PSP/GAME/OASISOS/.kload_modid\0".as_ptr());
+
+    let mod_id_val = u32::from_le_bytes(mod_id_bytes);
+    let mod_id = psp::sys::SceUid(mod_id_val as i32);
+
+    let mut msg = [0u8; 60];
+    let mut p = append_bytes(&mut msg, 0, b"[KLOAD] mod_id=0x");
+    p = append_hex(&mut msg, p, mod_id_val);
+    crate::debug_log(&msg[..p]);
+
+    // The kernel patch (NOP at 0x8805E620) should now allow child module start.
+    // The EBOOT does sceKernelStartModule directly — no need to do it here.
+
+    // Write empty result file to signal completion
+    let result_fd = psp::sys::sceIoOpen(
+        b"ms0:/PSP/GAME/OASISOS/.kload_result\0".as_ptr(),
+        psp::sys::IoOpenFlags::CREAT | psp::sys::IoOpenFlags::WR_ONLY | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if result_fd >= psp::sys::SceUid(0) {
+        psp::sys::sceIoWrite(result_fd, b"DONE".as_ptr() as *const _, 4);
+        psp::sys::sceIoClose(result_fd);
+    }
+
+    crate::debug_log(b"[KLOAD] test complete");
+}
+
+/// Dump a kernel module's text+data segments to a file for Ghidra analysis.
+/// `mod_name` must be null-terminated. `out_path` must be null-terminated.
+unsafe fn dump_kernel_module(mod_name: &[u8], out_path: &[u8]) {
+    // Get list of all loaded module IDs
+    let mut ids = [psp::sys::SceUid(0); 256];
+    let mut count: i32 = 0;
+    let ret = psp::sys::sceKernelGetModuleIdList(
+        ids.as_mut_ptr(), 256, &mut count,
+    );
+    if ret < 0 {
+        let mut m = [0u8; 60];
+        let mut p = append_bytes(&mut m, 0, b"[KDUMP] GetModuleIdList err=0x");
+        p = append_hex(&mut m, p, ret as u32);
+        crate::debug_log(&m[..p]);
+        return;
+    }
+
+    let mut m = [0u8; 60];
+    let mut p = append_bytes(&mut m, 0, b"[KDUMP] ");
+    p = append_dec(&mut m, p, count as u32);
+    p = append_bytes(&mut m, p, b" modules loaded, searching for ");
+    // Append module name (without null terminator)
+    let name_len = mod_name.iter().position(|&b| b == 0).unwrap_or(mod_name.len());
+    p = append_bytes(&mut m, p, &mod_name[..name_len]);
+    crate::debug_log(&m[..p]);
+
+    // Search for the target module
+    let mut found_id = psp::sys::SceUid(-1);
+    let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
+
+    for i in 0..(count as usize).min(256) {
+        info = core::mem::zeroed();
+        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+        let ret = psp::sys::sceKernelQueryModuleInfo(ids[i], &mut info);
+        if ret < 0 {
+            continue;
+        }
+
+        // Compare name (info.name is [u8; 28])
+        let mut matches = true;
+        for j in 0..name_len {
+            if j >= 28 || info.name[j] != mod_name[j] {
+                matches = false;
+                break;
+            }
+        }
+        // Also check null terminator
+        if matches && name_len < 28 && info.name[name_len] != 0 {
+            matches = false;
+        }
+
+        if matches {
+            found_id = ids[i];
+            break;
+        }
+    }
+
+    if found_id < psp::sys::SceUid(0) {
+        let mut m = [0u8; 60];
+        let mut p = append_bytes(&mut m, 0, b"[KDUMP] module not found: ");
+        p = append_bytes(&mut m, p, &mod_name[..name_len]);
+        crate::debug_log(&m[..p]);
+        return;
+    }
+
+    // Log module info
+    let text_addr = info.text_addr;
+    let text_size = info.text_size;
+    let data_size = info.data_size;
+    let total_size = text_size + data_size;
+    let seg0_addr = info.segment_addr[0] as u32;
+    let seg0_size = info.segment_size[0] as u32;
+
+    let mut m = [0u8; 120];
+    let mut p = append_bytes(&mut m, 0, b"[KDUMP] found! text=0x");
+    p = append_hex(&mut m, p, text_addr);
+    p = append_bytes(&mut m, p, b" tsize=0x");
+    p = append_hex(&mut m, p, text_size);
+    p = append_bytes(&mut m, p, b" dsize=0x");
+    p = append_hex(&mut m, p, data_size);
+    p = append_bytes(&mut m, p, b" seg0=0x");
+    p = append_hex(&mut m, p, seg0_addr);
+    p = append_bytes(&mut m, p, b"+0x");
+    p = append_hex(&mut m, p, seg0_size);
+    crate::debug_log(&m[..p]);
+
+    // Use the larger of (text+data) or seg0_size for dump
+    let dump_size = if seg0_size > total_size { seg0_size } else { total_size };
+    let dump_addr = if seg0_addr != 0 { seg0_addr } else { text_addr };
+
+    if dump_size == 0 || dump_size > 0x100000 {
+        crate::debug_log(b"[KDUMP] invalid size, skipping");
+        return;
+    }
+
+    // Write raw memory to file
+    let fd = psp::sys::sceIoOpen(
+        out_path.as_ptr(),
+        psp::sys::IoOpenFlags::CREAT | psp::sys::IoOpenFlags::WR_ONLY | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if fd < psp::sys::SceUid(0) {
+        crate::debug_log(b"[KDUMP] failed to open output file");
+        return;
+    }
+
+    // Write a small header: [base_addr: u32] [dump_size: u32] [module_name: 28 bytes]
+    let hdr_addr = dump_addr.to_le_bytes();
+    let hdr_size = dump_size.to_le_bytes();
+    psp::sys::sceIoWrite(fd, hdr_addr.as_ptr() as *const _, 4);
+    psp::sys::sceIoWrite(fd, hdr_size.as_ptr() as *const _, 4);
+    psp::sys::sceIoWrite(fd, info.name.as_ptr() as *const _, 28);
+    // Total header: 36 bytes, raw dump follows
+
+    // Dump memory in chunks (kernel memory may need uncached access)
+    let src = dump_addr as *const u8;
+    let mut written = 0u32;
+    while written < dump_size {
+        let chunk = if dump_size - written > 4096 { 4096 } else { dump_size - written };
+        let ret = psp::sys::sceIoWrite(
+            fd,
+            src.add(written as usize) as *const _,
+            chunk as usize,
+        );
+        if ret < 0 {
+            break;
+        }
+        written += chunk;
+    }
+
+    psp::sys::sceIoClose(fd);
+
+    let mut m = [0u8; 60];
+    let mut p = append_bytes(&mut m, 0, b"[KDUMP] dumped 0x");
+    p = append_hex(&mut m, p, written);
+    p = append_bytes(&mut m, p, b" bytes to file");
+    crate::debug_log(&m[..p]);
 }

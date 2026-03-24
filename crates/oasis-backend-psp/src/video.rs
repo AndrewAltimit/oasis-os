@@ -433,9 +433,9 @@ pub fn test_real_pmf() {
 ///
 /// Must be called from the main thread before spawning the audio thread.
 pub fn preinit_mpeg() {
-    unsafe {
-        psp::sys::sceKernelSetCompiledSdkVersion(0x06060010);
-    }
+    // NOTE: sceKernelSetCompiledSdkVersion(0x06060010) REMOVED.
+    // Setting SDK 6.60 may enable stricter library version checking
+    // that rejects mpeg_vsh370.prx (built for FW 3.70).
 
     // Try loading mpeg_vsh370 BEFORE anything else — if it works here
     // but not after load_av_modules, we know which module interferes.
