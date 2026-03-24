@@ -1364,8 +1364,9 @@ impl NalDecoder {
             )
         };
         if ret < 0 {
-            if verbose {
-                vlog(&format!("[VIDEO] NAL: AvcDecode = {ret:#x}"));
+            if verbose || call_num < 50 {
+                vlog(&format!("[VIDEO] NAL: AvcDecode = {ret:#x} pic={}",
+                    self.pic_num));
             }
             return None;
         }
