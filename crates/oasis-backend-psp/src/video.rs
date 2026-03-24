@@ -436,12 +436,87 @@ pub fn test_real_pmf() {
 /// is called, which would otherwise put the MPEG library in a state where
 /// `sceMpegInit` returns `0x8002013a` (library already exists).
 pub fn preinit_mpeg() {
+    // Load AV modules (avcodec + mpegbase).
     crate::audio::load_av_modules_once_pub();
 
-    // The VSH sceMpeg function addresses are in the VSH process space
-    // (0x0A0Axxxx) and can't be called from our EBOOT process.
-    // Instead, just use the standard sceMpeg — the ME stubs are the issue,
-    // not the sceMpeg library itself.
+    // Load cooleyesBridge.prx — the kernel bridge for sceMeBootStart.
+    vlog("[VIDEO] loading cooleyesBridge.prx...");
+    let bridge_id = unsafe {
+        psp::sys::kubridge::kuKernelLoadModule(
+            b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0".as_ptr(),
+            0, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] bridge id={:#x}", bridge_id.0));
+    if bridge_id >= psp::sys::SceUid(0) {
+        let mut st: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                bridge_id, 0, core::ptr::null_mut(),
+                &mut st, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] bridge start={ret:#x}"));
+    }
+
+    // Load mpeg_vsh.prx via CFW kernel bridge.
+    // Try from app folder first (extracted from flash0, may avoid link issues),
+    // then fall back to flash0.
+    // Try loading mpeg_vsh via standard sceKernelLoadModule first
+    // (works if ARK-4 doesn't block flash0:/kd/ for module loading).
+    vlog("[VIDEO] sceKernelLoadModule(mpeg_vsh.prx)...");
+    let mut vsh_id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] mpeg_vsh id={:#x}", vsh_id.0));
+
+    // Fallback: try kuKernelLoadModule (CFW kernel bridge).
+    if vsh_id < psp::sys::SceUid(0) {
+        vlog(&format!("[VIDEO] sceKernelLoadModule failed: {:#x}, trying ku...", vsh_id.0));
+        vsh_id = unsafe {
+            psp::sys::kubridge::kuKernelLoadModule(
+                b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
+                0, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] ku mpeg_vsh id={:#x}", vsh_id.0));
+    }
+    // Fallback: try ms0 copy.
+    if vsh_id < psp::sys::SceUid(0) {
+        vsh_id = unsafe {
+            psp::sys::kubridge::kuKernelLoadModule(
+                b"ms0:/PSP/GAME/OASISOS/mpeg_vsh.prx\0".as_ptr(),
+                0, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] ms0 mpeg_vsh id={:#x}", vsh_id.0));
+    }
+
+    if vsh_id >= psp::sys::SceUid(0) {
+        let mut st: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                vsh_id, 0, core::ptr::null_mut(),
+                &mut st, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] mpeg_vsh start={ret:#x}"));
+
+        if ret < 0 {
+            // Try starting without status param (some modules need this).
+            let ret2 = unsafe {
+                psp::sys::sceKernelStartModule(
+                    vsh_id, 0, core::ptr::null_mut(),
+                    core::ptr::null_mut(), core::ptr::null_mut(),
+                )
+            };
+            vlog(&format!("[VIDEO] mpeg_vsh start2={ret2:#x}"));
+        }
+    }
 
     let ret = unsafe { psp::sys::sceMpegInit() };
     vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
@@ -1150,7 +1225,8 @@ impl NalDecoder {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
 
-        let mpeg_mode = 4;
+        // Mode 5 for Main Profile or >480x272 (cooleyes pattern).
+        let mpeg_mode = if width > 480 || height > 272 { 5 } else { 4 };
         let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
             return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
@@ -1163,22 +1239,24 @@ impl NalDecoder {
             unsafe { p.add(p.align_offset(64)) }
         };
 
-        // DDR-top: 2MB for ME decode output.
+        // DDR-top: 2MB for ME decode output, 4MB aligned (cooleyes pattern).
+        // Allocate 2MB + 4MB for alignment overhead.
         let ddr_block = unsafe {
             psp::sys::sceKernelAllocPartitionMemory(
                 psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
                 b"MeDdrTop\0".as_ptr(),
                 psp::sys::SceSysMemBlockTypes::Low,
-                0x20_0000,
+                0x20_0000 + 0x40_0000, // 2MB + 4MB alignment
                 core::ptr::null_mut(),
             )
         };
         if ddr_block < psp::sys::SceUid(0) {
             return Err(format!("DDR-top alloc: {:#x}", ddr_block.0));
         }
-        let ddr_ptr = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
-        vlog(&format!("[VIDEO] NAL: DDR @{ddr_ptr:?}"));
-        let ddr_aligned = ddr_ptr as i32;
+        let ddr_raw = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
+        // Align to 4MB boundary.
+        let ddr_aligned = ((ddr_raw as u32) + 0x3F_FFFF) & !0x3F_FFFF;
+        vlog(&format!("[VIDEO] NAL: DDR raw={ddr_raw:?} aligned={ddr_aligned:#x}"));
 
         let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
         let mpeg: psp::sys::SceMpeg = unsafe {
@@ -1196,7 +1274,7 @@ impl NalDecoder {
                 &mut ringbuffer,
                 512,
                 mpeg_mode,
-                ddr_aligned,
+                ddr_aligned as i32,
             )
         };
         if ret < 0 {
