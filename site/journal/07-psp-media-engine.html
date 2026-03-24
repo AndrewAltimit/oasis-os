@@ -571,19 +571,207 @@ Offset  Size   Field
     </li>
   </ol>
 
+  <h2>Phase 6: The Syscall Hook Approach</h2>
+
+  <p>
+    With direct ME driver calls producing initialization errors, we pivoted to the
+    <code>sceMpeg</code> API &mdash; the higher-level interface that Sony&rsquo;s own games
+    use for H.264 decode. The hypothesis: if we could get <code>sceMpeg</code> to call the
+    real <code>sceAvcodec_wrapper</code> functions (the ones loaded during UMD playback)
+    instead of the empty stubs, the full initialization sequence would happen automatically.
+  </p>
+
+  <h3>NAL-Based Decode: The ME Accepts Our Data</h3>
+
+  <p>
+    We first tested whether the <code>sceMpeg</code> API could accept raw H.264 NAL units
+    rather than requiring a full MPEG-PS container. The function
+    <code>sceMpegGetAvcNalAu</code> &mdash; previously undocumented in public homebrew SDKs
+    &mdash; accepts a NAL unit buffer and produces an <code>SceMpegAu</code> (access unit)
+    suitable for the decoder:
+  </p>
+
+  <pre><code>sceMpegGetAvcNalAu(mpeg, stream_id, nal_buf, au)
+  &rarr; <span class="hl-bright">0x00000000</span>  // <span class="hl-accent">SUCCESS</span> &mdash; the ME accepted our H.264 NAL data</code></pre>
+
+  <p>
+    This was a significant finding. The <code>sceMpeg</code> layer successfully parsed our
+    NAL units and constructed an access unit for decode. The ME firmware accepted the data.
+    But the next step failed:
+  </p>
+
+  <pre><code>sceMpegAvcDecode(mpeg, au, width, ...)
+  &rarr; <span class="hl-warn">0x80628002</span>  // AVC_DECODE_FATAL &mdash; persistent, every attempt</code></pre>
+
+  <p>
+    Error <code>0x80628002</code> is distinct from the earlier <code>0x806201FE</code>. We
+    had progressed past the empty stubs into a real decode attempt, but something in the
+    kernel-side codec path was rejecting it.
+  </p>
+
+  <h3>Hooking All Five sceMpeg Functions</h3>
+
+  <p>
+    To redirect <code>sceMpeg</code> calls through the VSH (Visual Shell) library &mdash; the
+    version loaded during XMB video playback that connects to the real ME driver &mdash; we
+    used <code>sctrlHENPatchSyscall</code> to hook all five critical functions:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>Hook Target</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sceMpegCreate</code></td>
+        <td><code>mpeg_vsh.prx</code></td>
+        <td>Redirected</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegGetAvcNalAu</code></td>
+        <td><code>mpeg_vsh.prx</code></td>
+        <td>Redirected</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegAvcDecode</code></td>
+        <td><code>mpeg_vsh.prx</code></td>
+        <td>Redirected</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegAvcDecodeDetail2</code></td>
+        <td><code>mpeg_vsh.prx</code></td>
+        <td>Redirected</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegBaseCscAvc</code></td>
+        <td><code>mpeg_vsh.prx</code></td>
+        <td>Redirected</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Same result: <code>0x80628002</code>. The VSH library itself delegates to
+    <code>sceAvcodec_wrapper</code> in kernel space, which is where the error originates.
+    The hook confirmed that the problem is not in the user-mode <code>mpeg.prx</code> vs
+    <code>mpeg_vsh.prx</code> distinction &mdash; both paths converge on the same kernel
+    codec driver.
+  </p>
+
+  <h3>The Empty Stub at +0x2388: A Red Herring</h3>
+
+  <p>
+    During Ghidra analysis of <code>sceAvcodec_wrapper</code>, we identified a suspicious
+    empty function at offset <code>+0x2388</code> in the module&rsquo;s text segment. It
+    looked like a candidate for the &ldquo;missing&rdquo; ME submission function that the
+    stubs should call. After exhaustive cross-reference analysis: <strong>zero callers</strong>.
+    No function in the entire module references this address. It is dead code, not the
+    missing bridge.
+  </p>
+
+  <h3>The Kernel Error Table</h3>
+
+  <p>
+    The actual error originates from <code>sceAvcodec_wrapper</code>&rsquo;s internal error
+    mapping table at module offset <code>+0x49A0</code>. Ghidra disassembly reveals seven
+    error codes that the kernel driver maps from internal ME return values to user-visible
+    <code>0x8062xxxx</code> errors:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">sceAvcodec_wrapper error table at +0x49A0 (7 entries)</span>
+
+Offset   ME Internal    Mapped Error       Meaning
+──────   ───────────    ────────────       ────────────────────────────
++0x49A0  <span class="hl-accent">0x00000000</span>     0x00000000         Success
++0x49A8  <span class="hl-accent">0xFFFFFFFF</span>     <span class="hl-warn">0x80628001</span>         AVC_DECODE_ERROR (recoverable)
++0x49B0  <span class="hl-accent">0xFFFFFFFE</span>     <span class="hl-warn">0x80628002</span>         AVC_DECODE_FATAL (our error)
++0x49B8  <span class="hl-accent">0xFFFFFFFD</span>     <span class="hl-warn">0x80628003</span>         AVC_DECODE_INVALID_STATE
++0x49C0  <span class="hl-accent">0xFFFFFFFC</span>     <span class="hl-warn">0x80628004</span>         AVC_DECODE_NO_MEMORY
++0x49C8  <span class="hl-accent">0xFFFFFFFB</span>     <span class="hl-warn">0x80628005</span>         AVC_DECODE_INVALID_PARAM
++0x49D0  <span class="hl-accent">0xFFFFFFFA</span>     <span class="hl-warn">0x80628006</span>         AVC_DECODE_UNSUPPORTED</code></pre>
+    <div class="diagram-caption">The ME returns -2 (0xFFFFFFFE) internally, which the kernel maps to 0x80628002 (AVC_DECODE_FATAL)</div>
+  </div>
+
+  <p>
+    So the ME firmware receives our decode command, attempts to process it, and returns
+    <code>-2</code> (fatal error). The kernel driver faithfully translates this to
+    <code>0x80628002</code>. The question is what state or parameter the ME expects that
+    we are not providing.
+  </p>
+
+  <h3>PMPlayer: Proof the Hardware Works</h3>
+
+  <p>
+    To rule out a hardware or firmware defect, we tested
+    <strong>PMPlayer Advance</strong> on the same PSP (PSP-3001 TA-090v2, ARK-4 CFW,
+    firmware 6.61). PMPlayer successfully decodes and plays H.264 video with hardware
+    acceleration. The Media Engine on this exact device is fully functional &mdash; the
+    problem is strictly in our initialization or calling convention.
+  </p>
+
+  <h3>Loading mpeg_vsh.prx: LIBRARY_NOT_YET_LINKED</h3>
+
+  <p>
+    We attempted to load the VSH MPEG library directly from our kernel PRX using
+    <code>kuKernelLoadModule</code> (a CFW kernel-mode module loader):
+  </p>
+
+  <pre><code>kuKernelLoadModule("flash0:/kd/mpeg_vsh.prx", 0, NULL)
+  &rarr; module UID (load succeeds)
+
+sceKernelStartModule(uid, 0, NULL, ...)
+  &rarr; <span class="hl-warn">0x8002012F</span>  // SCE_KERNEL_ERROR_LIBRARY_NOT_YET_LINKED</code></pre>
+
+  <p>
+    The module loads into memory but fails to start because it imports libraries that are
+    not yet resident in the kernel. This confirms that <code>mpeg_vsh.prx</code> depends on
+    additional kernel modules (likely <code>sceMeCodecWrapper</code> and its ME driver
+    imports) that are only loaded during UMD boot or VSH video playback.
+  </p>
+
+  <h3>SDK Additions</h3>
+
+  <p>
+    During this phase, we added four new functions to the
+    <a href="https://github.com/overdrivenpotato/rust-psp">rust-psp</a> SDK:
+  </p>
+
+  <ul>
+    <li><code>sceMpegGetAvcNalAu</code> &mdash; accept raw H.264 NAL units into the MPEG pipeline</li>
+    <li><code>sceMpegAvcDecodeDetail2</code> &mdash; retrieve detailed decode status and error info</li>
+    <li><code>sceMpegBaseCscAvc</code> &mdash; hardware color space conversion (YCbCr &rarr; RGBA)</li>
+    <li><code>kuKernelLoadModule</code> &mdash; CFW kernel-mode module loader for flash0 PRX files</li>
+  </ul>
+
+  <h3>Next: Kernel Avcodec Disassembly</h3>
+
+  <p>
+    The error table at <code>+0x49A0</code> tells us <em>where</em> the error is generated
+    but not <em>why</em>. The next step is a full Ghidra disassembly of the kernel
+    <code>sceAvcodec_wrapper</code>&rsquo;s <code>AvcDecode</code> code path &mdash; tracing
+    from the syscall entry point through every branch that can produce ME internal error
+    <code>-2</code>, to identify the exact state check or parameter validation that rejects
+    our decode request.
+  </p>
+
   <h2>Why This Matters</h2>
 
   <p>
     While earlier homebrew like PMPlayer achieved ME video decode on older CFW, the
     internal kernel driver architecture and RPC protocol have remained largely undocumented.
-    Our findings have significant implications:
+    PMPlayer&rsquo;s success on this exact hardware (PSP-3001, ARK-4, FW 6.61) proves that
+    the ME is fully functional and that a working decode path exists &mdash; we are close to
+    identifying the specific kernel avcodec logic that distinguishes a successful decode
+    from our <code>0x80628002</code> failure. Our findings have significant implications:
   </p>
 
   <ul>
     <li>
       <strong>Hardware H.264 decode from homebrew.</strong> The ME is alive and responding to
-      video commands. With the correct initialization sequence (memory allocation, codec open,
-      header parsing), full hardware-accelerated H.264 decode should be achievable.
+      video commands. NAL-based input is accepted (<code>sceMpegGetAvcNalAu</code> returns
+      success). With the kernel avcodec decode path fully traced, we expect to identify the
+      missing initialization step that separates a working decode from the fatal error.
     </li>
     <li>
       <strong>Hardware AAC decode.</strong> The <code>sceAudiocodecCheckNeedMem</code> call
@@ -596,6 +784,12 @@ Offset  Size   Field
       documentation of Sony&rsquo;s internal codec RPC protocol &mdash; the specific command IDs,
       buffer layouts, and driver chain that the firmware uses for video/audio decode. This
       reference enables interacting with the ME&rsquo;s codec firmware rather than replacing it.
+    </li>
+    <li>
+      <strong>Kernel error table reference.</strong> The seven-entry error mapping at
+      <code>+0x49A0</code> in <code>sceAvcodec_wrapper</code> provides the first documented
+      translation between ME internal return codes and user-visible <code>0x8062xxxx</code>
+      errors, useful for anyone debugging PSP video codec issues.
     </li>
     <li>
       <strong>OASIS_OS video playback.</strong> Our TV Guide app currently streams audio-only on
