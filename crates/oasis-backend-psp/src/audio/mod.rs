@@ -45,9 +45,10 @@ pub fn load_av_modules_once_pub() {
     // SAFETY: sceIo log + sceUtilityLoadModule calls.
     unsafe {
         let r1 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
-        let r3 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
+        // AvMp3 loaded AFTER mpeg_vsh370.prx (in video.rs) to avoid
+        // sceMp3_Library's sceMpeg imports conflicting with VSH loading.
         let msg = format!(
-            "[AV] modules: AvCodec={r1:#x} AvMp3={r3:#x}\n",
+            "[AV] modules: AvCodec={r1:#x} AvMp3=deferred\n",
         );
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
