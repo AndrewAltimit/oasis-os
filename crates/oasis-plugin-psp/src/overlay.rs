@@ -28,6 +28,12 @@ enum OverlayState {
 /// Current overlay state (atomic for thread-safe read from hook).
 static STATE: AtomicU8 = AtomicU8::new(OverlayState::Hidden as u8);
 
+/// Returns true when the overlay menu is visible and should consume inputs.
+/// Called from the ctrl hook to mask buttons from the underlying app.
+pub fn is_overlay_active() -> bool {
+    STATE.load(Ordering::Relaxed) == OverlayState::Menu as u8
+}
+
 /// Menu cursor position.
 static mut CURSOR: u8 = 0;
 
@@ -57,7 +63,7 @@ const MENU_LABELS: [&[u8]; 13] = [
     b"  PIP Play/Stop",
     b"  PIP Next",
     b"  Dump ME FW",
-    b"  Init ME RPC",
+    b"  Spy: Dump Log",
     b"  Hide Overlay",
 ];
 
@@ -253,7 +259,10 @@ unsafe fn execute_menu_action(item: u8) {
             me_dump::trigger_dump();
             show_osd(b"ME dump started...");
         },
-        11 => show_osd(b"ME RPC disabled"),
+        11 => {
+            me_dump::trigger_spy_dump();
+            show_osd(b"Spy log dumped!");
+        },
         12 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
         _ => {},
     }

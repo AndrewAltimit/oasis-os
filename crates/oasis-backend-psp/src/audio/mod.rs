@@ -38,18 +38,16 @@ pub fn load_av_modules_once_pub() {
         return; // Already loaded.
     }
     // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
-    // AvCodec and AvMpegBase are required for sceAudiocodec and
-    // sceVideocodec. AvMp3 is for MP3 decoding.
+    // AvCodec provides sceAudiocodec + sceVideocodec + kernel avcodec.
+    // AvMp3 provides MP3 decoding.
+    // AvMpegBase loaded separately in video.rs (before mpeg_vsh370.prx).
     // The AtomicBool guard ensures these are loaded at most once.
-    // Log return values to diagnose video codec init failures.
     // SAFETY: sceIo log + sceUtilityLoadModule calls.
     unsafe {
         let r1 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
-        let r2 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
         let r3 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
-        // Log to file (dprintln goes to screen, not eboot.log).
         let msg = format!(
-            "[AV] modules: AvCodec={r1:#x} AvMpegBase={r2:#x} AvMp3={r3:#x}\n",
+            "[AV] modules: AvCodec={r1:#x} AvMp3={r3:#x}\n",
         );
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),

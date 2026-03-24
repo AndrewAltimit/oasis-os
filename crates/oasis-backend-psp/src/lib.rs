@@ -556,6 +556,13 @@ impl PspBackend {
         self.controller.is_held(button)
     }
 
+    /// Check if any button OTHER than `exclude` is currently held.
+    pub fn is_any_other_button_held(&self, exclude: psp::sys::CtrlButtons) -> bool {
+        self.controller.raw().buttons.intersects(
+            psp::sys::CtrlButtons::from_bits_truncate(!exclude.bits()),
+        )
+    }
+
     /// Query volatile memory cache status.
     ///
     /// Returns `(total_bytes, remaining_bytes)` if volatile memory was

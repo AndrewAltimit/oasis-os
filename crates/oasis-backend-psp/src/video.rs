@@ -432,15 +432,178 @@ pub fn test_real_pmf() {
 /// Pre-initialize the MPEG subsystem before any audio modules load.
 ///
 /// Must be called from the main thread before spawning the audio thread.
-/// This ensures `sceMpegInit` succeeds before `sceUtilityLoadModule(AvMpegBase)`
-/// is called, which would otherwise put the MPEG library in a state where
-/// `sceMpegInit` returns `0x8002013a` (library already exists).
 pub fn preinit_mpeg() {
-    // Load AV modules normally. The kernel PRX hooks sceMpegAvcDecode
-    // to route through sceMeVideo_driver when the standard path fails.
     crate::audio::load_av_modules_once_pub();
+    // Load sceMpegVsh_library from flash0 (PMPlayer approach).
+    load_vsh_mpeg_module();
     let ret = unsafe { psp::sys::sceMpegInit() };
     vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
+}
+
+/// Load `sceMpegVsh_library` from flash0:/kd/mpeg_vsh.prx.
+///
+/// PMPlayer uses this library instead of `sceMpeg_library` for H.264 decode.
+/// Must be loaded AFTER AvMpegBase (provides sceMpegbase + sceMpeg
+/// dependencies that the VSH library imports from).
+///
+/// After loading, the PRX resolves VSH function addresses and writes them
+/// to `.vsh_addrs` for the EBOOT to call through function pointers.
+fn load_vsh_mpeg_module() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    vlog("[VIDEO] loading AV modules + reading VSH syscalls...");
+
+    // Load AvMpegBase normally (provides sceMpeg_library for standard calls).
+    unsafe {
+        let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
+        vlog(&format!("[VIDEO] AvMpegBase = {r:#x}"));
+    }
+
+    // Read VSH syscall numbers written by PRX at boot time.
+    // The PRX extracts them from the VSH process stubs during XMB
+    // (before game launch, while 0x0A0A* addresses are accessible).
+    read_vsh_syscalls();
+}
+
+/// Read VSH syscall numbers from `.vsh_addrs` file written by PRX at boot.
+fn read_vsh_syscalls() {
+    let rfd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0".as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY, 0,
+        )
+    };
+    if rfd < psp::sys::SceUid(0) {
+        vlog("[VIDEO] .vsh_addrs not found (PRX not running?)");
+        return;
+    }
+
+    let mut buf = [0u32; 8];
+    let n = unsafe {
+        psp::sys::sceIoRead(rfd, buf.as_mut_ptr() as *mut _, 32)
+    };
+    unsafe { psp::sys::sceIoClose(rfd) };
+
+    if n == 32 {
+        unsafe { VSH_ADDRS = buf; }
+        let resolved = buf.iter().filter(|&&a| a != 0).count();
+        vlog(&format!("[VIDEO] VSH syscalls: {resolved}/8"));
+        for (i, &sc) in buf.iter().enumerate() {
+            if sc != 0 {
+                vlog(&format!("[VIDEO]   [{i}] syscall={sc}"));
+            }
+        }
+    } else {
+        vlog(&format!("[VIDEO] .vsh_addrs: {n} bytes (expected 32)"));
+    }
+}
+
+/// VSH function pointers resolved by the kernel PRX.
+/// Index: 0=Create, 1=Delete, 2=InitAu, 3=MallocEsBuf, 4=FreeEsBuf,
+///        5=GetAvcNalAu, 6=AvcDecode, 7=QueryMemSize
+static mut VSH_ADDRS: [u32; 8] = [0; 8];
+
+/// Request VSH function addresses from the kernel PRX via file IPC.
+///
+/// Writes `.vsh_req` trigger file, PRX resolves sceMpegVsh_library NIDs
+/// and writes 8 x u32 addresses to `.vsh_addrs`.
+fn request_vsh_addrs() {
+    use core::ffi::c_void;
+
+    vlog("[VIDEO] requesting VSH addrs from PRX...");
+
+    // Delete stale response.
+    unsafe {
+        psp::sys::sceIoRemove(
+            b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0".as_ptr(),
+        );
+    }
+
+    // Write request trigger.
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.vsh_req\0".as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        )
+    };
+    if fd >= psp::sys::SceUid(0) {
+        unsafe {
+            psp::sys::sceIoWrite(fd, b"1".as_ptr() as *const _, 1);
+            psp::sys::sceIoClose(fd);
+        }
+    }
+
+    // Poll for response (PRX writes 8 x u32 = 32 bytes).
+    for _attempt in 0..50 {
+        unsafe { psp::sys::sceKernelDelayThread(100_000) }; // 100ms
+
+        let rfd = unsafe {
+            psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0".as_ptr(),
+                psp::sys::IoOpenFlags::RD_ONLY,
+                0,
+            )
+        };
+        if rfd >= psp::sys::SceUid(0) {
+            let mut buf = [0u32; 8];
+            let n = unsafe {
+                psp::sys::sceIoRead(
+                    rfd,
+                    buf.as_mut_ptr() as *mut c_void,
+                    32,
+                )
+            };
+            unsafe { psp::sys::sceIoClose(rfd) };
+
+            if n == 32 {
+                unsafe {
+                    VSH_ADDRS = buf;
+                }
+                let resolved = buf.iter().filter(|&&a| a != 0).count();
+                vlog(&format!(
+                    "[VIDEO] VSH addrs: {resolved}/8 resolved"
+                ));
+                for (i, &addr) in buf.iter().enumerate() {
+                    if addr != 0 {
+                        vlog(&format!("[VIDEO]   [{i}] = {addr:#010x}"));
+                    }
+                }
+            } else {
+                vlog(&format!("[VIDEO] VSH addrs read: {n} bytes (expected 32)"));
+            }
+
+            // Cleanup.
+            unsafe {
+                psp::sys::sceIoRemove(
+                    b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0".as_ptr(),
+                );
+                psp::sys::sceIoRemove(
+                    b"ms0:/PSP/GAME/OASISOS/.vsh_req\0".as_ptr(),
+                );
+            }
+            return;
+        }
+    }
+
+    vlog("[VIDEO] VSH addrs timeout (PRX not running?)");
+}
+
+/// Get a resolved VSH function pointer by index.
+/// Returns null if not resolved.
+fn vsh_fn(idx: usize) -> *mut core::ffi::c_void {
+    let addr = unsafe {
+        core::ptr::read_volatile(
+            (&raw const VSH_ADDRS).cast::<u32>().add(idx)
+        )
+    };
+    addr as *mut core::ffi::c_void
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones

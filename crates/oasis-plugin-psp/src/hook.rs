@@ -21,8 +21,15 @@ const NID_SCE_DISPLAY_SET_FRAME_BUF: u32 = 0x289D82FE;
 /// NID for sceCtrlPeekBufferPositive.
 const NID_SCE_CTRL_PEEK_BUF_POS: u32 = 0x3A622550;
 
+/// NID for sceCtrlReadBufferPositive.
+const NID_SCE_CTRL_READ_BUF_POS: u32 = 0x1F803938;
+
 /// Resolved kernel-mode sceCtrlPeekBufferPositive function pointer.
 static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = None;
+
+/// Ctrl hook handles (for input consumption when overlay is active).
+static mut CTRL_PEEK_HOOK: Option<psp::hook::SyscallHook> = None;
+static mut CTRL_READ_HOOK: Option<psp::hook::SyscallHook> = None;
 
 // -- scePower driver NIDs --
 
@@ -152,6 +159,112 @@ unsafe extern "C" fn hooked_set_frame_buf(
     }
 }
 
+/// Hooked sceCtrlPeekBufferPositive: when overlay is active, zeros buttons.
+///
+/// # Safety
+/// Called as a syscall replacement by the kernel.
+unsafe extern "C" fn hooked_ctrl_peek(pad_data: *mut u8, count: i32) -> i32 {
+    // Call original first.
+    // SAFETY: CTRL_PEEK_HOOK is set before hook is active.
+    let ret = unsafe {
+        if let Some(ref hook) = *(&raw const CTRL_PEEK_HOOK) {
+            let orig: unsafe extern "C" fn(*mut u8, i32) -> i32 =
+                core::mem::transmute(hook.original_ptr());
+            orig(pad_data, count)
+        } else {
+            0
+        }
+    };
+
+    // If overlay menu is active, zero buttons so the underlying app
+    // doesn't see our navigation inputs.
+    if overlay::is_overlay_active() && !pad_data.is_null() && ret > 0 {
+        // SceCtrlData: [u32 timestamp, u32 buttons, u8 lx, u8 ly, ...]
+        // Zero the buttons field (offset 4, 4 bytes).
+        // SAFETY: pad_data points to valid SceCtrlData array.
+        unsafe {
+            let buttons_ptr = pad_data.add(4) as *mut u32;
+            for i in 0..count as usize {
+                let entry = buttons_ptr.add(i * 4); // stride = 16 bytes = 4 u32s
+                core::ptr::write_volatile(entry, 0);
+            }
+        }
+    }
+
+    ret
+}
+
+/// Hooked sceCtrlReadBufferPositive: same as peek hook.
+///
+/// # Safety
+/// Called as a syscall replacement by the kernel.
+unsafe extern "C" fn hooked_ctrl_read(pad_data: *mut u8, count: i32) -> i32 {
+    // SAFETY: CTRL_READ_HOOK is set before hook is active.
+    let ret = unsafe {
+        if let Some(ref hook) = *(&raw const CTRL_READ_HOOK) {
+            let orig: unsafe extern "C" fn(*mut u8, i32) -> i32 =
+                core::mem::transmute(hook.original_ptr());
+            orig(pad_data, count)
+        } else {
+            0
+        }
+    };
+
+    if overlay::is_overlay_active() && !pad_data.is_null() && ret > 0 {
+        // SAFETY: pad_data points to valid SceCtrlData array.
+        unsafe {
+            let buttons_ptr = pad_data.add(4) as *mut u32;
+            for i in 0..count as usize {
+                let entry = buttons_ptr.add(i * 4);
+                core::ptr::write_volatile(entry, 0);
+            }
+        }
+    }
+
+    ret
+}
+
+/// Install ctrl hooks for input consumption when overlay is active.
+///
+/// # Safety
+/// Must be called during single-threaded init after ctrl driver is resolved.
+unsafe fn install_ctrl_hooks() {
+    let ctrl_modules: &[(&[u8], &[u8])] = &[
+        (b"sceController_Service\0", b"sceCtrl_driver\0"),
+        (b"sceController_Service\0", b"sceCtrl\0"),
+    ];
+
+    // Hook PeekBufferPositive.
+    for &(module, library) in ctrl_modules {
+        let hook = psp::hook::SyscallHook::install(
+            module.as_ptr(),
+            library.as_ptr(),
+            NID_SCE_CTRL_PEEK_BUF_POS,
+            hooked_ctrl_peek as *mut u8,
+        );
+        if let Some(h) = hook {
+            CTRL_PEEK_HOOK = Some(h);
+            crate::debug_log(b"[OASIS] ctrl peek hook installed");
+            break;
+        }
+    }
+
+    // Hook ReadBufferPositive.
+    for &(module, library) in ctrl_modules {
+        let hook = psp::hook::SyscallHook::install(
+            module.as_ptr(),
+            library.as_ptr(),
+            NID_SCE_CTRL_READ_BUF_POS,
+            hooked_ctrl_read as *mut u8,
+        );
+        if let Some(h) = hook {
+            CTRL_READ_HOOK = Some(h);
+            crate::debug_log(b"[OASIS] ctrl read hook installed");
+            break;
+        }
+    }
+}
+
 /// Module/library name pairs to try for finding sceDisplaySetFrameBuf.
 const DISPLAY_MODULE_NAMES: &[(&[u8], &[u8])] = &[
     (b"sceDisplay_Service\0", b"sceDisplay\0"),
@@ -252,6 +365,10 @@ pub fn install_display_hook() -> bool {
                 f(1); // 1 = analog mode
                 crate::debug_log(b"[OASIS] ctrl sampling initialized");
             }
+
+            // Ctrl hooks for input consumption disabled — they crash PMPlayer
+            // at launch. TODO: investigate SyscallHook trampoline compatibility.
+            // install_ctrl_hooks();
 
             // Start the controller polling thread.
             start_ctrl_thread();

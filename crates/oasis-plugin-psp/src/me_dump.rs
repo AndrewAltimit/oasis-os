@@ -57,11 +57,17 @@ pub fn start_dump_thread() {
     }
 }
 
+/// Auto-flush counter: flush spy log every ~5 seconds (50 ticks at 10Hz).
+static mut SPY_FLUSH_CTR: u32 = 0;
+
 /// Dump thread entry point. Polls for trigger, then dumps.
 unsafe extern "C" fn dump_thread_entry(
     _args: usize,
     _argp: *mut core::ffi::c_void,
 ) -> i32 {
+    // Load cooleyesBridge.prx early — PMPlayer requires it before mpeg_vsh.
+    unsafe { load_cooleyes_bridge() };
+
     loop {
         // Wait for trigger.
         if DUMP_STATE.compare_exchange(
@@ -81,6 +87,36 @@ unsafe extern "C" fn dump_thread_entry(
         // EBOOT writes ".me_patch" after loading AV modules, we hook
         // sceMpegAvcDecode syscall and write ".me_patched" when done.
         unsafe { check_patch_request() };
+
+        // Check for VSH module load + address resolution request from EBOOT.
+        unsafe { check_vsh_load_request() };
+        unsafe { check_vsh_addr_request() };
+
+        // Check for spy dump request from overlay menu.
+        if SPY_DUMP_STATE.compare_exchange(
+            1, 0, Ordering::AcqRel, Ordering::Relaxed
+        ).is_ok() {
+            crate::debug_log(b"[SPY] menu dump triggered");
+            unsafe {
+                auto_flush_spy();
+                dump_all_modules_to_file();
+            }
+        }
+
+        // Auto-flush spy log every ~5 seconds if there's data.
+        // Also auto-dump modules once ~30s after boot for comparison.
+        unsafe {
+            let ctr = core::ptr::read_volatile(&raw const SPY_FLUSH_CTR);
+            core::ptr::write_volatile(&raw mut SPY_FLUSH_CTR, ctr + 1);
+            if ctr % 50 == 49 {
+                auto_flush_spy();
+            }
+            // Auto-dump modules once ~30s after boot (300 ticks at 10Hz).
+            if ctr == 300 {
+                crate::debug_log(b"[SPY] auto module dump");
+                dump_all_modules_to_file();
+            }
+        }
 
         // SAFETY: PSP kernel syscall to sleep.
         unsafe { psp::sys::sceKernelDelayThread(100_000) }; // poll at 10Hz
@@ -730,6 +766,219 @@ fn log_dec(prefix: &[u8], val: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// Spy log: captures sceMpeg call arguments for runtime analysis
+// ---------------------------------------------------------------------------
+
+/// 4KB ring buffer for spy log entries. Each hook appends a line with
+/// function name, arguments, and return value. Flushed to file on demand
+/// via the overlay menu ("Spy: Dump Log").
+static mut SPY_BUF: [u8; 4096] = [0u8; 4096];
+static mut SPY_POS: usize = 0;
+
+/// Append a raw byte string to the spy log buffer.
+pub fn spy_append(msg: &[u8]) {
+    // SAFETY: Only called from syscall hook context (serialized by kernel).
+    unsafe {
+        let pos = core::ptr::read_volatile(&raw const SPY_POS);
+        let buf = &mut *(&raw mut SPY_BUF);
+        let new_pos = append_bytes(buf, pos, msg);
+        core::ptr::write_volatile(&raw mut SPY_POS, new_pos);
+    }
+}
+
+/// Append a newline to the spy log.
+pub fn spy_newline() {
+    // SAFETY: Same as spy_append.
+    unsafe {
+        let pos = core::ptr::read_volatile(&raw const SPY_POS);
+        let buf = &mut *(&raw mut SPY_BUF);
+        let new_pos = append_bytes(buf, pos, b"\n");
+        core::ptr::write_volatile(&raw mut SPY_POS, new_pos);
+    }
+}
+
+/// Append a hex value to the spy log.
+pub fn spy_hex(val: u32) {
+    // SAFETY: Same as spy_append.
+    unsafe {
+        let pos = core::ptr::read_volatile(&raw const SPY_POS);
+        let buf = &mut *(&raw mut SPY_BUF);
+        let p = append_bytes(buf, pos, b"0x");
+        let new_pos = append_hex(buf, p, val);
+        core::ptr::write_volatile(&raw mut SPY_POS, new_pos);
+    }
+}
+
+/// Append a decimal value to the spy log.
+pub fn spy_dec(val: u32) {
+    // SAFETY: Same as spy_append.
+    unsafe {
+        let pos = core::ptr::read_volatile(&raw const SPY_POS);
+        let buf = &mut *(&raw mut SPY_BUF);
+        let new_pos = append_dec(buf, pos, val);
+        core::ptr::write_volatile(&raw mut SPY_POS, new_pos);
+    }
+}
+
+/// Log a sceMpegCreate call to the spy buffer.
+pub fn spy_log_create(
+    mpeg: u32, data: u32, size: i32, rb: u32,
+    fw: i32, mode: i32, ddr: i32, ret: i32, tag: &[u8],
+) {
+    spy_append(tag);
+    spy_append(b"Create: mpeg=");
+    spy_hex(mpeg);
+    spy_append(b" data=");
+    spy_hex(data);
+    spy_append(b" sz=");
+    spy_dec(size as u32);
+    spy_append(b" rb=");
+    spy_hex(rb);
+    spy_append(b" fw=");
+    spy_dec(fw as u32);
+    spy_append(b" mode=");
+    spy_dec(mode as u32);
+    spy_append(b" ddr=");
+    spy_hex(ddr as u32);
+    spy_append(b" ret=");
+    spy_hex(ret as u32);
+    spy_newline();
+}
+
+/// Log a sceMpegAvcDecode call to the spy buffer.
+pub fn spy_log_decode(
+    mpeg: u32, au: u32, fw: i32, buf: u32,
+    init: i32, ret: i32, tag: &[u8],
+) {
+    spy_append(tag);
+    spy_append(b"Decode: mpeg=");
+    spy_hex(mpeg);
+    spy_append(b" au=");
+    spy_hex(au);
+    spy_append(b" fw=");
+    spy_dec(fw as u32);
+    spy_append(b" buf=");
+    spy_hex(buf);
+    spy_append(b" init=");
+    spy_dec(init as u32);
+    spy_append(b" ret=");
+    spy_hex(ret as u32);
+    spy_newline();
+}
+
+/// Spy dump command: 0=idle, 1=requested.
+static SPY_DUMP_STATE: AtomicU8 = AtomicU8::new(0);
+
+/// Request a spy dump (called from overlay menu — display hook context).
+/// Actual I/O happens in the dump thread where file operations are safe.
+pub fn trigger_spy_dump() {
+    let _ = SPY_DUMP_STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed);
+}
+
+/// Auto-flush spy log to file if there's data. Called periodically from
+/// the dump thread (~every 5 seconds). Appends to mpeg_spy.txt and also
+/// writes a fresh module snapshot on the first flush.
+unsafe fn auto_flush_spy() {
+    let pos = core::ptr::read_volatile(&raw const SPY_POS);
+    if pos == 0 {
+        return;
+    }
+
+    // Diagnostic: log that we detected data.
+    let mut m = [0u8; 48];
+    let mut p = append_bytes(&mut m, 0, b"[SPY] flush pos=");
+    p = append_dec(&mut m, p, pos as u32);
+    crate::debug_log(&m[..p]);
+
+    // Append spy log to file (not truncate -- accumulates across flushes).
+    let buf = &*(&raw const SPY_BUF);
+    let fd = psp::sys::sceIoOpen(
+        b"ms0:/seplugins/mpeg_spy.txt\0".as_ptr(),
+        psp::sys::IoOpenFlags::APPEND
+            | psp::sys::IoOpenFlags::CREAT
+            | psp::sys::IoOpenFlags::WR_ONLY,
+        0o777,
+    );
+    if fd >= psp::sys::SceUid(0) {
+        psp::sys::sceIoWrite(fd, buf.as_ptr() as *const _, pos);
+        psp::sys::sceIoClose(fd);
+    }
+
+    // Reset buffer.
+    core::ptr::write_volatile(&raw mut SPY_POS, 0);
+
+    // Dump modules on first flush only (avoid repeated large writes).
+    static mut MODULES_DUMPED: bool = false;
+    if !core::ptr::read_volatile(&raw const MODULES_DUMPED) {
+        core::ptr::write_volatile(&raw mut MODULES_DUMPED, true);
+        dump_all_modules_to_file();
+    }
+}
+
+/// Dump all loaded modules (kernel + user) to a text file for comparison.
+unsafe fn dump_all_modules_to_file() {
+    let mut mod_ids = [psp::sys::SceUid(0); 128];
+    let mut count: i32 = 0;
+    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+    let ret = psp::sys::sceKernelGetModuleIdList(
+        mod_ids.as_mut_ptr(), buf_bytes, &mut count,
+    );
+    if ret < 0 || count <= 0 {
+        crate::debug_log(b"[SPY] no modules");
+        return;
+    }
+
+    let mut list = [0u8; 8192];
+    let mut lp = 0;
+
+    for i in 0..count as usize {
+        let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
+        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+        if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
+            continue;
+        }
+        let name_len = info.name.iter().position(|&b| b == 0)
+            .unwrap_or(info.name.len());
+
+        // Tag kernel vs user modules.
+        let tag = if info.text_addr >= 0x8800_0000 {
+            b"[K] "
+        } else if info.text_addr >= 0x0800_0000 {
+            b"[U] "
+        } else {
+            b"[?] "
+        };
+
+        lp = append_bytes(&mut list, lp, tag);
+        lp = append_bytes(&mut list, lp, &info.name[..name_len]);
+        lp = append_bytes(&mut list, lp, b" @0x");
+        lp = append_hex(&mut list, lp, info.text_addr);
+        lp = append_bytes(&mut list, lp, b" t=");
+        lp = append_dec(&mut list, lp, info.text_size);
+        lp = append_bytes(&mut list, lp, b" d=");
+        lp = append_dec(&mut list, lp, info.data_size);
+        lp = append_bytes(&mut list, lp, b" attr=0x");
+        lp = append_hex(&mut list, lp, info.attribute as u32);
+        lp = append_bytes(&mut list, lp, b"\n");
+    }
+
+    lp = append_bytes(&mut list, lp, b"\nTotal: ");
+    lp = append_dec(&mut list, lp, count as u32);
+    lp = append_bytes(&mut list, lp, b" modules\n");
+
+    write_file(
+        b"ms0:/seplugins/mpeg_spy_modules.txt\0",
+        &list[..lp],
+    );
+
+    let mut m = [0u8; 48];
+    let mut p = append_bytes(&mut m, 0, b"[SPY] dumped ");
+    p = append_dec(&mut m, p, count as u32);
+    p = append_bytes(&mut m, p, b" modules");
+    crate::debug_log(&m[..p]);
+}
+
+// ---------------------------------------------------------------------------
 // ME stub patching via file-based IPC with EBOOT
 // ---------------------------------------------------------------------------
 
@@ -756,12 +1005,21 @@ unsafe fn check_patch_request() {
 
     crate::debug_log(b"[ME-PATCH] hooking sceMpegAvcDecode...");
 
-    // Now that EBOOT has loaded sceMpeg_library, find AvcDecode in it.
+    // Find AvcDecode — try kernel driver first (sctrlHENPatchSyscall
+    // only works on kernel syscall table entries, not user-mode stubs).
     let avc_ptr = psp::hook::find_function(
+        b"sceMpeg_driver\0".as_ptr(),
+        b"sceMpeg\0".as_ptr(),
+        0x0E3C2E9D,
+    ).or_else(|| psp::hook::find_function(
+        b"sceMpegVsh_library\0".as_ptr(),
+        b"sceMpeg\0".as_ptr(),
+        0x0E3C2E9D,
+    )).or_else(|| psp::hook::find_function(
         b"sceMpeg_library\0".as_ptr(),
         b"sceMpeg\0".as_ptr(),
         0x0E3C2E9D,
-    );
+    ));
     if let Some(ptr) = avc_ptr {
         let mut m = [0u8; 64];
         let mut p = append_bytes(&mut m, 0, b"[ME-PATCH] AvcDecode @0x");
@@ -944,6 +1202,236 @@ unsafe fn patch_kernel_stubs(base: u32) -> bool {
     log_dec(b"[ME-PATCH] patched ", patched);
     crate::debug_log(b"[ME-PATCH] done");
     patched == 5
+}
+
+// ---------------------------------------------------------------------------
+// VSH address resolution via file-based IPC
+// ---------------------------------------------------------------------------
+
+const VSH_LOAD_REQ: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_load\0";
+const VSH_REQ: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_req\0";
+const VSH_ADDRS: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0";
+
+static VSH_LOAD_DONE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Load cooleyesBridge.prx as kernel module (PMPlayer prerequisite).
+/// Called once at dump thread startup.
+static BRIDGE_LOADED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+unsafe fn load_cooleyes_bridge() {
+    if BRIDGE_LOADED.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    BRIDGE_LOADED.store(true, core::sync::atomic::Ordering::Release);
+
+    let paths: [&[u8]; 2] = [
+        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
+        b"ms0:/PSP/GAME/UoPMPlayer_660/cooleyesBridge.prx\0",
+    ];
+
+    for path in &paths {
+        let mod_id = psp::sys::sceKernelLoadModule(
+            path.as_ptr(), 0, core::ptr::null_mut(),
+        );
+        if mod_id < psp::sys::SceUid(0) {
+            continue;
+        }
+        let mut status: i32 = 0;
+        let ret = psp::sys::sceKernelStartModule(
+            mod_id, 0, core::ptr::null_mut(),
+            &mut status, core::ptr::null_mut(),
+        );
+        let mut m = [0u8; 64];
+        let mut p = append_bytes(&mut m, 0, b"[BRIDGE] start=0x");
+        p = append_hex(&mut m, p, ret as u32);
+        crate::debug_log(&m[..p]);
+        if ret >= 0 {
+            crate::debug_log(b"[BRIDGE] cooleyesBridge loaded OK");
+            return;
+        }
+        psp::sys::sceKernelUnloadModule(mod_id);
+    }
+    crate::debug_log(b"[BRIDGE] cooleyesBridge not found");
+}
+
+/// Check for VSH syscall resolution request from EBOOT.
+/// Reads syscall numbers from the VSH library's user-mode stubs (0x0A0A*)
+/// and writes them so the EBOOT can make direct syscalls.
+unsafe fn check_vsh_load_request() {
+    if VSH_LOAD_DONE.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    let fd = psp::sys::sceIoOpen(
+        VSH_LOAD_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0,
+    );
+    if fd < psp::sys::SceUid(0) {
+        return;
+    }
+    psp::sys::sceIoClose(fd);
+    psp::sys::sceIoRemove(VSH_LOAD_REQ.as_ptr());
+
+    crate::debug_log(b"[VSH-SC] extracting syscall numbers...");
+
+    // Resolve VSH function addresses (in VSH process space 0x0A0A*).
+    let nids: [u32; 8] = [
+        0xD8C5F121, 0x606A4649, 0x167AFD9E, 0xA780CF7E,
+        0xCEB870B1, 0x11F95CF1, 0x0E3C2E9D, 0xC132E22F,
+    ];
+
+    // Output: 8 x u32 syscall numbers (or 0 if not found).
+    let mut syscalls = [0u32; 8];
+    let mut resolved = 0u32;
+
+    for (i, &nid) in nids.iter().enumerate() {
+        let ptr = psp::hook::find_function(
+            b"sceMpegVsh_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            nid,
+        );
+        if let Some(fn_ptr) = ptr {
+            // Read the syscall stub. PSP user-mode stubs look like:
+            //   jr $ra        (03E00008)
+            //   syscall N     (0000000C | (N << 6))
+            // OR:
+            //   nop           (00000000)
+            //   syscall N     (0000000C | (N << 6))
+            // The syscall instruction is at offset +4.
+            let stub_addr = fn_ptr as u32;
+            let insn0 = core::ptr::read_volatile(stub_addr as *const u32);
+            let insn1 = core::ptr::read_volatile((stub_addr + 4) as *const u32);
+
+            // Extract syscall number from whichever instruction is the syscall.
+            let sc_num = if (insn1 & 0x3F) == 0x0C {
+                // insn1 is syscall
+                (insn1 >> 6) & 0xFFFFF
+            } else if (insn0 & 0x3F) == 0x0C {
+                // insn0 is syscall
+                (insn0 >> 6) & 0xFFFFF
+            } else {
+                0
+            };
+
+            if sc_num != 0 {
+                syscalls[i] = sc_num;
+                resolved += 1;
+
+                let mut m = [0u8; 80];
+                let mut p = append_bytes(&mut m, 0, b"[VSH-SC] [");
+                p = append_dec(&mut m, p, i as u32);
+                p = append_bytes(&mut m, p, b"] @0x");
+                p = append_hex(&mut m, p, stub_addr);
+                p = append_bytes(&mut m, p, b" insn=0x");
+                p = append_hex(&mut m, p, insn0);
+                p = append_bytes(&mut m, p, b",0x");
+                p = append_hex(&mut m, p, insn1);
+                p = append_bytes(&mut m, p, b" sc=");
+                p = append_dec(&mut m, p, sc_num);
+                crate::debug_log(&m[..p]);
+            }
+        }
+    }
+
+    let mut m = [0u8; 48];
+    let mut p = append_bytes(&mut m, 0, b"[VSH-SC] resolved ");
+    p = append_dec(&mut m, p, resolved);
+    p = append_bytes(&mut m, p, b"/8 syscalls");
+    crate::debug_log(&m[..p]);
+
+    // Write syscall numbers to file (8 x u32 = 32 bytes).
+    let out_fd = psp::sys::sceIoOpen(
+        VSH_ADDRS.as_ptr(),
+        psp::sys::IoOpenFlags::WR_ONLY
+            | psp::sys::IoOpenFlags::CREAT
+            | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if out_fd >= psp::sys::SceUid(0) {
+        psp::sys::sceIoWrite(
+            out_fd,
+            syscalls.as_ptr() as *const core::ffi::c_void,
+            32,
+        );
+        psp::sys::sceIoClose(out_fd);
+    }
+
+    VSH_LOAD_DONE.store(true, core::sync::atomic::Ordering::Release);
+}
+
+static VSH_ADDRS_DONE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Check for VSH address request from EBOOT and resolve sceMpegVsh_library NIDs.
+unsafe fn check_vsh_addr_request() {
+    if VSH_ADDRS_DONE.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    let fd = psp::sys::sceIoOpen(
+        VSH_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0,
+    );
+    if fd < psp::sys::SceUid(0) {
+        return;
+    }
+    psp::sys::sceIoClose(fd);
+    psp::sys::sceIoRemove(VSH_REQ.as_ptr());
+
+    crate::debug_log(b"[VSH-ADDR] resolving sceMpegVsh_library NIDs...");
+
+    // NIDs to resolve (same order as VSH_FN in main.rs).
+    let nids: [u32; 8] = [
+        0xD8C5F121, // 0: sceMpegCreate
+        0x606A4649, // 1: sceMpegDelete
+        0x167AFD9E, // 2: sceMpegInitAu
+        0xA780CF7E, // 3: sceMpegMallocAvcEsBuf
+        0xCEB870B1, // 4: sceMpegFreeAvcEsBuf
+        0x11F95CF1, // 5: sceMpegGetAvcNalAu
+        0x0E3C2E9D, // 6: sceMpegAvcDecode
+        0xC132E22F, // 7: sceMpegQueryMemSize
+    ];
+
+    let mut addrs = [0u32; 8];
+    let mut resolved = 0u32;
+
+    for (i, &nid) in nids.iter().enumerate() {
+        let ptr = psp::hook::find_function(
+            b"sceMpegVsh_library\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            nid,
+        );
+        if let Some(p) = ptr {
+            addrs[i] = p as u32;
+            resolved += 1;
+        }
+    }
+
+    let mut m = [0u8; 48];
+    let mut p = append_bytes(&mut m, 0, b"[VSH-ADDR] resolved ");
+    p = append_dec(&mut m, p, resolved);
+    p = append_bytes(&mut m, p, b"/8");
+    crate::debug_log(&m[..p]);
+
+    // Write addresses to file (8 x u32 = 32 bytes, little-endian).
+    let out_fd = psp::sys::sceIoOpen(
+        VSH_ADDRS.as_ptr(),
+        psp::sys::IoOpenFlags::WR_ONLY
+            | psp::sys::IoOpenFlags::CREAT
+            | psp::sys::IoOpenFlags::TRUNC,
+        0o777,
+    );
+    if out_fd >= psp::sys::SceUid(0) {
+        psp::sys::sceIoWrite(
+            out_fd,
+            addrs.as_ptr() as *const core::ffi::c_void,
+            32,
+        );
+        psp::sys::sceIoClose(out_fd);
+        crate::debug_log(b"[VSH-ADDR] addrs written");
+    }
+
+    VSH_ADDRS_DONE.store(true, core::sync::atomic::Ordering::Release);
 }
 
 /// Write the done file (EBOOT polls for this).
