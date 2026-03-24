@@ -436,90 +436,35 @@ pub fn test_real_pmf() {
 /// is called, which would otherwise put the MPEG library in a state where
 /// `sceMpegInit` returns `0x8002013a` (library already exists).
 pub fn preinit_mpeg() {
-    // Load AV modules (avcodec + mpegbase).
-    crate::audio::load_av_modules_once_pub();
+    // Exact PMPlayer sequence:
+    // 1. sceUtilityLoadAvModule(0)
+    // 2. kuKernelLoadModule("flash0:/kd/mpeg_vsh.prx")
+    // 3. sceKernelStartModule
+    // 4. sceMpegInit
 
-    // Load cooleyesBridge.prx — the kernel bridge for sceMeBootStart.
-    vlog("[VIDEO] loading cooleyesBridge.prx...");
-    let bridge_id = unsafe {
+    let av = unsafe { psp::sys::sceUtilityLoadAvModule(psp::sys::AvModule::AvCodec) };
+    vlog(&format!("[VIDEO] LoadAvModule(0)={av:#x}"));
+
+    let vsh = unsafe {
         psp::sys::kubridge::kuKernelLoadModule(
-            b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0".as_ptr(),
-            0, core::ptr::null_mut(),
+            b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(), 0, core::ptr::null_mut(),
         )
     };
-    vlog(&format!("[VIDEO] bridge id={:#x}", bridge_id.0));
-    if bridge_id >= psp::sys::SceUid(0) {
-        let mut st: i32 = 0;
-        let ret = unsafe {
+    vlog(&format!("[VIDEO] ku mpeg_vsh={:#x}", vsh.0));
+
+    if vsh >= psp::sys::SceUid(0) {
+        let mut status: i32 = 0;
+        let r = unsafe {
             psp::sys::sceKernelStartModule(
-                bridge_id, 0, core::ptr::null_mut(),
-                &mut st, core::ptr::null_mut(),
+                vsh, 0, 0 as *mut core::ffi::c_void,
+                &mut status, core::ptr::null_mut(),
             )
         };
-        vlog(&format!("[VIDEO] bridge start={ret:#x}"));
+        vlog(&format!("[VIDEO] vsh start={r:#x} st={status}"));
     }
 
-    // Load mpeg_vsh.prx via CFW kernel bridge.
-    // Try from app folder first (extracted from flash0, may avoid link issues),
-    // then fall back to flash0.
-    // Try loading mpeg_vsh via standard sceKernelLoadModule first
-    // (works if ARK-4 doesn't block flash0:/kd/ for module loading).
-    vlog("[VIDEO] sceKernelLoadModule(mpeg_vsh.prx)...");
-    let mut vsh_id = unsafe {
-        psp::sys::sceKernelLoadModule(
-            b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
-            0,
-            core::ptr::null_mut(),
-        )
-    };
-    vlog(&format!("[VIDEO] mpeg_vsh id={:#x}", vsh_id.0));
-
-    // Fallback: try kuKernelLoadModule (CFW kernel bridge).
-    if vsh_id < psp::sys::SceUid(0) {
-        vlog(&format!("[VIDEO] sceKernelLoadModule failed: {:#x}, trying ku...", vsh_id.0));
-        vsh_id = unsafe {
-            psp::sys::kubridge::kuKernelLoadModule(
-                b"flash0:/kd/mpeg_vsh.prx\0".as_ptr(),
-                0, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] ku mpeg_vsh id={:#x}", vsh_id.0));
-    }
-    // Fallback: try ms0 copy.
-    if vsh_id < psp::sys::SceUid(0) {
-        vsh_id = unsafe {
-            psp::sys::kubridge::kuKernelLoadModule(
-                b"ms0:/PSP/GAME/OASISOS/mpeg_vsh.prx\0".as_ptr(),
-                0, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] ms0 mpeg_vsh id={:#x}", vsh_id.0));
-    }
-
-    if vsh_id >= psp::sys::SceUid(0) {
-        let mut st: i32 = 0;
-        let ret = unsafe {
-            psp::sys::sceKernelStartModule(
-                vsh_id, 0, core::ptr::null_mut(),
-                &mut st, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] mpeg_vsh start={ret:#x}"));
-
-        if ret < 0 {
-            // Try starting without status param (some modules need this).
-            let ret2 = unsafe {
-                psp::sys::sceKernelStartModule(
-                    vsh_id, 0, core::ptr::null_mut(),
-                    core::ptr::null_mut(), core::ptr::null_mut(),
-                )
-            };
-            vlog(&format!("[VIDEO] mpeg_vsh start2={ret2:#x}"));
-        }
-    }
-
-    let ret = unsafe { psp::sys::sceMpegInit() };
-    vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
+    let r = unsafe { psp::sys::sceMpegInit() };
+    vlog(&format!("[VIDEO] sceMpegInit={r:#x}"));
 }
 
 /// Enumerate all loaded kernel modules and dump mpeg/codec-related ones
