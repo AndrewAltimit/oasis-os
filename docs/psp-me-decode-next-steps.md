@@ -2,6 +2,57 @@
 
 ## Date: 2026-03-25 (Updated)
 
+## BREAKTHROUGH: H.264 Video Decode Working! (2026-03-25)
+
+**Root cause of 0x80628002**: `sceMpegCreate` last two parameters are NOT "unknown/zero".
+They are `mpeg_mode` (4 for ≤480p, 5 for >480p) and `mpeg_ddrtop` (4MB-aligned 2MB buffer
+used as ME decode workspace). Without the DDR top pointer, the ME had no output workspace
+and returned `AVC_DECODE_FATAL` on every frame.
+
+**Discovery**: Found PMPlayer's actual source code (`pmplayer-advance` by cooleyes, exported
+from Google Code to GitHub: `DavisDev/pmplayer-advance`). Key file: `/ppa/mod/mp4avcdecoder.c`.
+
+### Three fixes applied:
+
+1. **`sceMpegQueryMemSize(4)` / `sceMpegCreate(..., mode, ddrtop)`**: PMPlayer passes mode 4/5
+   and a 4MB-aligned 2MB DDR top pointer. These tell the ME firmware how to allocate internal
+   decode structures. Without DDR top, the ME has no workspace for decoded frames.
+
+2. **AU buffer = `ddrtop + 0x10000`**: PMPlayer uses DDR top + 64KB offset as the AU buffer
+   for `sceMpegInitAu`, NOT `sceMpegMallocAvcEsBuf`. This places the AU in the DDR top region
+   where the ME expects it.
+
+3. **AU initialized with 0xFF** (not zeroed): PMPlayer does `memset(au, 0xFF, 64)` before
+   `sceMpegInitAu`. The sentinel values may be required for proper AU state tracking.
+
+### Additional fix: alpha channel
+
+`sceMpegBaseCscAvc` outputs ABGR with alpha=0x00 (transparent). Added post-CSC alpha fixup
+to set every pixel's alpha byte to 0xFF for correct compositing.
+
+### Working init sequence (confirmed on real hardware):
+
+```
+sceMpegInit() = 0x0
+sceMpegQueryMemSize(5) = 49535        (mode 5 for 656x480 video)
+DDR top: memalign(0x400000, 0x200000) → aligned to 0x9000000
+sceMpegRingbufferConstruct(8 packets) = 0x0
+sceMpegCreate(mpeg, data, 49535, &rb, 512, 5, 0x9000000) = 0x0
+sceMpegRegistStream(mpeg, 0, 0) = OK
+sceMpegInitAu(mpeg, ddrtop+0x10000, &au) = 0x0   (AU filled with 0xFF first)
+sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0
+```
+
+### Working decode sequence:
+
+```
+Mp4AvcNalStruct { sps, pps, nal_prefix_size=4, nal_buffer=AVCC_data, mode=3/0 }
+sceMpegGetAvcNalAu(mpeg, &nal, &au) = 0x0
+sceMpegAvcDecode(mpeg, &au, 512, &output, &pic_num) = 0x0
+sceMpegAvcDecodeDetail2(mpeg, &detail2)
+sceMpegBaseCscAvc(output, 0, csc_width, &csc_struct)  → ABGR pixels (alpha fixup needed)
+```
+
 ## BREAKTHROUGH: Child Module Loading Fixed (2026-03-25)
 
 Two bugs in `rust-psp` were preventing `sceKernelStartModule` from working:
@@ -20,18 +71,16 @@ from Rust EBOOTs. `mpeg_vsh370.prx` loading is unblocked.
 
 See: `docs/psp-child-module-investigation.md` for full investigation trail.
 
-## Current Status (Updated 2026-03-25 late evening)
+## Current Status: H.264 DECODE WORKING (2026-03-25)
 
+- **H.264 video decode confirmed working** on real PSP hardware via ME coprocessor
 - **sceMpeg stubs resolved via mpeg_vsh370**: mpeg_vsh370 registers "sceMpeg" for
   self-imports, which triggers re-linking of our EBOOT's weak import stubs
-- **Full init chain works**: Init → QueryMemSize(46515) → RingbufferConstruct →
-  Create → RegistStream → MallocAvcEsBuf → InitAu → GetAvcNalAu — all succeed
-- **AvcDecode fails**: returns `0x80628002` (AVC_DECODE_FATAL) on every frame
-- **ME boot confirmed NOT the issue**: `sceMeBootStart660(0)` returns `0x80000102`
-  (already booted by AAC subsystem). K1 cleared correctly. Same error with/without.
-- **PMPlayer confirmed working** on this exact PSP with `oasis_demo.mp4` — proves
-  hardware CAN decode H.264. Issue is in our NAL data formatting or call sequence.
-- **oasis-me-boot.prx created**: Clean Rust replacement for cooleyesBridge (GPL-free).
+- **Full pipeline working**: Init → QueryMemSize(mode=5) → RingbufferConstruct →
+  Create(mode=5, ddrtop) → RegistStream → InitAu(ddrtop+0x10000) →
+  GetAvcNalAu → AvcDecode → DecodeDetail2 → CscAvc → ABGR pixels
+- **656x480 video decoded** from archive.org streaming (Bits and Bytes, 1983)
+- **oasis-me-boot.prx**: Clean Rust replacement for cooleyesBridge (GPL-free).
   Uses `sctrlHENFindFunction` + `set_k1(0)` + `sceMeBootStart660(0)`.
 - **No kernel PRX plugin needed**: sceMpeg works through standard import stubs.
   Kernel PRX plugin (`sctrlHENPatchSyscall`) corrupts networking — must not be used.
@@ -49,6 +98,7 @@ See: `docs/psp-child-module-investigation.md` for full investigation trail.
 | Above + sceMpegAvcDecodeMode(Psm8888) | Yes | All OK | 0x80628002 | DecodeMode returns 0x0 (OK) |
 | Above + mode=0 (default) | Yes | All OK | 0x80628002 | QueryMemSize returns 46515 |
 | Above + mode=5 (Main Profile) | Yes | All OK | 0x80628002 | QueryMemSize returns 49535 |
+| **Above + mode=5 + DDR top + AU from DDR** | **Yes** | **All OK** | **SUCCESS** | **Video decoded! Root cause was missing DDR top pointer.** |
 | Kernel PRX for NID resolution | N/A | N/A | N/A | sctrlHENPatchSyscall corrupts networking |
 | sceMpegVsh_library import stubs in EBOOT | Dashboard freeze | N/A | N/A | Kernel re-linking corrupts I-cache on ARK-4 |
 | Loading mpeg_vsh370 during preinit | Dashboard freeze | N/A | N/A | Must load from video thread, not main thread |

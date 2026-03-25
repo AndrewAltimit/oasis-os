@@ -587,6 +587,9 @@ struct NalDecoder {
     mpeg_storage: *mut c_void,
     mpeg_data: Vec<u8>,
     ddr_block: psp::sys::SceUid,
+    // Keep ringbuffer + backing data alive — sceMpegCreate stores internal pointers.
+    _ringbuffer: Box<psp::sys::SceMpegRingbuffer>,
+    _rb_data: Vec<u8>,
     es_buf: *mut c_void,
     au: psp::sys::SceMpegAu,
     sps: Vec<u8>,
@@ -644,10 +647,10 @@ impl NalDecoder {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
 
-        // Mode 5 for Main Profile or >480x272 (cooleyes pattern).
-        // Mode 0 is the standard sceMpeg mode. Modes 4/5 are cooleyes extensions
-        // that may not be supported by mpeg_vsh370.
-        let mpeg_mode = 0;
+        // PMPlayer uses mode 4 for ≤480x272, mode 5 for larger video.
+        // These are NOT standard pspsdk modes — they enable the NAL decode path
+        // in mpeg_vsh370 and tell the ME how to allocate internal structures.
+        let mpeg_mode = if width > 480 { 5 } else { 4 };
         let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
             return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
@@ -703,18 +706,21 @@ impl NalDecoder {
             vlog(&format!("[VIDEO] NAL: RingbufferConstruct = {ret:#x}"));
         }
 
+        // PMPlayer passes mpeg_mode and mpeg_ddrtop as the last two args.
+        // The DDR top is a 2MB region (4MB-aligned) used as ME decode workspace.
+        // Without these, the ME has no output buffer and returns 0x80628002.
         let ret = unsafe {
             psp::sys::sceMpegCreate(
                 mpeg,
                 mpeg_data_aligned as *mut c_void,
                 mem_size as i32,
                 &mut *ringbuffer,
-                512, // frame_width
-                0,   // unk1 (standard)
-                0,   // unk2 (standard)
+                512,                   // frame_width
+                mpeg_mode,             // mode: 4 (≤480p) or 5 (>480p)
+                ddr_aligned as i32,    // DDR top: ME decode workspace
             )
         };
-        vlog(&format!("[VIDEO] NAL: sceMpegCreate = {ret:#x}"));
+        vlog(&format!("[VIDEO] NAL: sceMpegCreate = {ret:#x} mode={mpeg_mode} ddr={ddr_aligned:#x}"));
         if ret < 0 {
             unsafe { let _ = Box::from_raw(mpeg_storage); }
             return Err(format!("sceMpegCreate: {ret:#x}"));
@@ -725,17 +731,19 @@ impl NalDecoder {
         let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
         vlog(&format!("[VIDEO] NAL: RegistStream = {:?}", stream));
 
-        // Allocate ES buffer and init AU.
-        let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
-        vlog(&format!("[VIDEO] NAL: MallocAvcEsBuf = {:?}", es_buf));
-        if es_buf.is_null() {
-            // Try without ringbuffer — some firmware versions need different init order.
-            return Err("MallocAvcEsBuf returned null".to_string());
-        }
-        vlog("[VIDEO] NAL: ES buffer allocated");
+        // PMPlayer uses ddrtop + 0x10000 as the AU buffer (NOT sceMpegMallocAvcEsBuf).
+        // This places the AU in the DDR top region where the ME expects it.
+        let au_buffer = (ddr_aligned + 0x10000) as *mut c_void;
+        vlog(&format!("[VIDEO] NAL: AU buffer = {:#x}", ddr_aligned + 0x10000));
 
-        let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
-        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
+        // PMPlayer initializes AU with 0xFF (not zeroed) before sceMpegInitAu.
+        let mut au = unsafe {
+            let mut a = core::mem::MaybeUninit::<psp::sys::SceMpegAu>::uninit();
+            core::ptr::write_bytes(a.as_mut_ptr() as *mut u8, 0xFF,
+                core::mem::size_of::<psp::sys::SceMpegAu>());
+            a.assume_init()
+        };
+        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, au_buffer, &mut au) };
         if ret < 0 {
             unsafe {
                 psp::sys::sceMpegDelete(mpeg);
@@ -761,7 +769,9 @@ impl NalDecoder {
             mpeg_storage: mpeg_storage as *mut c_void,
             mpeg_data,
             ddr_block,
-            es_buf,
+            _ringbuffer: ringbuffer,
+            _rb_data: rb_data,
+            es_buf: core::ptr::null_mut(), // Not using MallocAvcEsBuf — AU buffer is in DDR top
             au,
             sps,
             pps,
@@ -984,18 +994,25 @@ impl NalDecoder {
             vlog("[VIDEO] NAL: FRAME DECODED!");
         }
 
-        // Copy from output buffer (stride=frame_width) to output (stride=width).
+        // Copy from output buffer (stride=frame_width) to output (stride=width),
+        // and fix alpha channel — sceMpegBaseCscAvc outputs ABGR with A=0x00.
         let w = self.width as usize;
         let h = self.height as usize;
         let stride = self.frame_width as usize;
         let mut rgba = vec![0u8; w * h * 4];
         for row in 0..h {
+            let src_off = row * stride * 4;
+            let dst_off = row * w * 4;
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    self.output_buf.as_ptr().add(row * stride * 4),
-                    rgba.as_mut_ptr().add(row * w * 4),
+                    self.output_buf.as_ptr().add(src_off),
+                    rgba.as_mut_ptr().add(dst_off),
                     w * 4,
                 );
+            }
+            // Set alpha to 0xFF for each pixel in this row.
+            for x in 0..w {
+                rgba[dst_off + x * 4 + 3] = 0xFF;
             }
         }
 

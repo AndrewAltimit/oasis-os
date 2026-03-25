@@ -1070,12 +1070,93 @@ sceKernelStartModule(uid, 0, NULL, ...)
     or NAL prefix handling differs from PMPlayer&rsquo;s. The H.264 data may
     have AVCC length prefixes where the ME expects Annex B start codes, or
     the struct layout may have additional fields we&rsquo;re not populating.
-    The next step is trying the <strong>PSMF ringbuffer approach</strong>
-    (SceMpegDecoder), which wraps H.264 AUs in MPEG-PS packets and bypasses
-    NAL feeding entirely.
   </p>
 
-  <h3>Infrastructure built this session</h3>
+  <h3>Root cause found: PMPlayer source code comparison</h3>
+
+  <p>
+    Finding PMPlayer&rsquo;s actual source code (<code>pmplayer-advance</code>
+    by cooleyes, exported from Google Code to GitHub:
+    <code>DavisDev/pmplayer-advance</code>, key file:
+    <code>/ppa/mod/mp4avcdecoder.c</code>) revealed three critical differences
+    in our <code>sceMpegCreate</code> call:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Parameter</th><th>Our Code</th><th>PMPlayer</th><th>Impact</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sceMpegQueryMemSize</code> mode</td>
+        <td><strong>0</strong></td>
+        <td><strong>4</strong> (&le;480p) / <strong>5</strong> (&gt;480p)</td>
+        <td>Different buffer size, NAL decode path not enabled</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegCreate</code> unk1</td>
+        <td><strong>0</strong></td>
+        <td><strong>mpeg_mode (4/5)</strong></td>
+        <td>ME doesn&rsquo;t know which decode mode to use</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegCreate</code> unk2</td>
+        <td><strong>0</strong></td>
+        <td><strong>DDR top pointer</strong> (4MB-aligned 2MB buffer)</td>
+        <td>ME has no workspace for decoded frames &mdash; <strong>root cause of 0x80628002</strong></td>
+      </tr>
+      <tr>
+        <td>AU buffer for <code>sceMpegInitAu</code></td>
+        <td><code>sceMpegMallocAvcEsBuf</code></td>
+        <td><code>ddrtop + 0x10000</code></td>
+        <td>AU not in DDR top region where ME expects it</td>
+      </tr>
+      <tr>
+        <td>AU struct init</td>
+        <td>zeroed</td>
+        <td><code>memset(0xFF)</code></td>
+        <td>Sentinel values required for proper state tracking</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The &ldquo;unknown&rdquo; parameters in <code>sceMpegCreate</code> were
+    <strong>never documented</strong> in PSPSDK or any public reference &mdash;
+    they were only visible in PMPlayer&rsquo;s source. Without the DDR top
+    pointer, the ME&rsquo;s codec firmware had no output buffer to write
+    decoded YCbCr frames, causing every <code>sceMpegAvcDecode</code> call to
+    return <code>0x80628002</code> (AVC_DECODE_FATAL).
+  </p>
+
+  <h3>H.264 decode: working!</h3>
+
+  <p>
+    After applying all three fixes, the full decode pipeline works on real
+    PSP hardware. Confirmed with a 656&times;480 H.264 stream from
+    archive.org (Bits and Bytes, 1983). The working init sequence:
+  </p>
+
+  <pre><code>sceMpegInit() = 0x0
+sceMpegQueryMemSize(5) = 49535        // mode 5 for &gt;480p
+DDR top: 2MB @ 0x9000000 (4MB-aligned)
+sceMpegRingbufferConstruct(8 packets) = 0x0
+sceMpegCreate(mpeg, data, 49535, &amp;rb, 512, 5, 0x9000000) = 0x0
+sceMpegRegistStream(mpeg, 0, 0) = OK
+sceMpegInitAu(mpeg, 0x9010000, &amp;au) = 0x0   // ddrtop + 0x10000, AU filled with 0xFF first
+sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
+
+  <p>
+    The per-frame decode sequence feeds AVCC-format NAL data
+    (length-prefixed, directly from MP4 container) via
+    <code>sceMpegGetAvcNalAu</code>, then decodes via
+    <code>sceMpegAvcDecode</code>. The ME outputs YCbCr which is converted to
+    ABGR via <code>sceMpegBaseCscAvc</code> (hardware color space converter).
+    One additional fix: the CSC outputs alpha=0x00, so a post-conversion
+    alpha fixup sets every pixel&rsquo;s alpha to 0xFF for correct compositing.
+  </p>
+
+  <h3>Infrastructure built across sessions</h3>
 
   <ul>
     <li><strong>29 EABI mappers</strong> added to <code>rust-psp</code> for all
@@ -1083,7 +1164,8 @@ sceKernelStartModule(uid, 0, NULL, ...)
     <li><strong>i8/i9 assembly bridges</strong> for 8 and 9 argument functions</li>
     <li><strong>prxgen fix</strong> for SHT_REL section corruption</li>
     <li><strong>oasis-me-boot.prx</strong> &mdash; GPL-free Rust ME boot PRX</li>
-    <li><strong>sceMpeg + sceMpegbase import stubs</strong> enabled (weak, from AvMpegBase/mpeg_vsh370)</li>
+    <li><strong>sceMpeg + sceMpegbase import stubs</strong> enabled (weak, from mpeg_vsh370)</li>
+    <li><strong>PMPlayer source code analysis</strong> &mdash; identified undocumented sceMpegCreate parameters</li>
     <li><strong>850 lines dead code removed</strong> from video.rs</li>
     <li><strong>Kernel PRX networking bug</strong> identified and documented</li>
   </ul>
