@@ -20,38 +20,114 @@ from Rust EBOOTs. `mpeg_vsh370.prx` loading is unblocked.
 
 See: `docs/psp-child-module-investigation.md` for full investigation trail.
 
-## Current Status (Updated 2026-03-25 evening)
+## Current Status (Updated 2026-03-25 late evening)
 
 - **sceMpeg stubs resolved via mpeg_vsh370**: mpeg_vsh370 registers "sceMpeg" for
   self-imports, which triggers re-linking of our EBOOT's weak import stubs
-- **Full init chain works**: Init → QueryMemSize(49535) → RingbufferConstruct →
+- **Full init chain works**: Init → QueryMemSize(46515) → RingbufferConstruct →
   Create → RegistStream → MallocAvcEsBuf → InitAu → GetAvcNalAu — all succeed
-- **AvcDecode still fails**: returns `0x80628002` (AVC_DECODE_FATAL)
-- **ME boot may be missing**: PMPlayer uses cooleyesBridge.prx to call
-  `sceMeBootStart660` before decode. Without explicit ME boot, the decode
-  submission may fail even though the init chain succeeds
-- **No kernel PRX needed**: sceMpeg functions work through standard import stubs
-- **PMPlayer works**: proves the hardware CAN decode H.264 on this exact PSP
+- **AvcDecode fails**: returns `0x80628002` (AVC_DECODE_FATAL) on every frame
+- **ME boot confirmed NOT the issue**: `sceMeBootStart660(0)` returns `0x80000102`
+  (already booted by AAC subsystem). K1 cleared correctly. Same error with/without.
+- **PMPlayer confirmed working** on this exact PSP with `oasis_demo.mp4` — proves
+  hardware CAN decode H.264. Issue is in our NAL data formatting or call sequence.
+- **oasis-me-boot.prx created**: Clean Rust replacement for cooleyesBridge (GPL-free).
+  Uses `sctrlHENFindFunction` + `set_k1(0)` + `sceMeBootStart660(0)`.
+- **No kernel PRX plugin needed**: sceMpeg works through standard import stubs.
+  Kernel PRX plugin (`sctrlHENPatchSyscall`) corrupts networking — must not be used.
 
-### What doesn't work (and why)
+### Comprehensive test matrix
 
-| Approach | Result | Why |
-|----------|--------|-----|
-| sceMpeg stubs + AvMpegBase | Init OK, AvcDecode 0x80628002 | ME stubs empty in avcodec.prx |
-| sceMpegVsh_library stubs + mpeg_vsh370 | Stubs NOT resolved (0x8002013a) | sceKernelStartModule doesn't re-link |
-| Both AvMpegBase + mpeg_vsh370 | 0x8002013b | Exclusive load conflict |
-| **sceMpeg stubs + mpeg_vsh370 only** | **Init/Create/NAL OK, AvcDecode 0x80628002** | **Stubs resolve! Decode fails — likely needs ME boot** |
-| Kernel PRX for NID resolution | Breaks networking | sctrlHENPatchSyscall corrupts syscall table |
+| Approach | Stubs resolve? | Init chain? | AvcDecode | Notes |
+|----------|---------------|-------------|-----------|-------|
+| sceMpeg stubs + AvMpegBase | Yes (sceUtilityLoadModule re-links) | All OK | 0x80628002 | AvMpegBase routes through broken avcodec stubs |
+| sceMpegVsh_library stubs + mpeg_vsh370 | No (0x8002013a) | N/A | N/A | sceKernelStartModule doesn't re-link |
+| Both AvMpegBase + mpeg_vsh370 | N/A | N/A | N/A | 0x8002013b exclusive load conflict |
+| **sceMpeg stubs + mpeg_vsh370 only** | **Yes** (self-import registration) | **All OK** | **0x80628002** | Stubs resolve! Same decode error. |
+| Above + ME boot (oasis-me-boot.prx) | Yes | All OK | 0x80628002 | ME already booted (0x80000102) |
+| Above + ME boot (cooleyesBridge.prx) | Yes | All OK | 0x80628002 | Same — ME boot is not the issue |
+| Above + sceMpegAvcDecodeMode(Psm8888) | Yes | All OK | 0x80628002 | DecodeMode returns 0x0 (OK) |
+| Above + mode=0 (default) | Yes | All OK | 0x80628002 | QueryMemSize returns 46515 |
+| Above + mode=5 (Main Profile) | Yes | All OK | 0x80628002 | QueryMemSize returns 49535 |
+| Kernel PRX for NID resolution | N/A | N/A | N/A | sctrlHENPatchSyscall corrupts networking |
+| sceMpegVsh_library import stubs in EBOOT | Dashboard freeze | N/A | N/A | Kernel re-linking corrupts I-cache on ARK-4 |
+| Loading mpeg_vsh370 during preinit | Dashboard freeze | N/A | N/A | Must load from video thread, not main thread |
+
+### Key discoveries
+
+1. **mpeg_vsh370 registers "sceMpeg"**: When mpeg_vsh370 starts, it imports 59
+   functions from "sceMpeg" (self-referencing). The kernel registers this as an
+   available library, which triggers re-linking of the EBOOT's weak "sceMpeg"
+   import stubs. This is the mechanism that makes sceMpeg calls work without
+   AvMpegBase or any kernel PRX.
+
+2. **sceKernelStartModule does NOT re-link for other library names**: If the
+   EBOOT has "sceMpegVsh_library" stubs, they remain unresolved (0x8002013a)
+   after mpeg_vsh370 starts. Only the "sceMpeg" stubs get resolved because
+   mpeg_vsh370's self-imports force that library's registration.
+
+3. **Module loading on main thread freezes GU**: `sceKernelLoadModule` for
+   mpeg_vsh370 during `preinit_mpeg()` (main thread) causes a permanent
+   dashboard freeze. Loading from the video thread works fine. Likely an
+   EDRAM partition conflict with GU framebuffers.
+
+4. **Kernel PRX sctrlHENPatchSyscall corrupts networking**: The oasis-plugin-psp
+   kernel PRX's sceMpeg syscall hooks corrupt adjacent entries in the syscall
+   table, breaking sceHttp/sceNet. Symptoms: WiFi dialog errors (80082731,
+   80020190), HTTP parse hangs. This cost hours of debugging.
+
+5. **ELF headers stripped after module load**: The PSP kernel removes ELF and
+   program headers from loaded PRX modules, making it impossible to walk the
+   export table from user mode for function resolution.
+
+6. **ARK-4 CFW caches kernel plugins**: Renaming the PRX file on the memory
+   stick does NOT force a reload — the CFW loads from a cached copy.
+
+7. **ME is already booted**: The AAC audio subsystem (sceAudiocodec) boots
+   the ME during codec initialization. Calling `sceMeBootStart660` again
+   returns `0x80000102` (already started). ME boot is NOT the decode blocker.
+
+### 0x80628002 analysis
+
+The error `0x80628002` (SCE_MPEG_ERROR_AVC_DECODE_FATAL) comes from the ME
+firmware's codec processing layer. It is NOT a "function unavailable" error —
+the ME IS attempting to decode but failing. One frame occasionally returns
+`0x80628001` (less fatal) which further confirms the ME is processing data.
+
+**PMPlayer works** with the same mpeg_vsh370.prx on the same hardware, so the
+ME codec layer IS functional. The difference must be in:
+
+1. **NAL data format**: Our NAL buffer may have AVCC length prefix (00 00 1e d4)
+   where the ME expects raw NAL data or Annex B start codes (00 00 00 01).
+   The `nal_prefix_size` field in Mp4AvcNalStruct may not mean what we think.
+
+2. **Mp4AvcNalStruct layout**: Our struct (8 fields, 32 bytes) may be missing
+   fields or have wrong ordering compared to what PMPlayer uses.
+
+3. **Call sequence**: PMPlayer may call additional functions between
+   GetAvcNalAu and AvcDecode that we skip, or pass different parameters.
 
 ### Next steps (priority order)
 
-1. **Boot the ME core**: Call `sceMeBootStart660` before AvcDecode. Options:
-   - Rewrite cooleyesBridge in Rust as a minimal kernel PRX (just find_function + ME boot, NO syscall patching)
-   - Or add ME boot to rust-psp's `me` module via find_function
-2. **If ME boot doesn't fix 0x80628002**: Investigate NID differences between
-   FW 3.71 (mpeg_vsh370) and FW 6.61 (our import stubs). Some functions may
-   have different NIDs — sceMpegMallocAvcEsBuf returned 0x1 (suspicious)
-3. **If decode works**: Wire up YCbCr→RGBA conversion and texture upload
+1. **Try SceMpegDecoder (PSMF ringbuffer approach)**: This wraps H.264 AUs in
+   MPEG-PS packets and feeds them through the standard ringbuffer path, bypassing
+   NAL feeding entirely. If this works, the issue is our Mp4AvcNalStruct/data
+   format. If this ALSO returns 0x80628002, the issue is deeper (avcodec.prx).
+   The SceMpegDecoder is already implemented in video.rs — just needs wiring
+   up with mpeg_vsh370 instead of AvMpegBase.
+
+2. **Find PMPlayer's video decode source**: The cooleyesBridge source is on the
+   memory stick at `ms0:/PSP/GAME/UoPMPlayer_660/src/`. But the actual sceMpeg
+   video decode logic is in PMPlayer's EBOOT, not cooleyesBridge. Search for
+   the PMPlayer source code online (it's open-source, by cooleyes) and compare
+   the Mp4AvcNalStruct layout and decode call sequence exactly.
+
+3. **Test with local file**: `test.mp4` is copied to the OASISOS directory.
+   The `play_mp4()` function in video.rs can decode from a local file,
+   eliminating streaming as a variable. Wire it up as a test path.
+
+4. **If decode works**: Wire up YCbCr→RGBA conversion (VFPU software converter
+   already implemented) and texture upload for TV Guide rendering.
 
 ## Phase A: Complete — Key Findings
 

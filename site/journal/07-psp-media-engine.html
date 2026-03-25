@@ -1029,22 +1029,64 @@ sceKernelStartModule(uid, 0, NULL, ...)
       file doesn&rsquo;t force a reload; the CFW loads from a cached copy.</li>
   </ul>
 
-  <h3>Current status: sceMpegCreate succeeds, AvcDecode pending</h3>
+  <h3>oasis-me-boot.prx: Rust replacement for cooleyesBridge</h3>
 
   <p>
-    The full sceMpeg init chain now works through mpeg_vsh370:
-    <code>sceMpegInit</code> &rarr; <code>sceMpegQueryMemSize</code> (returns 49535)
-    &rarr; <code>sceMpegRingbufferConstruct</code> &rarr;
-    <code>sceMpegCreate</code> &rarr; <code>sceMpegRegistStream</code> &rarr;
-    <code>sceMpegMallocAvcEsBuf</code> &rarr; <code>sceMpegInitAu</code> &rarr;
-    <code>sceMpegGetAvcNalAu</code> (NAL feeding). All return success.
-    <code>sceMpegAvcDecode</code> still returns <code>0x80628002</code>
-    (AVC_DECODE_FATAL), likely because the Media Engine core needs explicit
-    booting via <code>sceMeBootStart660</code> (a kernel function called by
-    PMPlayer through <code>cooleyesBridge.prx</code>). The next step is either
-    calling the ME boot through a minimal kernel bridge or rewriting the
-    cooleyesBridge functionality in Rust.
+    We rewrote <code>cooleyesBridge.prx</code> (GPL, by cooleyes) as a clean Rust
+    kernel PRX: <code>oasis-me-boot.prx</code>. It uses
+    <code>sctrlHENFindFunction</code> to resolve <code>sceMeBootStart660</code>
+    (NID <code>0x5DFF5C50</code> in <code>sceMeCore_driver</code>), clears
+    <code>$k1</code> for kernel address validation, and calls it with
+    <code>mebooterType=0</code>. No GPL dependency, no syscall patching, no
+    networking corruption.
   </p>
+
+  <h3>The 0x80628002 mystery: ME decodes for PMPlayer but not for us</h3>
+
+  <p>
+    Despite getting every sceMpeg function to succeed &mdash; Init, Create,
+    RingbufferConstruct, RegistStream, MallocAvcEsBuf, InitAu,
+    AvcDecodeMode(Psm8888), GetAvcNalAu &mdash; <code>sceMpegAvcDecode</code>
+    consistently returns <code>0x80628002</code> (AVC_DECODE_FATAL). We confirmed:
+  </p>
+
+  <ul>
+    <li><strong>ME boot is not the issue</strong> &mdash;
+      <code>sceMeBootStart660(0)</code> returns <code>0x80000102</code>
+      (already booted by the AAC subsystem). Same error with or without boot.</li>
+    <li><strong>PMPlayer works</strong> on this exact PSP with the same
+      <code>mpeg_vsh370.prx</code> and <code>cooleyesBridge.prx</code>.
+      H.264 decode is hardware-capable.</li>
+    <li><strong>The ME IS processing</strong> &mdash; one frame occasionally
+      returns <code>0x80628001</code> (less fatal error), confirming the ME
+      receives and attempts to decode our data.</li>
+    <li><strong>All configuration variants tested</strong>: mode 0, mode 5,
+      with/without AvcDecodeMode, with/without ME boot, proper ringbuffer
+      construction &mdash; all return <code>0x80628002</code>.</li>
+  </ul>
+
+  <p>
+    The remaining hypothesis: our <code>Mp4AvcNalStruct</code> data formatting
+    or NAL prefix handling differs from PMPlayer&rsquo;s. The H.264 data may
+    have AVCC length prefixes where the ME expects Annex B start codes, or
+    the struct layout may have additional fields we&rsquo;re not populating.
+    The next step is trying the <strong>PSMF ringbuffer approach</strong>
+    (SceMpegDecoder), which wraps H.264 AUs in MPEG-PS packets and bypasses
+    NAL feeding entirely.
+  </p>
+
+  <h3>Infrastructure built this session</h3>
+
+  <ul>
+    <li><strong>29 EABI mappers</strong> added to <code>rust-psp</code> for all
+      5+ argument PSP functions (kernel, thread, net, font, HTTP)</li>
+    <li><strong>i8/i9 assembly bridges</strong> for 8 and 9 argument functions</li>
+    <li><strong>prxgen fix</strong> for SHT_REL section corruption</li>
+    <li><strong>oasis-me-boot.prx</strong> &mdash; GPL-free Rust ME boot PRX</li>
+    <li><strong>sceMpeg + sceMpegbase import stubs</strong> enabled (weak, from AvMpegBase/mpeg_vsh370)</li>
+    <li><strong>850 lines dead code removed</strong> from video.rs</li>
+    <li><strong>Kernel PRX networking bug</strong> identified and documented</li>
+  </ul>
 
   <nav class="article-nav">
     <a class="prev" href="06-backend-trait-system.html">&larr; Prev: Anatomy of the Backend Trait System</a>
