@@ -153,24 +153,43 @@ pub fn preinit_mpeg() {
 /// that conflicts with GU rendering). Instead, we defer `sceKernelStartModule`
 /// to when the video thread actually needs it.
 fn load_vsh_mpeg_module() {
-    // Load AvMpegBase first — resolves sceMpeg import stubs at kernel level.
-    // mpeg_vsh370 is loaded later from the video thread to provide the
-    // working sceMpegVsh_library implementation.
+    // Do NOT load AvMpegBase — it conflicts with mpeg_vsh370 (exclusive load).
+    // mpeg_vsh370 is loaded from the video thread when decode is needed.
     unsafe {
-        let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
-        vlog(&format!("[VIDEO] AvMpegBase = {r:#x}"));
         let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
         vlog(&format!("[VIDEO] AvMp3 = {r:#x}"));
     }
 }
 
-/// Load mpeg_vsh370.prx from the video thread. Registers sceMpegVsh_library
-/// which the kernel uses to resolve our weak import stubs.
+/// Load cooleyesBridge.prx + mpeg_vsh370.prx from the video thread.
+/// cooleyesBridge boots the ME core (required for H.264 decode).
+/// mpeg_vsh370 provides the sceMpegVsh_library implementation.
 fn load_mpeg_vsh_module() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
         return;
+    }
+
+    // Load cooleyesBridge.prx to boot the ME core.
+    // This is a tiny kernel bridge: cooleyesMeBootStart(devkit, type) → sceMeBootStart660.
+    // Without ME boot, sceMpegAvcDecode returns 0x80628002 (FATAL).
+    let bridge_id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0".as_ptr(),
+            0, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] cooleyesBridge load = {:#x}", bridge_id.0));
+    if bridge_id >= psp::sys::SceUid(0) {
+        let mut status: i32 = 0;
+        let ret = unsafe {
+            psp::sys::sceKernelStartModule(
+                bridge_id, 0, core::ptr::null_mut(),
+                &mut status, core::ptr::null_mut(),
+            )
+        };
+        vlog(&format!("[VIDEO] cooleyesBridge start = {ret:#x}"));
     }
 
     vlog("[VIDEO] loading mpeg_vsh370.prx...");
@@ -201,12 +220,28 @@ fn load_mpeg_vsh_module() {
     }
     vlog("[VIDEO] sceMpegVsh_library registered!");
 
-    // Test if stubs are now resolved.
-    let test = unsafe { psp::sys::sceMpegInit() };
-    vlog(&format!("[VIDEO] sceMpegInit test = {test:#x}"));
-    if test >= 0 || test == 0x80618003_u32 as i32 || test == 0x80618005_u32 as i32 {
-        vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370!");
-        unsafe { psp::sys::sceMpegFinish() };
+    // Probe which sceMpeg stubs are resolved by reading the stub instructions.
+    // Resolved stubs have: jr $ra (0x03E00008) + syscall N
+    // Unresolved stubs have: jr $ra (0x03E00008) + nop (0x00000000)
+    // OR: some other pattern like two pointer words (Stub struct).
+    unsafe {
+        // Read stub instructions for key functions to check resolution.
+        let fns: &[(&str, unsafe extern "C" fn() -> i32)] = &[
+            ("Init", core::mem::transmute(psp::sys::sceMpegInit as *const ())),
+            ("QueryMemSize", core::mem::transmute(psp::sys::sceMpegQueryMemSize as *const ())),
+            ("MallocEsBuf", core::mem::transmute(psp::sys::sceMpegMallocAvcEsBuf as *const ())),
+            ("InitAu", core::mem::transmute(psp::sys::sceMpegInitAu as *const ())),
+        ];
+        for &(name, f) in fns {
+            let addr = f as *const () as *const u32;
+            let insn0 = core::ptr::read_volatile(addr);
+            let insn1 = core::ptr::read_volatile(addr.add(1));
+            let has_syscall = (insn1 & 0x3F) == 0x0C;
+            vlog(&format!(
+                "[VIDEO] stub {name}: @{addr:?} = {insn0:#010x} {insn1:#010x} {}",
+                if has_syscall { "RESOLVED" } else { "unresolved" }
+            ));
+        }
     }
 }
 
@@ -593,6 +628,7 @@ impl NalDecoder {
         vlog("[VIDEO] NAL: using linked sceMpeg");
 
         let ret = unsafe { psp::sys::sceMpegInit() };
+        vlog(&format!("[VIDEO] NAL: sceMpegInit = {ret:#x}"));
         if ret < 0 && ret != 0x80618003_u32 as i32 && ret != 0x80618005_u32 as i32 {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
@@ -635,30 +671,53 @@ impl NalDecoder {
             core::mem::transmute(mpeg_storage as *mut *mut c_void)
         };
 
-        let mut ringbuffer = unsafe {
+        // Construct a real ringbuffer (mpeg_vsh370 validates it during Create).
+        let rb_packets = 8; // Minimal — NAL feeding bypasses the ringbuffer.
+        let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(rb_packets) };
+        vlog(&format!("[VIDEO] NAL: rb_size={rb_size}"));
+        let mut rb_data = vec![0u8; if rb_size > 0 { rb_size as usize } else { 16384 }];
+        let mut ringbuffer = Box::new(unsafe {
             core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
-        };
+        });
+        if rb_size > 0 {
+            let ret = unsafe {
+                psp::sys::sceMpegRingbufferConstruct(
+                    &mut *ringbuffer, rb_packets,
+                    rb_data.as_mut_ptr() as *mut c_void,
+                    rb_size, None, core::ptr::null_mut(),
+                )
+            };
+            vlog(&format!("[VIDEO] NAL: RingbufferConstruct = {ret:#x}"));
+        }
+
         let ret = unsafe {
             psp::sys::sceMpegCreate(
                 mpeg,
                 mpeg_data_aligned as *mut c_void,
                 mem_size as i32,
-                &mut ringbuffer,
-                512,
-                mpeg_mode,
-                ddr_aligned as i32,
+                &mut *ringbuffer,
+                512, // frame_width
+                0,   // unk1 (standard)
+                0,   // unk2 (standard)
             )
         };
+        vlog(&format!("[VIDEO] NAL: sceMpegCreate = {ret:#x}"));
         if ret < 0 {
             unsafe { let _ = Box::from_raw(mpeg_storage); }
             return Err(format!("sceMpegCreate: {ret:#x}"));
         }
         vlog("[VIDEO] NAL: sceMpegCreate OK");
 
+        // Register video stream (required before MallocAvcEsBuf/AvcDecode).
+        let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
+        vlog(&format!("[VIDEO] NAL: RegistStream = {:?}", stream));
+
         // Allocate ES buffer and init AU.
         let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
+        vlog(&format!("[VIDEO] NAL: MallocAvcEsBuf = {:?}", es_buf));
         if es_buf.is_null() {
-            return Err("MallocAvcEsBuf failed".to_string());
+            // Try without ringbuffer — some firmware versions need different init order.
+            return Err("MallocAvcEsBuf returned null".to_string());
         }
         vlog("[VIDEO] NAL: ES buffer allocated");
 

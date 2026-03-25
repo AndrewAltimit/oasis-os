@@ -959,6 +959,93 @@ sceKernelStartModule(uid, 0, NULL, ...)
     sceMpeg API through the loaded VSH library for TV Guide video playback.
   </p>
 
+  <h2 id="update-scempeg-integration">Update: sceMpeg Integration (2026-03-25)</h2>
+
+  <p>
+    With the EABI fix confirmed, the focus shifted to actually <em>calling</em>
+    sceMpeg functions from the Rust EBOOT. This turned out to be a deep
+    exploration of the PSP kernel&rsquo;s module linking behavior.
+  </p>
+
+  <h3>Import stub resolution: what works, what doesn&rsquo;t</h3>
+
+  <p>
+    The PSP kernel resolves import stubs (weak <code>0x0009</code> flags) at module
+    load time. We tested every combination:
+  </p>
+
+  <table>
+    <thead><tr><th>Approach</th><th>Stubs resolve?</th><th>AvcDecode works?</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>sceMpeg</code> stubs + AvMpegBase (<code>sceUtilityLoadModule</code>)</td>
+        <td>Yes &mdash; utility loader triggers re-linking</td>
+        <td>No &mdash; <code>0x80628002</code> (ME stubs empty on FW 6.61)</td>
+      </tr>
+      <tr>
+        <td><code>sceMpegVsh_library</code> stubs + mpeg_vsh370 (<code>sceKernelStartModule</code>)</td>
+        <td>No &mdash; kernel does NOT re-link after <code>StartModule</code></td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td>Both AvMpegBase + mpeg_vsh370</td>
+        <td>N/A</td>
+        <td>Conflict: <code>0x8002013b</code> (exclusive load)</td>
+      </tr>
+      <tr>
+        <td><code>sceMpeg</code> stubs + mpeg_vsh370 only (no AvMpegBase)</td>
+        <td><strong>Yes!</strong> mpeg_vsh370 registers &ldquo;sceMpeg&rdquo; for self-imports</td>
+        <td><code>0x80628002</code> &mdash; but Init/Create/GetAvcNalAu all succeed</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>The surprise: mpeg_vsh370 registers &ldquo;sceMpeg&rdquo;</h3>
+
+  <p>
+    mpeg_vsh370.prx imports 59 functions from the <code>sceMpeg</code> library
+    (self-referencing). When the kernel links these at <code>StartModule</code> time,
+    it effectively registers <code>sceMpeg</code> as an available library &mdash;
+    which triggers re-linking of the EBOOT&rsquo;s <code>sceMpeg</code> weak import
+    stubs. This means <strong>we can call sceMpeg functions through mpeg_vsh370
+    without any kernel PRX or bridge module</strong>.
+  </p>
+
+  <h3>Key discoveries along the way</h3>
+
+  <ul>
+    <li><strong>Module loading during preinit freezes the GU</strong> &mdash;
+      <code>sceKernelLoadModule</code> for mpeg_vsh370 must be called from the
+      video thread, not the main thread. Loading during init causes a dashboard
+      freeze (likely EDRAM partition conflict with framebuffers).</li>
+    <li><strong>The kernel PRX corrupts networking</strong> &mdash;
+      <code>sctrlHENPatchSyscall</code> hooks on sceMpeg functions corrupt adjacent
+      syscall table entries used by sceHttp/sceNet, causing WiFi dialog errors
+      (80082731, 80020190) and HTTP parse hangs. This cost hours of debugging.</li>
+    <li><strong>ELF headers stripped after module load</strong> &mdash; the kernel
+      removes ELF/program headers from loaded PRX modules, making it impossible
+      to walk the export table from user mode.</li>
+    <li><strong>ARK-4 CFW caches kernel plugins</strong> &mdash; renaming the PRX
+      file doesn&rsquo;t force a reload; the CFW loads from a cached copy.</li>
+  </ul>
+
+  <h3>Current status: sceMpegCreate succeeds, AvcDecode pending</h3>
+
+  <p>
+    The full sceMpeg init chain now works through mpeg_vsh370:
+    <code>sceMpegInit</code> &rarr; <code>sceMpegQueryMemSize</code> (returns 49535)
+    &rarr; <code>sceMpegRingbufferConstruct</code> &rarr;
+    <code>sceMpegCreate</code> &rarr; <code>sceMpegRegistStream</code> &rarr;
+    <code>sceMpegMallocAvcEsBuf</code> &rarr; <code>sceMpegInitAu</code> &rarr;
+    <code>sceMpegGetAvcNalAu</code> (NAL feeding). All return success.
+    <code>sceMpegAvcDecode</code> still returns <code>0x80628002</code>
+    (AVC_DECODE_FATAL), likely because the Media Engine core needs explicit
+    booting via <code>sceMeBootStart660</code> (a kernel function called by
+    PMPlayer through <code>cooleyesBridge.prx</code>). The next step is either
+    calling the ME boot through a minimal kernel bridge or rewriting the
+    cooleyesBridge functionality in Rust.
+  </p>
+
   <nav class="article-nav">
     <a class="prev" href="06-backend-trait-system.html">&larr; Prev: Anatomy of the Backend Trait System</a>
   </nav>

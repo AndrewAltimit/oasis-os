@@ -20,12 +20,38 @@ from Rust EBOOTs. `mpeg_vsh370.prx` loading is unblocked.
 
 See: `docs/psp-child-module-investigation.md` for full investigation trail.
 
-## Current Status
+## Current Status (Updated 2026-03-25 evening)
 
-- **NAL feeding works**: `sceMpegGetAvcNalAu` returns 0 for every frame
-- **ME is booted**: `sceMeBootStart660` returns 0
-- **AvcDecode fails**: returns `0x80628002` (AVC_DECODE_FATAL) on every frame, pic_num=0
+- **sceMpeg stubs resolved via mpeg_vsh370**: mpeg_vsh370 registers "sceMpeg" for
+  self-imports, which triggers re-linking of our EBOOT's weak import stubs
+- **Full init chain works**: Init → QueryMemSize(49535) → RingbufferConstruct →
+  Create → RegistStream → MallocAvcEsBuf → InitAu → GetAvcNalAu — all succeed
+- **AvcDecode still fails**: returns `0x80628002` (AVC_DECODE_FATAL)
+- **ME boot may be missing**: PMPlayer uses cooleyesBridge.prx to call
+  `sceMeBootStart660` before decode. Without explicit ME boot, the decode
+  submission may fail even though the init chain succeeds
+- **No kernel PRX needed**: sceMpeg functions work through standard import stubs
 - **PMPlayer works**: proves the hardware CAN decode H.264 on this exact PSP
+
+### What doesn't work (and why)
+
+| Approach | Result | Why |
+|----------|--------|-----|
+| sceMpeg stubs + AvMpegBase | Init OK, AvcDecode 0x80628002 | ME stubs empty in avcodec.prx |
+| sceMpegVsh_library stubs + mpeg_vsh370 | Stubs NOT resolved (0x8002013a) | sceKernelStartModule doesn't re-link |
+| Both AvMpegBase + mpeg_vsh370 | 0x8002013b | Exclusive load conflict |
+| **sceMpeg stubs + mpeg_vsh370 only** | **Init/Create/NAL OK, AvcDecode 0x80628002** | **Stubs resolve! Decode fails — likely needs ME boot** |
+| Kernel PRX for NID resolution | Breaks networking | sctrlHENPatchSyscall corrupts syscall table |
+
+### Next steps (priority order)
+
+1. **Boot the ME core**: Call `sceMeBootStart660` before AvcDecode. Options:
+   - Rewrite cooleyesBridge in Rust as a minimal kernel PRX (just find_function + ME boot, NO syscall patching)
+   - Or add ME boot to rust-psp's `me` module via find_function
+2. **If ME boot doesn't fix 0x80628002**: Investigate NID differences between
+   FW 3.71 (mpeg_vsh370) and FW 6.61 (our import stubs). Some functions may
+   have different NIDs — sceMpegMallocAvcEsBuf returned 0x1 (suspicious)
+3. **If decode works**: Wire up YCbCr→RGBA conversion and texture upload
 
 ## Phase A: Complete — Key Findings
 
