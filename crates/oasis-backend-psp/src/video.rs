@@ -153,12 +153,60 @@ pub fn preinit_mpeg() {
 /// that conflicts with GU rendering). Instead, we defer `sceKernelStartModule`
 /// to when the video thread actually needs it.
 fn load_vsh_mpeg_module() {
-    // mpeg_vsh370 loading is deferred to the video thread — calling
-    // sceKernelLoadModule during preinit causes a dashboard freeze
-    // (likely GU memory partition conflict). Just load AvMp3 here.
+    // Load AvMpegBase first — resolves sceMpeg import stubs at kernel level.
+    // mpeg_vsh370 is loaded later from the video thread to provide the
+    // working sceMpegVsh_library implementation.
     unsafe {
+        let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
+        vlog(&format!("[VIDEO] AvMpegBase = {r:#x}"));
         let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
         vlog(&format!("[VIDEO] AvMp3 = {r:#x}"));
+    }
+}
+
+/// Load mpeg_vsh370.prx from the video thread. Registers sceMpegVsh_library
+/// which the kernel uses to resolve our weak import stubs.
+fn load_mpeg_vsh_module() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    vlog("[VIDEO] loading mpeg_vsh370.prx...");
+    let id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0".as_ptr(),
+            0, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] sceKernelLoadModule = {:#x}", id.0));
+    if id < psp::sys::SceUid(0) {
+        vlog("[VIDEO] load FAILED");
+        return;
+    }
+
+    let mut status: i32 = 0;
+    let ret = unsafe {
+        psp::sys::sceKernelStartModule(
+            id, 0, core::ptr::null_mut(),
+            &mut status, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] sceKernelStartModule = {ret:#x}, status={status:#x}"));
+    if ret < 0 {
+        vlog("[VIDEO] start FAILED");
+        unsafe { psp::sys::sceKernelUnloadModule(id); }
+        return;
+    }
+    vlog("[VIDEO] sceMpegVsh_library registered!");
+
+    // Test if stubs are now resolved.
+    let test = unsafe { psp::sys::sceMpegInit() };
+    vlog(&format!("[VIDEO] sceMpegInit test = {test:#x}"));
+    if test >= 0 || test == 0x80618003_u32 as i32 || test == 0x80618005_u32 as i32 {
+        vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370!");
+        unsafe { psp::sys::sceMpegFinish() };
     }
 }
 
@@ -514,7 +562,7 @@ impl NalDecoder {
     fn try_init(first_frame: &StreamFrame) -> Result<Self, String> {
         vlog("[VIDEO] NalDecoder::try_init");
         crate::audio::load_av_modules_once_pub();
-        // TODO: start_vsh_mpeg_module() once function pointer dispatch works
+        load_mpeg_vsh_module();
 
         // Prefer SPS/PPS from MP4 avcC atom (exact match for ME expectations).
         let (sps, pps) = if let (Some(s), Some(p)) = (&first_frame.avcc_sps, &first_frame.avcc_pps) {
@@ -544,14 +592,14 @@ impl NalDecoder {
         // The kernel PRX handles ME boot + avcodec stub patching.
         vlog("[VIDEO] NAL: using linked sceMpeg");
 
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegInit() };
+        let ret = unsafe { psp::sys::sceMpegInit() };
         if ret < 0 && ret != 0x80618003_u32 as i32 && ret != 0x80618005_u32 as i32 {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
 
         // Mode 5 for Main Profile or >480x272 (cooleyes pattern).
         let mpeg_mode = if width > 480 || height > 272 { 5 } else { 4 };
-        let mem_size = unsafe { psp::sys::mpeg_stubs::sceMpegQueryMemSize(mpeg_mode) };
+        let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
             return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
         }
@@ -591,7 +639,7 @@ impl NalDecoder {
             core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
         };
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegCreate(
+            psp::sys::sceMpegCreate(
                 mpeg,
                 mpeg_data_aligned as *mut c_void,
                 mem_size as i32,
@@ -608,17 +656,17 @@ impl NalDecoder {
         vlog("[VIDEO] NAL: sceMpegCreate OK");
 
         // Allocate ES buffer and init AU.
-        let es_buf = unsafe { psp::sys::mpeg_stubs::sceMpegMallocAvcEsBuf(mpeg) };
+        let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
         if es_buf.is_null() {
             return Err("MallocAvcEsBuf failed".to_string());
         }
         vlog("[VIDEO] NAL: ES buffer allocated");
 
         let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegInitAu(mpeg, es_buf, &mut au) };
+        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
         if ret < 0 {
             unsafe {
-                psp::sys::mpeg_stubs::sceMpegDelete(mpeg);
+                psp::sys::sceMpegDelete(mpeg);
                 let _ = Box::from_raw(mpeg_storage);
             }
             return Err(format!("sceMpegInitAu: {ret:#x}"));
@@ -742,7 +790,7 @@ impl NalDecoder {
 
         // Feed NAL to ME.
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegGetAvcNalAu(
+            psp::sys::sceMpegGetAvcNalAu(
                 mpeg, &mut nal as *mut _ as *mut c_void, &mut self.au,
             )
         };
@@ -762,7 +810,7 @@ impl NalDecoder {
         let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
         let buf_arg = &mut output_ptr as *mut *mut c_void as *mut c_void;
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegAvcDecode(
+            psp::sys::sceMpegAvcDecode(
                 mpeg, &mut self.au, 512, buf_arg, &mut self.pic_num,
             )
         };
@@ -784,7 +832,7 @@ impl NalDecoder {
         // Get YCbCr buffer pointers.
         let mut detail2: *mut c_void = core::ptr::null_mut();
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegAvcDecodeDetail2(mpeg, &mut detail2)
+            psp::sys::sceMpegAvcDecodeDetail2(mpeg, &mut detail2)
         };
         if ret < 0 || detail2.is_null() {
             if verbose {
@@ -841,7 +889,7 @@ impl NalDecoder {
         };
 
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegBaseCscAvc(
+            psp::sys::sceMpegBaseCscAvc(
                 self.output_buf.as_mut_ptr() as *mut c_void,
                 0,
                 csc_width,
@@ -887,14 +935,14 @@ impl Drop for NalDecoder {
         let mpeg = self.mpeg();
         unsafe {
             if !self.es_buf.is_null() {
-                psp::sys::mpeg_stubs::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
+                psp::sys::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
             }
-            psp::sys::mpeg_stubs::sceMpegDelete(mpeg);
+            psp::sys::sceMpegDelete(mpeg);
             let _ = Box::from_raw(self.mpeg_storage as *mut *mut c_void);
             if self.ddr_block >= psp::sys::SceUid(0) {
                 psp::sys::sceKernelFreePartitionMemory(self.ddr_block);
             }
-            psp::sys::mpeg_stubs::sceMpegFinish();
+            psp::sys::sceMpegFinish();
         }
     }
 }
@@ -1007,7 +1055,7 @@ impl SceMpegDecoder {
     fn try_init(width: u32, height: u32) -> Result<Self, String> {
         vlog("[VIDEO] SceMpegDecoder::try_init start");
         crate::audio::load_av_modules_once_pub();
-        // TODO: start_vsh_mpeg_module() once function pointer dispatch works
+        load_mpeg_vsh_module();
         vlog("[VIDEO] AV modules loaded");
 
         // Step 1: Init MPEG subsystem (may already be done by preinit_mpeg).
@@ -1015,7 +1063,7 @@ impl SceMpegDecoder {
         // Known "already initialized" codes:
         //   0x80618003 = SCE_MPEG_ERROR_ALREADY_INIT
         //   0x80618005 = firmware-specific "already init" variant (PSP-3001)
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegInit() };
+        let ret = unsafe { psp::sys::sceMpegInit() };
         if ret < 0
             && ret != 0x80618003_u32 as i32
             && ret != 0x80618005_u32 as i32
@@ -1025,7 +1073,7 @@ impl SceMpegDecoder {
         vlog(&format!("[VIDEO] sceMpegInit = {ret:#x}"));
 
         // Step 2: Query and allocate working memory.
-        let mem_size = unsafe { psp::sys::mpeg_stubs::sceMpegQueryMemSize(0) };
+        let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(0) };
         if mem_size <= 0 {
             return Err(format!("sceMpegQueryMemSize = {mem_size}"));
         }
@@ -1041,7 +1089,7 @@ impl SceMpegDecoder {
         };
 
         // Step 3: Query and allocate ringbuffer memory.
-        let rb_size = unsafe { psp::sys::mpeg_stubs::sceMpegRingbufferQueryMemSize(Self::RB_PACKETS) };
+        let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(Self::RB_PACKETS) };
         if rb_size <= 0 {
             return Err(format!("sceMpegRingbufferQueryMemSize = {rb_size}"));
         }
@@ -1056,7 +1104,7 @@ impl SceMpegDecoder {
             core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
         });
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegRingbufferConstruct(
+            psp::sys::sceMpegRingbufferConstruct(
                 &mut *ringbuffer,
                 Self::RB_PACKETS,
                 ringbuf_data.as_mut_ptr() as *mut c_void,
@@ -1086,7 +1134,7 @@ impl SceMpegDecoder {
         ));
 
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegCreate(
+            psp::sys::sceMpegCreate(
                 mpeg,
                 mpeg_data_aligned as *mut c_void,
                 mem_size as i32,
@@ -1100,14 +1148,14 @@ impl SceMpegDecoder {
             // SAFETY: Clean up allocated storage.
             unsafe {
                 let _ = Box::from_raw(mpeg_storage_box);
-                psp::sys::mpeg_stubs::sceMpegRingbufferDestruct(&mut *ringbuffer);
+                psp::sys::sceMpegRingbufferDestruct(&mut *ringbuffer);
             }
             return Err(format!("sceMpegCreate = {ret:#x}"));
         }
         vlog("[VIDEO] sceMpegCreate OK");
 
         // Step 6: Register video stream (stream_id=0 for video).
-        let video_stream = unsafe { psp::sys::mpeg_stubs::sceMpegRegistStream(mpeg, 0, 0) };
+        let video_stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
         vlog("[VIDEO] stream registered");
 
         // Step 7: Set decode mode to ABGR 8888 for direct pixel output.
@@ -1115,17 +1163,17 @@ impl SceMpegDecoder {
             unk0: -1,
             pixel_format: psp::sys::DisplayPixelFormat::Psm8888,
         };
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegAvcDecodeMode(mpeg, &mut mode) };
+        let ret = unsafe { psp::sys::sceMpegAvcDecodeMode(mpeg, &mut mode) };
         vlog(&format!("[VIDEO] sceMpegAvcDecodeMode = {ret:#x}"));
 
         // Step 8: Allocate ES buffer.
-        let es_buf = unsafe { psp::sys::mpeg_stubs::sceMpegMallocAvcEsBuf(mpeg) };
+        let es_buf = unsafe { psp::sys::sceMpegMallocAvcEsBuf(mpeg) };
         if es_buf.is_null() {
             unsafe {
-                psp::sys::mpeg_stubs::sceMpegUnRegistStream(mpeg, video_stream);
-                psp::sys::mpeg_stubs::sceMpegDelete(mpeg);
+                psp::sys::sceMpegUnRegistStream(mpeg, video_stream);
+                psp::sys::sceMpegDelete(mpeg);
                 let _ = Box::from_raw(mpeg_storage_box);
-                psp::sys::mpeg_stubs::sceMpegRingbufferDestruct(&mut *ringbuffer);
+                psp::sys::sceMpegRingbufferDestruct(&mut *ringbuffer);
             }
             return Err("sceMpegMallocAvcEsBuf returned null".to_string());
         }
@@ -1133,11 +1181,11 @@ impl SceMpegDecoder {
 
         // Step 9: Init AU descriptor.
         let mut au = unsafe { core::mem::zeroed::<psp::sys::SceMpegAu>() };
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegInitAu(mpeg, es_buf, &mut au) };
+        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
         vlog(&format!("[VIDEO] sceMpegInitAu = {ret:#x}"));
 
         // Step 10: Init hardware CSC (color space converter).
-        let ret = unsafe { psp::sys::mpeg_stubs::sceMpegBaseCscInit(frame_width as i32) };
+        let ret = unsafe { psp::sys::sceMpegBaseCscInit(frame_width as i32) };
         vlog(&format!("[VIDEO] sceMpegBaseCscInit = {ret:#x}"));
 
         // Allocate output pixel buffer (frame_width stride × height × 4 ABGR).
@@ -1151,7 +1199,7 @@ impl SceMpegDecoder {
         let header = muxer.peek_header();
         let mut stream_offset: i32 = 0;
         let qso_ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegQueryStreamOffset(
+            psp::sys::sceMpegQueryStreamOffset(
                 mpeg,
                 header.as_ptr() as *mut c_void,
                 &mut stream_offset,
@@ -1163,7 +1211,7 @@ impl SceMpegDecoder {
 
         let mut stream_size: i32 = 0;
         let qss_ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegQueryStreamSize(
+            psp::sys::sceMpegQueryStreamSize(
                 header.as_ptr() as *mut c_void,
                 &mut stream_size,
             )
@@ -1221,7 +1269,7 @@ impl SceMpegDecoder {
 
         // Check available space in ringbuffer.
         let avail = unsafe {
-            psp::sys::mpeg_stubs::sceMpegRingbufferAvailableSize(&mut *self.ringbuffer)
+            psp::sys::sceMpegRingbufferAvailableSize(&mut *self.ringbuffer)
         };
         if avail <= 0 {
             // SAFETY: Clear context.
@@ -1250,7 +1298,7 @@ impl SceMpegDecoder {
 
         // SAFETY: sceMpegRingbufferPut invokes our callback which copies data.
         let ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegRingbufferPut(
+            psp::sys::sceMpegRingbufferPut(
                 &mut *self.ringbuffer,
                 packets_to_put,
                 avail,
@@ -1322,7 +1370,7 @@ impl SceMpegDecoder {
         }
 
         let avail = unsafe {
-            psp::sys::mpeg_stubs::sceMpegRingbufferAvailableSize(&mut *self.ringbuffer)
+            psp::sys::sceMpegRingbufferAvailableSize(&mut *self.ringbuffer)
         };
         if avail <= 0 {
             unsafe {
@@ -1353,7 +1401,7 @@ impl SceMpegDecoder {
         // This blocks until the callback copies all data, but since we're
         // not trying to call GetAvcAu concurrently, it should complete.
         let put_ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegRingbufferPut(
+            psp::sys::sceMpegRingbufferPut(
                 &mut *self.ringbuffer,
                 packets_to_put,
                 avail,
@@ -1375,7 +1423,7 @@ impl SceMpegDecoder {
         let mpeg = self.mpeg();
         for attempt in 0..10 {
             let ret = unsafe {
-                psp::sys::mpeg_stubs::sceMpegGetAvcAu(
+                psp::sys::sceMpegGetAvcAu(
                     mpeg,
                     self.video_stream,
                     &mut self.au,
@@ -1406,7 +1454,7 @@ impl SceMpegDecoder {
         let mut output_buf_ptr: *mut c_void = self.output_buf.as_mut_ptr() as *mut c_void;
         let buffer_addr = &mut output_buf_ptr as *mut *mut c_void as *mut c_void;
         let dec_ret = unsafe {
-            psp::sys::mpeg_stubs::sceMpegAvcDecode(
+            psp::sys::sceMpegAvcDecode(
                 mpeg,
                 &mut self.au,
                 self.frame_width as i32,
@@ -1448,11 +1496,11 @@ impl Drop for SceMpegDecoder {
         // SAFETY: Cleanup sceMpeg resources in reverse order.
         unsafe {
             if !self.es_buf.is_null() {
-                psp::sys::mpeg_stubs::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
+                psp::sys::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
             }
-            psp::sys::mpeg_stubs::sceMpegUnRegistStream(mpeg, self.video_stream);
-            psp::sys::mpeg_stubs::sceMpegDelete(mpeg);
-            psp::sys::mpeg_stubs::sceMpegRingbufferDestruct(&mut *self.ringbuffer);
+            psp::sys::sceMpegUnRegistStream(mpeg, self.video_stream);
+            psp::sys::sceMpegDelete(mpeg);
+            psp::sys::sceMpegRingbufferDestruct(&mut *self.ringbuffer);
             // Reclaim the Box we leaked for mpeg_storage.
             let _ = Box::from_raw(self.mpeg_storage as *mut *mut c_void);
             // Don't call sceMpegFinish — allow reuse on channel switch.
