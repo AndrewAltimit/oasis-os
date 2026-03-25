@@ -29,10 +29,6 @@ mod config;
 mod font;
 mod hook;
 mod me_dump;
-// me_hook and me_rpc disabled — their static buffers + me_boot_modules
-// caused the PRX to crash the EBOOT at launch. Need lighter approach.
-// mod me_hook;
-// mod me_rpc;
 mod overlay;
 mod render;
 mod video;
