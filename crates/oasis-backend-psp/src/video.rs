@@ -171,25 +171,26 @@ fn load_mpeg_vsh_module() {
         return;
     }
 
-    // Load cooleyesBridge.prx to boot the ME core.
-    // This is a tiny kernel bridge: cooleyesMeBootStart(devkit, type) → sceMeBootStart660.
-    // Without ME boot, sceMpegAvcDecode returns 0x80628002 (FATAL).
-    let bridge_id = unsafe {
+    // Boot the Media Engine via our minimal kernel PRX.
+    // sceMeBootStart660 is a kernel function — must be called from kernel mode.
+    // oasis-me-boot.prx resolves it via sctrlHENFindFunction and calls it
+    // during module_start. Without ME boot, sceMpegAvcDecode returns 0x80628002.
+    let boot_id = unsafe {
         psp::sys::sceKernelLoadModule(
-            b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0".as_ptr(),
+            b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0".as_ptr(),
             0, core::ptr::null_mut(),
         )
     };
-    vlog(&format!("[VIDEO] cooleyesBridge load = {:#x}", bridge_id.0));
-    if bridge_id >= psp::sys::SceUid(0) {
+    vlog(&format!("[VIDEO] oasis-me-boot load = {:#x}", boot_id.0));
+    if boot_id >= psp::sys::SceUid(0) {
         let mut status: i32 = 0;
         let ret = unsafe {
             psp::sys::sceKernelStartModule(
-                bridge_id, 0, core::ptr::null_mut(),
+                boot_id, 0, core::ptr::null_mut(),
                 &mut status, core::ptr::null_mut(),
             )
         };
-        vlog(&format!("[VIDEO] cooleyesBridge start = {ret:#x}"));
+        vlog(&format!("[VIDEO] oasis-me-boot start = {ret:#x}, status={status:#x}"));
     }
 
     vlog("[VIDEO] loading mpeg_vsh370.prx...");
@@ -634,7 +635,9 @@ impl NalDecoder {
         }
 
         // Mode 5 for Main Profile or >480x272 (cooleyes pattern).
-        let mpeg_mode = if width > 480 || height > 272 { 5 } else { 4 };
+        // Mode 0 is the standard sceMpeg mode. Modes 4/5 are cooleyes extensions
+        // that may not be supported by mpeg_vsh370.
+        let mpeg_mode = 0;
         let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
         if mem_size <= 0 {
             return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
@@ -732,8 +735,13 @@ impl NalDecoder {
         }
         vlog("[VIDEO] NAL: sceMpegInitAu OK");
 
-        // Skip AvcDecodeMode for NAL approach — cooleyes doesn't call it.
-        // The 0x80628002 error from AvcDecode may be about something else.
+        // Set decode mode to ABGR 8888 pixel output.
+        let mut mode = psp::sys::SceMpegAvcMode {
+            unk0: -1,
+            pixel_format: psp::sys::DisplayPixelFormat::Psm8888,
+        };
+        let ret = unsafe { psp::sys::sceMpegAvcDecodeMode(mpeg, &mut mode) };
+        vlog(&format!("[VIDEO] NAL: AvcDecodeMode = {ret:#x}"));
 
         // Output pixel buffer.
         let out_h = ((height + 15) / 16) * 16;
