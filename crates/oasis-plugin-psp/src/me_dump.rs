@@ -68,48 +68,10 @@ unsafe extern "C" fn dump_thread_entry(
     // Load cooleyesBridge.prx early — PMPlayer requires it before mpeg_vsh.
     unsafe { load_cooleyes_bridge() };
 
-    // Patch kernel: NOP the "beq $a2, $zero" check in the module linking
-    // wrapper (sceKernelLinkLibraryEntriesWithModule) at 0x8805E620.
-    // This check returns 0x800200D3 when stubSize is 0, preventing child
-    // module starts from Rust EBOOTs. The patch allows modules with
-    // no imports to be linked without error.
-    unsafe {
-        let patch_addr = 0x8805E620 as *mut u32;
-        // PRECISE FIX: Patch the _PrologueModule function at 0x8805EA2C.
-        // This function validates the SceModule pointer (a kernel address
-        // 0x88xxxxxx) against the K1 user-mode flag. The K1 check always
-        // fails because the module manager thread has user-mode K1.
-        //
-        // The function uses a non-standard K1 shift pattern:
-        //   0x8805EA2C: sll $v1, $k1, 11  (0x001B1AC0)
-        //   0x8805EA3C: addu $k1, $v1, $zero
-        //
-        // Patch: sll $v1, $k1, 11 → sll $v1, $zero, 11 (v1=0, so K1=0)
-        // Patch BOTH instances of `sll $v1, $k1, 11` (0x001B1AC0) in modulemgr.
-        // These are non-standard K1 shifts that my earlier scans missed.
-        let expected = 0x001B1AC0u32;  // sll $v1, $k1, 11
-        let patched_val = 0x00001AC0u32;  // sll $v1, $zero, 11 (K1→0)
-
-        let addrs: &[u32] = &[0x8805EA2C, 0x8805FE80];
-        for &addr in addrs {
-            let ptr = addr as *mut u32;
-            let old = core::ptr::read_volatile(ptr);
-            if old == expected {
-                core::ptr::write_volatile(ptr, patched_val);
-                let mut m = [0u8; 50];
-                let mut p = append_bytes(&mut m, 0, b"[PATCH] fixed K1 @0x");
-                p = append_hex(&mut m, p, addr);
-                crate::debug_log(&m[..p]);
-            } else {
-                let mut m = [0u8; 50];
-                let mut p = append_bytes(&mut m, 0, b"[PATCH] skip @0x");
-                p = append_hex(&mut m, p, addr);
-                crate::debug_log(&m[..p]);
-            }
-        }
-        psp::sys::sceKernelDcacheWritebackInvalidateAll();
-        psp::sys::sceKernelIcacheInvalidateAll();
-    };
+    // NOTE: Kernel K1 patches previously here have been REMOVED.
+    // The root cause (EABI32 vs O32 ABI mismatch) is fixed in rust-psp
+    // by adding i5/i6/i7 EABI mappers to 5+ arg PSP functions.
+    // See docs/psp-child-module-investigation.md for the full story.
 
     loop {
         // Wait for trigger.
@@ -130,9 +92,6 @@ unsafe extern "C" fn dump_thread_entry(
         // EBOOT writes ".me_patch" after loading AV modules, we hook
         // sceMpegAvcDecode syscall and write ".me_patched" when done.
         unsafe { check_patch_request() };
-
-        // Check for kernel-mode child module load test.
-        unsafe { check_kernel_load_test() };
 
         // Check for VSH module load + address resolution request from EBOOT.
         unsafe { check_vsh_load_request() };
