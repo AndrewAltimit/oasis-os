@@ -900,6 +900,65 @@ sceKernelStartModule(uid, 0, NULL, ...)
     </li>
   </ul>
 
+  <h2 id="update-eabi-breakthrough">Update: EABI32 Breakthrough (2026-03-25)</h2>
+
+  <p>
+    A marathon debugging session uncovered <strong>two critical bugs</strong> in
+    <code>rust-psp</code> that were preventing child PRX modules (like
+    <code>mpeg_vsh370.prx</code>) from loading. The symptom:
+    <code>sceKernelStartModule</code> returned <code>0x800200D3</code>
+    (<code>SCE_ERROR_KERNEL_ILLEGAL_ADDR</code>) for <em>every</em> call from a
+    Rust EBOOT, while identical C EBOOTs worked perfectly.
+  </p>
+
+  <h3>Root cause: EABI32 vs O32 ABI mismatch</h3>
+
+  <p>
+    LLVM&rsquo;s MIPS target generates <strong>O32 calling convention</strong> code, where
+    arguments 5&ndash;8 go on the stack. The PSP Allegrex CPU uses
+    <strong>EABI32</strong>, where arguments 5&ndash;8 are passed in registers
+    <code>$t0</code>&ndash;<code>$t3</code>. For <code>sceKernelStartModule</code>
+    (which takes 5 arguments), the kernel read <em>garbage</em> from <code>$t0</code>
+    as the <code>pOption</code> pointer, failed address validation, and returned
+    the error.
+  </p>
+
+  <p>
+    The fix was straightforward: <code>rust-psp</code> already had EABI32 bridge
+    functions in <code>eabi.rs</code> (<code>i5</code>, <code>i6</code>, <code>i7</code>)
+    written in assembly. They just weren&rsquo;t applied to all 5+ argument PSP functions.
+    Adding <code>#[psp(NID, i5)]</code> annotations to <code>sceKernelStartModule</code>,
+    <code>sceKernelStopModule</code>, and several other functions resolved the issue.
+  </p>
+
+  <h3>Second bug: prxgen leaving SHT_REL sections</h3>
+
+  <p>
+    <code>rust-psp</code>&rsquo;s <code>prxgen</code> tool left <code>SHT_REL</code>
+    relocation sections (targeting non-ALLOC sections) in the PRX output. The PSP kernel
+    processes all relocation sections it finds, so these leftover entries caused bogus
+    relocations that corrupted module state. The fix: NULL out non-ALLOC
+    <code>SHT_REL</code> section headers during the ELF-to-PRX conversion.
+  </p>
+
+  <h3>Investigation trail</h3>
+
+  <p>
+    The debugging effort spanned kernel module dumps (modulemgr at
+    <code>0x8805A400</code>, loadcore at <code>0x88017000</code>), MIPS disassembly of
+    the PSP firmware&rsquo;s <code>_PrologueModule</code> function, K1 register
+    patching experiments, ARK-4 CFW source analysis, C/Rust hybrid test EBOOTs,
+    syscall number comparisons, and progressive binary morphing. The full details
+    are in <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/psp-child-module-investigation.md">
+    <code>docs/psp-child-module-investigation.md</code></a>.
+  </p>
+
+  <p>
+    With child module loading now working, the path to hardware H.264 decode via
+    <code>mpeg_vsh370.prx</code> is unblocked. The next step is wiring up the
+    sceMpeg API through the loaded VSH library for TV Guide video playback.
+  </p>
+
   <nav class="article-nav">
     <a class="prev" href="06-backend-trait-system.html">&larr; Prev: Anatomy of the Backend Trait System</a>
   </nav>

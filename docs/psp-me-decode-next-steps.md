@@ -1,6 +1,24 @@
 # PSP ME H.264 Decode: Next Steps Plan
 
-## Date: 2026-03-24 (Updated)
+## Date: 2026-03-25 (Updated)
+
+## BREAKTHROUGH: Child Module Loading Fixed (2026-03-25)
+
+Two bugs in `rust-psp` were preventing `sceKernelStartModule` from working:
+
+1. **EABI32 vs O32 ABI mismatch** (root cause): LLVM generates O32 code (args 5+
+   on stack), PSP kernel expects EABI32 (args 5-8 in `$t0`-`$t3`). The 5th argument
+   to `sceKernelStartModule` (`pOption`) was garbage in `$t0`, failing K1 validation.
+   **Fix:** Added `i5` EABI mapper to `sceKernelStartModule` and other 5-arg functions.
+
+2. **prxgen SHT_REL bug**: `prxgen` left `SHT_REL` sections for non-ALLOC targets in
+   PRX output. Kernel processed them as real relocations, corrupting state.
+   **Fix:** NULL out non-ALLOC `SHT_REL` section headers in prxgen.
+
+**Result:** `sceKernelStartModule` now returns SUCCESS for child PRX modules loaded
+from Rust EBOOTs. `mpeg_vsh370.prx` loading is unblocked.
+
+See: `docs/psp-child-module-investigation.md` for full investigation trail.
 
 ## Current Status
 
