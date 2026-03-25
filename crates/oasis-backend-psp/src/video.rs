@@ -203,11 +203,10 @@ fn load_mpeg_vsh_module() {
     vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370");
 }
 
-/// Boot the Media Engine via kernel PRX (if available).
+/// Boot the Media Engine via oasis-me-boot.prx (if available).
 fn load_me_boot_prx() {
     let boot_paths: &[&[u8]] = &[
         b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
-        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
     ];
     for path in boot_paths {
         let id = unsafe {
