@@ -10,8 +10,27 @@
 
 #![no_std]
 #![no_main]
+#![feature(asm_experimental_arch)]
 
 psp::module_kernel!("OasisMeBoot", 1, 0);
+
+// K1 register manipulation (equivalent to pspSdkSetK1).
+// K1 ($k1, register $27) controls kernel address validation.
+unsafe extern "C" {
+    fn set_k1(val: u32) -> u32;
+}
+
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global set_k1
+    set_k1:
+        move $v0, $k1
+        move $k1, $a0
+        jr $ra
+        nop
+    "#
+);
 
 /// NID for sceMeBootStart660 in sceMeCore_driver.
 const NID_ME_BOOT_START_660: u32 = 0x5DFF5C50;
@@ -30,12 +49,16 @@ fn psp_main() {
     };
 
     if let Some(ptr) = boot_fn {
-        // SAFETY: sceMeBootStart660 takes one i32 arg: the devkit version.
-        // FW 6.60 = 0x06060010, FW 6.61 = 0x06060110.
-        // cooleyesBridge passes the devkit version from its caller.
+        // SAFETY: sceMeBootStart660 takes one i32 arg: mebooterType (0 or 1).
+        // cooleyesBridge passes mebooterType=0 and clears K1 protection bits.
+        // K1 clearing is critical — kernel functions check K1 for address validation.
         let me_boot: unsafe extern "C" fn(i32) -> i32 =
             unsafe { core::mem::transmute(ptr) };
-        let ret = unsafe { me_boot(0x06060010) };
+
+        // Clear K1 protection bits (like pspSdkSetK1(0) in cooleyesBridge).
+        let old_k1 = unsafe { set_k1(0) };
+        let ret = unsafe { me_boot(0) }; // mebooterType = 0
+        unsafe { set_k1(old_k1); }
 
         // Log result to file (kernel mode — can't use std I/O).
         log_result(b"[ME-BOOT] sceMeBootStart660 = ", ret as u32);

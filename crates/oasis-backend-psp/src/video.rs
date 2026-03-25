@@ -171,17 +171,27 @@ fn load_mpeg_vsh_module() {
         return;
     }
 
-    // Boot the Media Engine via our minimal kernel PRX.
-    // sceMeBootStart660 is a kernel function — must be called from kernel mode.
-    // oasis-me-boot.prx resolves it via sctrlHENFindFunction and calls it
-    // during module_start. Without ME boot, sceMpegAvcDecode returns 0x80628002.
-    let boot_id = unsafe {
-        psp::sys::sceKernelLoadModule(
-            b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0".as_ptr(),
-            0, core::ptr::null_mut(),
-        )
-    };
-    vlog(&format!("[VIDEO] oasis-me-boot load = {:#x}", boot_id.0));
+    // Boot the Media Engine via kernel PRX.
+    // Try our Rust oasis-me-boot.prx first, fall back to cooleyesBridge.prx.
+    let boot_paths: &[&[u8]] = &[
+        b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
+        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
+    ];
+    let mut boot_id = psp::sys::SceUid(-1);
+    for path in boot_paths {
+        let id = unsafe {
+            psp::sys::sceKernelLoadModule(
+                path.as_ptr(), 0, core::ptr::null_mut(),
+            )
+        };
+        let name = core::str::from_utf8(&path[..path.len()-1]).unwrap_or("?");
+        vlog(&format!("[VIDEO] load {name} = {:#x}", id.0));
+        if id >= psp::sys::SceUid(0) {
+            boot_id = id;
+            break;
+        }
+    }
+    vlog(&format!("[VIDEO] ME boot PRX = {:#x}", boot_id.0));
     if boot_id >= psp::sys::SceUid(0) {
         let mut status: i32 = 0;
         let ret = unsafe {
