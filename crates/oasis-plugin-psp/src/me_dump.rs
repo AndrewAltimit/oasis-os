@@ -1369,6 +1369,11 @@ static VSH_ADDRS_DONE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 /// Check for VSH address request from EBOOT and resolve sceMpegVsh_library NIDs.
+///
+/// The EBOOT creates `.vsh_req` after starting mpeg_vsh370.prx. This function
+/// resolves all 24 sceMpeg NIDs via sctrlHENFindFunction and writes the
+/// function addresses to `.vsh_addrs` (24 x u32 = 96 bytes).
+/// NID order matches `psp::sys::mpeg_stubs::NIDS`.
 unsafe fn check_vsh_addr_request() {
     if VSH_ADDRS_DONE.load(core::sync::atomic::Ordering::Relaxed) {
         return;
@@ -1383,21 +1388,37 @@ unsafe fn check_vsh_addr_request() {
     psp::sys::sceIoClose(fd);
     psp::sys::sceIoRemove(VSH_REQ.as_ptr());
 
-    crate::debug_log(b"[VSH-ADDR] resolving sceMpegVsh_library NIDs...");
+    crate::debug_log(b"[VSH-ADDR] resolving 24 sceMpegVsh NIDs...");
 
-    // NIDs to resolve (same order as VSH_FN in main.rs).
-    let nids: [u32; 8] = [
-        0xD8C5F121, // 0: sceMpegCreate
-        0x606A4649, // 1: sceMpegDelete
-        0x167AFD9E, // 2: sceMpegInitAu
-        0xA780CF7E, // 3: sceMpegMallocAvcEsBuf
-        0xCEB870B1, // 4: sceMpegFreeAvcEsBuf
-        0x11F95CF1, // 5: sceMpegGetAvcNalAu
-        0x0E3C2E9D, // 6: sceMpegAvcDecode
-        0xC132E22F, // 7: sceMpegQueryMemSize
+    // All 24 NIDs — same order as psp::sys::mpeg_stubs::NIDS.
+    let nids: [u32; 24] = [
+        0x682A619B, // 0:  sceMpegInit
+        0x874624D6, // 1:  sceMpegFinish
+        0xC132E22F, // 2:  sceMpegQueryMemSize
+        0xD8C5F121, // 3:  sceMpegCreate
+        0x606A4649, // 4:  sceMpegDelete
+        0x42560F23, // 5:  sceMpegRegistStream
+        0x591A4AA2, // 6:  sceMpegUnRegistStream
+        0xA780CF7E, // 7:  sceMpegMallocAvcEsBuf
+        0xCEB870B1, // 8:  sceMpegFreeAvcEsBuf
+        0x167AFD9E, // 9:  sceMpegInitAu
+        0xFE246728, // 10: sceMpegGetAvcAu
+        0xA11C7026, // 11: sceMpegAvcDecodeMode
+        0x0E3C2E9D, // 12: sceMpegAvcDecode
+        0x740FCCD1, // 13: sceMpegAvcDecodeStop
+        0x11F95CF1, // 14: sceMpegGetAvcNalAu
+        0xCF3547A2, // 15: sceMpegAvcDecodeDetail2
+        0x707B7629, // 16: sceMpegFlushAllStream
+        0xD7A29F46, // 17: sceMpegRingbufferQueryMemSize
+        0x37295ED8, // 18: sceMpegRingbufferConstruct
+        0x13407F13, // 19: sceMpegRingbufferDestruct
+        0xB5F6DC87, // 20: sceMpegRingbufferAvailableSize
+        0xB240A59E, // 21: sceMpegRingbufferPut
+        0x21FF80E4, // 22: sceMpegQueryStreamOffset
+        0x611E9E11, // 23: sceMpegQueryStreamSize
     ];
 
-    let mut addrs = [0u32; 8];
+    let mut addrs = [0u32; 24];
     let mut resolved = 0u32;
 
     for (i, &nid) in nids.iter().enumerate() {
@@ -1415,12 +1436,14 @@ unsafe fn check_vsh_addr_request() {
     let mut m = [0u8; 48];
     let mut p = append_bytes(&mut m, 0, b"[VSH-ADDR] resolved ");
     p = append_dec(&mut m, p, resolved);
-    p = append_bytes(&mut m, p, b"/8");
+    p = append_bytes(&mut m, p, b"/24");
     crate::debug_log(&m[..p]);
 
-    // Write addresses to file (8 x u32 = 32 bytes, little-endian).
+    // Write addresses to dedicated file (24 x u32 = 96 bytes, LE).
+    // Uses ".mpeg_fns" NOT ".vsh_addrs" to avoid conflict with boot-time
+    // syscall extraction that also writes to ".vsh_addrs".
     let out_fd = psp::sys::sceIoOpen(
-        VSH_ADDRS.as_ptr(),
+        b"ms0:/PSP/GAME/OASISOS/.mpeg_fns\0".as_ptr(),
         psp::sys::IoOpenFlags::WR_ONLY
             | psp::sys::IoOpenFlags::CREAT
             | psp::sys::IoOpenFlags::TRUNC,
@@ -1430,10 +1453,10 @@ unsafe fn check_vsh_addr_request() {
         psp::sys::sceIoWrite(
             out_fd,
             addrs.as_ptr() as *const core::ffi::c_void,
-            32,
+            96, // 24 * 4
         );
         psp::sys::sceIoClose(out_fd);
-        crate::debug_log(b"[VSH-ADDR] addrs written");
+        crate::debug_log(b"[VSH-ADDR] 96 bytes written");
     }
 
     VSH_ADDRS_DONE.store(true, core::sync::atomic::Ordering::Release);

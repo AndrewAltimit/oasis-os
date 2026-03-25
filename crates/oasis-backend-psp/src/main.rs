@@ -236,10 +236,6 @@ fn psp_main() {
     // PMF test disabled — even real Persona 3 PMSF crashes.
     // Root cause (confirmed by Ghidra): sceMpeg internally calls
     // sceVideocodec (avcodec.prx) for ME decode. The ME submission
-    // stubs in avcodec.prx are empty on PSP-3001/ARK-4/FW6.61.
-    // H.264 decode is blocked for homebrew on this firmware config.
-    // oasis_backend_psp::video::test_real_pmf();
-
     // Background worker threads: audio, file I/O, and video decode.
     let (audio, io) = oasis_backend_psp::spawn_workers();
     oasis_backend_psp::video::spawn_video_thread();

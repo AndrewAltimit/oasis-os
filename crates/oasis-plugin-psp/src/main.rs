@@ -450,6 +450,55 @@ unsafe fn setup_me_decode_hook() {
         }
     }
 
+    // Resolve all 24 sceMpegVsh_library function addresses for EBOOT.
+    // NID order matches psp::sys::mpeg_stubs::NIDS.
+    // Written to .mpeg_fns (24 x u32 = 96 bytes).
+    {
+        let all_nids: [u32; 24] = [
+            0x682A619B, 0x874624D6, 0xC132E22F, 0xD8C5F121,
+            0x606A4649, 0x42560F23, 0x591A4AA2, 0xA780CF7E,
+            0xCEB870B1, 0x167AFD9E, 0xFE246728, 0xA11C7026,
+            0x0E3C2E9D, 0x740FCCD1, 0x11F95CF1, 0xCF3547A2,
+            0x707B7629, 0xD7A29F46, 0x37295ED8, 0x13407F13,
+            0xB5F6DC87, 0xB240A59E, 0x21FF80E4, 0x611E9E11,
+        ];
+        let mut addrs24 = [0u32; 24];
+        let mut resolved24 = 0u32;
+        for (i, &nid) in all_nids.iter().enumerate() {
+            let ptr = psp::hook::find_function(
+                b"sceMpegVsh_library\0".as_ptr(),
+                b"sceMpeg\0".as_ptr(),
+                nid,
+            );
+            if let Some(p) = ptr {
+                addrs24[i] = p as u32;
+                resolved24 += 1;
+            }
+        }
+        let mut m4 = [0u8; 48];
+        let mut p4 = me_dump::append_bytes(&mut m4, 0, b"[OASIS] mpeg_fns: ");
+        p4 = me_dump::append_dec(&mut m4, p4, resolved24);
+        p4 = me_dump::append_bytes(&mut m4, p4, b"/24");
+        debug_log(&m4[..p4]);
+
+        let fn_fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.mpeg_fns\0".as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        );
+        if fn_fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(
+                fn_fd,
+                addrs24.as_ptr() as *const core::ffi::c_void,
+                96,
+            );
+            psp::sys::sceIoClose(fn_fd);
+            debug_log(b"[OASIS] .mpeg_fns written (96 bytes)");
+        }
+    }
+
     // Phase A: Install spy hooks on sceMpegVsh_library's Create and
     // AvcDecode syscalls. These capture PMPlayer's arguments when it
     // calls through VSH (log + pass through to original).
