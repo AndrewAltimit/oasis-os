@@ -146,24 +146,25 @@ pub fn preinit_mpeg() {
     vlog("[VIDEO] preinit done");
 }
 
-/// Pre-load AV modules during init (AvMp3 only).
-///
-/// Starting the module during preinit causes a dashboard freeze (the module's
-/// `module_start` likely allocates EDRAM or initializes ME hardware in a way
-/// that conflicts with GU rendering). Instead, we defer `sceKernelStartModule`
-/// to when the video thread actually needs it.
+/// Pre-load AV modules during init.
 fn load_vsh_mpeg_module() {
-    // Do NOT load AvMpegBase — it conflicts with mpeg_vsh370 (exclusive load).
-    // mpeg_vsh370 is loaded from the video thread when decode is needed.
     unsafe {
         let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
         vlog(&format!("[VIDEO] AvMp3 = {r:#x}"));
     }
 }
 
-/// Load cooleyesBridge.prx + mpeg_vsh370.prx from the video thread.
-/// cooleyesBridge boots the ME core (required for H.264 decode).
-/// mpeg_vsh370 provides the sceMpegVsh_library implementation.
+/// Load sceMpeg implementation via mpeg_vsh370.prx.
+///
+/// AvMpegBase (the system's built-in sceMpeg) does NOT work with the NAL
+/// decode path — it returns 0x80628002 even with correct mode + DDR top
+/// parameters. The mode 4/5 + DDR top convention is specific to mpeg_vsh370
+/// (decrypted FW 3.71 module used by PMPlayer). AvMpegBase only supports
+/// the standard PSMF ringbuffer path (sceMpegGetAvcAu), not the NAL path
+/// (sceMpegGetAvcNalAu).
+///
+/// mpeg_vsh370.prx registers "sceMpeg" via self-import when started,
+/// which triggers the kernel to resolve the EBOOT's weak import stubs.
 fn load_mpeg_vsh_module() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOADED: AtomicBool = AtomicBool::new(false);
@@ -171,39 +172,9 @@ fn load_mpeg_vsh_module() {
         return;
     }
 
-    // Boot the Media Engine via kernel PRX.
-    // Try our Rust oasis-me-boot.prx first, fall back to cooleyesBridge.prx.
-    let boot_paths: &[&[u8]] = &[
-        b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
-        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
-    ];
-    let mut boot_id = psp::sys::SceUid(-1);
-    for path in boot_paths {
-        let id = unsafe {
-            psp::sys::sceKernelLoadModule(
-                path.as_ptr(), 0, core::ptr::null_mut(),
-            )
-        };
-        let name = core::str::from_utf8(&path[..path.len()-1]).unwrap_or("?");
-        vlog(&format!("[VIDEO] load {name} = {:#x}", id.0));
-        if id >= psp::sys::SceUid(0) {
-            boot_id = id;
-            break;
-        }
-    }
-    vlog(&format!("[VIDEO] ME boot PRX = {:#x}", boot_id.0));
-    if boot_id >= psp::sys::SceUid(0) {
-        let mut status: i32 = 0;
-        let ret = unsafe {
-            psp::sys::sceKernelStartModule(
-                boot_id, 0, core::ptr::null_mut(),
-                &mut status, core::ptr::null_mut(),
-            )
-        };
-        vlog(&format!("[VIDEO] oasis-me-boot start = {ret:#x}, status={status:#x}"));
-    }
+    // Boot the ME first (mpeg_vsh370 needs it running).
+    load_me_boot_prx();
 
-    vlog("[VIDEO] loading mpeg_vsh370.prx...");
     let id = unsafe {
         psp::sys::sceKernelLoadModule(
             b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0".as_ptr(),
@@ -212,7 +183,7 @@ fn load_mpeg_vsh_module() {
     };
     vlog(&format!("[VIDEO] sceKernelLoadModule = {:#x}", id.0));
     if id < psp::sys::SceUid(0) {
-        vlog("[VIDEO] load FAILED");
+        vlog("[VIDEO] mpeg_vsh370 load FAILED — H.264 decode unavailable");
         return;
     }
 
@@ -225,35 +196,39 @@ fn load_mpeg_vsh_module() {
     };
     vlog(&format!("[VIDEO] sceKernelStartModule = {ret:#x}, status={status:#x}"));
     if ret < 0 {
-        vlog("[VIDEO] start FAILED");
+        vlog("[VIDEO] mpeg_vsh370 start FAILED");
         unsafe { psp::sys::sceKernelUnloadModule(id); }
         return;
     }
-    vlog("[VIDEO] sceMpegVsh_library registered!");
+    vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370");
+}
 
-    // Probe which sceMpeg stubs are resolved by reading the stub instructions.
-    // Resolved stubs have: jr $ra (0x03E00008) + syscall N
-    // Unresolved stubs have: jr $ra (0x03E00008) + nop (0x00000000)
-    // OR: some other pattern like two pointer words (Stub struct).
-    unsafe {
-        // Read stub instructions for key functions to check resolution.
-        let fns: &[(&str, unsafe extern "C" fn() -> i32)] = &[
-            ("Init", core::mem::transmute(psp::sys::sceMpegInit as *const ())),
-            ("QueryMemSize", core::mem::transmute(psp::sys::sceMpegQueryMemSize as *const ())),
-            ("MallocEsBuf", core::mem::transmute(psp::sys::sceMpegMallocAvcEsBuf as *const ())),
-            ("InitAu", core::mem::transmute(psp::sys::sceMpegInitAu as *const ())),
-        ];
-        for &(name, f) in fns {
-            let addr = f as *const () as *const u32;
-            let insn0 = core::ptr::read_volatile(addr);
-            let insn1 = core::ptr::read_volatile(addr.add(1));
-            let has_syscall = (insn1 & 0x3F) == 0x0C;
-            vlog(&format!(
-                "[VIDEO] stub {name}: @{addr:?} = {insn0:#010x} {insn1:#010x} {}",
-                if has_syscall { "RESOLVED" } else { "unresolved" }
-            ));
+/// Boot the Media Engine via kernel PRX (if available).
+fn load_me_boot_prx() {
+    let boot_paths: &[&[u8]] = &[
+        b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
+        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
+    ];
+    for path in boot_paths {
+        let id = unsafe {
+            psp::sys::sceKernelLoadModule(
+                path.as_ptr(), 0, core::ptr::null_mut(),
+            )
+        };
+        if id >= psp::sys::SceUid(0) {
+            let mut status: i32 = 0;
+            let ret = unsafe {
+                psp::sys::sceKernelStartModule(
+                    id, 0, core::ptr::null_mut(),
+                    &mut status, core::ptr::null_mut(),
+                )
+            };
+            let name = core::str::from_utf8(&path[..path.len()-1]).unwrap_or("?");
+            vlog(&format!("[VIDEO] ME boot {name} = {ret:#x}"));
+            return;
         }
     }
+    vlog("[VIDEO] no ME boot PRX found (ME may already be booted by AAC)");
 }
 
 /// Spawn the video decode thread (priority 24, between audio=16 and I/O=32).
