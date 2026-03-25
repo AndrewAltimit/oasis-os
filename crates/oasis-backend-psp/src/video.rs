@@ -562,238 +562,69 @@ unsafe extern "C" fn ringbuffer_callback(
 }
 
 // ---------------------------------------------------------------------------
-// NAL-based H.264 decoder (cooleyes/PMPlayer approach)
+// NAL-based H.264 decoder — thin wrapper around psp::mpeg::AvcDecoder
 // ---------------------------------------------------------------------------
 
-/// Mp4AvcNalStruct — matches the C struct from PMPlayer.
-#[repr(C)]
-struct Mp4AvcNalStruct {
-    sps_buffer: *const u8,
-    sps_size: i32,
-    pps_buffer: *const u8,
-    pps_size: i32,
-    nal_prefix_size: i32,
-    nal_buffer: *const u8,
-    nal_size: i32,
-    mode: i32,  // 3 for first frame, 0 for subsequent
-}
-
-/// NAL-based H.264 decoder using sceMpegGetAvcNalAu.
+/// NAL-based H.264 decoder using the high-level `psp::mpeg::AvcDecoder`.
 ///
-/// Feeds raw H.264 NAL units directly to the ME, bypassing the MPEG-PS
-/// demuxer and broken avcodec stubs. Based on the cooleyes/PMPlayer
-/// approach that's proven to work on real PSP hardware.
+/// Adds OASIS-specific logging and SPS/PPS extraction on top of the
+/// reusable rust-psp abstraction.
 struct NalDecoder {
-    mpeg_storage: *mut c_void,
-    mpeg_data: Vec<u8>,
-    ddr_block: psp::sys::SceUid,
-    // Keep ringbuffer + backing data alive — sceMpegCreate stores internal pointers.
-    _ringbuffer: Box<psp::sys::SceMpegRingbuffer>,
-    _rb_data: Vec<u8>,
-    es_buf: *mut c_void,
-    au: psp::sys::SceMpegAu,
+    decoder: psp::mpeg::AvcDecoder,
     sps: Vec<u8>,
     pps: Vec<u8>,
     nal_prefix_size: i32,
-    output_buf: Vec<u8>,
-    pic_num: i32,
-    frame_width: u32,
-    width: u32,
-    height: u32,
     first_frame: bool,
 }
 
 impl NalDecoder {
     /// Initialize the NAL decoder from the first keyframe.
-    ///
-    /// Uses SPS/PPS from the MP4 avcC atom if available (preferred),
-    /// otherwise extracts from the Annex B stream.
     fn try_init(first_frame: &StreamFrame) -> Result<Self, String> {
         vlog("[VIDEO] NalDecoder::try_init");
         crate::audio::load_av_modules_once_pub();
         load_mpeg_vsh_module();
 
         // Prefer SPS/PPS from MP4 avcC atom (exact match for ME expectations).
-        let (sps, pps) = if let (Some(s), Some(p)) = (&first_frame.avcc_sps, &first_frame.avcc_pps) {
+        let (sps, pps) = if let (Some(s), Some(p)) =
+            (&first_frame.avcc_sps, &first_frame.avcc_pps)
+        {
             (s.clone(), p.clone())
         } else {
             extract_sps_pps(&first_frame.data)
                 .ok_or_else(|| "no SPS/PPS found".to_string())?
         };
-        // Log SPS profile/level (first 3 bytes: profile_idc, flags, level_idc).
-        let prof = if sps.len() >= 4 {
-            format!("profile={:#x} level={:#x}", sps[1], sps[3])
-        } else {
-            "short".to_string()
-        };
-        vlog(&format!(
-            "[VIDEO] NAL: SPS={} PPS={} {prof}", sps.len(), pps.len()
-        ));
+        if sps.len() >= 4 {
+            vlog(&format!(
+                "[VIDEO] NAL: SPS={} PPS={} profile={:#x} level={:#x}",
+                sps.len(), pps.len(), sps[1], sps[3]
+            ));
+        }
 
-        // Parse dimensions from SPS.
         let (width, height) = parse_sps_dimensions(&first_frame.data)
             .unwrap_or((480, 272));
-        let frame_width = if width > 480 { 768 } else { 512 };
-        vlog(&format!("[VIDEO] NAL: {width}x{height}, stride={frame_width}"));
+        vlog(&format!("[VIDEO] NAL: {width}x{height}"));
 
-        // Use standard linked sceMpeg functions. The VSH addresses
-        // are in a different process space and can't be called.
-        // The kernel PRX handles ME boot + avcodec stub patching.
-        vlog("[VIDEO] NAL: using linked sceMpeg");
-
-        let ret = unsafe { psp::sys::sceMpegInit() };
-        vlog(&format!("[VIDEO] NAL: sceMpegInit = {ret:#x}"));
-        if ret < 0 && ret != 0x80618003_u32 as i32 && ret != 0x80618005_u32 as i32 {
-            return Err(format!("sceMpegInit: {ret:#x}"));
-        }
-
-        // PMPlayer uses mode 4 for ≤480x272, mode 5 for larger video.
-        // These are NOT standard pspsdk modes — they enable the NAL decode path
-        // in mpeg_vsh370 and tell the ME how to allocate internal structures.
-        let mpeg_mode = if width > 480 { 5 } else { 4 };
-        let mem_size = unsafe { psp::sys::sceMpegQueryMemSize(mpeg_mode) };
-        if mem_size <= 0 {
-            return Err(format!("QueryMemSize({mpeg_mode}): {mem_size}"));
-        }
-        vlog(&format!("[VIDEO] NAL: mem_size={mem_size}, mode={mpeg_mode}"));
-
-        let mut mpeg_data = vec![0u8; mem_size as usize + 64];
-        let mpeg_data_aligned = {
-            let p = mpeg_data.as_mut_ptr();
-            unsafe { p.add(p.align_offset(64)) }
-        };
-
-        // DDR-top: 2MB for ME decode output, 4MB aligned (cooleyes pattern).
-        // Allocate 2MB + 4MB for alignment overhead.
-        let ddr_block = unsafe {
-            psp::sys::sceKernelAllocPartitionMemory(
-                psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
-                b"MeDdrTop\0".as_ptr(),
-                psp::sys::SceSysMemBlockTypes::Low,
-                0x20_0000 + 0x40_0000, // 2MB + 4MB alignment
-                core::ptr::null_mut(),
-            )
-        };
-        if ddr_block < psp::sys::SceUid(0) {
-            return Err(format!("DDR-top alloc: {:#x}", ddr_block.0));
-        }
-        let ddr_raw = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
-        // Align to 4MB boundary.
-        let ddr_aligned = ((ddr_raw as u32) + 0x3F_FFFF) & !0x3F_FFFF;
-        vlog(&format!("[VIDEO] NAL: DDR raw={ddr_raw:?} aligned={ddr_aligned:#x}"));
-
-        let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
-        let mpeg: psp::sys::SceMpeg = unsafe {
-            core::mem::transmute(mpeg_storage as *mut *mut c_void)
-        };
-
-        // Construct a real ringbuffer (mpeg_vsh370 validates it during Create).
-        let rb_packets = 8; // Minimal — NAL feeding bypasses the ringbuffer.
-        let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(rb_packets) };
-        vlog(&format!("[VIDEO] NAL: rb_size={rb_size}"));
-        let mut rb_data = vec![0u8; if rb_size > 0 { rb_size as usize } else { 16384 }];
-        let mut ringbuffer = Box::new(unsafe {
-            core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
-        });
-        if rb_size > 0 {
-            let ret = unsafe {
-                psp::sys::sceMpegRingbufferConstruct(
-                    &mut *ringbuffer, rb_packets,
-                    rb_data.as_mut_ptr() as *mut c_void,
-                    rb_size, None, core::ptr::null_mut(),
-                )
-            };
-            vlog(&format!("[VIDEO] NAL: RingbufferConstruct = {ret:#x}"));
-        }
-
-        // PMPlayer passes mpeg_mode and mpeg_ddrtop as the last two args.
-        // The DDR top is a 2MB region (4MB-aligned) used as ME decode workspace.
-        // Without these, the ME has no output buffer and returns 0x80628002.
-        let ret = unsafe {
-            psp::sys::sceMpegCreate(
-                mpeg,
-                mpeg_data_aligned as *mut c_void,
-                mem_size as i32,
-                &mut *ringbuffer,
-                512,                   // frame_width
-                mpeg_mode,             // mode: 4 (≤480p) or 5 (>480p)
-                ddr_aligned as i32,    // DDR top: ME decode workspace
-            )
-        };
-        vlog(&format!("[VIDEO] NAL: sceMpegCreate = {ret:#x} mode={mpeg_mode} ddr={ddr_aligned:#x}"));
-        if ret < 0 {
-            unsafe { let _ = Box::from_raw(mpeg_storage); }
-            return Err(format!("sceMpegCreate: {ret:#x}"));
-        }
-        vlog("[VIDEO] NAL: sceMpegCreate OK");
-
-        // Register video stream (required before MallocAvcEsBuf/AvcDecode).
-        let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
-        vlog(&format!("[VIDEO] NAL: RegistStream = {:?}", stream));
-
-        // PMPlayer uses ddrtop + 0x10000 as the AU buffer (NOT sceMpegMallocAvcEsBuf).
-        // This places the AU in the DDR top region where the ME expects it.
-        let au_buffer = (ddr_aligned + 0x10000) as *mut c_void;
-        vlog(&format!("[VIDEO] NAL: AU buffer = {:#x}", ddr_aligned + 0x10000));
-
-        // PMPlayer initializes AU with 0xFF (not zeroed) before sceMpegInitAu.
-        let mut au = unsafe {
-            let mut a = core::mem::MaybeUninit::<psp::sys::SceMpegAu>::uninit();
-            core::ptr::write_bytes(a.as_mut_ptr() as *mut u8, 0xFF,
-                core::mem::size_of::<psp::sys::SceMpegAu>());
-            a.assume_init()
-        };
-        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, au_buffer, &mut au) };
-        if ret < 0 {
-            unsafe {
-                psp::sys::sceMpegDelete(mpeg);
-                let _ = Box::from_raw(mpeg_storage);
-            }
-            return Err(format!("sceMpegInitAu: {ret:#x}"));
-        }
-        vlog("[VIDEO] NAL: sceMpegInitAu OK");
-
-        // Set decode mode to ABGR 8888 pixel output.
-        let mut mode = psp::sys::SceMpegAvcMode {
-            unk0: -1,
-            pixel_format: psp::sys::DisplayPixelFormat::Psm8888,
-        };
-        let ret = unsafe { psp::sys::sceMpegAvcDecodeMode(mpeg, &mut mode) };
-        vlog(&format!("[VIDEO] NAL: AvcDecodeMode = {ret:#x}"));
-
-        // Output pixel buffer.
-        let out_h = ((height + 15) / 16) * 16;
-        let output_buf = vec![0u8; frame_width as usize * out_h as usize * 4];
+        let decoder = psp::mpeg::AvcDecoder::new(width, height)
+            .map_err(|e| format!("AvcDecoder::new: {e}"))?;
+        vlog(&format!(
+            "[VIDEO] NAL: decoder ready, ddr={:#x}",
+            decoder.ddr_top()
+        ));
 
         Ok(Self {
-            mpeg_storage: mpeg_storage as *mut c_void,
-            mpeg_data,
-            ddr_block,
-            _ringbuffer: ringbuffer,
-            _rb_data: rb_data,
-            es_buf: core::ptr::null_mut(), // Not using MallocAvcEsBuf — AU buffer is in DDR top
-            au,
+            decoder,
             sps,
             pps,
             nal_prefix_size: first_frame.nal_prefix_size as i32,
-            output_buf,
-            pic_num: 0,
-            frame_width,
-            width,
-            height,
             first_frame: true,
         })
     }
 
-    fn mpeg(&self) -> psp::sys::SceMpeg {
-        unsafe {
-            core::mem::transmute(self.mpeg_storage as *mut *mut c_void)
-        }
-    }
-
-    /// Decode one H.264 access unit using NAL-based approach.
-    fn decode(&mut self, au_data: &[u8], _pts_secs: f64,
-              raw_avcc: Option<&[u8]>, avcc_prefix: u8) -> Option<DecodedFrame> {
+    /// Decode one H.264 access unit.
+    fn decode(
+        &mut self, au_data: &[u8], _pts_secs: f64,
+        raw_avcc: Option<&[u8]>, avcc_prefix: u8,
+    ) -> Option<DecodedFrame> {
         if au_data.is_empty() {
             return None;
         }
@@ -803,240 +634,47 @@ impl NalDecoder {
         let call_num = DECODE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let verbose = call_num < 10;
 
-        let mpeg = self.mpeg();
+        // Use raw AVCC data (length-prefixed NALs) if available.
+        let (data, prefix) = if let Some(avcc) = raw_avcc {
+            (avcc, avcc_prefix as i32)
+        } else {
+            (au_data, 0)
+        };
 
-        // Build NAL struct.
-        let mode = if self.first_frame { 3 } else { 0 };
+        let is_first = self.first_frame;
         self.first_frame = false;
 
-        // Use raw AVCC data (length-prefixed NALs) if available.
-        // sceMpegGetAvcNalAu expects AVCC format, not Annex B.
-        let (nal_buf, nal_len, prefix) = if let Some(avcc) = raw_avcc {
-            (avcc.as_ptr(), avcc.len() as i32, avcc_prefix as i32)
-        } else {
-            (au_data.as_ptr(), au_data.len() as i32, 0)
+        let nal = psp::mpeg::AvcNal {
+            sps: &self.sps,
+            pps: &self.pps,
+            data,
+            prefix_size: prefix,
+            is_first_frame: is_first,
         };
 
-        let mut nal = Mp4AvcNalStruct {
-            sps_buffer: self.sps.as_ptr(),
-            sps_size: self.sps.len() as i32,
-            pps_buffer: self.pps.as_ptr(),
-            pps_size: self.pps.len() as i32,
-            nal_prefix_size: prefix,
-            nal_buffer: nal_buf,
-            nal_size: nal_len,
-            mode,
-        };
-
-        // Always log first frame details.
-        if call_num == 0 {
-            vlog(&format!(
-                "[VIDEO] NAL: sps={} pps={} nal={} prefix={} mode={}",
-                self.sps.len(), self.pps.len(), nal_len, prefix, mode
-            ));
-            // Hex dump first 16 bytes.
-            let dump_len = (nal_len as usize).min(16);
-            let slice = unsafe { core::slice::from_raw_parts(nal_buf, dump_len) };
-            let hex_chars = b"0123456789abcdef";
-            let mut hex_buf = [0u8; 64];
-            let mut hp = 0;
-            for &b in slice {
-                if hp + 3 > hex_buf.len() { break; }
-                hex_buf[hp] = hex_chars[(b >> 4) as usize];
-                hex_buf[hp + 1] = hex_chars[(b & 0xF) as usize];
-                hex_buf[hp + 2] = b' ';
-                hp += 3;
+        match self.decoder.decode(&nal) {
+            Ok(Some(frame)) => {
+                if verbose {
+                    vlog("[VIDEO] NAL: FRAME DECODED!");
+                }
+                Some(DecodedFrame {
+                    rgba: frame.pixels,
+                    width: frame.width,
+                    height: frame.height,
+                })
             }
-            let hex_str = core::str::from_utf8(&hex_buf[..hp]).unwrap_or("?");
-            vlog(&format!("[VIDEO] NAL: data={hex_str}"));
-            // Also log SPS first bytes.
-            let sps_dump = self.sps.len().min(8);
-            let mut sbuf = [0u8; 32];
-            let mut sp = 0;
-            for &b in &self.sps[..sps_dump] {
-                if sp + 3 > sbuf.len() { break; }
-                sbuf[sp] = hex_chars[(b >> 4) as usize];
-                sbuf[sp + 1] = hex_chars[(b & 0xF) as usize];
-                sbuf[sp + 2] = b' ';
-                sp += 3;
+            Ok(None) => {
+                if verbose {
+                    vlog("[VIDEO] NAL: no picture yet (reordering)");
+                }
+                None
             }
-            let sps_str = core::str::from_utf8(&sbuf[..sp]).unwrap_or("?");
-            vlog(&format!("[VIDEO] NAL: sps={sps_str}"));
-        }
-
-        // Flush cache on NAL data + struct.
-        unsafe {
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                au_data.as_ptr() as *const c_void, au_data.len() as u32,
-            );
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                &nal as *const _ as *const c_void,
-                core::mem::size_of::<Mp4AvcNalStruct>() as u32,
-            );
-        }
-
-        // Feed NAL to ME.
-        let ret = unsafe {
-            psp::sys::sceMpegGetAvcNalAu(
-                mpeg, &mut nal as *mut _ as *mut c_void, &mut self.au,
-            )
-        };
-        if ret < 0 {
-            if verbose {
-                vlog(&format!(
-                    "[VIDEO] NAL: GetAvcNalAu = {ret:#x} prefix={prefix} nalsz={nal_len} mode={mode}"
-                ));
+            Err(e) => {
+                if verbose || call_num < 50 {
+                    vlog(&format!("[VIDEO] NAL: decode error: {e}"));
+                }
+                None
             }
-            return None;
-        }
-        if verbose {
-            vlog("[VIDEO] NAL: GetAvcNalAu OK");
-        }
-
-        // Decode.
-        let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
-        let buf_arg = &mut output_ptr as *mut *mut c_void as *mut c_void;
-        let ret = unsafe {
-            psp::sys::sceMpegAvcDecode(
-                mpeg, &mut self.au, 512, buf_arg, &mut self.pic_num,
-            )
-        };
-        if ret < 0 {
-            if verbose || call_num < 50 {
-                vlog(&format!("[VIDEO] NAL: AvcDecode = {ret:#x} pic={}",
-                    self.pic_num));
-            }
-            return None;
-        }
-        if verbose {
-            vlog(&format!("[VIDEO] NAL: AvcDecode OK, pic_num={}", self.pic_num));
-        }
-
-        if self.pic_num <= 0 {
-            return None; // No picture produced yet (B-frame reordering).
-        }
-
-        // Get YCbCr buffer pointers.
-        let mut detail2: *mut c_void = core::ptr::null_mut();
-        let ret = unsafe {
-            psp::sys::sceMpegAvcDecodeDetail2(mpeg, &mut detail2)
-        };
-        if ret < 0 || detail2.is_null() {
-            if verbose {
-                vlog(&format!("[VIDEO] NAL: DecodeDetail2 = {ret:#x}"));
-            }
-            return None;
-        }
-
-        // CSC: YCbCr → ABGR via hardware.
-        // Build CSC struct from detail2.
-        // detail2 is Mp4AvcDetail2Struct; CSC needs info_buffer and yuv_buffer.
-        // info_buffer is at offset 16 (4th u32), yuv_buffer at offset 44 (11th u32).
-        let detail_ptr = detail2 as *const u32;
-        let info_ptr = unsafe { *detail_ptr.add(4) } as *const u32; // info_buffer
-        let yuv_ptr = unsafe { *detail_ptr.add(11) } as *const u32; // yuv_buffer
-
-        if info_ptr.is_null() || yuv_ptr.is_null() {
-            if verbose {
-                vlog("[VIDEO] NAL: null info/yuv pointers");
-            }
-            return None;
-        }
-
-        // Build CscStruct on stack.
-        // Format: height_mbs, width_mbs, mode0, mode1, buffer0..buffer7
-        let info_w = unsafe { *info_ptr.add(2) } as u32; // width at offset 8
-        let info_h = unsafe { *info_ptr.add(3) } as u32; // height at offset 12
-        let csc_width = if info_w > 480 { 768i32 } else { 512 };
-
-        #[repr(C)]
-        struct Mp4AvcCscStruct {
-            height: i32,
-            width: i32,
-            mode0: i32,
-            mode1: i32,
-            buffers: [*const c_void; 8],
-        }
-
-        let csc = Mp4AvcCscStruct {
-            height: ((info_h + 15) / 16) as i32,
-            width: ((info_w + 15) / 16) as i32,
-            mode0: 0,
-            mode1: 0,
-            buffers: [
-                unsafe { *yuv_ptr.add(0) } as *const c_void,
-                unsafe { *yuv_ptr.add(1) } as *const c_void,
-                unsafe { *yuv_ptr.add(2) } as *const c_void,
-                unsafe { *yuv_ptr.add(3) } as *const c_void,
-                unsafe { *yuv_ptr.add(4) } as *const c_void,
-                unsafe { *yuv_ptr.add(5) } as *const c_void,
-                unsafe { *yuv_ptr.add(6) } as *const c_void,
-                unsafe { *yuv_ptr.add(7) } as *const c_void,
-            ],
-        };
-
-        let ret = unsafe {
-            psp::sys::sceMpegBaseCscAvc(
-                self.output_buf.as_mut_ptr() as *mut c_void,
-                0,
-                csc_width,
-                &csc as *const _ as *mut c_void,
-            )
-        };
-        if ret < 0 {
-            if verbose {
-                vlog(&format!("[VIDEO] NAL: CscAvc = {ret:#x}"));
-            }
-            return None;
-        }
-
-        if verbose {
-            vlog("[VIDEO] NAL: FRAME DECODED!");
-        }
-
-        // Copy from output buffer (stride=frame_width) to output (stride=width),
-        // and fix alpha channel — sceMpegBaseCscAvc outputs ABGR with A=0x00.
-        let w = self.width as usize;
-        let h = self.height as usize;
-        let stride = self.frame_width as usize;
-        let mut rgba = vec![0u8; w * h * 4];
-        for row in 0..h {
-            let src_off = row * stride * 4;
-            let dst_off = row * w * 4;
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    self.output_buf.as_ptr().add(src_off),
-                    rgba.as_mut_ptr().add(dst_off),
-                    w * 4,
-                );
-            }
-            // Set alpha to 0xFF for each pixel in this row.
-            for x in 0..w {
-                rgba[dst_off + x * 4 + 3] = 0xFF;
-            }
-        }
-
-        Some(DecodedFrame {
-            rgba,
-            width: self.width,
-            height: self.height,
-        })
-    }
-}
-
-impl Drop for NalDecoder {
-    fn drop(&mut self) {
-        let mpeg = self.mpeg();
-        unsafe {
-            if !self.es_buf.is_null() {
-                psp::sys::sceMpegFreeAvcEsBuf(mpeg, self.es_buf);
-            }
-            psp::sys::sceMpegDelete(mpeg);
-            let _ = Box::from_raw(self.mpeg_storage as *mut *mut c_void);
-            if self.ddr_block >= psp::sys::SceUid(0) {
-                psp::sys::sceKernelFreePartitionMemory(self.ddr_block);
-            }
-            psp::sys::sceMpegFinish();
         }
     }
 }
