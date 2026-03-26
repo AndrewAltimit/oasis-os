@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Reverse Engineering the PSP Media Engine - OASIS_OS Developer's Journal</title>
-  <meta name="description" content="Reverse engineering the PSP's Media Engine coprocessor for H.264 video decode on ARK-4 CFW &mdash; discovering hidden kernel modules, mapping the RPC protocol, and achieving direct ME communication from a kernel PRX.">
+  <meta name="description" content="Reverse engineering the PSP's Media Engine coprocessor for H.264 hardware video decode from Rust homebrew on ARK-4 CFW &mdash; discovering hidden kernel modules, mapping the RPC protocol, and achieving working video streaming via undocumented sceMpegCreate parameters.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -26,13 +26,14 @@
 <header class="article-header">
   <div class="container">
     <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Direct RPC</h1>
+    <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Hardware Video Decode</h1>
     <p class="article-subtitle">
       On ARK-4 CFW, H.264 video decode from PSP homebrew fails with a cryptic error &mdash;
       the official <code>sceVideocodec</code> API returns <code>0x806201FE</code> and nobody
       has documented why. We traced the problem to empty firmware stubs, discovered hidden
-      kernel modules loaded only during UMD playback, reverse engineered the Media Engine&rsquo;s
-      RPC protocol, and achieved direct communication with the ME coprocessor from a kernel PRX.
+      kernel modules, reverse engineered the Media Engine&rsquo;s RPC protocol, found
+      undocumented parameters in PMPlayer&rsquo;s source code, and achieved hardware-accelerated
+      H.264 video streaming from a Rust EBOOT.
     </p>
     <div class="article-meta">
       <span>Entry 07</span>
@@ -54,7 +55,7 @@
   </p>
 
   <p>
-    On our hardware &mdash; a PSP-3001 (TA-090v2) running ARK-4 CFW on firmware 6.61 &mdash;
+    On our hardware &mdash; a PSP-2000 running ARK-4 CFW on firmware 6.61 &mdash;
     the official <code>sceVideocodec</code> API returns error <code>0x806201FE</code> on every
     call. The higher-level <code>sceMpeg</code> API fails too, as it internally delegates to
     <code>sceVideocodec</code> and hits the same wall. The root cause turned out to be
@@ -704,7 +705,7 @@ Offset   ME Internal    Mapped Error       Meaning
 
   <p>
     To rule out a hardware or firmware defect, we tested
-    <strong>PMPlayer Advance</strong> on the same PSP (PSP-3001 TA-090v2, ARK-4 CFW,
+    <strong>PMPlayer Advance</strong> on the same PSP (PSP-2000, ARK-4 CFW,
     firmware 6.61). PMPlayer successfully decodes and plays H.264 video with hardware
     acceleration. The Media Engine on this exact device is fully functional &mdash; the
     problem is strictly in our initialization or calling convention.
@@ -734,7 +735,7 @@ sceKernelStartModule(uid, 0, NULL, ...)
 
   <p>
     During this phase, we added four new functions to the
-    <a href="https://github.com/overdrivenpotato/rust-psp">rust-psp</a> SDK:
+    <a href="https://github.com/AndrewAltimit/rust-psp">rust-psp</a> SDK:
   </p>
 
   <ul>
@@ -755,46 +756,44 @@ sceKernelStartModule(uid, 0, NULL, ...)
     our decode request.
   </p>
 
-  <h2>Why This Matters</h2>
+  <h2>What We Learned</h2>
 
   <p>
-    While earlier homebrew like PMPlayer achieved ME video decode on older CFW, the
-    internal kernel driver architecture and RPC protocol have remained largely undocumented.
-    PMPlayer&rsquo;s success on this exact hardware (PSP-3001, ARK-4, FW 6.61) proves that
-    the ME is fully functional and that a working decode path exists &mdash; we are close to
-    identifying the specific kernel avcodec logic that distinguishes a successful decode
-    from our <code>0x80628002</code> failure. Our findings have significant implications:
+    The investigation revealed a complete, previously undocumented kernel driver architecture
+    and RPC protocol. While the direct RPC approach (Phases 1&ndash;5) produced valuable
+    documentation, the actual solution came from a different direction &mdash; discovering
+    undocumented parameters in <code>sceMpegCreate</code> by reading PMPlayer&rsquo;s source
+    code. Sometimes reverse engineering the firmware is less effective than reading existing
+    homebrew that already solved the problem. Key takeaways:
   </p>
 
   <ul>
     <li>
-      <strong>Hardware H.264 decode from homebrew.</strong> The ME is alive and responding to
-      video commands. NAL-based input is accepted (<code>sceMpegGetAvcNalAu</code> returns
-      success). With the kernel avcodec decode path fully traced, we expect to identify the
-      missing initialization step that separates a working decode from the fatal error.
+      <strong>Hardware H.264 decode from Rust homebrew is working.</strong> The OASIS_OS TV Guide
+      app now streams H.264 video with audio from archive.org on real PSP hardware. The
+      <a href="https://github.com/AndrewAltimit/rust-psp"><code>psp::mpeg::AvcDecoder</code></a>
+      abstraction encapsulates the full decode pipeline in a safe RAII interface &mdash; anyone
+      can decode H.264 in ~5 lines of Rust instead of the 200+ lines of unsafe syscalls.
     </li>
     <li>
-      <strong>Hardware AAC decode.</strong> The <code>sceAudiocodecCheckNeedMem</code> call
-      already returned success. The audio path through the ME may be fully functional with
-      minimal additional work.
+      <strong>AvMpegBase does NOT support the NAL decode path.</strong> Tested on real hardware:
+      <code>sceUtilityLoadModule(AvMpegBase)</code> resolves stubs but returns
+      <code>0x80628002</code> even with correct mode + DDR top parameters. AvMpegBase only
+      supports the PSMF ringbuffer path (<code>sceMpegGetAvcAu</code>). The NAL path
+      (<code>sceMpegGetAvcNalAu</code>) requires <code>mpeg_vsh370.prx</code>.
     </li>
     <li>
-      <strong>Codec RPC documentation.</strong> Homebrew like Daedalus X64 has long used the ME
-      as a general-purpose coprocessor via <code>psp::me</code> APIs. What was missing was
-      documentation of Sony&rsquo;s internal codec RPC protocol &mdash; the specific command IDs,
-      buffer layouts, and driver chain that the firmware uses for video/audio decode. This
-      reference enables interacting with the ME&rsquo;s codec firmware rather than replacing it.
-    </li>
-    <li>
-      <strong>Kernel error table reference.</strong> The seven-entry error mapping at
-      <code>+0x49A0</code> in <code>sceAvcodec_wrapper</code> provides the first documented
+      <strong>Codec RPC documentation.</strong> The 22 RPC command IDs, buffer layouts, and
+      six-library driver chain are now documented for the PSP homebrew community. The
+      seven-entry kernel error table at <code>+0x49A0</code> provides the first documented
       translation between ME internal return codes and user-visible <code>0x8062xxxx</code>
-      errors, useful for anyone debugging PSP video codec issues.
+      errors.
     </li>
     <li>
-      <strong>OASIS_OS video playback.</strong> Our TV Guide app currently streams audio-only on
-      PSP because H.264 decode was unavailable. Direct ME access would enable full video playback
-      on the original hardware.
+      <strong>EABI32 is a systemic issue for Rust on PSP.</strong> LLVM&rsquo;s O32 calling
+      convention breaks every PSP syscall with 5+ arguments. The 29 EABI mappers added to
+      <code>rust-psp</code> fix this for all known affected functions, and the pattern is
+      documented for future additions.
     </li>
   </ul>
 
@@ -876,27 +875,16 @@ sceKernelStartModule(uid, 0, NULL, ...)
 
   <ul>
     <li>
-      <strong>Complete initialization sequence:</strong> Call the ME driver functions in the
-      correct order &mdash; memory allocation, codec open, init with H.264 parameters, header
-      scan &mdash; to get past the initialization errors and achieve a successful decode.
+      <strong>Performance tuning:</strong> Frame pacing, decode thread priority, and memory
+      budget optimization for smooth 30fps playback on the 333 MHz Allegrex.
     </li>
     <li>
       <strong>ME firmware decryption:</strong> Decrypt <code>me_t2img.img</code> using the Kirk
-      engine and disassemble the ME-side firmware to understand its command handling, error codes,
-      and memory layout.
+      engine to understand the ME-side command handling and error codes in detail.
     </li>
     <li>
-      <strong>Standalone ME boot:</strong> Attempt to load <code>me_wrapper.prx</code> from our
-      own kernel PRX without a UMD game running, bootstrapping the ME independently.
-    </li>
-    <li>
-      <strong>Integration with OASIS_OS:</strong> Wire the ME decode path into the
-      <code>oasis-video</code> crate&rsquo;s PSP backend for hardware-accelerated TV Guide
-      video playback.
-    </li>
-    <li>
-      <strong>Document all 47 NIDs:</strong> Publish the complete NID table for the six ME driver
-      libraries so the PSP homebrew community can build on this work.
+      <strong>Publish the 47 NIDs:</strong> Complete documentation of all six ME driver
+      libraries for the PSP homebrew community.
     </li>
   </ul>
 
@@ -955,8 +943,8 @@ sceKernelStartModule(uid, 0, NULL, ...)
 
   <p>
     With child module loading now working, the path to hardware H.264 decode via
-    <code>mpeg_vsh370.prx</code> is unblocked. The next step is wiring up the
-    sceMpeg API through the loaded VSH library for TV Guide video playback.
+    <code>mpeg_vsh370.prx</code> was unblocked &mdash; leading directly to the
+    sceMpeg integration work described in the next section.
   </p>
 
   <h2 id="update-scempeg-integration">Update: sceMpeg Integration (2026-03-25)</h2>
@@ -980,7 +968,7 @@ sceKernelStartModule(uid, 0, NULL, ...)
       <tr>
         <td><code>sceMpeg</code> stubs + AvMpegBase (<code>sceUtilityLoadModule</code>)</td>
         <td>Yes &mdash; utility loader triggers re-linking</td>
-        <td>No &mdash; <code>0x80628002</code> (ME stubs empty on FW 6.61)</td>
+        <td>No &mdash; <code>0x80628002</code> (AvMpegBase does not support NAL decode path)</td>
       </tr>
       <tr>
         <td><code>sceMpegVsh_library</code> stubs + mpeg_vsh370 (<code>sceKernelStartModule</code>)</td>
@@ -1156,18 +1144,23 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     alpha fixup sets every pixel&rsquo;s alpha to 0xFF for correct compositing.
   </p>
 
-  <h3>Infrastructure built across sessions</h3>
+  <h3>SDK and infrastructure contributions</h3>
 
   <ul>
+    <li><strong><code>psp::mpeg::AvcDecoder</code></strong> &mdash; high-level RAII H.264
+      decoder in <code>rust-psp</code>, encapsulating all undocumented ME parameters</li>
     <li><strong>29 EABI mappers</strong> added to <code>rust-psp</code> for all
       5+ argument PSP functions (kernel, thread, net, font, HTTP)</li>
     <li><strong>i8/i9 assembly bridges</strong> for 8 and 9 argument functions</li>
-    <li><strong>prxgen fix</strong> for SHT_REL section corruption</li>
-    <li><strong>oasis-me-boot.prx</strong> &mdash; GPL-free Rust ME boot PRX</li>
-    <li><strong>sceMpeg + sceMpegbase import stubs</strong> enabled (weak, from mpeg_vsh370)</li>
-    <li><strong>PMPlayer source code analysis</strong> &mdash; identified undocumented sceMpegCreate parameters</li>
-    <li><strong>850 lines dead code removed</strong> from video.rs</li>
-    <li><strong>Kernel PRX networking bug</strong> identified and documented</li>
+    <li><strong>prxgen fix</strong> for SHT_REL section corruption in PRX output</li>
+    <li><strong>oasis-me-boot.prx</strong> &mdash; GPL-free Rust kernel PRX for ME boot
+      (replaces cooleyesBridge.prx)</li>
+    <li><strong>sceMpeg + sceMpegbase import stubs</strong> with weak flags (from mpeg_vsh370)</li>
+    <li><strong>sceMpegCreate parameter documentation</strong> &mdash; mode and DDR top
+      parameters previously undocumented in any public reference</li>
+    <li><strong>AvMpegBase NAL incompatibility</strong> documented and tested on real hardware</li>
+    <li><strong>Kernel PRX networking bug</strong> &mdash; <code>sctrlHENPatchSyscall</code>
+      corrupts adjacent syscall table entries, identified and documented</li>
   </ul>
 
   <nav class="article-nav">
