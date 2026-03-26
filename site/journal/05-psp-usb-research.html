@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PSP USB Research - OASIS_OS Developer's Journal</title>
-  <meta name="description" content="Deep hardware reverse engineering of the PSP's USB subsystem — firmware decryption, OHCI controller discovery, Syscon protocol, and a working custom USB device driver in Rust.">
+  <meta name="description" content="Deep hardware reverse engineering of the PSP's USB subsystem — firmware decryption, OHCI controller discovery, Syscon protocol, a working custom USB device driver in Rust, and a hardware adapter design to bring modern USB-C to the PSP.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -26,12 +26,13 @@
 <header class="article-header">
   <div class="container">
     <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">PSP USB Research: From Firmware Decryption to a Custom Device Driver</h1>
+    <h1 class="article-title">PSP USB Research: From Firmware Decryption to a Custom Device Driver and Hardware Adapter</h1>
     <p class="article-subtitle">
       What started as an attempt to enable USB host mode became a deep reverse engineering
       expedition &mdash; decrypting Sony's USB firmware, mapping undocumented hardware
-      registers, and ultimately building a working custom USB device driver in Rust that
-      turns the PSP into a thin client for external compute.
+      registers, discovering that PSP accessories were never powered through VBUS at all,
+      and ultimately building both a working custom USB device driver in Rust and a hardware
+      adapter design that brings USB-C to the PSP.
     </p>
     <div class="article-meta">
       <span>Entry 05</span>
@@ -58,32 +59,75 @@
     about how PSP accessories actually work.
   </p>
 
-  <h2>The Discovery: PSP Accessories Are the Host</h2>
+  <h2>The Answer: Accessory Power Pads, Not VBUS</h2>
 
   <p>
-    After exhaustively testing every accessible register, Syscon command, and GPIO pin,
-    we discovered that <strong>the PSP never acts as a USB host</strong>. Sony's accessories
-    contain their own USB host controller chips. The PSP is always the device. The
-    accessories power themselves from dedicated side contact pins on the PSP's USB port,
-    not from VBUS.
+    Before diving into the journey, here's the conclusion up front so we don't mislead
+    anyone chasing the same path: <strong>the PSP never drives 5V on USB VBUS</strong>.
+    Sony's accessories don't draw power from the Mini-B port's VBUS pin at all.
+  </p>
+
+  <p>
+    The PSP-2000 and PSP-3000 have <strong>exposed contact pads flanking the Mini-B USB
+    port</strong> on the top edge of the console. Sony's accessories &mdash; the Go!Cam
+    PSP-300, GPS receiver PSP-290, and 1seg TV tuner PSP-S310 &mdash; have spring-loaded
+    pogo contacts that press against these pads when clipped on, drawing power directly from
+    the PSP's internal power rail. The Mini-B USB connection carries data only.
   </p>
 
   <div class="diagram">
-    <pre><code><span class="hl-bright">How PSP Accessories Actually Work</span>
+    <pre><code><span class="hl-bright">How PSP Accessories Actually Get Power</span>
 
 <span class="hl-warn">What we assumed:</span>
-  PSP (host) ──VBUS 5V──&gt; Accessory (device)
-  PSP enumerates and controls the peripheral
+  PSP ──USB VBUS 5V──&gt; Accessory
+  Standard USB power delivery through Mini-B pin 1
 
 <span class="hl-accent">What actually happens:</span>
-  PSP (device) &lt;──data──&gt; Accessory (host)
-  Accessory has its own host chip + power
-  PSP presents itself as a custom USB device
-  Accessory controls the conversation</code></pre>
-    <div class="diagram-caption">The PSP's Mini-B port is always a device port &mdash; accessories are the masters</div>
+  PSP ──side contact pads──&gt; Accessory (power)
+  PSP &lt;──Mini-B USB data──&gt; Accessory (data)
+  Dedicated pads on left and right of Mini-B port
+  Accessory has spring-loaded pogo contacts that
+  press against these pads when clipped on
+
+<span class="hl-bright">PSP Top Edge (front view):</span>
+  ┌──┐  ┌──┐  ┌──────────┐  ┌──┐  ┌──┐
+  │5V│  │GND│  │  Mini-B  │  │GND│  │5V│
+  │  │  │  │  │  USB port │  │  │  │  │
+  └──┘  └──┘  └──────────┘  └──┘  └──┘
+  ▲     ▲     data only      ▲     ▲
+  └─────┴─── power pads ─────┴─────┘</code></pre>
+    <div class="diagram-caption">The PSP's proprietary side contact pads supply power &mdash; VBUS was never used for accessories</div>
   </div>
 
+  <p>
+    We confirmed this by acquiring a Go!Cam PSP-300 and examining its connector. The camera's
+    clip-on housing has spring contacts on both sides that align precisely with the PSP's
+    side pads. The Mini-B plug in the center handles USB data exclusively.
+  </p>
+
+  <p>
+    This also explains why Sony's accessories are always the USB host, not the PSP. The
+    accessory contains its own USB host controller chip and initiates all communication.
+    The PSP presents itself as a USB device &mdash; the same role it plays when connected
+    to a PC for file transfer.
+  </p>
+
+  <p>
+    This is the correct starting point for anyone trying to connect external hardware to
+    a PSP. Don't chase VBUS on the Mini-B port &mdash; it doesn't exist. Use the side
+    pads for power, and the Mini-B for data. The rest of this article documents how we
+    arrived at this conclusion and what we built along the way.
+  </p>
+
   <h2>The Reverse Engineering Journey</h2>
+
+  <p>
+    Even though the answer turned out to be "use the side pads," the investigation produced
+    a wealth of previously undocumented hardware knowledge about the PSP's USB subsystem.
+    We mapped register blocks, decrypted firmware, discovered the real USB controller, and
+    built a complete Syscon command reference. All of this feeds into the final adapter
+    design.
+  </p>
 
   <h3>Phase 0&ndash;1: VBUS Experiments</h3>
   <p>
@@ -137,13 +181,78 @@
     function with its GET/SET pairing (e.g., GET=0x46, SET=0x47 for USB power).
   </p>
 
+  <h3>Phase 4: The MUSB Discovery</h3>
+  <p>
+    Built a kernel-mode EBOOT (<code>oasis-prx-decrypt-psp</code>) that uses the PSP's own
+    Kirk hardware crypto engine (memlmd NID <code>0xEF73E85B</code>) to decrypt firmware
+    modules on-device. Successfully decrypted all 15 USB/system PRX files from
+    <code>flash0:/kd/</code> &mdash; something desktop tools couldn't do with 6.61 keys.
+  </p>
+  <p>
+    A standalone binary analyzer (<code>scripts/psp_nid_analyze.py</code>) scanned the
+    decrypted <code>usb.prx</code> and revealed a critical finding: <strong>the USB driver
+    has 143 references to the MUSB (Mentor USB OTG) controller at
+    <code>0xBD80xxxx</code></strong> and zero to the OHCI controller we'd been testing.
+    We'd been probing the wrong USB controller entirely.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>PRX File</th><th>Key Finding</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>usb.prx</code></td>
+        <td>143 MUSB accesses, GPIO pin 23 VBUS enable at offset 0x8C74, 14 sceSysreg imports</td>
+      </tr>
+      <tr>
+        <td><code>lowio.prx</code></td>
+        <td>50 GPIO accesses, 90 sceSysreg &mdash; the actual GPIO hardware driver</td>
+      </tr>
+      <tr>
+        <td><code>syscon.prx</code></td>
+        <td>Also controls GPIO pin 23 directly, accesses <code>BC100083</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Phase 5: Exhaustive GPIO &amp; Register Testing</h3>
+  <p>
+    The 19-step interactive EBOOT (<code>oasis-usb-vbus-psp</code>) tested every accessible
+    approach to enabling VBUS on the PSP-3001 (TA-090v2):
+  </p>
+
+  <ul>
+    <li>All 14 <code>sceSysreg_driver</code> NIDs resolved and called (14/14)</li>
+    <li>Syscon SET commands (0x47 values 0&ndash;4) accepted but no VBUS effect</li>
+    <li>GPIO pin 23 direction and set registers accept writes, but <strong>output doesn't latch</strong></li>
+    <li>USB PHY already configured for host mode (<code>0x301</code>)</li>
+    <li>MUSB controller at <code>0xBD80xxxx</code> bus-faults &mdash; its bus gate is unknown</li>
+    <li><code>0xBE500000</code> peripheral alive (offsets +0x18=0x99, +0x2C=0x71) &mdash; purpose unknown</li>
+  </ul>
+
+  <p>
+    Ghidra decompilation of <code>lowio.prx</code> revealed the GPIO output enable register at
+    <code>0xBE240024</code> &mdash; written by <code>sceGpioSetPortMode2</code> with
+    <code>1 &lt;&lt; pin</code>. On-device testing confirmed this register <strong>rejects
+    all writes</strong> on TA-090v2. The lock is set by the Tachyon SoC's mask ROM during
+    the earliest boot phase, before any firmware code executes.
+  </p>
+
+  <p>
+    This is when we acquired the Go!Cam and discovered the side contact pads &mdash;
+    confirming that Sony never intended VBUS to carry power. The GPIO pin 23 code in
+    <code>usb.prx</code> controls an <em>internal</em> signal path within the USB
+    subsystem, not the external VBUS pin.
+  </p>
+
   <h2>The Pivot: Custom USB Device Driver</h2>
 
   <p>
-    With USB host mode ruled out, we pivoted to the correct architecture: the PSP as a USB
-    <strong>device</strong> with custom bulk endpoints. If we want the PSP to talk to a
-    Luckfox Pico, the Pico should be the USB host and the PSP should present a custom
-    device interface.
+    With the power delivery question answered (use the side pads), we focused on the data
+    path. The PSP is always a USB device, so we built a custom USB device driver in Rust
+    using the undocumented <code>sceUsbbd</code> kernel API &mdash; the same API that
+    Sony's mass storage and camera drivers use internally.
   </p>
 
   <div class="diagram">
@@ -158,7 +267,10 @@
 │  AI / compute   │             │  EP1 IN  (0x81)  │
 │  networking     │             │  EP2 OUT (0x02)  │
 │  $9, 51x21mm    │             │                  │
-└─────────────────┘             └──────────────────┘</code></pre>
+└─────────────────┘             └──────────────────┘
+
+Power: PSP side contact pads &rarr; adapter &rarr; Pico VBUS
+Data:  PSP Mini-B port &rarr; adapter passthru &rarr; Pico USB</code></pre>
     <div class="diagram-caption">The PSP registers a vendor-specific USB device with bulk endpoints</div>
   </div>
 
@@ -166,8 +278,7 @@
 
   <p>
     The PSP's <code>sceUsbBus_driver</code> exports functions for registering custom USB
-    device drivers &mdash; the same API that Sony's mass storage and camera drivers use
-    internally. These functions are kernel-only and not documented in any public SDK:
+    device drivers. These functions are kernel-only and not documented in any public SDK:
   </p>
 
   <table>
@@ -223,105 +334,160 @@ $ lsusb -v -d 054c:1337
   <p>
     Two high-speed bulk endpoints at 512 bytes per packet &mdash; enough for ~30 MB/s
     sustained throughput. A full 480&times;272 RGBA framebuffer (522 KB) can be
-    transferred in under 20ms, enabling 30+ FPS thin client rendering.
+    transferred in under 20ms, enabling 30+ FPS thin client rendering. In testing, the
+    driver sustained <strong>~100 FPS / 28 MB/s</strong>.
   </p>
 
-  <h2>Phase 2: VBUS Power Output Research (Ongoing)</h2>
+  <h2>The Hardware: A USB-C Adapter for the PSP</h2>
 
   <p>
-    While the thin client architecture works over USB device mode, the original goal of
-    powering a Luckfox Pico from the PSP's USB port remains compelling. We returned to
-    the VBUS problem with new tools.
+    With the software side working, the remaining challenge is physical: how do you
+    connect a modern USB device to the PSP's proprietary power pads + Mini-B data port?
+    The answer is a passive adapter that consolidates both into a single standard USB-C
+    receptacle.
   </p>
 
-  <h3>On-Device PRX Decryption</h3>
+  <figure style="margin: 2em 0; text-align: center;">
+    <img src="../img/psp-usb-adapter-diagram.png"
+         alt="PSP universal USB-C adapter diagram showing pogo pins contacting the PSP's side power pads, a Mini-B passthrough for data, and a USB-C receptacle that combines both into a single port for any USB-C device"
+         style="max-width: 100%; border-radius: 8px;">
+    <figcaption style="margin-top: 0.5em; opacity: 0.7;">
+      The adapter bridges the PSP's proprietary power pads and Mini-B data port into a single USB-C receptacle
+    </figcaption>
+  </figure>
+
   <p>
-    Built a kernel-mode EBOOT (<code>oasis-prx-decrypt-psp</code>) that uses the PSP's own
-    Kirk hardware crypto engine (memlmd NID <code>0xEF73E85B</code>) to decrypt firmware
-    modules. Successfully decrypted all 15 USB/system PRX files from
-    <code>flash0:/kd/</code> &mdash; something desktop tools couldn't do with 6.61 keys.
+    The adapter is a small clip-on module that attaches to the PSP's top edge:
   </p>
 
-  <h3>NID Analysis: The MUSB Discovery</h3>
+  <ul>
+    <li><strong>Pogo pins</strong> on the left and right press against the PSP's side contact
+        pads, picking up 5V power from the PSP's internal rail</li>
+    <li>A <strong>Mini-B male plug</strong> in the center passes through to the PSP's USB
+        port for data (D+/D&minus;)</li>
+    <li>A <strong>passive carrier PCB</strong> routes both power and data to a single USB-C
+        receptacle with 5.1k CC pulldown resistors (standard USB-C device identification)</li>
+    <li>The whole assembly is held in place by a <strong>screw-mounted shell</strong> that
+        applies consistent contact pressure on the pogo pins</li>
+  </ul>
+
   <p>
-    A standalone binary analyzer (<code>scripts/psp_nid_analyze.py</code>) scanned the
-    decrypted <code>usb.prx</code> and revealed a critical finding: <strong>the USB driver
-    has 143 references to the MUSB (Mentor USB OTG) controller at
-    <code>0xBD80xxxx</code></strong> and zero to the OHCI controller we'd been testing.
-    We'd been probing the wrong USB controller.
+    Any USB-C device &mdash; a Luckfox Pico, a Raspberry Pi Zero, or anything else &mdash;
+    plugs into the USB-C receptacle and gets both power and data through a single cable.
+    The adapter is entirely passive: no active components, no firmware, no configuration.
+    It's a mechanical bridge between Sony's 2007 proprietary connector and a modern
+    standard.
   </p>
+
+  <h3>Design Constraints from the RE Work</h3>
+
+  <p>
+    The reverse engineering wasn't wasted &mdash; it directly informed the adapter design:
+  </p>
+
+  <ul>
+    <li><strong>The PSP is always the USB device.</strong> The external SBC must act as USB
+        host. This means the Luckfox Pico runs a <code>libusb</code> daemon that initiates
+        all communication &mdash; it reads frames from the PSP's custom bulk endpoints.</li>
+    <li><strong>Power comes from the side pads, not VBUS.</strong> The adapter's pogo pins
+        must make reliable contact with the PSP's pads. ENIG (gold) PCB finish is critical
+        for durability across repeated insertions.</li>
+    <li><strong>The MUSB OTG controller exists but is gated off.</strong> If future firmware
+        research unlocks the MUSB bus gate (candidates: <code>BC1000C4</code>,
+        <code>BC1000F0</code>), the PSP might be able to negotiate USB OTG roles. For now,
+        the device-mode architecture works and is proven at ~100 FPS.</li>
+  </ul>
+
+  <h3>Bill of Materials</h3>
 
   <table>
     <thead>
-      <tr><th>PRX File</th><th>Key Finding</th></tr>
+      <tr><th>Component</th><th>Purpose</th><th>Unit Cost</th></tr>
     </thead>
     <tbody>
       <tr>
-        <td><code>usb.prx</code></td>
-        <td>143 MUSB accesses, GPIO pin 23 VBUS enable at offset 0x8C74, 14 sceSysreg imports</td>
+        <td>Carrier PCB (ENIG)</td>
+        <td>Routes power pads + Mini-B data to USB-C receptacle</td>
+        <td>~$3&ndash;5</td>
       </tr>
       <tr>
-        <td><code>lowio.prx</code></td>
-        <td>50 GPIO accesses, 90 sceSysreg &mdash; the actual GPIO hardware driver</td>
+        <td>Spring-loaded pogo pins</td>
+        <td>Contact PSP side power pads</td>
+        <td>~$0.50</td>
       </tr>
       <tr>
-        <td><code>syscon.prx</code></td>
-        <td>Also controls GPIO pin 23 directly, accesses <code>BC100083</code></td>
+        <td>USB-C receptacle</td>
+        <td>Standard port for any USB-C device</td>
+        <td>~$0.30</td>
+      </tr>
+      <tr>
+        <td>5.1k CC pulldown resistors (x2)</td>
+        <td>USB-C device identification</td>
+        <td>~$0.02</td>
+      </tr>
+      <tr>
+        <td>Mini-B male connector</td>
+        <td>Data passthrough to PSP</td>
+        <td>~$0.30</td>
+      </tr>
+      <tr>
+        <td>ESD protection (USBLC6-2)</td>
+        <td>Protect USB data lines</td>
+        <td>~$0.15</td>
+      </tr>
+      <tr>
+        <td>Shell (SLA resin or MJF nylon)</td>
+        <td>Screw-mount enclosure with pogo pin pressure</td>
+        <td>~$2&ndash;4</td>
       </tr>
     </tbody>
   </table>
 
-  <h3>Interactive VBUS Test Tool</h3>
   <p>
-    The 19-step interactive EBOOT (<code>oasis-usb-vbus-psp</code>) tested every accessible
-    approach to enabling VBUS on the PSP-3001 (TA-090v2):
+    Total per-unit cost is roughly <strong>$7&ndash;11</strong> for the adapter alone (excluding
+    the SBC). At quantities of 50, rigid-flex PCB tooling and SMT assembly setup amortize to
+    under $2/unit.
+  </p>
+
+  <h2>What We Learned</h2>
+
+  <p>
+    This project produced several results that have value beyond our specific use case:
   </p>
 
   <ul>
-    <li>All 14 <code>sceSysreg_driver</code> NIDs resolved and called (14/14)</li>
-    <li>Syscon SET commands (0x47 values 0&ndash;4) accepted but no VBUS effect</li>
-    <li>GPIO pin 23 direction and set registers accept writes, but <strong>output doesn't latch</strong></li>
-    <li>USB PHY already configured for host mode (<code>0x301</code>)</li>
-    <li>MUSB controller at <code>0xBD80xxxx</code> bus-faults &mdash; its bus gate is unknown</li>
-    <li><code>0xBE500000</code> peripheral alive (offsets +0x18=0x99, +0x2C=0x71) &mdash; purpose unknown</li>
+    <li><strong>The PSP's USB subsystem uses a Mentor MUSB OTG controller</strong>, not the OHCI
+        controller visible at <code>0xBD101000</code>. The MUSB is at <code>0xBD80xxxx</code>
+        with its bus gate controlled by an unknown <code>sceSysreg</code> register.</li>
+    <li><strong>GPIO pin 23 output enable is locked by Tachyon mask ROM</strong> on TA-090v2
+        and cannot be overridden from any privilege level available to firmware.</li>
+    <li><strong>The complete Syscon command map</strong> for Baryon 0x00040600: 256 GET commands
+        and 14 SET commands, including the USB power control pair (GET=0x46, SET=0x47).</li>
+    <li><strong>On-device PRX decryption</strong> via Kirk hardware crypto engine is possible
+        and more effective than desktop tools for 6.61 firmware modules.</li>
+    <li><strong><code>sceUsbbdRegister</code> works on ARK-4 CFW</strong> with correct NIDs
+        resolved from kernel memory dumps, enabling custom USB device drivers in Rust.</li>
+    <li><strong>PSP accessories use proprietary side contact pads for power</strong>, not USB
+        VBUS. Any modern accessory design must account for these pads.</li>
   </ul>
-
-  <h3>The Verdict: Silicon-Level Lock</h3>
-
-  <p>
-    Ghidra decompilation of <code>lowio.prx</code> (run via an amd64 Docker container on
-    our ARM64 host) revealed the GPIO output enable register at <code>0xBE240024</code>
-    &mdash; written by <code>sceGpioSetPortMode2</code> with <code>1 &lt;&lt; pin</code>.
-    On-device testing confirmed this register <strong>rejects all writes</strong> on TA-090v2,
-    along with AltFunc (<code>0xBE240040</code>) and <code>BC1000C4</code>.
-  </p>
-
-  <p>
-    An exhaustive search followed: all 14 sceSysreg NIDs, every Syscon command 0x00&ndash;0xFF,
-    the sysreg GPIO port enable (<code>BC10007C</code>), USB bus gates, scePower functions,
-    OTG ID pin grounding with two different adapters, and live register monitoring during
-    cable plug/unplug. <strong>Nothing unlocks the GPIO output enable.</strong>
-  </p>
-
-  <p>
-    The lock is set by the Tachyon SoC's mask ROM during the earliest boot phase, before
-    any firmware code executes. It cannot be overridden from kernel mode. Sony's Go!Cam
-    accessory likely triggers VBUS through a hardware detection circuit in the Syscon or
-    Pommel chip that monitors USB connector pin voltages &mdash; not through any software
-    command or the standard OTG ID pin.
-  </p>
 
   <h2>What's Next</h2>
 
   <ul>
-    <li><strong>Thin client streaming:</strong> The USB device driver achieves 105 FPS / 28 MB/s
-        framebuffer streaming &mdash; integrate with the Luckfox Pico for external AI compute</li>
-    <li><strong>Go!Cam PSP-300:</strong> Acquiring the camera accessory would reveal whether
-        VBUS is triggered by hardware detection (likely) or a privileged command path</li>
-    <li><strong>Hardware mod:</strong> Bypass the MOSFET gate by soldering a wire from the
-        PSP's 5V rail to the USB VBUS pin &mdash; the simplest path to single-cable operation</li>
-    <li><strong>Convert to PRX:</strong> Move from game-slot EBOOT to kernel PRX loaded via
-        <code>PLUGINS.TXT</code> for always-on USB device mode</li>
+    <li><strong>Connector reverse engineering:</strong> Multimeter + caliper measurements of the
+        Go!Cam's spring contacts and the PSP-3001's side pads to determine exact voltage, pinout,
+        and geometry for the adapter PCB</li>
+    <li><strong>PCB fabrication:</strong> KiCad design for the rigid-flex adapter, ordered from
+        JLCPCB with ENIG finish on contact fingers</li>
+    <li><strong>USE_USB SFO flag:</strong> The PSP's <code>PARAM.SFO</code> has a <code>USE_USB</code>
+        integer field that tells the firmware to initialize USB peripheral support. Our
+        <code>mksfo</code> tool doesn't support it yet. Adding it may cause the firmware to
+        pre-load <code>usb.prx</code> and open the MUSB bus gate &mdash; worth testing even
+        though the adapter design doesn't depend on it</li>
+    <li><strong>Production run:</strong> First batch of ~50 adapters paired with Luckfox Picos
+        as self-contained PSP compute accessory kits</li>
+    <li><strong>Convert to PRX:</strong> Move the thin client from game-slot EBOOT to kernel PRX
+        loaded via <code>PLUGINS.TXT</code> for always-on USB device mode alongside games</li>
   </ul>
 
   <nav class="article-nav">
