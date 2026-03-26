@@ -158,8 +158,8 @@ pub(super) fn process_stream_chunk(
 
             if video_sample_data.len() == *sample_size as usize {
                 // Convert AVCC→Annex B and push to video thread.
-                let raw_data = core::mem::take(video_sample_data);
-                push_video_sample(&raw_data, *v_idx, video_track);
+                push_video_sample(video_sample_data, *v_idx, video_track);
+                video_sample_data.clear();
                 *v_idx += 1;
                 *have_target = false;
             }

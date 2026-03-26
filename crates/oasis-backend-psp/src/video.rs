@@ -315,18 +315,6 @@ impl Drop for PspFileReader {
     }
 }
 
-/// Round up to the next power of 2 (minimum 512 for PSP ME alignment).
-fn next_power_of_2(v: u32) -> u32 {
-    let min = 512;
-    let mut n = v.max(min);
-    n -= 1;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    n + 1
-}
 
 // ---------------------------------------------------------------------------
 // NAL-based H.264 decoder — thin wrapper around psp::mpeg::AvcDecoder
@@ -559,11 +547,11 @@ fn parse_sps_rbsp(sps: &[u8]) -> Option<(u32, u32)> {
         let seq_scaling_matrix_present = reader.read_bit()?;
         if seq_scaling_matrix_present == 1 {
             let count = if chroma_format_idc != 3 { 8 } else { 12 };
-            for _ in 0..count {
+            for i in 0..count {
                 let present = reader.read_bit()?;
                 if present == 1 {
-                    // Skip scaling list
-                    let size = if count < 6 { 16 } else { 64 };
+                    // Skip scaling list (first 6 are 4x4=16, rest are 8x8=64)
+                    let size = if i < 6 { 16 } else { 64 };
                     let mut last_scale = 8i32;
                     let mut next_scale = 8i32;
                     for _ in 0..size {
