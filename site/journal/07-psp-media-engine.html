@@ -55,7 +55,7 @@
   </p>
 
   <p>
-    On our hardware &mdash; a PSP-2000 running ARK-4 CFW on firmware 6.61 &mdash;
+    On our hardware &mdash; a PSP-3001 running ARK-4 CFW on firmware 6.61 &mdash;
     the official <code>sceVideocodec</code> API returns error <code>0x806201FE</code> on every
     call. The higher-level <code>sceMpeg</code> API fails too, as it internally delegates to
     <code>sceVideocodec</code> and hits the same wall. The root cause turned out to be
@@ -705,7 +705,7 @@ Offset   ME Internal    Mapped Error       Meaning
 
   <p>
     To rule out a hardware or firmware defect, we tested
-    <strong>PMPlayer Advance</strong> on the same PSP (PSP-2000, ARK-4 CFW,
+    <strong>PMPlayer Advance</strong> on the same PSP (PSP-3001, ARK-4 CFW,
     firmware 6.61). PMPlayer successfully decodes and plays H.264 video with hardware
     acceleration. The Media Engine on this exact device is fully functional &mdash; the
     problem is strictly in our initialization or calling convention.
