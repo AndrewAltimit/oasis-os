@@ -440,7 +440,7 @@ fn extract_sps_pps(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut i = 0;
     while i + 4 < data.len() {
         if data[i] == 0 && data[i + 1] == 0 {
-            let (sc_len, nal_start) = if data[i + 2] == 1 {
+            let (_sc_len, nal_start) = if data[i + 2] == 1 {
                 (3, i + 3)
             } else if data[i + 2] == 0 && i + 3 < data.len() && data[i + 3] == 1 {
                 (4, i + 4)

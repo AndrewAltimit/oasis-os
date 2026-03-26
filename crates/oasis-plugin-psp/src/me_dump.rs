@@ -1530,13 +1530,7 @@ unsafe fn check_kernel_load_test() {
     psp::sys::sceKernelDcacheWritebackInvalidateAll();
     psp::sys::sceKernelIcacheInvalidateAll();
 
-    // Read module ID from trigger file (EBOOT writes u32 module ID)
-    let fd = psp::sys::sceIoOpen(
-        b"ms0:/PSP/GAME/OASISOS/.kload_test\0".as_ptr(),
-        psp::sys::IoOpenFlags::RD_ONLY, 0,
-    );
-    // File was already removed above, so reopen the new version the EBOOT writes
-    // Actually: EBOOT writes .kload_modid with the module ID
+    // Read module ID from .kload_modid (EBOOT writes u32 module ID)
     let fd = psp::sys::sceIoOpen(
         b"ms0:/PSP/GAME/OASISOS/.kload_modid\0".as_ptr(),
         psp::sys::IoOpenFlags::RD_ONLY, 0,
@@ -1577,6 +1571,7 @@ unsafe fn check_kernel_load_test() {
 
 /// Dump a kernel module's text+data segments to a file for Ghidra analysis.
 /// `mod_name` must be null-terminated. `out_path` must be null-terminated.
+#[allow(dead_code)]
 unsafe fn dump_kernel_module(mod_name: &[u8], out_path: &[u8]) {
     // Get list of all loaded module IDs
     let mut ids = [psp::sys::SceUid(0); 256];
