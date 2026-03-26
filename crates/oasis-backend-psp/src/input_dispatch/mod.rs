@@ -80,7 +80,11 @@ pub(crate) fn dispatch_unified(
         },
 
         // -- Start: toggle kiosk/windowed for focused app, or open terminal --
-        InputEvent::ButtonPress(Button::Start) => {
+        // Ignore if ANY other button is held alongside START (e.g. L+R+START
+        // is the PRX overlay combo and must not toggle windowing mode).
+        InputEvent::ButtonPress(Button::Start)
+            if !backend.is_any_other_button_held(CtrlButtons::START) =>
+        {
             if *kiosk_app != KioskApp::None {
                 // Kiosk → windowed: exit fullscreen but keep window visible.
                 if let Some(wid) = kiosk_app.window_id() {
@@ -116,20 +120,26 @@ pub(crate) fn dispatch_unified(
         },
 
         // -- L/R triggers: cycle window focus --
+        // L+R = close all windows, BUT L+R+START is reserved for the
+        // kernel PRX overlay trigger — ignore close if START is held.
         InputEvent::TriggerPress(Trigger::Left) => {
-            if backend.is_button_held(CtrlButtons::RTRIGGER) {
+            if backend.is_button_held(CtrlButtons::RTRIGGER)
+                && !backend.is_button_held(CtrlButtons::START)
+            {
                 wm.close_all(sdi);
                 *kiosk_app = KioskApp::None;
-            } else {
+            } else if !backend.is_button_held(CtrlButtons::RTRIGGER) {
                 wm.cycle_focus(false, sdi);
                 audio.send(AudioCmd::PlaySfx(SfxId::Click));
             }
         },
         InputEvent::TriggerPress(Trigger::Right) => {
-            if backend.is_button_held(CtrlButtons::LTRIGGER) {
+            if backend.is_button_held(CtrlButtons::LTRIGGER)
+                && !backend.is_button_held(CtrlButtons::START)
+            {
                 wm.close_all(sdi);
                 *kiosk_app = KioskApp::None;
-            } else {
+            } else if !backend.is_button_held(CtrlButtons::LTRIGGER) {
                 wm.cycle_focus(true, sdi);
                 audio.send(AudioCmd::PlaySfx(SfxId::Click));
             }

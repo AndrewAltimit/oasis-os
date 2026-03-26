@@ -91,6 +91,13 @@ impl TrackInfo {
     pub fn sample_is_keyframe(&self, idx: usize) -> bool {
         is_keyframe(&self.table, idx)
     }
+
+    /// Largest sample size in the track (bytes).
+    ///
+    /// Useful for pre-allocating buffers on memory-constrained platforms.
+    pub fn max_sample_size(&self) -> u32 {
+        self.table.stsz.iter().copied().max().unwrap_or(0)
+    }
 }
 
 /// A raw sample read from the file.

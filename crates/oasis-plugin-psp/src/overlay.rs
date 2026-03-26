@@ -7,6 +7,7 @@
 
 use crate::audio;
 use crate::config;
+use crate::me_dump;
 use crate::render::{self, SCREEN_WIDTH, colors};
 use crate::video;
 
@@ -27,6 +28,12 @@ enum OverlayState {
 /// Current overlay state (atomic for thread-safe read from hook).
 static STATE: AtomicU8 = AtomicU8::new(OverlayState::Hidden as u8);
 
+/// Returns true when the overlay menu is visible and should consume inputs.
+/// Called from the ctrl hook to mask buttons from the underlying app.
+pub fn is_overlay_active() -> bool {
+    STATE.load(Ordering::Relaxed) == OverlayState::Menu as u8
+}
+
 /// Menu cursor position.
 static mut CURSOR: u8 = 0;
 
@@ -41,10 +48,10 @@ static mut OSD_MSG_LEN: usize = 0;
 static mut PREV_BUTTONS: u32 = 0;
 
 /// Number of menu items.
-const MENU_ITEMS: u8 = 11;
+const MENU_ITEMS: u8 = 13;
 
 /// Menu item labels.
-const MENU_LABELS: [&[u8]; 11] = [
+const MENU_LABELS: [&[u8]; 13] = [
     b"  Play / Pause",
     b"  Next",
     b"  Prev",
@@ -55,6 +62,8 @@ const MENU_LABELS: [&[u8]; 11] = [
     b"  CPU Clock",
     b"  PIP Play/Stop",
     b"  PIP Next",
+    b"  Dump ME FW",
+    b"  Spy: Dump Log",
     b"  Hide Overlay",
 ];
 
@@ -62,7 +71,7 @@ const MENU_LABELS: [&[u8]; 11] = [
 const OVERLAY_X: u32 = 80;
 const OVERLAY_Y: u32 = 40;
 const OVERLAY_W: u32 = 320;
-const OVERLAY_H: u32 = 212;
+const OVERLAY_H: u32 = 232;
 const ITEM_H: u32 = 14;
 const STATUS_Y: u32 = OVERLAY_Y + 8;
 const MENU_START_Y: u32 = OVERLAY_Y + 48;
@@ -246,7 +255,15 @@ unsafe fn execute_menu_action(item: u8) {
         7 => cycle_cpu_clock(),
         8 => video::toggle_pip(),
         9 => video::next_video(),
-        10 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
+        10 => {
+            me_dump::trigger_dump();
+            show_osd(b"ME dump started...");
+        },
+        11 => {
+            me_dump::trigger_spy_dump();
+            show_osd(b"Spy log dumped!");
+        },
+        12 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
         _ => {},
     }
 }

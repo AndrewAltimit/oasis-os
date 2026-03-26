@@ -1,0 +1,9 @@
+[package]
+name = "oasis-me-boot"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["kernel"] }

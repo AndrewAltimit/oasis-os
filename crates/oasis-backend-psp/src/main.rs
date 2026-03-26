@@ -229,6 +229,13 @@ fn psp_main() {
     // would conflict with the PRX overlay's sceAudiocodec if the PRX
     // initialized before the EBOOT was launched.
 
+    // Pre-init MPEG subsystem before spawning workers (audio thread would
+    // load AvMpegBase first, making sceMpegInit fail with 0x8002013a).
+    oasis_backend_psp::video::preinit_mpeg();
+
+    // PMF test disabled — even real Persona 3 PMSF crashes.
+    // Root cause (confirmed by Ghidra): sceMpeg internally calls
+    // sceVideocodec (avcodec.prx) for ME decode. The ME submission
     // Background worker threads: audio, file I/O, and video decode.
     let (audio, io) = oasis_backend_psp::spawn_workers();
     oasis_backend_psp::video::spawn_video_thread();

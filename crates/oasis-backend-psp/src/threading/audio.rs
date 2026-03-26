@@ -9,7 +9,7 @@ use crate::sfx::SfxEngine;
 use super::{
     AUDIO_BITRATE, AUDIO_CHANNELS, AUDIO_DURATION_MS, AUDIO_PAUSED, AUDIO_PLAYING,
     AUDIO_POSITION_MS, AUDIO_QUEUE, AUDIO_SAMPLE_RATE, AudioCmd, RADIO_BUFFERING, RADIO_META_QUEUE,
-    RADIO_STREAMING, io_log,
+    RADIO_STREAMING, io_log, io_log_verbose,
 };
 
 // ---------------------------------------------------------------------------
@@ -98,12 +98,20 @@ impl PspAacDecoder {
         words[9] = (dst.len() * 2) as u32; // bytes
         // Do NOT touch words[10] — it holds the sample rate set during init.
 
-        // Flush D-cache before DMA-based codec decode to ensure the
-        // hardware reads coherent data from the source buffer.
-        // SAFETY: sceKernelDcacheWritebackInvalidateAll flushes all
-        // cached data back to main memory.
+        // Flush only the relevant D-cache ranges before DMA-based codec
+        // decode. A full `sceKernelDcacheWritebackInvalidateAll` thrashes
+        // the entire 16KB D-cache (~43x/sec during AAC streaming), hurting
+        // all threads. Range-based flushes limit the impact to ~300 bytes.
+        // SAFETY: Pointers and sizes are valid for the codec buffer,
+        // source data, and destination PCM buffer.
         unsafe {
-            sys::sceKernelDcacheWritebackInvalidateAll();
+            let codec_ptr = words.as_ptr() as *const core::ffi::c_void;
+            let codec_size = core::mem::size_of_val(words) as u32;
+            sys::sceKernelDcacheWritebackInvalidateRange(codec_ptr, codec_size);
+            sys::sceKernelDcacheWritebackRange(
+                src.as_ptr() as *const core::ffi::c_void,
+                src.len() as u32,
+            );
         }
 
         // SAFETY: sceAudiocodecDecode operates on the aligned buffer.
@@ -127,18 +135,22 @@ impl Drop for PspAacDecoder {
     }
 }
 
+/// AAC: 1024 samples per frame, stereo = 2048 i16.
+const AAC_FRAME_SAMPLES: i32 = 1024;
+
 /// Decode a raw AAC frame via PSP hardware codec and output PCM.
+///
+/// `pcm_buf` is a pre-allocated buffer (at least 2048 i16) reused across
+/// calls to avoid per-frame heap allocation on the PSP's slow allocator.
 fn decode_aac_frame(
     data: &[u8],
     player: &mut AudioPlayer,
     aac_decoder: &mut Option<PspAacDecoder>,
     aac_sample_rate: u32,
     aac_init_failures: &mut u32,
+    pcm_buf: &mut [i16],
 ) {
     use psp::audio::{AudioChannel, AudioFormat};
-
-    // AAC: 1024 samples per frame, stereo = 2048 i16.
-    const AAC_FRAME_SAMPLES: i32 = 1024;
 
     if aac_sample_rate == 0 {
         // Config not received yet — drop frame silently.
@@ -175,14 +187,14 @@ fn decode_aac_frame(
         }
     }
 
-    // Ensure audio channel exists.
+    // Ensure audio channel exists with the correct AAC sample count.
     if player.channel.is_none() {
-        io_log("[AUDIO] reserving audio channel...");
+        io_log("[AUDIO] reserving AAC audio channel...");
         player.channel = AudioChannel::reserve(AAC_FRAME_SAMPLES, AudioFormat::Stereo).ok();
         if player.channel.is_some() {
-            io_log("[AUDIO] audio channel reserved OK");
+            io_log("[AUDIO] AAC audio channel reserved OK");
         } else {
-            io_log("[AUDIO] audio channel reserve FAILED");
+            io_log("[AUDIO] AAC audio channel reserve FAILED");
         }
     }
 
@@ -191,28 +203,32 @@ fn decode_aac_frame(
         return;
     };
 
-    let mut pcm = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
+    // Zero the pre-allocated PCM buffer before decode.
+    let pcm = &mut pcm_buf[..AAC_FRAME_SAMPLES as usize * 2];
+    pcm.fill(0);
 
     static DECODE_COUNT: AtomicU32 = AtomicU32::new(0);
     let count = DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
     if count < 3 {
-        io_log(&format!(
+        io_log_verbose(&format!(
             "[AUDIO] decode #{count} src_len={} src_ptr={:#x}",
             data.len(),
             data.as_ptr() as u32,
         ));
     }
 
-    match decoder.decode(data, &mut pcm) {
+    match decoder.decode(data, pcm) {
         Ok(consumed) => {
             if count < 3 {
-                io_log(&format!("[AUDIO] decode #{count} OK, consumed={consumed}"));
+                io_log_verbose(&format!(
+                    "[AUDIO] decode #{count} OK, consumed={consumed}"
+                ));
             }
             if consumed == 0 {
                 return;
             }
             if let Some(channel) = &player.channel {
-                let _ = channel.output_blocking(0x8000, &pcm);
+                let _ = channel.output_blocking(0x8000, pcm);
             }
         },
         Err(e) => {
@@ -239,6 +255,11 @@ pub(super) fn audio_thread_fn() {
     let mut aac_decoder: Option<PspAacDecoder> = None;
     let mut aac_sample_rate: u32 = 0;
     let mut aac_init_failures: u32 = 0;
+
+    // Pre-allocate PCM decode buffer once to avoid per-frame heap
+    // allocation (~43 allocs/sec at 44.1kHz/1024). Reused across all
+    // AAC decode calls.
+    let mut aac_pcm_buf = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
 
     loop {
         match AUDIO_QUEUE.pop() {
@@ -358,6 +379,16 @@ pub(super) fn audio_thread_fn() {
                 // Reset decoder and retry counter if sample rate changed.
                 aac_decoder = None;
                 aac_init_failures = 0;
+                // Release any existing audio channel so AAC can reserve one
+                // with the correct sample count (1024 vs MP3's 1152).
+                // Drop the old channel explicitly to free the hardware slot.
+                player.channel = None;
+                // Stop file player if still active (AAC takes over audio).
+                if player.is_playing() {
+                    player.stop();
+                    AUDIO_PLAYING.store(false, Ordering::Relaxed);
+                    AUDIO_PAUSED.store(false, Ordering::Relaxed);
+                }
                 io_log(&format!("[AUDIO] AAC config: rate={sample_rate}"));
             },
             Some(AudioCmd::VideoAudioAac { data }) => {
@@ -368,6 +399,7 @@ pub(super) fn audio_thread_fn() {
                     &mut aac_decoder,
                     aac_sample_rate,
                     &mut aac_init_failures,
+                    &mut aac_pcm_buf,
                 );
             },
             Some(AudioCmd::VideoAudioStop) => {

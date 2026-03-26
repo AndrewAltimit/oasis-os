@@ -3,14 +3,18 @@
 //! Uses oasis-video's `demux_lite::Mp4Lite` for lightweight MP4 parsing
 //! (no symphonia, no lazy_static, no std::sync::Once -- PPSSPP-safe).
 //! Audio AAC samples are forwarded to the audio thread for hardware decode.
-//! Video H.264 frames are decoded via `sceVideocodec` (Media Engine) on real
-//! PSP hardware, with VFPU-accelerated YUV420->RGBA color conversion.
+//! Video H.264 frames are decoded via `sceMpeg` (Media Engine) on real PSP
+//! hardware via the Media Engine coprocessor.
+//!
+//! Uses `psp::mpeg::AvcDecoder` (NAL direct feeding via `sceMpegGetAvcNalAu`)
+//! with `mpeg_vsh370.prx` providing the sceMpeg implementation. The sceMpeg
+//! API is used instead of the lower-level sceVideocodec because sceVideocodec
+//! weak imports fail to resolve on many CFW configurations (error 0x806201fe).
 
+use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
-use psp::vfpu_asm;
-
 use crate::threading::{AudioCmd, send_audio_cmd};
 
 /// File-based debug logging (works from video thread, unlike psp::dprintln).
@@ -51,6 +55,14 @@ pub enum VideoCmd {
 /// A pre-demuxed H.264 access unit pushed by the I/O thread for decode.
 pub struct StreamFrame {
     pub data: Vec<u8>,
+    /// Raw AVCC data (before Annex B conversion) for NAL decoder.
+    pub raw_avcc: Option<Vec<u8>>,
+    /// AVCC NAL length prefix size (typically 4).
+    pub nal_prefix_size: u8,
+    /// SPS from MP4 avcC atom (raw NAL, no start codes).
+    pub avcc_sps: Option<Vec<u8>>,
+    /// PPS from MP4 avcC atom (raw NAL, no start codes).
+    pub avcc_pps: Option<Vec<u8>>,
     pub timestamp_secs: f64,
     pub is_keyframe: bool,
 }
@@ -75,7 +87,9 @@ static VIDEO_CMD_QUEUE: SpscQueue<VideoCmd, 4> = SpscQueue::new();
 /// Decoded frames: video thread -> main thread (double-buffered).
 static VIDEO_FRAME_QUEUE: SpscQueue<DecodedFrame, 2> = SpscQueue::new();
 /// Pre-demuxed H.264 frames: I/O thread -> video thread (streaming mode).
-static VIDEO_STREAM_QUEUE: SpscQueue<StreamFrame, 4> = SpscQueue::new();
+/// 8 slots provide enough buffering to absorb I/O jitter while keeping
+/// memory usage bounded (~8 × avg H.264 AU ≈ 200KB for 480p content).
+static VIDEO_STREAM_QUEUE: SpscQueue<StreamFrame, 8> = SpscQueue::new();
 /// Whether video is currently playing.
 static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// Set by I/O thread to signal video thread to enter streaming mode.
@@ -119,6 +133,99 @@ pub fn try_push_stream_frame(frame: StreamFrame) -> Result<(), StreamFrame> {
     VIDEO_STREAM_QUEUE.push(frame)
 }
 
+/// Pre-initialize the MPEG subsystem before any audio modules load.
+///
+/// Must be called from the main thread before spawning the audio thread.
+pub fn preinit_mpeg() {
+    crate::audio::load_av_modules_once_pub();
+    load_avmp3_module();
+    vlog("[VIDEO] preinit done");
+}
+
+/// Pre-load AvMp3 module during init (before mpeg_vsh370.prx).
+fn load_avmp3_module() {
+    unsafe {
+        let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
+        vlog(&format!("[VIDEO] AvMp3 = {r:#x}"));
+    }
+}
+
+/// Load sceMpeg implementation via mpeg_vsh370.prx.
+///
+/// AvMpegBase (the system's built-in sceMpeg) does NOT work with the NAL
+/// decode path — it returns 0x80628002 even with correct mode + DDR top
+/// parameters. The mode 4/5 + DDR top convention is specific to mpeg_vsh370
+/// (decrypted FW 3.71 module used by PMPlayer). AvMpegBase only supports
+/// the standard PSMF ringbuffer path (sceMpegGetAvcAu), not the NAL path
+/// (sceMpegGetAvcNalAu).
+///
+/// mpeg_vsh370.prx registers "sceMpeg" via self-import when started,
+/// which triggers the kernel to resolve the EBOOT's weak import stubs.
+fn load_mpeg_vsh_module() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    // Boot the ME first (mpeg_vsh370 needs it running).
+    load_me_boot_prx();
+
+    let id = unsafe {
+        psp::sys::sceKernelLoadModule(
+            b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0".as_ptr(),
+            0, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] sceKernelLoadModule = {:#x}", id.0));
+    if id < psp::sys::SceUid(0) {
+        vlog("[VIDEO] mpeg_vsh370 load FAILED — H.264 decode unavailable");
+        return;
+    }
+
+    let mut status: i32 = 0;
+    let ret = unsafe {
+        psp::sys::sceKernelStartModule(
+            id, 0, core::ptr::null_mut(),
+            &mut status, core::ptr::null_mut(),
+        )
+    };
+    vlog(&format!("[VIDEO] sceKernelStartModule = {ret:#x}, status={status:#x}"));
+    if ret < 0 {
+        vlog("[VIDEO] mpeg_vsh370 start FAILED");
+        unsafe { psp::sys::sceKernelUnloadModule(id); }
+        return;
+    }
+    vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370");
+}
+
+/// Boot the Media Engine via oasis-me-boot.prx (if available).
+fn load_me_boot_prx() {
+    let boot_paths: &[&[u8]] = &[
+        b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
+    ];
+    for path in boot_paths {
+        let id = unsafe {
+            psp::sys::sceKernelLoadModule(
+                path.as_ptr(), 0, core::ptr::null_mut(),
+            )
+        };
+        if id >= psp::sys::SceUid(0) {
+            let mut status: i32 = 0;
+            let ret = unsafe {
+                psp::sys::sceKernelStartModule(
+                    id, 0, core::ptr::null_mut(),
+                    &mut status, core::ptr::null_mut(),
+                )
+            };
+            let name = core::str::from_utf8(&path[..path.len()-1]).unwrap_or("?");
+            vlog(&format!("[VIDEO] ME boot {name} = {ret:#x}"));
+            return;
+        }
+    }
+    vlog("[VIDEO] no ME boot PRX found (ME may already be booted by AAC)");
+}
+
 /// Spawn the video decode thread (priority 24, between audio=16 and I/O=32).
 pub fn spawn_video_thread() {
     if let Ok(handle) = ThreadBuilder::new(b"oasis_video\0")
@@ -142,6 +249,13 @@ struct PspFileReader {
 }
 
 impl PspFileReader {
+    fn seek_read(&mut self, offset: u64, buf: &mut [u8]) {
+        unsafe {
+            psp::sys::sceIoLseek(self.fd, offset as i64, psp::sys::IoWhence::Set);
+            psp::sys::sceIoRead(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32);
+        }
+    }
+
     fn open(path: &str) -> Option<Self> {
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0);
@@ -201,428 +315,354 @@ impl Drop for PspFileReader {
     }
 }
 
-// ---------------------------------------------------------------------------
-// H.264 video decoder (sceVideocodec)
-// ---------------------------------------------------------------------------
-//
-// sceVideocodec is declared with weak import flags (0x4009) in the rust-psp
-// SDK, so the EBOOT module loads even when codec libraries aren't present at
-// boot. Before first use, we call `load_av_modules_once()` which triggers
-// `sceUtilityLoadModule(AvCodec)` + `sceUtilityLoadModule(AvMpegBase)`.
-// The kernel then re-links the weak stubs with the real syscall entries.
 
-/// 64-byte-aligned codec buffer required by the PSP Media Engine.
-///
-/// `sceVideocodec*` APIs require a 64-byte-aligned buffer of at least
-/// 96 `u32` words. `#[repr(align(64))]` lets the Rust compiler guarantee
-/// alignment without manual pointer arithmetic.
-#[repr(align(64))]
-struct CodecBuf([u32; 96]);
+// ---------------------------------------------------------------------------
+// NAL-based H.264 decoder — thin wrapper around psp::mpeg::AvcDecoder
+// ---------------------------------------------------------------------------
 
-/// PSP hardware H.264 video decoder using the Media Engine.
+/// NAL-based H.264 decoder using the high-level `psp::mpeg::AvcDecoder`.
 ///
-/// Uses `sceVideocodec*` APIs after lazy-loading the AV modules.
-/// The ME is not emulated in PPSSPP, so `try_init()` returns `Err`
-/// when running under emulation (falls back to audio-only mode).
-struct PspVideoDecoder {
-    /// Codec buffer (96 words, 64-byte aligned via `CodecBuf`).
-    buf: Box<CodecBuf>,
-    initialized: bool,
-    /// Cached video dimensions from first successful decode.
-    width: u32,
-    height: u32,
+/// Adds OASIS-specific logging and SPS/PPS extraction on top of the
+/// reusable rust-psp abstraction.
+struct NalDecoder {
+    decoder: psp::mpeg::AvcDecoder,
+    sps: Vec<u8>,
+    pps: Vec<u8>,
+    nal_prefix_size: i32,
+    first_frame: bool,
 }
 
-impl PspVideoDecoder {
-    /// Attempt to initialize the H.264 hardware decoder.
-    ///
-    /// Loads AV codec modules first (idempotent), then calls sceVideocodec.
-    /// Returns `Err` on PPSSPP (ME not emulated) or if the codec modules
-    /// are unavailable. The caller should fall back to audio-only mode.
-    fn try_init() -> Result<Self, String> {
-        vlog("[VIDEO] try_init: loading AV modules...");
-        // Ensure AV modules are loaded so the weak sceVideocodec stubs
-        // get re-linked by the kernel to the real syscall entries.
+impl NalDecoder {
+    /// Initialize the NAL decoder from the first keyframe.
+    fn try_init(first_frame: &StreamFrame) -> Result<Self, String> {
+        vlog("[VIDEO] NalDecoder::try_init");
         crate::audio::load_av_modules_once_pub();
-        vlog("[VIDEO] try_init: AV modules loaded");
+        load_mpeg_vsh_module();
 
-        let mut buf = Box::new(CodecBuf([0u32; 96]));
-        let ptr = buf.0.as_mut_ptr();
-
-        vlog("[VIDEO] try_init: calling sceVideocodecOpen...");
-        // SAFETY: sceVideocodecOpen initializes the codec buffer.
-        // Type 0 = H.264 / AVC. ptr is 64-byte aligned via CodecBuf.
-        let ret = unsafe { psp::sys::sceVideocodecOpen(ptr, 0) };
-        if ret < 0 {
-            let msg = format!(
-                "sceVideocodecOpen failed: {:#010x} (ME not available?)",
-                ret as u32
-            );
-            vlog(&format!("[VIDEO] {msg}"));
-            return Err(msg);
+        // Prefer SPS/PPS from MP4 avcC atom (exact match for ME expectations).
+        let (sps, pps) = if let (Some(s), Some(p)) =
+            (&first_frame.avcc_sps, &first_frame.avcc_pps)
+        {
+            (s.clone(), p.clone())
+        } else {
+            extract_sps_pps(&first_frame.data)
+                .ok_or_else(|| "no SPS/PPS found".to_string())?
+        };
+        if sps.len() >= 4 {
+            vlog(&format!(
+                "[VIDEO] NAL: SPS={} PPS={} profile={:#x} level={:#x}",
+                sps.len(), pps.len(), sps[1], sps[3]
+            ));
         }
-        vlog("[VIDEO] try_init: sceVideocodecOpen OK");
 
-        vlog("[VIDEO] try_init: calling sceVideocodecGetEDRAM...");
-        // SAFETY: ptr is the same aligned buffer passed to Open.
-        let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(ptr, 0) };
-        if ret < 0 {
-            // Note: sceVideocodecOpen has no corresponding Close/Stop API, so
-            // the codec handle from Open cannot be explicitly released. Only
-            // EDRAM (from GetEDRAM) has a release function.
-            let msg = format!("sceVideocodecGetEDRAM failed: {:#010x}", ret as u32);
-            vlog(&format!("[VIDEO] {msg}"));
-            return Err(msg);
-        }
-        vlog("[VIDEO] try_init: sceVideocodecGetEDRAM OK");
+        let (width, height) = parse_sps_dimensions(&first_frame.data)
+            .unwrap_or((480, 272));
+        vlog(&format!("[VIDEO] NAL: {width}x{height}"));
 
-        vlog("[VIDEO] try_init: calling sceVideocodecInit...");
-        // SAFETY: ptr is the same aligned buffer passed to Open/GetEDRAM.
-        let ret = unsafe { psp::sys::sceVideocodecInit(ptr, 0) };
-        if ret < 0 {
-            // SAFETY: Release EDRAM on init failure.
-            unsafe { psp::sys::sceVideocodecReleaseEDRAM(ptr) };
-            let msg = format!("sceVideocodecInit failed: {:#010x}", ret as u32);
-            vlog(&format!("[VIDEO] {msg}"));
-            return Err(msg);
-        }
-        vlog("[VIDEO] try_init: sceVideocodecInit OK -- decoder ready");
+        let decoder = psp::mpeg::AvcDecoder::new(width, height)
+            .map_err(|e| format!("AvcDecoder::new: {e}"))?;
+        vlog(&format!(
+            "[VIDEO] NAL: decoder ready, ddr={:#x}",
+            decoder.ddr_top()
+        ));
 
         Ok(Self {
-            buf,
-            initialized: true,
-            width: 0,
-            height: 0,
+            decoder,
+            sps,
+            pps,
+            nal_prefix_size: first_frame.nal_prefix_size as i32,
+            first_frame: true,
         })
     }
 
-    /// Decode a single H.264 access unit (Annex B format).
-    ///
-    /// The AU data should contain NAL units separated by Annex B start codes
-    /// (00 00 00 01). On keyframes, SPS + PPS NALs are prepended by demux_lite.
-    ///
-    /// Returns the decoded RGBA frame on success, or `None` if the codec
-    /// needs more data (buffering reference frames) or decode fails.
-    fn decode(&mut self, au_data: &[u8]) -> Option<DecodedFrame> {
-        if !self.initialized || au_data.is_empty() {
+    /// Decode one H.264 access unit.
+    fn decode(
+        &mut self, au_data: &[u8], _pts_secs: f64,
+        raw_avcc: Option<&[u8]>, avcc_prefix: u8,
+    ) -> Option<DecodedFrame> {
+        if au_data.is_empty() {
             return None;
         }
 
-        let ptr = self.buf.0.as_mut_ptr();
+        static DECODE_COUNT: core::sync::atomic::AtomicU32 =
+            core::sync::atomic::AtomicU32::new(0);
+        let call_num = DECODE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let verbose = call_num < 10;
 
-        // SAFETY: Set source AU pointer and size in the codec buffer.
-        // buf[9] = pointer to H.264 access unit data (Annex B)
-        // buf[10] = size of AU data in bytes
-        // These offsets are standard for sceVideocodec type 0 (H.264).
-        unsafe {
-            *ptr.add(9) = au_data.as_ptr() as u32;
-            *ptr.add(10) = au_data.len() as u32;
-        }
-
-        // SAFETY: The Media Engine reads AU data via DMA, which bypasses
-        // the CPU data cache. Flush the cache so the ME sees the latest
-        // writes to `au_data` (and the codec buffer fields we just set).
-        unsafe { psp::sys::sceKernelDcacheWritebackInvalidateAll() };
-
-        // SAFETY: sceVideocodecDecode processes one AU through the Media
-        // Engine. The codec buffer and AU data must remain valid.
-        let ret = unsafe { psp::sys::sceVideocodecDecode(ptr, 0) };
-        if ret < 0 {
-            vlog(&format!(
-                "[VIDEO] decode: sceVideocodecDecode failed: {:#010x}",
-                ret as u32
-            ));
-            return None;
-        }
-
-        // Read decoded frame info from codec buffer.
-        //
-        // After a successful decode, the ME writes YCbCr 4:2:0 planar data
-        // to EDRAM and populates these codec buffer fields:
-        //   buf[32] = decoded picture width
-        //   buf[33] = decoded picture height
-        //   buf[38] = Y plane pointer (in EDRAM)
-        //   buf[39] = Y plane stride (bytes per row)
-        //   buf[40] = Cb plane pointer
-        //   buf[41] = Cr plane pointer
-        //
-        // NOTE: These offsets are based on PSP homebrew documentation (PMP
-        // Mod, cooleyes MP4 player). If decode succeeds but dimensions are
-        // zero, we log the full buffer for diagnosis on real hardware.
-        let width;
-        let height;
-        let y_ptr;
-        let y_stride;
-        let cb_ptr;
-        let cr_ptr;
-
-        // SAFETY: Reading codec buffer fields populated by sceVideocodecDecode.
-        unsafe {
-            width = *ptr.add(32);
-            height = *ptr.add(33);
-            y_ptr = *ptr.add(38);
-            y_stride = *ptr.add(39);
-            cb_ptr = *ptr.add(40);
-            cr_ptr = *ptr.add(41);
-        }
-
-        // No output frame yet (codec buffering reference frames).
-        if width == 0 || height == 0 {
-            // On first decode, log the buffer to help diagnose offset issues.
-            if self.width == 0 {
-                psp::dprintln!("video: no frame yet, probing buffer...");
-                self.log_codec_buffer();
-            }
-            return None;
-        }
-
-        // Cache dimensions on first successful decode.
-        if self.width == 0 {
-            self.width = width;
-            self.height = height;
-            psp::dprintln!(
-                "video: first frame decoded: {}x{}, Y={:#010x} stride={} \
-                 Cb={:#010x} Cr={:#010x}",
-                width,
-                height,
-                y_ptr,
-                y_stride,
-                cb_ptr,
-                cr_ptr
-            );
-        }
-
-        // Validate pointers -- EDRAM is at 0x04000000..0x04200000 on PSP.
-        if y_ptr < 0x0400_0000 || y_ptr >= 0x0420_0000 {
-            psp::dprintln!(
-                "video: Y pointer {:#010x} outside EDRAM, dumping buffer",
-                y_ptr
-            );
-            self.log_codec_buffer();
-            return None;
-        }
-
-        // Convert YCbCr 4:2:0 to RGBA using VFPU.
-        // SAFETY: EDRAM pointers are valid after successful decode.
-        // We access via uncached address (| 0x40000000) to bypass data cache
-        // since the ME writes directly to EDRAM.
-        let frame = unsafe {
-            yuv420_to_rgba_vfpu(
-                (y_ptr | 0x4000_0000) as *const u8,
-                y_stride as usize,
-                (cb_ptr | 0x4000_0000) as *const u8,
-                (cr_ptr | 0x4000_0000) as *const u8,
-                width,
-                height,
-            )
+        let (data, prefix) = if let Some(avcc) = raw_avcc {
+            (avcc, avcc_prefix as i32)
+        } else {
+            (au_data, 0)
         };
 
-        Some(frame)
-    }
+        let is_first = self.first_frame;
+        self.first_frame = false;
 
-    /// Log all 96 words of the codec buffer for debugging on real hardware.
-    fn log_codec_buffer(&self) {
-        let ptr = self.buf.0.as_ptr();
-        for row in 0..12 {
-            let base = row * 8;
-            // SAFETY: Reading within the 96-word buffer.
-            let vals: [u32; 8] = unsafe {
-                [
-                    *ptr.add(base),
-                    *ptr.add(base + 1),
-                    *ptr.add(base + 2),
-                    *ptr.add(base + 3),
-                    *ptr.add(base + 4),
-                    *ptr.add(base + 5),
-                    *ptr.add(base + 6),
-                    *ptr.add(base + 7),
-                ]
+        let nal = psp::mpeg::AvcNal {
+            sps: &self.sps,
+            pps: &self.pps,
+            data,
+            prefix_size: prefix,
+            is_first_frame: is_first,
+        };
+
+        match self.decoder.decode(&nal) {
+            Ok(Some(frame)) => {
+                if verbose {
+                    vlog("[VIDEO] NAL: FRAME DECODED!");
+                }
+                Some(DecodedFrame {
+                    rgba: frame.pixels,
+                    width: frame.width,
+                    height: frame.height,
+                })
+            }
+            Ok(None) => {
+                if verbose {
+                    vlog("[VIDEO] NAL: no picture yet (reordering)");
+                }
+                None
+            }
+            Err(e) => {
+                if verbose || call_num < 50 {
+                    vlog(&format!("[VIDEO] NAL: decode error: {e}"));
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Extract SPS and PPS NAL units from an Annex B H.264 stream.
+fn extract_sps_pps(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut sps = None;
+    let mut pps = None;
+    let mut i = 0;
+    while i + 4 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 {
+            let (_sc_len, nal_start) = if data[i + 2] == 1 {
+                (3, i + 3)
+            } else if data[i + 2] == 0 && i + 3 < data.len() && data[i + 3] == 1 {
+                (4, i + 4)
+            } else {
+                i += 1;
+                continue;
             };
-            psp::dprintln!(
-                "  buf[{:02}..{:02}]: {:08x} {:08x} {:08x} {:08x} \
-                 {:08x} {:08x} {:08x} {:08x}",
-                base,
-                base + 8,
-                vals[0],
-                vals[1],
-                vals[2],
-                vals[3],
-                vals[4],
-                vals[5],
-                vals[6],
-                vals[7],
-            );
+            if nal_start >= data.len() { break; }
+            let nal_type = data[nal_start] & 0x1F;
+            let mut end = nal_start + 1;
+            while end + 3 < data.len() {
+                if data[end] == 0 && data[end + 1] == 0
+                    && (data[end + 2] == 1
+                        || (data[end + 2] == 0 && end + 3 < data.len() && data[end + 3] == 1))
+                {
+                    break;
+                }
+                end += 1;
+            }
+            if end + 3 >= data.len() { end = data.len(); }
+            let nal_data = &data[nal_start..end];
+            match nal_type {
+                7 => sps = Some(nal_data.to_vec()),
+                8 => pps = Some(nal_data.to_vec()),
+                _ => {}
+            }
+            if sps.is_some() && pps.is_some() { break; }
+            i = end;
+        } else {
+            i += 1;
         }
     }
-}
-
-impl Drop for PspVideoDecoder {
-    fn drop(&mut self) {
-        if self.initialized {
-            // SAFETY: Release EDRAM allocated by sceVideocodecGetEDRAM.
-            // buf.0.as_mut_ptr() is the same 64-byte-aligned pointer.
-            unsafe { psp::sys::sceVideocodecReleaseEDRAM(self.buf.0.as_mut_ptr()) };
-        }
+    match (sps, pps) {
+        (Some(s), Some(p)) => Some((s, p)),
+        _ => None,
     }
 }
 
 // ---------------------------------------------------------------------------
-// VFPU-accelerated YUV420P -> RGBA conversion
+// H.264 SPS parsing (minimal, for extracting width/height)
 // ---------------------------------------------------------------------------
-//
-// BT.601 standard conversion (used by most H.264 content):
-//   R = 1.164 * (Y - 16) + 1.596 * (Cr - 128)
-//   G = 1.164 * (Y - 16) - 0.392 * (Cb - 128) - 0.813 * (Cr - 128)
-//   B = 1.164 * (Y - 16) + 2.017 * (Cb - 128)
-//   A = 255
-//
-// The VFPU processes this as a 4x4 matrix-vector multiply per pixel:
-//   [R]   [1.164   0.0   1.596  0.0] [Y  - 16 ]
-//   [G] = [1.164  -0.392 -0.813 0.0] [Cb - 128]
-//   [B]   [1.164   2.017  0.0   0.0] [Cr - 128]
-//   [A]   [0.0     0.0    0.0   1.0] [255     ]
-//
-// The conversion matrix is loaded into VFPU M000 once, then `vtfm4.q`
-// computes all 4 output channels in a single instruction (~4 cycles).
-// `vmax`/`vmin` clamp to [0, 255], and `vf2iz` converts to integer.
-//
-// At ~20 VFPU cycles per pixel, a 480x272 frame converts in ~2.6M cycles
-// = ~8ms at 333MHz. This is well within the 33ms budget for 30fps video.
 
-/// BT.601 YUV->RGB conversion matrix, 16-byte aligned for VFPU loads.
-/// Row-major: each row contains coefficients for one output channel.
-#[repr(C, align(16))]
-struct Bt601Matrix([[f32; 4]; 4]);
-
-/// The BT.601 conversion matrix (constant).
-static BT601: Bt601Matrix = Bt601Matrix([
-    [1.164, 0.0, 1.596, 0.0],     // R = 1.164*(Y-16) + 1.596*(Cr-128)
-    [1.164, -0.392, -0.813, 0.0], // G = 1.164*(Y-16) - 0.392*(Cb-128) - 0.813*(Cr-128)
-    [1.164, 2.017, 0.0, 0.0],     // B = 1.164*(Y-16) + 2.017*(Cb-128)
-    [0.0, 0.0, 0.0, 1.0],         // A = passthrough (input[3] = 255)
-]);
-
-/// Bias vector subtracted from input: [16, 128, 128, 0].
-/// After subtraction: [Y-16, Cb-128, Cr-128, 255-0=255].
-#[repr(C, align(16))]
-struct BiasVec([f32; 4]);
-
-static YUV_BIAS: BiasVec = BiasVec([16.0, 128.0, 128.0, 0.0]);
-
-/// Convert a YUV420P frame to RGBA using VFPU matrix multiply.
+/// Parse width and height from an H.264 SPS NAL unit (Annex B format).
 ///
-/// # Safety
+/// Scans the AU for a NAL type 7 (SPS) and extracts dimensions from the
+/// fixed-offset fields. Returns `(width, height)` or `None`.
+fn parse_sps_dimensions(au_data: &[u8]) -> Option<(u32, u32)> {
+    // Find SPS NAL: 00 00 00 01 67 or 00 00 01 67 (nal_type & 0x1F == 7)
+    let mut i = 0;
+    while i + 4 < au_data.len() {
+        let is_start = (au_data[i] == 0 && au_data[i + 1] == 0 && au_data[i + 2] == 1)
+            || (au_data[i] == 0
+                && au_data[i + 1] == 0
+                && au_data[i + 2] == 0
+                && au_data[i + 3] == 1);
+        if is_start {
+            let nal_offset = if au_data[i + 2] == 1 { i + 3 } else { i + 4 };
+            if nal_offset < au_data.len() {
+                let nal_type = au_data[nal_offset] & 0x1F;
+                if nal_type == 7 {
+                    // Found SPS. For TV Guide content (Baseline/Main profile,
+                    // no cropping, standard resolution), dimensions are at
+                    // predictable bit offsets. Use a simplified parser.
+                    return parse_sps_rbsp(&au_data[nal_offset..]);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Simplified SPS RBSP parser for Baseline/Main profile.
 ///
-/// - `y_ptr`, `cb_ptr`, `cr_ptr` must point to valid YUV420P plane data
-///   with the given dimensions.
-/// - Y plane: `height` rows of `y_stride` bytes (only first `width` used).
-/// - Cb/Cr planes: `height/2` rows of `y_stride/2` bytes each.
-/// - Pointers should use uncached addresses for EDRAM data.
-unsafe fn yuv420_to_rgba_vfpu(
-    y_ptr: *const u8,
-    y_stride: usize,
-    cb_ptr: *const u8,
-    cr_ptr: *const u8,
-    width: u32,
-    height: u32,
-) -> DecodedFrame {
-    let w = width as usize;
-    let h = height as usize;
-    let chroma_stride = y_stride / 2;
-    let mut rgba = vec![0u8; w * h * 4];
+/// Reads exp-golomb coded fields to extract pic_width_in_mbs and
+/// pic_height_in_map_units, then computes pixel dimensions.
+fn parse_sps_rbsp(sps: &[u8]) -> Option<(u32, u32)> {
+    if sps.len() < 5 {
+        return None;
+    }
 
-    let mat_ptr = BT601.0.as_ptr() as *const u8;
-    let bias_ptr = YUV_BIAS.0.as_ptr() as *const u8;
-    let clamp_255: u32 = 255.0f32.to_bits();
+    // sps[0] = nal header (already checked)
+    let profile_idc = sps[1];
+    // sps[2] = constraint flags
+    // sps[3] = level_idc
 
-    // SAFETY: Load the BT.601 matrix into VFPU M000 and bias into C130.
-    // These registers persist across the pixel loop since Rust's scalar
-    // code doesn't touch VFPU registers.
-    //
-    // Register allocation:
-    //   M000 (C000-C030): BT.601 conversion matrix (persistent)
-    //   C130:             Bias vector [16, 128, 128, 0] (persistent)
-    //   S200:             255.0 constant for clamping (persistent)
-    //   C100:             Per-pixel input [Y, Cb, Cr, 255]
-    //   C110:             Per-pixel output [R, G, B, A]
-    //   C120:             Temp for clamping
-    vfpu_asm!(
-        "lv.q C000, 0({m})",
-        "lv.q C010, 16({m})",
-        "lv.q C020, 32({m})",
-        "lv.q C030, 48({m})",
-        "lv.q C130, 0({b})",
-        "mtv {c255}, S200",
-        m = in(reg) mat_ptr,
-        b = in(reg) bias_ptr,
-        c255 = in(reg) clamp_255,
-        options(nostack),
-    );
+    let mut reader = BitReader::new(&sps[4..]);
 
-    for row in 0..h {
-        let chroma_row = row / 2;
+    // seq_parameter_set_id
+    let _sps_id = reader.read_ue()?;
 
-        for col in 0..w {
-            let chroma_col = col / 2;
-
-            // SAFETY: Pointers are valid EDRAM addresses for the decoded
-            // frame. Indices are within plane dimensions (checked by caller).
-            let y_val = unsafe { *y_ptr.add(row * y_stride + col) } as u32;
-            let cb_val = unsafe { *cb_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
-            let cr_val = unsafe { *cr_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
-            let alpha: u32 = 255;
-
-            let r: u32;
-            let g: u32;
-            let b: u32;
-
-            // SAFETY: VFPU conversion for one pixel.
-            // 1. Load Y, Cb, Cr, 255 as integers into C100
-            // 2. Convert to float via vi2f
-            // 3. Subtract bias [16, 128, 128, 0]
-            // 4. Matrix multiply: [R,G,B,A] = M000 * [Y-16, Cb-128, Cr-128, 255]
-            // 5. Clamp to [0, 255]
-            // 6. Convert to integer via vf2iz
-            // 7. Extract R, G, B to general registers
-            vfpu_asm!(
-                "mtv {y}, S100",
-                "mtv {cb}, S101",
-                "mtv {cr}, S102",
-                "mtv {a}, S103",
-                "vi2f.q C100, C100, 0",
-                "vsub.q C100, C100, C130",
-                "vtfm4.q C110, M000, C100",
-                "vzero.q C120",
-                "vmax.q C110, C110, C120",
-                "vone.q C120",
-                "vscl.q C120, C120, S200",
-                "vmin.q C110, C110, C120",
-                "vf2iz.q C110, C110, 0",
-                "mfv {ro}, S110",
-                "mfv {go}, S111",
-                "mfv {bo}, S112",
-                y = in(reg) y_val,
-                cb = in(reg) cb_val,
-                cr = in(reg) cr_val,
-                a = in(reg) alpha,
-                ro = out(reg) r,
-                go = out(reg) g,
-                bo = out(reg) b,
-                options(nostack),
-            );
-
-            let pix = (row * w + col) * 4;
-            rgba[pix] = r as u8;
-            rgba[pix + 1] = g as u8;
-            rgba[pix + 2] = b as u8;
-            rgba[pix + 3] = 255;
+    // High profile has additional fields
+    if profile_idc == 100 || profile_idc == 110 || profile_idc == 122
+        || profile_idc == 244 || profile_idc == 44 || profile_idc == 83
+        || profile_idc == 86 || profile_idc == 118 || profile_idc == 128
+    {
+        let chroma_format_idc = reader.read_ue()?;
+        if chroma_format_idc == 3 {
+            reader.skip(1)?; // separate_colour_plane_flag
+        }
+        let _bit_depth_luma = reader.read_ue()?;
+        let _bit_depth_chroma = reader.read_ue()?;
+        reader.skip(1)?; // qpprime_y_zero_transform_bypass_flag
+        let seq_scaling_matrix_present = reader.read_bit()?;
+        if seq_scaling_matrix_present == 1 {
+            let count = if chroma_format_idc != 3 { 8 } else { 12 };
+            for i in 0..count {
+                let present = reader.read_bit()?;
+                if present == 1 {
+                    // Skip scaling list (first 6 are 4x4=16, rest are 8x8=64)
+                    let size = if i < 6 { 16 } else { 64 };
+                    let mut last_scale = 8i32;
+                    let mut next_scale = 8i32;
+                    for _ in 0..size {
+                        if next_scale != 0 {
+                            let delta = reader.read_se()?;
+                            next_scale = (last_scale + delta + 256) % 256;
+                        }
+                        last_scale = if next_scale == 0 { last_scale } else { next_scale };
+                    }
+                }
+            }
         }
     }
 
-    DecodedFrame {
-        rgba,
-        width,
-        height,
+    // log2_max_frame_num_minus4
+    let _log2_max_frame_num = reader.read_ue()?;
+    // pic_order_cnt_type
+    let poc_type = reader.read_ue()?;
+    if poc_type == 0 {
+        let _log2_max_poc_lsb = reader.read_ue()?;
+    } else if poc_type == 1 {
+        reader.skip(1)?; // delta_pic_order_always_zero_flag
+        let _offset_for_non_ref_pic = reader.read_se()?;
+        let _offset_for_top_to_bottom = reader.read_se()?;
+        let num_ref_frames_in_poc = reader.read_ue()?;
+        for _ in 0..num_ref_frames_in_poc {
+            let _offset = reader.read_se()?;
+        }
+    }
+
+    // max_num_ref_frames
+    let _max_ref_frames = reader.read_ue()?;
+    // gaps_in_frame_num_allowed
+    reader.skip(1)?;
+
+    // pic_width_in_mbs_minus1
+    let pic_width_mbs = reader.read_ue()? + 1;
+    // pic_height_in_map_units_minus1
+    let pic_height_map_units = reader.read_ue()? + 1;
+
+    let width = pic_width_mbs * 16;
+    let height = pic_height_map_units * 16;
+
+    Some((width, height))
+}
+
+/// Minimal bitstream reader for exp-golomb codes in H.264 SPS.
+struct BitReader<'a> {
+    data: &'a [u8],
+    byte_pos: usize,
+    bit_pos: u8, // 0-7, MSB first
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, byte_pos: 0, bit_pos: 0 }
+    }
+
+    fn read_bit(&mut self) -> Option<u32> {
+        if self.byte_pos >= self.data.len() {
+            return None;
+        }
+        let bit = ((self.data[self.byte_pos] >> (7 - self.bit_pos)) & 1) as u32;
+        self.bit_pos += 1;
+        if self.bit_pos >= 8 {
+            self.bit_pos = 0;
+            self.byte_pos += 1;
+        }
+        Some(bit)
+    }
+
+    fn skip(&mut self, n: u32) -> Option<()> {
+        for _ in 0..n {
+            self.read_bit()?;
+        }
+        Some(())
+    }
+
+    fn read_bits(&mut self, n: u32) -> Option<u32> {
+        let mut val = 0u32;
+        for _ in 0..n {
+            val = (val << 1) | self.read_bit()?;
+        }
+        Some(val)
+    }
+
+    /// Read unsigned exp-golomb code.
+    fn read_ue(&mut self) -> Option<u32> {
+        let mut leading_zeros = 0u32;
+        loop {
+            let bit = self.read_bit()?;
+            if bit == 1 {
+                break;
+            }
+            leading_zeros += 1;
+            if leading_zeros > 31 {
+                return None; // overflow protection
+            }
+        }
+        if leading_zeros == 0 {
+            return Some(0);
+        }
+        let suffix = self.read_bits(leading_zeros)?;
+        Some((1 << leading_zeros) - 1 + suffix)
+    }
+
+    /// Read signed exp-golomb code.
+    fn read_se(&mut self) -> Option<i32> {
+        let ue = self.read_ue()?;
+        let sign = if ue & 1 == 1 { 1 } else { -1 };
+        Some(sign * ((ue + 1) / 2) as i32)
     }
 }
 
@@ -701,21 +741,6 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
         }
     }
 
-    // Attempt H.264 hardware decoder init.
-    vlog("[VIDEO] play_mp4: attempting H.264 init...");
-    let mut h264 = match PspVideoDecoder::try_init() {
-        Ok(dec) => {
-            vlog("[VIDEO] play_mp4: H.264 hardware decoder initialized");
-            Some(dec)
-        },
-        Err(e) => {
-            vlog(&format!(
-                "[VIDEO] play_mp4: H.264 disabled ({e}), audio-only"
-            ));
-            None
-        },
-    };
-
     psp::dprintln!(
         "video: MP4 opened, video={}, audio={}",
         mp4.video_track_info().is_some(),
@@ -729,9 +754,6 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
     let mut video_done = mp4.video_track_info().is_none();
 
     // Track playback start time for frame pacing.
-    // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
-    // SAFETY: sceKernelGetSystemTimeWide is a read-only kernel syscall that
-    // returns the 64-bit system timer in microseconds. No preconditions.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
     loop {
@@ -776,39 +798,11 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
             }
         }
 
-        // Read and decode video samples.
+        // Skip video samples (local file decode not wired up — use play_stream for H.264).
         if !video_done {
             match mp4.next_video_sample() {
-                Ok(Some(sample)) => {
+                Ok(Some(_sample)) => {
                     video_count += 1;
-
-                    // Decode H.264 via Media Engine if available.
-                    if let Some(ref mut decoder) = h264 {
-                        if let Some(frame) = decoder.decode(&sample.data) {
-                            decode_count += 1;
-
-                            // Frame pacing: wait until the frame's PTS.
-                            // This prevents dumping frames faster than
-                            // the display can consume them.
-                            let pts_us = (sample.timestamp_secs * 1_000_000.0) as u64;
-                            // SAFETY: Read-only kernel syscall returning 64-bit system timer.
-                            let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
-                            let elapsed = now_us.wrapping_sub(start_us);
-                            if pts_us > elapsed {
-                                let wait = (pts_us - elapsed) as u32;
-                                // Cap wait to 100ms to avoid stalls.
-                                if wait < 100_000 {
-                                    // SAFETY: Sleep for frame pacing.
-                                    unsafe {
-                                        psp::sys::sceKernelDelayThread(wait);
-                                    }
-                                }
-                            }
-
-                            // Push to frame queue (drops if full).
-                            let _ = VIDEO_FRAME_QUEUE.push(frame);
-                        }
-                    }
                 },
                 Ok(None) => {
                     video_done = true;
@@ -842,15 +836,13 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 }
 
 /// Streaming playback: receive pre-demuxed H.264 frames from I/O thread
-/// and decode them via the Media Engine.
+/// and decode them via sceMpeg.
 ///
 /// Returns `true` if Shutdown was received (caller should exit thread).
 fn play_stream() -> bool {
-    vlog("[VIDEO] play_stream: starting streaming decode (audio-only)");
+    vlog("[VIDEO] play_stream: starting streaming decode");
 
-    // Drain stale commands that may have been queued during moov buffering
-    // (e.g., user pressed Cancel while I/O thread was still downloading).
-    // Without this, a stale Stop command would immediately exit the loop.
+    // Drain stale commands that may have been queued during moov buffering.
     while let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
         if matches!(cmd, VideoCmd::Shutdown) {
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
@@ -860,16 +852,73 @@ fn play_stream() -> bool {
         vlog("[VIDEO] play_stream: drained stale command");
     }
 
-    // Skip H.264 hardware decoder init for streaming mode.
-    // The I/O thread skips all video samples (audio-only streaming),
-    // so initializing the ME coprocessor is unnecessary and can cause
-    // hard crashes on some PSP firmware if the ME isn't available.
-    let mut h264: Option<PspVideoDecoder> = None;
+    // We need the first keyframe to extract SPS and get video dimensions
+    // before initializing the decoder. Wait for it.
+    vlog("[VIDEO] play_stream: waiting for first keyframe...");
+    let mut first_frame: Option<StreamFrame> = None;
 
-    // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
-    // SAFETY: Read-only kernel syscall returning 64-bit system timer.
+    for _ in 0..500 {
+        // ~5 seconds timeout (500 × 10ms)
+        if let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
+            if matches!(cmd, VideoCmd::Stop | VideoCmd::Shutdown) {
+                VIDEO_PLAYING.store(false, Ordering::Relaxed);
+                send_audio_cmd(AudioCmd::VideoAudioStop);
+                return matches!(cmd, VideoCmd::Shutdown);
+            }
+        }
+
+        if let Some(frame) = VIDEO_STREAM_QUEUE.pop() {
+            if frame.is_keyframe {
+                first_frame = Some(frame);
+                break;
+            }
+            // Skip non-keyframes before decoder init.
+        }
+
+        // SAFETY: Sleep while waiting for data.
+        unsafe { psp::sys::sceKernelDelayThread(10_000) };
+    }
+
+    let first_frame = match first_frame {
+        Some(f) => f,
+        None => {
+            vlog("[VIDEO] play_stream: no keyframe received, audio-only");
+            // Continue draining stream queue but don't decode.
+            return drain_stream_only();
+        },
+    };
+
+    // Parse SPS from the first keyframe to get video dimensions.
+    let (vid_w, vid_h) = parse_sps_dimensions(&first_frame.data)
+        .unwrap_or((480, 272));
+    vlog(&format!(
+        "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
+    ));
+
+    // NAL-based decode (cooleyes/PMPlayer approach).
+    let mut nal_dec = match NalDecoder::try_init(&first_frame) {
+        Ok(dec) => {
+            vlog("[VIDEO] NAL decoder initialized OK");
+            dec
+        },
+        Err(e) => {
+            vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
+            return drain_stream_only();
+        },
+    };
+
+    // Decode the first keyframe.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
     let mut decode_count = 0u32;
+
+    if let Some(decoded) = nal_dec.decode(
+        &first_frame.data, first_frame.timestamp_secs,
+        first_frame.raw_avcc.as_deref(), first_frame.nal_prefix_size,
+    ) {
+        decode_count += 1;
+        let _ = VIDEO_FRAME_QUEUE.push(decoded);
+        vlog("[VIDEO] play_stream: first frame decoded!");
+    }
 
     loop {
         // Check for stop/shutdown commands.
@@ -898,27 +947,28 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                if let Some(ref mut decoder) = h264 {
-                    if let Some(decoded) = decoder.decode(&frame.data) {
-                        decode_count += 1;
+                if let Some(decoded) = nal_dec.decode(
+                    &frame.data, frame.timestamp_secs,
+                    frame.raw_avcc.as_deref(), frame.nal_prefix_size,
+                ) {
+                    decode_count += 1;
 
-                        // Frame pacing via PTS.
-                        let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
-                        // SAFETY: Read-only kernel syscall returning 64-bit system timer.
-                        let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
-                        let elapsed = now_us.wrapping_sub(start_us);
-                        if pts_us > elapsed {
-                            let wait = (pts_us - elapsed) as u32;
-                            if wait < 100_000 {
-                                // SAFETY: Sleep for frame pacing.
-                                unsafe {
-                                    psp::sys::sceKernelDelayThread(wait);
-                                }
+                    // Frame pacing via PTS.
+                    let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
+                    let now_us =
+                        unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
+                    let elapsed = now_us.wrapping_sub(start_us);
+                    if pts_us > elapsed {
+                        let wait = (pts_us - elapsed) as u32;
+                        if wait < 100_000 {
+                            // SAFETY: Sleep for frame pacing.
+                            unsafe {
+                                psp::sys::sceKernelDelayThread(wait);
                             }
                         }
-
-                        let _ = VIDEO_FRAME_QUEUE.push(decoded);
                     }
+
+                    let _ = VIDEO_FRAME_QUEUE.push(decoded);
                 }
             },
             None => {
@@ -935,4 +985,32 @@ fn play_stream() -> bool {
     VIDEO_PLAYING.store(false, Ordering::Relaxed);
     send_audio_cmd(AudioCmd::VideoAudioStop);
     false
+}
+
+/// Drain the stream queue without decoding (audio-only fallback).
+/// Keeps the thread alive to handle Stop/Shutdown commands.
+fn drain_stream_only() -> bool {
+    loop {
+        if let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
+            match cmd {
+                VideoCmd::Stop | VideoCmd::Shutdown => {
+                    VIDEO_PLAYING.store(false, Ordering::Relaxed);
+                    while VIDEO_STREAM_QUEUE.pop().is_some() {}
+                    send_audio_cmd(AudioCmd::VideoAudioStop);
+                    return matches!(cmd, VideoCmd::Shutdown);
+                },
+                _ => {},
+            }
+        }
+
+        if !VIDEO_PLAYING.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        // Drain frames to prevent queue backup.
+        while VIDEO_STREAM_QUEUE.pop().is_some() {}
+
+        // SAFETY: sceKernelDelayThread sleeps the current thread.
+        unsafe { psp::sys::sceKernelDelayThread(50_000) };
+    }
 }

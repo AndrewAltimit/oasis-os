@@ -31,19 +31,36 @@ const READ_BUF_SIZE: usize = 32 * 1024;
 /// to avoid conflicts with the PRX overlay at boot time.
 ///
 /// Also exposed as `pub` for use by the video AAC decoder in threading.rs.
-pub(crate) fn load_av_modules_once_pub() {
+pub fn load_av_modules_once_pub() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
         return; // Already loaded.
     }
     // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
-    // AvCodec, AvMpegBase, and AvMp3 are required for sceAudiocodec MP3
-    // decoding. The AtomicBool guard ensures these are loaded at most once.
+    // AvCodec provides sceAudiocodec + sceVideocodec + kernel avcodec.
+    // AvMp3 provides MP3 decoding.
+    // AvMp3 loaded separately in video.rs (via load_avmp3_module).
+    // AvMpegBase is NOT loaded — it breaks NAL decode (see video.rs docs).
+    // The AtomicBool guard ensures these are loaded at most once.
+    // SAFETY: sceIo log + sceUtilityLoadModule calls.
     unsafe {
-        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
-        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
-        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
+        let r1 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
+        // AvMp3 loaded in video.rs preinit_mpeg() via load_avmp3_module().
+        let msg = format!(
+            "[AV] modules: AvCodec={r1:#x} AvMp3=deferred\n",
+        );
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+            psp::sys::sceIoClose(fd);
+        }
     }
 }
 

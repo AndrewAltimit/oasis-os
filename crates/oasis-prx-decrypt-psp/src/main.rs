@@ -423,6 +423,37 @@ const TARGETS: &[PrxTarget] = &[
         output_name: b"ms0:/PSP/GAME/PRXDEC/dec/usb1seg.prx\0",
         label: "usb1seg.prx",
     },
+    // Video/audio codec modules — for analyzing sceVideocodec 0x806201fe error.
+    PrxTarget {
+        flash_path: b"flash0:/kd/videocodec.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/videocodec.prx\0",
+        label: "videocodec.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/avcodec.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/avcodec.prx\0",
+        label: "avcodec.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpeg.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpeg.prx\0",
+        label: "mpeg.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpegbase.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpegbase.prx\0",
+        label: "mpegbase.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mpeg_vsh.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mpeg_vsh.prx\0",
+        label: "mpeg_vsh.prx",
+    },
+    PrxTarget {
+        flash_path: b"flash0:/kd/mediaman.prx\0",
+        output_name: b"ms0:/PSP/GAME/PRXDEC/dec/mediaman.prx\0",
+        label: "mediaman.prx",
+    },
 ];
 
 // ── Input helpers ───────────────────────────────────────────────────────
@@ -447,6 +478,176 @@ fn wait_button() -> CtrlButtons {
         if !pressed.is_empty() { return pressed; }
         unsafe { sceKernelDelayThread(16_000) };
     }
+}
+
+// ── MPEG module memory dump ──────────────────────────────────────────────
+
+/// Load AV modules via sceUtility, then find and dump the loaded MPEG
+/// modules from memory. This bypasses PRX encryption entirely since the
+/// kernel decrypts modules at load time.
+fn dump_mpeg_modules() {
+    log("=== Dumping MPEG modules from memory ===");
+    log("");
+
+    // Load AV modules (same as the EBOOT does for streaming).
+    log("Loading AvCodec...");
+    let ret = unsafe { sys::sceUtilityLoadModule(sys::Module::AvCodec) };
+    let mut f = Fmt::new();
+    f.p("  sceUtilityLoadModule(AvCodec) = ");
+    f.h8(ret as u32);
+    log(f.s());
+
+    log("Loading AvMpegBase...");
+    let ret = unsafe { sys::sceUtilityLoadModule(sys::Module::AvMpegBase) };
+    let mut f = Fmt::new();
+    f.p("  sceUtilityLoadModule(AvMpegBase) = ");
+    f.h8(ret as u32);
+    log(f.s());
+
+    log("");
+
+    // Module names to search for (as they appear in loaded module list).
+    // We'll enumerate all loaded modules and dump any mpeg-related ones.
+    log("Enumerating loaded modules...");
+
+    // Get module ID list.
+    let mut mod_ids = [sys::SceUid(0); 128];
+    let mut count: i32 = 0;
+    let ret = unsafe {
+        sys::sceKernelGetModuleIdList(
+            mod_ids.as_mut_ptr(),
+            128,
+            &mut count,
+        )
+    };
+
+    let mut f = Fmt::new();
+    f.p("  GetModuleIdList = ");
+    f.h8(ret as u32);
+    f.p(", count = ");
+    f.decimal(count as u32);
+    log(f.s());
+
+    if ret < 0 {
+        log("  ERROR: Cannot enumerate modules");
+        return;
+    }
+
+    let count = count as usize;
+    for i in 0..count {
+        let mid = mod_ids[i];
+        let mut info: sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
+        info.size = core::mem::size_of::<sys::SceKernelModuleInfo>();
+        let ret = unsafe { sys::sceKernelQueryModuleInfo(mid, &mut info) };
+        if ret < 0 {
+            let mut f = Fmt::new();
+            f.p("  [");
+            f.decimal(i as u32);
+            f.p("] QueryInfo err: ");
+            f.h8(ret as u32);
+            log(f.s());
+            continue;
+        }
+
+        // Convert module name to str.
+        let name_bytes = &info.name;
+        let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+        let name = unsafe {
+            core::str::from_utf8_unchecked(&name_bytes[..name_len])
+        };
+
+        // Log ALL modules with their addresses.
+        let text_addr = info.text_addr as usize;
+        let text_size = info.text_size as usize;
+        let data_size = info.data_size as usize;
+        {
+            let mut f = Fmt::new();
+            f.p("  [");
+            f.decimal(i as u32);
+            f.p("] ");
+            f.p(name);
+            f.p(" @");
+            f.h8(text_addr as u32);
+            f.p(" t=");
+            f.decimal(text_size as u32);
+            f.p(" d=");
+            f.decimal(data_size as u32);
+            log(f.s());
+        }
+
+        // Dump any mpeg/codec/av-related module.
+        let is_target = {
+            let mut found = false;
+            let targets = [
+                "mpeg", "Mpeg", "MPEG",
+                "avcodec", "Avcodec",
+                "codec", "Codec",
+                "video", "Video",
+                "mpegbase", "MpegBase",
+                "sceMpeg", "libmpeg",
+                "memlmd", "semaphore",
+            ];
+            for t in targets {
+                if name.contains(t) {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+
+        if is_target {
+            let text_addr = info.text_addr as usize;
+            let text_size = info.text_size as usize;
+            let data_size = info.data_size as usize;
+            let total = text_size + data_size;
+
+            let mut f = Fmt::new();
+            f.p("  [");
+            f.decimal(i as u32);
+            f.p("] ");
+            f.p(name);
+            f.p(" addr=");
+            f.h8(text_addr as u32);
+            f.p(" text=");
+            f.decimal(text_size as u32);
+            f.p(" data=");
+            f.decimal(data_size as u32);
+            log(f.s());
+
+            if total > 0 && text_addr != 0 {
+                // Build output filename.
+                // Use a fixed set of output paths based on module name.
+                let out_path: &[u8] = if name.contains("mpegbase") || name.contains("MpegBase") {
+                    b"ms0:/PSP/GAME/PRXDEC/dec/mpegbase_memdump.bin\0"
+                } else if name.contains("mpeg_vsh") {
+                    b"ms0:/PSP/GAME/PRXDEC/dec/mpeg_vsh_memdump.bin\0"
+                } else if name.contains("mpeg") || name.contains("Mpeg") || name.contains("MPEG") {
+                    b"ms0:/PSP/GAME/PRXDEC/dec/mpeg_memdump.bin\0"
+                } else if name.contains("avcodec") || name.contains("Avcodec") {
+                    b"ms0:/PSP/GAME/PRXDEC/dec/avcodec_memdump.bin\0"
+                } else {
+                    b"ms0:/PSP/GAME/PRXDEC/dec/codec_memdump.bin\0"
+                };
+
+                let slice = unsafe {
+                    core::slice::from_raw_parts(text_addr as *const u8, total)
+                };
+                if write_file(out_path, slice) {
+                    let mut f = Fmt::new();
+                    f.p("    Dumped ");
+                    f.decimal(total as u32);
+                    f.p(" bytes");
+                    log(f.s());
+                } else {
+                    log("    Write failed");
+                }
+            }
+        }
+    }
+
+    log("");
+    log("Done!");
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
@@ -520,9 +721,19 @@ fn psp_main() {
     log(f.s());
     log("");
 
-    log("X=decrypt all, TRI=exit");
+    log("X=decrypt all, O=dump loaded MPEG, TRI=exit");
     let btn = wait_button();
     if btn.intersects(CtrlButtons::TRIANGLE) {
+        return;
+    }
+
+    // --- CIRCLE: Dump already-loaded MPEG modules from memory ---
+    if btn.intersects(CtrlButtons::CIRCLE) {
+        dump_mpeg_modules();
+        log("");
+        log("Press any button to exit.");
+        wait_button();
+        unsafe { sys::sceKernelExitDeleteThread(0) };
         return;
     }
 
