@@ -50,17 +50,21 @@ impl PspAacDecoder {
         let mut buf = Box::new(AacCodecBuf { words: [0u32; 65] });
         let ptr = buf.words.as_mut_ptr();
 
+        let codec_ptr = ptr as *const core::ffi::c_void;
+        let codec_size = core::mem::size_of_val(&buf.words) as u32;
+
         // SAFETY: sceAudiocodec operates on the 64-byte-aligned buffer.
-        // Flush cache before each codec call (DMA coherency).
+        // Use range-based cache flushes instead of full D-cache invalidate
+        // to avoid thrashing the 16KB D-cache during init.
         unsafe {
-            sys::sceKernelDcacheWritebackInvalidateAll();
+            sys::sceKernelDcacheWritebackInvalidateRange(codec_ptr, codec_size);
             let ret = sys::sceAudiocodecCheckNeedMem(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] CheckNeedMem failed: {ret:#010x}"));
                 return Err(ret);
             }
 
-            sys::sceKernelDcacheWritebackInvalidateAll();
+            sys::sceKernelDcacheWritebackInvalidateRange(codec_ptr, codec_size);
             let ret = sys::sceAudiocodecGetEDRAM(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] GetEDRAM failed: {ret:#010x}"));
@@ -70,7 +74,7 @@ impl PspAacDecoder {
             // Set sample rate BEFORE init — required for AAC.
             buf.words[10] = sample_rate;
 
-            sys::sceKernelDcacheWritebackInvalidateAll();
+            sys::sceKernelDcacheWritebackInvalidateRange(codec_ptr, codec_size);
             let ret = sys::sceAudiocodecInit(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] AudiocodecInit failed: {ret:#010x}"));
@@ -393,6 +397,9 @@ pub(super) fn audio_thread_fn() {
             },
             Some(AudioCmd::VideoAudioAac { data }) => {
                 // Decode raw AAC frame via sceAudiocodec and output PCM.
+                // output_blocking takes ~23ms per frame — immediately loop
+                // back to check for the next frame rather than falling
+                // through to the idle sleep path.
                 decode_aac_frame(
                     &data,
                     &mut player,
@@ -401,6 +408,7 @@ pub(super) fn audio_thread_fn() {
                     &mut aac_init_failures,
                     &mut aac_pcm_buf,
                 );
+                continue;
             },
             Some(AudioCmd::VideoAudioStop) => {
                 // Video playback ended -- flush AAC decoder state.
@@ -449,10 +457,12 @@ pub(super) fn audio_thread_fn() {
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
             }
         } else {
-            // Sleep when idle. During AAC playback the audio thread must
-            // wake frequently to pop frames, but a short sleep (1ms)
-            // prevents a CPU-burning busy loop that can crash the PSP.
-            let sleep_us = if aac_sample_rate > 0 { 1_000 } else { 10_000 };
+            // Sleep when idle. During AAC streaming, the `continue` above
+            // ensures we immediately re-pop after output_blocking returns.
+            // We only reach here when the queue is empty, so 5ms is fine
+            // (one AAC frame takes ~23ms, giving the I/O thread time to
+            // push more). Idle (no streaming): 10ms.
+            let sleep_us = if aac_sample_rate > 0 { 5_000 } else { 10_000 };
             // SAFETY: sceKernelDelayThread sleeps the current thread.
             unsafe { psp::sys::sceKernelDelayThread(sleep_us) };
         }

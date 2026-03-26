@@ -132,11 +132,18 @@ impl TlsHttpReader {
     ///
     /// Returns the reader and content length (0 if unknown).
     pub(super) fn open(url: &str) -> Result<(Self, u64), String> {
-        Self::open_with_redirects(url, 5)
+        Self::open_inner(url, 5, None)
     }
 
-    /// Open with redirect depth limit to prevent infinite recursion.
-    fn open_with_redirects(url: &str, redirects_left: u8) -> Result<(Self, u64), String> {
+    /// Open an HTTPS connection with a Range header to resume a download.
+    pub(super) fn open_range(url: &str, offset: u64) -> Result<(Self, u64), String> {
+        Self::open_inner(url, 5, Some(offset))
+    }
+
+    /// Open with redirect depth limit and optional Range header.
+    fn open_inner(
+        url: &str, redirects_left: u8, range_offset: Option<u64>,
+    ) -> Result<(Self, u64), String> {
         let (host, port, path, _) = parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
         io_log(&format!("[IO-TLS] resolving {host}..."));
@@ -238,8 +245,10 @@ impl TlsHttpReader {
                 4,
             );
             // Set send/receive timeouts for the TLS stream.
+            // 10s is short enough to detect CDN connection drops quickly
+            // but long enough for slow TLS reads on PSP WiFi.
             let timeout = Timeval {
-                tv_sec: 30,
+                tv_sec: 10,
                 tv_usec: 0,
             };
             let timeout_ptr = &timeout as *const Timeval as *const core::ffi::c_void;
@@ -295,12 +304,17 @@ impl TlsHttpReader {
 
         io_log("[IO-TLS] TLS 1.3 handshake OK");
 
-        // Send HTTP/1.1 GET request.
+        // Send HTTP/1.1 GET request (with Range header for resume).
+        let range_hdr = match range_offset {
+            Some(off) => format!("Range: bytes={off}-\r\n"),
+            None => String::new(),
+        };
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host}\r\n\
              User-Agent: oasis-psp/1.0\r\n\
              Accept: */*\r\n\
+             {range_hdr}\
              Connection: keep-alive\r\n\r\n"
         );
         if let Err(e) = embedded_io::Write::write_all(&mut tls, request.as_bytes())
@@ -388,12 +402,13 @@ impl TlsHttpReader {
                     return Err("too many TLS redirects".into());
                 }
                 io_log(&format!("[IO-TLS] redirect → {loc}"));
-                return Self::open_with_redirects(&loc, redirects_left - 1);
+                return Self::open_inner(&loc, redirects_left - 1, range_offset);
             }
             return Err(format!("redirect {status}, no Location"));
         }
 
-        if status < 200 || status >= 300 {
+        // Accept 200 OK and 206 Partial Content (Range requests).
+        if status != 200 && status != 206 && (status < 200 || status >= 300) {
             drop(tls);
             // SAFETY: Reclaim leaked TLS buffers and close socket on HTTP error.
             unsafe {

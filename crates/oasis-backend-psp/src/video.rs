@@ -11,14 +11,27 @@
 //! API is used instead of the lower-level sceVideocodec because sceVideocodec
 //! weak imports fail to resolve on many CFW configurations (error 0x806201fe).
 
-use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
 use crate::threading::{AudioCmd, send_audio_cmd};
 
+/// Whether verbose video logging is enabled. Disabled during active
+/// decode to avoid ~5-20ms Memory Stick I/O stalls per log write.
+static VLOG_ENABLED: AtomicBool = AtomicBool::new(true);
+
 /// File-based debug logging (works from video thread, unlike psp::dprintln).
+/// Suppressed when `VLOG_ENABLED` is false (during active decode).
 fn vlog(msg: &str) {
+    if !VLOG_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    vlog_force(msg);
+}
+
+/// Unconditional log — always writes regardless of VLOG_ENABLED.
+/// Use sparingly during active decode (each write costs ~5-20ms).
+pub fn vlog_force(msg: &str) {
     // SAFETY: sceIo calls with valid path and buffer pointers.
     unsafe {
         let fd = psp::sys::sceIoOpen(
@@ -54,14 +67,16 @@ pub enum VideoCmd {
 
 /// A pre-demuxed H.264 access unit pushed by the I/O thread for decode.
 pub struct StreamFrame {
+    /// Raw AVCC-format data (NAL length prefix + NAL units). The decoder
+    /// feeds this directly to the ME via `psp::mpeg::AvcNal`.
     pub data: Vec<u8>,
-    /// Raw AVCC data (before Annex B conversion) for NAL decoder.
-    pub raw_avcc: Option<Vec<u8>>,
     /// AVCC NAL length prefix size (typically 4).
     pub nal_prefix_size: u8,
     /// SPS from MP4 avcC atom (raw NAL, no start codes).
+    /// Only set on keyframes to avoid per-frame cloning.
     pub avcc_sps: Option<Vec<u8>>,
     /// PPS from MP4 avcC atom (raw NAL, no start codes).
+    /// Only set on keyframes to avoid per-frame cloning.
     pub avcc_pps: Option<Vec<u8>>,
     pub timestamp_secs: f64,
     pub is_keyframe: bool,
@@ -69,14 +84,23 @@ pub struct StreamFrame {
 
 /// A decoded video frame ready for texture upload.
 ///
-/// Identical to `oasis_video::h264::DecodedFrame` but defined separately
-/// because the PSP backend is excluded from the workspace (different target
-/// architecture) and cannot depend on oasis-video's h264 module.
+/// Contains a reference to one of two pre-allocated static pixel buffers
+/// rather than a per-frame Vec allocation.
 pub struct DecodedFrame {
-    pub rgba: Vec<u8>,
+    /// Index into `FRAME_BUFFERS` (0 or 1). The main thread reads pixel
+    /// data directly from the static buffer.
+    pub buf_idx: u8,
     pub width: u32,
     pub height: u32,
 }
+
+/// Pre-allocated double-buffer for decoded RGBA frames. Each buffer holds
+/// one frame at the maximum expected resolution (480x272x4 = 522,240 bytes).
+/// Allocated lazily at first decode. Protected by the SPSC queue contract:
+/// the video thread writes to the buffer identified by `write_buf_idx`,
+/// then pushes a DecodedFrame; the main thread reads from the buffer
+/// identified by `DecodedFrame::buf_idx` after popping.
+static mut FRAME_BUFFERS: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
 
 // ---------------------------------------------------------------------------
 // Static queues and state
@@ -96,6 +120,60 @@ static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// The video thread clears it once it starts `play_stream()`.
 static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Kernel semaphore signalled by I/O thread when a stream frame is pushed.
+/// The video thread waits on this instead of polling with sleep.
+static STREAM_FRAME_SEMA: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(-1);
+
+/// Create the stream frame semaphore (called once at video thread start).
+fn create_stream_sema() {
+    // SAFETY: sceKernelCreateSema with valid name and parameters.
+    let id = unsafe {
+        psp::sys::sceKernelCreateSema(
+            b"oasis_vframe\0".as_ptr(),
+            0,   // attr: FIFO
+            0,   // initial value
+            8,   // max value (matches VIDEO_STREAM_QUEUE capacity)
+            core::ptr::null_mut(),
+        )
+    };
+    if id >= psp::sys::SceUid(0) {
+        STREAM_FRAME_SEMA.store(id.0, core::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Signal the stream frame semaphore (called by I/O thread after pushing).
+pub fn signal_stream_frame() {
+    let id = STREAM_FRAME_SEMA.load(core::sync::atomic::Ordering::Acquire);
+    if id >= 0 {
+        // SAFETY: id is a valid semaphore created by create_stream_sema.
+        unsafe {
+            psp::sys::sceKernelSignalSema(psp::sys::SceUid(id), 1);
+        }
+    }
+}
+
+/// Wait for a stream frame to be available (with timeout).
+/// Returns true if signalled, false on timeout.
+fn wait_stream_frame(timeout_us: u32) -> bool {
+    let id = STREAM_FRAME_SEMA.load(core::sync::atomic::Ordering::Acquire);
+    if id < 0 {
+        // Semaphore not created; fall back to sleep.
+        unsafe { psp::sys::sceKernelDelayThread(timeout_us) };
+        return false;
+    }
+    let mut timeout = timeout_us;
+    // SAFETY: id is a valid semaphore, timeout pointer is valid.
+    let ret = unsafe {
+        psp::sys::sceKernelWaitSema(
+            psp::sys::SceUid(id),
+            1,
+            &mut timeout,
+        )
+    };
+    ret >= 0
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -106,8 +184,24 @@ pub fn send_video_cmd(cmd: VideoCmd) {
 }
 
 /// Poll for the next decoded video frame (non-blocking).
+///
+/// Returns the frame metadata. Pixel data is in the static
+/// `FRAME_BUFFERS[frame.buf_idx]` — the caller must copy it
+/// before the next `poll_video_frame` call overwrites it.
 pub fn poll_video_frame() -> Option<DecodedFrame> {
     VIDEO_FRAME_QUEUE.pop()
+}
+
+/// Get a reference to the pixel data for a decoded frame.
+///
+/// # Safety
+/// Must be called from the main thread after `poll_video_frame` returns
+/// a frame and before the next poll (SPSC contract).
+pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
+    let size = (frame.width * frame.height * 4) as usize;
+    // SAFETY: The SPSC queue contract guarantees the video thread will
+    // not write to this buffer index until we poll the next frame.
+    unsafe { &FRAME_BUFFERS[frame.buf_idx as usize][..size] }
 }
 
 /// Check if video is currently playing.
@@ -130,7 +224,13 @@ pub fn request_stream_start() {
 /// Returns `Ok(())` on success, or `Err(frame)` if the queue was full
 /// (caller should retry after a short sleep).
 pub fn try_push_stream_frame(frame: StreamFrame) -> Result<(), StreamFrame> {
-    VIDEO_STREAM_QUEUE.push(frame)
+    match VIDEO_STREAM_QUEUE.push(frame) {
+        Ok(()) => {
+            signal_stream_frame();
+            Ok(())
+        }
+        Err(f) => Err(f),
+    }
 }
 
 /// Pre-initialize the MPEG subsystem before any audio modules load.
@@ -330,6 +430,14 @@ struct NalDecoder {
     pps: Vec<u8>,
     nal_prefix_size: i32,
     first_frame: bool,
+    /// Alternates between 0 and 1 to index into FRAME_BUFFERS.
+    write_buf_idx: u8,
+    /// Frames decoded since last flush/keyframe.
+    frames_since_flush: u32,
+    /// Maximum frames before a preventive flush.
+    flush_interval: u32,
+    /// When true, skip all frames until the next keyframe.
+    awaiting_keyframe: bool,
 }
 
 impl NalDecoder {
@@ -339,14 +447,13 @@ impl NalDecoder {
         crate::audio::load_av_modules_once_pub();
         load_mpeg_vsh_module();
 
-        // Prefer SPS/PPS from MP4 avcC atom (exact match for ME expectations).
+        // SPS/PPS from MP4 avcC atom (always present on keyframes).
         let (sps, pps) = if let (Some(s), Some(p)) =
             (&first_frame.avcc_sps, &first_frame.avcc_pps)
         {
             (s.clone(), p.clone())
         } else {
-            extract_sps_pps(&first_frame.data)
-                .ok_or_else(|| "no SPS/PPS found".to_string())?
+            return Err("no SPS/PPS on first keyframe".to_string());
         };
         if sps.len() >= 4 {
             vlog(&format!(
@@ -355,9 +462,21 @@ impl NalDecoder {
             ));
         }
 
-        let (width, height) = parse_sps_dimensions(&first_frame.data)
+        // Parse dimensions and ref frame count from the raw SPS NAL.
+        let sps_info = parse_sps_info(&sps);
+        let (width, height) = sps_info
+            .as_ref()
+            .map(|i| (i.width, i.height))
             .unwrap_or((480, 272));
-        vlog(&format!("[VIDEO] NAL: {width}x{height}"));
+        let max_ref_frames = sps_info.as_ref().map_or(4, |i| i.max_ref_frames);
+        // YCbCr 4:2:0 frame size in DPB
+        let dpb_frame_bytes = (width * height * 3 / 2) as usize;
+        let dpb_total = dpb_frame_bytes * (max_ref_frames as usize + 1);
+        vlog(&format!(
+            "[VIDEO] NAL: {width}x{height} refs={max_ref_frames} \
+             dpb={dpb_total}B (2MB workspace={})",
+            if dpb_total > 0x20_0000 { "OVERFLOW" } else { "ok" }
+        ));
 
         let decoder = psp::mpeg::AvcDecoder::new(width, height)
             .map_err(|e| format!("AvcDecoder::new: {e}"))?;
@@ -366,22 +485,55 @@ impl NalDecoder {
             decoder.ddr_top()
         ));
 
+        // Pre-allocate the static double-buffers for decoded frames.
+        let buf_size = (width * height * 4) as usize;
+        // SAFETY: Called from the video thread before any frames are
+        // pushed. No concurrent access to FRAME_BUFFERS yet.
+        unsafe {
+            FRAME_BUFFERS[0] = vec![0u8; buf_size];
+            FRAME_BUFFERS[1] = vec![0u8; buf_size];
+        }
+
+        // Compute preventive flush interval: how many frames until the
+        // DPB approaches the 2MB DDR workspace limit. The ME stores
+        // ref_frames+1 decoded pictures in YCbCr 4:2:0 format.
+        // If the total DPB exceeds ~1.8MB (leaving margin), we flush.
+        let flush_interval = if dpb_total > 0x1C_0000 {
+            // DPB close to workspace limit — recreate decoder periodically.
+            // Use 80 frames (~2.7s at 30fps) to stay safely under the
+            // ~90-frame hang threshold observed on real hardware.
+            80u32
+        } else {
+            u32::MAX // DPB fits in workspace, no reset needed.
+        };
+        vlog(&format!(
+            "[VIDEO] NAL: flush_interval={flush_interval}"
+        ));
+
         Ok(Self {
             decoder,
             sps,
             pps,
             nal_prefix_size: first_frame.nal_prefix_size as i32,
             first_frame: true,
+            write_buf_idx: 0,
+            frames_since_flush: 0,
+            flush_interval,
+            awaiting_keyframe: false,
         })
     }
 
-    /// Decode one H.264 access unit.
+    /// Decode one H.264 access unit (raw AVCC format) into a pre-allocated
+    /// static buffer. Returns:
+    /// - `Ok(Some(frame))` — frame decoded successfully
+    /// - `Ok(None)` — no picture yet (B-frame reordering)
+    /// - `Err(())` — decode error
     fn decode(
-        &mut self, au_data: &[u8], _pts_secs: f64,
-        raw_avcc: Option<&[u8]>, avcc_prefix: u8,
-    ) -> Option<DecodedFrame> {
-        if au_data.is_empty() {
-            return None;
+        &mut self, avcc_data: &[u8], _pts_secs: f64,
+        avcc_prefix: u8, is_keyframe: bool,
+    ) -> Result<Option<DecodedFrame>, ()> {
+        if avcc_data.is_empty() {
+            return Ok(None);
         }
 
         static DECODE_COUNT: core::sync::atomic::AtomicU32 =
@@ -389,11 +541,37 @@ impl NalDecoder {
         let call_num = DECODE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let verbose = call_num < 10;
 
-        let (data, prefix) = if let Some(avcc) = raw_avcc {
-            (avcc, avcc_prefix as i32)
-        } else {
-            (au_data, 0)
-        };
+        self.frames_since_flush += 1;
+
+        // Periodic ME rest: skip to next keyframe every flush_interval
+        // frames. The ME accumulates internal pressure that causes hangs
+        // after ~90 consecutive frames. Skipping gives it idle time to
+        // recover. No flush/recreate needed — just stop feeding frames.
+        if self.awaiting_keyframe {
+            if !is_keyframe {
+                return Ok(None);
+            }
+            vlog_force(&format!(
+                "[VIDEO] NAL: resuming at keyframe (rested {} frames)",
+                self.frames_since_flush,
+            ));
+            self.awaiting_keyframe = false;
+            // Do NOT set first_frame — continue with existing ME state.
+            // Setting mode=3 (first_frame) after a skip can hang the ME.
+            self.frames_since_flush = 0;
+        }
+
+        if self.frames_since_flush >= self.flush_interval {
+            vlog_force(&format!(
+                "[VIDEO] NAL: ME rest at frame {} (interval={})",
+                self.frames_since_flush, self.flush_interval,
+            ));
+            self.awaiting_keyframe = true;
+            return Ok(None);
+        }
+        if is_keyframe {
+            self.frames_since_flush = 0;
+        }
 
         let is_first = self.first_frame;
         self.first_frame = false;
@@ -401,81 +579,44 @@ impl NalDecoder {
         let nal = psp::mpeg::AvcNal {
             sps: &self.sps,
             pps: &self.pps,
-            data,
-            prefix_size: prefix,
+            data: avcc_data,
+            prefix_size: avcc_prefix as i32,
             is_first_frame: is_first,
         };
 
-        match self.decoder.decode(&nal) {
-            Ok(Some(frame)) => {
+        // Decode into the current write buffer (alternates 0/1).
+        let buf_idx = self.write_buf_idx;
+        // SAFETY: The video thread owns the write side. The main thread
+        // only reads from the OTHER buffer (the one last pushed to the
+        // queue). The SPSC queue with capacity 2 ensures at most one
+        // frame is in-flight, so the write buffer is always free.
+        let dst = unsafe { &mut FRAME_BUFFERS[buf_idx as usize] };
+
+        match self.decoder.decode_into(&nal, dst) {
+            Ok(true) => {
                 if verbose {
                     vlog("[VIDEO] NAL: FRAME DECODED!");
                 }
-                Some(DecodedFrame {
-                    rgba: frame.pixels,
-                    width: frame.width,
-                    height: frame.height,
-                })
+                self.write_buf_idx = 1 - buf_idx;
+                Ok(Some(DecodedFrame {
+                    buf_idx,
+                    width: self.decoder.width(),
+                    height: self.decoder.height(),
+                }))
             }
-            Ok(None) => {
+            Ok(false) => {
                 if verbose {
                     vlog("[VIDEO] NAL: no picture yet (reordering)");
                 }
-                None
+                Ok(None)
             }
             Err(e) => {
                 if verbose || call_num < 50 {
                     vlog(&format!("[VIDEO] NAL: decode error: {e}"));
                 }
-                None
+                Err(())
             }
         }
-    }
-}
-
-/// Extract SPS and PPS NAL units from an Annex B H.264 stream.
-fn extract_sps_pps(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let mut sps = None;
-    let mut pps = None;
-    let mut i = 0;
-    while i + 4 < data.len() {
-        if data[i] == 0 && data[i + 1] == 0 {
-            let (_sc_len, nal_start) = if data[i + 2] == 1 {
-                (3, i + 3)
-            } else if data[i + 2] == 0 && i + 3 < data.len() && data[i + 3] == 1 {
-                (4, i + 4)
-            } else {
-                i += 1;
-                continue;
-            };
-            if nal_start >= data.len() { break; }
-            let nal_type = data[nal_start] & 0x1F;
-            let mut end = nal_start + 1;
-            while end + 3 < data.len() {
-                if data[end] == 0 && data[end + 1] == 0
-                    && (data[end + 2] == 1
-                        || (data[end + 2] == 0 && end + 3 < data.len() && data[end + 3] == 1))
-                {
-                    break;
-                }
-                end += 1;
-            }
-            if end + 3 >= data.len() { end = data.len(); }
-            let nal_data = &data[nal_start..end];
-            match nal_type {
-                7 => sps = Some(nal_data.to_vec()),
-                8 => pps = Some(nal_data.to_vec()),
-                _ => {}
-            }
-            if sps.is_some() && pps.is_some() { break; }
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    match (sps, pps) {
-        (Some(s), Some(p)) => Some((s, p)),
-        _ => None,
     }
 }
 
@@ -483,41 +624,22 @@ fn extract_sps_pps(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 // H.264 SPS parsing (minimal, for extracting width/height)
 // ---------------------------------------------------------------------------
 
-/// Parse width and height from an H.264 SPS NAL unit (Annex B format).
-///
-/// Scans the AU for a NAL type 7 (SPS) and extracts dimensions from the
-/// fixed-offset fields. Returns `(width, height)` or `None`.
-fn parse_sps_dimensions(au_data: &[u8]) -> Option<(u32, u32)> {
-    // Find SPS NAL: 00 00 00 01 67 or 00 00 01 67 (nal_type & 0x1F == 7)
-    let mut i = 0;
-    while i + 4 < au_data.len() {
-        let is_start = (au_data[i] == 0 && au_data[i + 1] == 0 && au_data[i + 2] == 1)
-            || (au_data[i] == 0
-                && au_data[i + 1] == 0
-                && au_data[i + 2] == 0
-                && au_data[i + 3] == 1);
-        if is_start {
-            let nal_offset = if au_data[i + 2] == 1 { i + 3 } else { i + 4 };
-            if nal_offset < au_data.len() {
-                let nal_type = au_data[nal_offset] & 0x1F;
-                if nal_type == 7 {
-                    // Found SPS. For TV Guide content (Baseline/Main profile,
-                    // no cropping, standard resolution), dimensions are at
-                    // predictable bit offsets. Use a simplified parser.
-                    return parse_sps_rbsp(&au_data[nal_offset..]);
-                }
-            }
-        }
-        i += 1;
-    }
-    None
+/// Parsed SPS info.
+struct SpsInfo {
+    width: u32,
+    height: u32,
+    max_ref_frames: u32,
 }
 
 /// Simplified SPS RBSP parser for Baseline/Main profile.
 ///
-/// Reads exp-golomb coded fields to extract pic_width_in_mbs and
-/// pic_height_in_map_units, then computes pixel dimensions.
+/// Reads exp-golomb coded fields to extract pic_width_in_mbs,
+/// pic_height_in_map_units, and max_num_ref_frames.
 fn parse_sps_rbsp(sps: &[u8]) -> Option<(u32, u32)> {
+    parse_sps_info(sps).map(|info| (info.width, info.height))
+}
+
+fn parse_sps_info(sps: &[u8]) -> Option<SpsInfo> {
     if sps.len() < 5 {
         return None;
     }
@@ -583,7 +705,7 @@ fn parse_sps_rbsp(sps: &[u8]) -> Option<(u32, u32)> {
     }
 
     // max_num_ref_frames
-    let _max_ref_frames = reader.read_ue()?;
+    let max_ref_frames = reader.read_ue()?;
     // gaps_in_frame_num_allowed
     reader.skip(1)?;
 
@@ -595,7 +717,7 @@ fn parse_sps_rbsp(sps: &[u8]) -> Option<(u32, u32)> {
     let width = pic_width_mbs * 16;
     let height = pic_height_map_units * 16;
 
-    Some((width, height))
+    Some(SpsInfo { width, height, max_ref_frames })
 }
 
 /// Minimal bitstream reader for exp-golomb codes in H.264 SPS.
@@ -671,6 +793,8 @@ impl<'a> BitReader<'a> {
 // ---------------------------------------------------------------------------
 
 fn video_thread_fn() {
+    create_stream_sema();
+
     loop {
         // Check for streaming mode request (set by I/O thread via atomic).
         if STREAM_REQUESTED.swap(false, Ordering::Acquire) {
@@ -875,8 +999,8 @@ fn play_stream() -> bool {
             // Skip non-keyframes before decoder init.
         }
 
-        // SAFETY: Sleep while waiting for data.
-        unsafe { psp::sys::sceKernelDelayThread(10_000) };
+        // Wait for I/O thread to signal a new frame (10ms timeout).
+        wait_stream_frame(10_000);
     }
 
     let first_frame = match first_frame {
@@ -889,7 +1013,8 @@ fn play_stream() -> bool {
     };
 
     // Parse SPS from the first keyframe to get video dimensions.
-    let (vid_w, vid_h) = parse_sps_dimensions(&first_frame.data)
+    let (vid_w, vid_h) = first_frame.avcc_sps.as_ref()
+        .and_then(|sps| parse_sps_rbsp(sps))
         .unwrap_or((480, 272));
     vlog(&format!(
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
@@ -910,21 +1035,31 @@ fn play_stream() -> bool {
     // Decode the first keyframe.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
     let mut decode_count = 0u32;
+    let mut frames_processed = 0u32;
+    let mut error_count = 0u32;
+    let mut no_pic_count = 0u32;
+    let mut wait_count = 0u32;
 
-    if let Some(decoded) = nal_dec.decode(
+    match nal_dec.decode(
         &first_frame.data, first_frame.timestamp_secs,
-        first_frame.raw_avcc.as_deref(), first_frame.nal_prefix_size,
+        first_frame.nal_prefix_size, true,
     ) {
-        decode_count += 1;
-        let _ = VIDEO_FRAME_QUEUE.push(decoded);
-        vlog("[VIDEO] play_stream: first frame decoded!");
+        Ok(Some(decoded)) => {
+            decode_count += 1;
+            let _ = VIDEO_FRAME_QUEUE.push(decoded);
+            vlog("[VIDEO] play_stream: first frame decoded!");
+        }
+        Ok(None) => { no_pic_count += 1; }
+        Err(()) => { error_count += 1; }
     }
+    frames_processed += 1;
 
     loop {
         // Check for stop/shutdown commands.
         if let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
             match cmd {
                 VideoCmd::Stop | VideoCmd::Shutdown => {
+                    VLOG_ENABLED.store(true, Ordering::Relaxed);
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
                     while VIDEO_STREAM_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
@@ -932,7 +1067,8 @@ fn play_stream() -> bool {
                         return true;
                     }
                     vlog(&format!(
-                        "[VIDEO] play_stream stopped, {decode_count} frames decoded"
+                        "[VIDEO] play_stream stopped: proc={frames_processed} \
+                         dec={decode_count} err={error_count} nopic={no_pic_count}"
                     ));
                     return false;
                 },
@@ -947,40 +1083,79 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                if let Some(decoded) = nal_dec.decode(
+                match nal_dec.decode(
                     &frame.data, frame.timestamp_secs,
-                    frame.raw_avcc.as_deref(), frame.nal_prefix_size,
+                    frame.nal_prefix_size, frame.is_keyframe,
                 ) {
-                    decode_count += 1;
+                    Ok(Some(decoded)) => {
+                        decode_count += 1;
 
-                    // Frame pacing via PTS.
-                    let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
-                    let now_us =
-                        unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
-                    let elapsed = now_us.wrapping_sub(start_us);
-                    if pts_us > elapsed {
-                        let wait = (pts_us - elapsed) as u32;
-                        if wait < 100_000 {
-                            // SAFETY: Sleep for frame pacing.
-                            unsafe {
-                                psp::sys::sceKernelDelayThread(wait);
+                        // Suppress verbose logging after first frame.
+                        if decode_count == 1 {
+                            VLOG_ENABLED.store(false, Ordering::Relaxed);
+                        }
+
+                        // Frame pacing via PTS.
+                        let pts_us =
+                            (frame.timestamp_secs * 1_000_000.0) as u64;
+                        let now_us = unsafe {
+                            psp::sys::sceKernelGetSystemTimeWide()
+                        } as u64;
+                        let elapsed = now_us.wrapping_sub(start_us);
+                        if pts_us > elapsed {
+                            let wait = (pts_us - elapsed) as u32;
+                            if wait < 100_000 {
+                                // SAFETY: Sleep for frame pacing.
+                                unsafe {
+                                    psp::sys::sceKernelDelayThread(wait);
+                                }
                             }
                         }
-                    }
 
-                    let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                        let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                    }
+                    Ok(None) => {
+                        no_pic_count += 1;
+                    }
+                    Err(()) => {
+                        error_count += 1;
+                    }
+                }
+                frames_processed += 1;
+
+                // Periodic diagnostic (unconditional) — every 10 frames
+                // so we can diagnose decode failures quickly.
+                if frames_processed % 10 == 0 {
+                    vlog_force(&format!(
+                        "[VIDEO] #{frames_processed}: dec={decode_count} \
+                         err={error_count} nopic={no_pic_count}"
+                    ));
                 }
             },
             None => {
-                // No frame available yet, sleep briefly.
-                // SAFETY: sceKernelDelayThread sleeps the current thread.
-                unsafe { psp::sys::sceKernelDelayThread(5_000) };
+                wait_count += 1;
+                // Log when stuck waiting (every 30 waits ≈ 1 second).
+                if wait_count % 30 == 0 {
+                    let step = psp::mpeg::DECODE_STEP.load(
+                        core::sync::atomic::Ordering::Relaxed,
+                    );
+                    vlog_force(&format!(
+                        "[VIDEO] waiting: w={wait_count} proc={frames_processed} \
+                         playing={} step={step}",
+                        VIDEO_PLAYING.load(Ordering::Relaxed),
+                    ));
+                }
+                // No frame available — wait for I/O thread signal
+                // (33ms timeout matches ~30fps frame interval).
+                wait_stream_frame(33_000);
             },
         }
     }
 
+    VLOG_ENABLED.store(true, Ordering::Relaxed);
     vlog(&format!(
-        "[VIDEO] play_stream ended, {decode_count} frames decoded"
+        "[VIDEO] play_stream ended: proc={frames_processed} \
+         dec={decode_count} err={error_count} nopic={no_pic_count}"
     ));
     VIDEO_PLAYING.store(false, Ordering::Relaxed);
     send_audio_cmd(AudioCmd::VideoAudioStop);

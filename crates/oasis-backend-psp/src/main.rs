@@ -347,17 +347,31 @@ fn psp_main() {
         // -- Poll video decode frames --
         if tv.tuned.is_some() && !tv.downloading {
             if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
-                if let Some(old) = tv.preview_tex.take() {
-                    backend.destroy_texture_inner(old);
-                }
-                tv.preview_tex = backend.load_texture_inner(frame.width, frame.height, &frame.rgba);
+                // Read pixels from pre-allocated static buffer, then copy
+                // into the persistent video texture (no alloc/dealloc).
+                let pixels = oasis_backend_psp::video::frame_pixels(&frame);
+                tv.preview_tex =
+                    backend.update_video_texture(frame.width, frame.height, pixels);
             }
             if !oasis_backend_psp::video::is_video_playing() {
-                if let Some(old) = tv.preview_tex.take() {
-                    backend.destroy_texture_inner(old);
-                }
+                backend.free_video_texture();
+                tv.preview_tex = None;
                 tv.tuned = None;
                 tv.now_playing.clear();
+            }
+        }
+
+        // -- Decode hang watchdog (main thread, runs every 2s) --
+        if tv.tuned.is_some() && viz_frame % 120 == 0 {
+            let step = psp::mpeg::DECODE_STEP.load(
+                core::sync::atomic::Ordering::Relaxed,
+            );
+            if step > 0 {
+                // Video thread is stuck inside an sceMpeg call.
+                // step: 1=GetAvcNalAu, 2=AvcDecode, 3=Detail2, 4=CscAvc
+                oasis_backend_psp::video::vlog_force(&format!(
+                    "[WATCHDOG] ME hung at step={step}"
+                ));
             }
         }
 
