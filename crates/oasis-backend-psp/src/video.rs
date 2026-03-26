@@ -436,8 +436,6 @@ struct NalDecoder {
     frames_since_flush: u32,
     /// Maximum frames before a preventive flush.
     flush_interval: u32,
-    /// When true, skip all frames until the next keyframe.
-    awaiting_keyframe: bool,
 }
 
 impl NalDecoder {
@@ -499,10 +497,10 @@ impl NalDecoder {
         // ref_frames+1 decoded pictures in YCbCr 4:2:0 format.
         // If the total DPB exceeds ~1.8MB (leaving margin), we flush.
         let flush_interval = if dpb_total > 0x1C_0000 {
-            // DPB close to workspace limit — recreate decoder periodically.
-            // Use 80 frames (~2.7s at 30fps) to stay safely under the
+            // DPB close to workspace limit — flush decoder periodically.
+            // Use 70 frames (~2.3s at 30fps) to stay safely under the
             // ~90-frame hang threshold observed on real hardware.
-            80u32
+            70u32
         } else {
             u32::MAX // DPB fits in workspace, no reset needed.
         };
@@ -519,7 +517,6 @@ impl NalDecoder {
             write_buf_idx: 0,
             frames_since_flush: 0,
             flush_interval,
-            awaiting_keyframe: false,
         })
     }
 
@@ -543,32 +540,11 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // Periodic ME rest: skip to next keyframe every flush_interval
-        // frames. The ME accumulates internal pressure that causes hangs
-        // after ~90 consecutive frames. Skipping gives it idle time to
-        // recover. No flush/recreate needed — just stop feeding frames.
-        if self.awaiting_keyframe {
-            if !is_keyframe {
-                return Ok(None);
-            }
-            vlog_force(&format!(
-                "[VIDEO] NAL: resuming at keyframe (rested {} frames)",
-                self.frames_since_flush,
-            ));
-            self.awaiting_keyframe = false;
-            // Do NOT set first_frame — continue with existing ME state.
-            // Setting mode=3 (first_frame) after a skip can hang the ME.
-            self.frames_since_flush = 0;
-        }
-
-        if self.frames_since_flush >= self.flush_interval {
-            vlog_force(&format!(
-                "[VIDEO] NAL: ME rest at frame {} (interval={})",
-                self.frames_since_flush, self.flush_interval,
-            ));
-            self.awaiting_keyframe = true;
-            return Ok(None);
-        }
+        // NOTE: sceMpegAvcDecodeFlush and sceMpegFlushAllStream both
+        // crash on real hardware with mpeg_vsh370.prx. sceMpegInit
+        // mid-stream also crashes. No safe way to reset the ME state
+        // has been found. The ME deadlocks after ~90 frames at 656x480.
+        // For now, just track keyframe boundaries.
         if is_keyframe {
             self.frames_since_flush = 0;
         }
