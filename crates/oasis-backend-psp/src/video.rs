@@ -138,12 +138,12 @@ pub fn try_push_stream_frame(frame: StreamFrame) -> Result<(), StreamFrame> {
 /// Must be called from the main thread before spawning the audio thread.
 pub fn preinit_mpeg() {
     crate::audio::load_av_modules_once_pub();
-    load_vsh_mpeg_module();
+    load_avmp3_module();
     vlog("[VIDEO] preinit done");
 }
 
-/// Pre-load AV modules during init.
-fn load_vsh_mpeg_module() {
+/// Pre-load AvMp3 module during init (before mpeg_vsh370.prx).
+fn load_avmp3_module() {
     unsafe {
         let r = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
         vlog(&format!("[VIDEO] AvMp3 = {r:#x}"));

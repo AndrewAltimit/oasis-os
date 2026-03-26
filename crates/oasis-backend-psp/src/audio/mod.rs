@@ -40,13 +40,13 @@ pub fn load_av_modules_once_pub() {
     // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
     // AvCodec provides sceAudiocodec + sceVideocodec + kernel avcodec.
     // AvMp3 provides MP3 decoding.
-    // AvMpegBase loaded separately in video.rs (before mpeg_vsh370.prx).
+    // AvMp3 loaded separately in video.rs (via load_avmp3_module).
+    // AvMpegBase is NOT loaded — it breaks NAL decode (see video.rs docs).
     // The AtomicBool guard ensures these are loaded at most once.
     // SAFETY: sceIo log + sceUtilityLoadModule calls.
     unsafe {
         let r1 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
-        // AvMp3 loaded AFTER mpeg_vsh370.prx (in video.rs) to avoid
-        // sceMp3_Library's sceMpeg imports conflicting with VSH loading.
+        // AvMp3 loaded in video.rs preinit_mpeg() via load_avmp3_module().
         let msg = format!(
             "[AV] modules: AvCodec={r1:#x} AvMp3=deferred\n",
         );

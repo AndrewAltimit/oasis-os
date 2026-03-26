@@ -345,7 +345,7 @@ unsafe fn list_kd_resource() {
 }
 
 /// Copy a file from src to dst using sceIo.
-/// Reads in 8KB chunks to avoid stack overflow in kernel thread.
+/// Reads in 4KB chunks to avoid stack overflow in kernel thread.
 unsafe fn copy_file(src: &[u8], dst: &[u8]) {
     crate::debug_log(b"[ME-DUMP] sceIoOpen src...");
 
