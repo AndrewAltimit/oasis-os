@@ -120,6 +120,25 @@ static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// The video thread clears it once it starts `play_stream()`.
 static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// The sceMpeg internal semaphore ID (at mpeg_data+0x66c). Published by
+/// the video thread after decoder init so the watchdog can signal it to
+/// unblock a stuck sceMpegAvcDecode call.
+static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(-1);
+
+/// Signal the sceMpeg internal semaphore to unblock a stuck AvcDecode.
+/// Called from the main thread watchdog when DECODE_STEP == 2.
+pub fn unblock_stuck_decode() {
+    let id = MPEG_INTERNAL_SEMA.load(core::sync::atomic::Ordering::Acquire);
+    if id > 0 {
+        vlog_force(&format!("[VIDEO] unblocking stuck decode, sema={id:#x}"));
+        // SAFETY: id is a valid semaphore read from the mpeg instance.
+        unsafe {
+            psp::sys::sceKernelSignalSema(psp::sys::SceUid(id), 1);
+        }
+    }
+}
+
 /// Kernel semaphore signalled by I/O thread when a stream frame is pushed.
 /// The video thread waits on this instead of polling with sleep.
 static STREAM_FRAME_SEMA: core::sync::atomic::AtomicI32 =
@@ -446,13 +465,17 @@ impl NalDecoder {
         load_mpeg_vsh_module();
 
         // SPS/PPS from MP4 avcC atom (always present on keyframes).
-        let (sps, pps) = if let (Some(s), Some(p)) =
+        let (mut sps, pps) = if let (Some(s), Some(p)) =
             (&first_frame.avcc_sps, &first_frame.avcc_pps)
         {
             (s.clone(), p.clone())
         } else {
             return Err("no SPS/PPS on first keyframe".to_string());
         };
+
+        // NOTE: SPS ref frame patching was tested (refs 3→1) but made the
+        // hang WORSE (1 frame vs 90). B-frames need >=2 refs. DPB size
+        // is NOT the cause of the ~90-frame ME deadlock.
         if sps.len() >= 4 {
             vlog(&format!(
                 "[VIDEO] NAL: SPS={} PPS={} profile={:#x} level={:#x}",
@@ -504,6 +527,15 @@ impl NalDecoder {
         } else {
             u32::MAX // DPB fits in workspace, no reset needed.
         };
+        // Publish the internal semaphore ID for the watchdog.
+        if let Some(sema) = decoder.internal_sema_id() {
+            MPEG_INTERNAL_SEMA.store(sema.0, core::sync::atomic::Ordering::Release);
+            vlog(&format!(
+                "[VIDEO] NAL: internal sema={:#x}",
+                sema.0,
+            ));
+        }
+
         vlog(&format!(
             "[VIDEO] NAL: flush_interval={flush_interval}"
         ));
@@ -594,6 +626,191 @@ impl NalDecoder {
             }
         }
     }
+}
+
+/// Patch the `max_num_ref_frames` field in a raw SPS NAL unit.
+///
+/// Navigates to the exp-golomb coded field and rewrites it in-place.
+/// Returns true if the patch was applied successfully.
+fn patch_sps_max_ref_frames(sps: &mut Vec<u8>, new_refs: u32) -> bool {
+    if sps.len() < 5 {
+        return false;
+    }
+
+    let profile_idc = sps[1];
+    let mut reader = BitReader::new(&sps[4..]);
+
+    // Navigate to max_num_ref_frames (same path as parse_sps_info)
+    if reader.read_ue().is_none() { return false; } // sps_id
+
+    if profile_idc == 100 || profile_idc == 110 || profile_idc == 122
+        || profile_idc == 244 || profile_idc == 44 || profile_idc == 83
+        || profile_idc == 86 || profile_idc == 118 || profile_idc == 128
+    {
+        let chroma = reader.read_ue();
+        if chroma.is_none() { return false; }
+        if chroma == Some(3) { if reader.skip(1).is_none() { return false; } }
+        if reader.read_ue().is_none() { return false; } // bit_depth_luma
+        if reader.read_ue().is_none() { return false; } // bit_depth_chroma
+        if reader.skip(1).is_none() { return false; }
+        let scaling = reader.read_bit();
+        if scaling == Some(1) {
+            let count = if chroma != Some(3) { 8 } else { 12 };
+            for i in 0..count {
+                let present = reader.read_bit();
+                if present == Some(1) {
+                    let size = if i < 6 { 16 } else { 64 };
+                    let mut last = 8i32;
+                    let mut next = 8i32;
+                    for _ in 0..size {
+                        if next != 0 {
+                            let d = match reader.read_se() { Some(v) => v, None => return false };
+                            next = (last + d + 256) % 256;
+                        }
+                        last = if next == 0 { last } else { next };
+                    }
+                }
+            }
+        }
+    }
+
+    if reader.read_ue().is_none() { return false; } // log2_max_frame_num
+    let poc_type = match reader.read_ue() { Some(v) => v, None => return false };
+    if poc_type == 0 {
+        if reader.read_ue().is_none() { return false; }
+    } else if poc_type == 1 {
+        if reader.skip(1).is_none() { return false; }
+        if reader.read_se().is_none() { return false; }
+        if reader.read_se().is_none() { return false; }
+        let n = match reader.read_ue() { Some(v) => v, None => return false };
+        for _ in 0..n { if reader.read_se().is_none() { return false; } }
+    }
+
+    // Now reader is positioned right before max_num_ref_frames.
+    // Record the bit position.
+    let ref_byte = reader.byte_pos;
+    let ref_bit = reader.bit_pos;
+
+    // Read the current value to know its exp-golomb size.
+    let old_refs = match reader.read_ue() { Some(v) => v, None => return false };
+
+    // Exp-golomb encoding of new_refs:
+    // value N encodes as: (leading_zeros zeros)(1)(N+1 in binary, leading_zeros bits)
+    // For 0: "1" (1 bit)
+    // For 1: "010" (3 bits)
+    // For 2: "011" (3 bits)
+    // For 3: "00100" (5 bits)
+
+    // Calculate bit lengths
+    fn ue_bit_len(val: u32) -> u32 {
+        if val == 0 { return 1; }
+        let n = val + 1;
+        let bits = 32 - n.leading_zeros(); // ceil(log2(n+1))
+        2 * bits - 1
+    }
+
+    let old_len = ue_bit_len(old_refs);
+    let new_len = ue_bit_len(new_refs);
+
+    // Only patch if new encoding is same size (avoids shifting the entire
+    // bitstream). For refs 3->1: 5 bits -> 3 bits — different size.
+    // For refs 3->2: 5 bits -> 3 bits — also different.
+    // This is tricky. Let's handle the simple same-size case first,
+    // then if sizes differ, we need to rebuild the SPS.
+    if old_len != new_len {
+        // Rebuild SPS with modified ref count. Copy bits up to the ref
+        // field, write new value, copy remaining bits.
+        let total_bits = (sps.len() - 4) * 8; // bits after byte 4
+        let ref_start_bit = ref_byte * 8 + ref_bit as usize;
+        let ref_end_bit = ref_start_bit + old_len as usize;
+        let tail_bits = total_bits.saturating_sub(ref_end_bit);
+
+        let new_total_bits = ref_start_bit + new_len as usize + tail_bits;
+        let new_total_bytes = (new_total_bits + 7) / 8;
+        let mut new_sps = vec![0u8; 4 + new_total_bytes];
+        new_sps[..4].copy_from_slice(&sps[..4]); // copy header
+
+        // Copy bits before ref field
+        let src = &sps[4..];
+        let dst = &mut new_sps[4..];
+        for b in 0..ref_start_bit {
+            let byte_idx = b / 8;
+            let bit_idx = 7 - (b % 8);
+            let val = (src[byte_idx] >> bit_idx) & 1;
+            let d_byte = b / 8;
+            let d_bit = 7 - (b % 8);
+            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
+        }
+
+        // Write new ref value (exp-golomb)
+        let ue_val = new_refs + 1;
+        let leading = (new_len - 1) / 2;
+        let mut pos = ref_start_bit;
+        // Write leading zeros
+        for _ in 0..leading {
+            let d_byte = pos / 8;
+            let d_bit = 7 - (pos % 8);
+            dst[d_byte] &= !(1 << d_bit);
+            pos += 1;
+        }
+        // Write 1
+        {
+            let d_byte = pos / 8;
+            let d_bit = 7 - (pos % 8);
+            dst[d_byte] |= 1 << d_bit;
+            pos += 1;
+        }
+        // Write suffix bits
+        for i in (0..leading).rev() {
+            let d_byte = pos / 8;
+            let d_bit = 7 - (pos % 8);
+            let val = ((ue_val >> i) & 1) as u8;
+            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
+            pos += 1;
+        }
+
+        // Copy tail bits
+        for b in 0..tail_bits {
+            let s_pos = ref_end_bit + b;
+            let s_byte = s_pos / 8;
+            let s_bit = 7 - (s_pos % 8);
+            let val = (src[s_byte] >> s_bit) & 1;
+            let d_byte = pos / 8;
+            let d_bit = 7 - (pos % 8);
+            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
+            pos += 1;
+        }
+
+        sps.clear();
+        sps.extend_from_slice(&new_sps);
+        return true;
+    }
+
+    // Same-size: just overwrite the bits in-place
+    let ue_val = new_refs + 1;
+    let leading = (new_len - 1) / 2;
+    let mut pos = ref_byte * 8 + ref_bit as usize;
+    let dst = &mut sps[4..];
+    for _ in 0..leading {
+        let d_byte = pos / 8;
+        let d_bit = 7 - (pos % 8);
+        dst[d_byte] &= !(1 << d_bit);
+        pos += 1;
+    }
+    {
+        let d_byte = pos / 8;
+        let d_bit = 7 - (pos % 8);
+        dst[d_byte] |= 1 << d_bit;
+        pos += 1;
+    }
+    for i in (0..leading).rev() {
+        let d_byte = pos / 8;
+        let d_bit = 7 - (pos % 8);
+        let val = ((ue_val >> i) & 1) as u8;
+        dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
+        pos += 1;
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
