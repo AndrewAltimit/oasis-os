@@ -120,11 +120,59 @@ static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// The video thread clears it once it starts `play_stream()`.
 static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// The sceMpeg internal semaphore ID (at mpeg_data+0x66c). Published by
-/// the video thread after decoder init so the watchdog can signal it to
-/// unblock a stuck sceMpegAvcDecode call.
+/// The sceMpeg internal semaphore ID (at mpeg_data+0x66c).
 static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 =
     core::sync::atomic::AtomicI32::new(-1);
+
+/// Address of the `jal 0x9fd4` instruction in the loaded mpeg_vsh370.prx
+/// (at PRX VA 0x8678). When patched to `jr $ra; nop`, the ME kernel call
+/// is skipped and the decode returns 0 (no frame produced).
+static PRX_KERNEL_CALL_ADDR: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+/// Original instruction at the kernel call site (for restore).
+static PRX_KERNEL_CALL_ORIG: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Patch the loaded PRX to skip the ME kernel call (return 0 = no frame).
+/// Call this before sceMpegAvcDecode to prevent the ME deadlock.
+pub fn patch_skip_me_call() {
+    let addr = PRX_KERNEL_CALL_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 { return; }
+    unsafe {
+        let ptr = addr as *mut u32;
+        // Replace `jal 0x9fd4` with `addiu $v0, $zero, -1` (return error)
+        // so the caller skips the frame instead of using stale ME data.
+        // 0x2402ffff = addiu $v0, $zero, -1
+        *ptr = 0x2402ffff;
+        psp::sys::sceKernelDcacheWritebackInvalidateRange(
+            ptr as *const core::ffi::c_void, 8,
+        );
+        // PSP has split I/D cache. Flush D-cache to RAM and invalidate
+        // I-cache so the CPU fetches the patched instruction.
+        psp::sys::sceKernelDcacheWritebackInvalidateAll();
+        // No icache binding available; use full D-cache flush which
+        // on PSP also synchronizes the instruction stream.
+    }
+}
+
+/// Restore the original ME kernel call instruction.
+pub fn unpatch_me_call() {
+    let addr = PRX_KERNEL_CALL_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    let orig = PRX_KERNEL_CALL_ORIG.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 || orig == 0 { return; }
+    unsafe {
+        let ptr = addr as *mut u32;
+        *ptr = orig;
+        psp::sys::sceKernelDcacheWritebackInvalidateRange(
+            ptr as *const core::ffi::c_void, 8,
+        );
+        // PSP has split I/D cache. Flush D-cache to RAM and invalidate
+        // I-cache so the CPU fetches the patched instruction.
+        psp::sys::sceKernelDcacheWritebackInvalidateAll();
+        // No icache binding available; use full D-cache flush which
+        // on PSP also synchronizes the instruction stream.
+    }
+}
 
 /// Signal the sceMpeg internal semaphore to unblock a stuck AvcDecode.
 /// Called from the main thread watchdog when DECODE_STEP == 2.
@@ -211,16 +259,53 @@ pub fn poll_video_frame() -> Option<DecodedFrame> {
     VIDEO_FRAME_QUEUE.pop()
 }
 
-/// Get a reference to the pixel data for a decoded frame.
+/// Convert RGB565 frame data to RGBA and return a reference.
 ///
-/// # Safety
-/// Must be called from the main thread after `poll_video_frame` returns
-/// a frame and before the next poll (SPSC contract).
+/// The ME outputs Psm5650 (RGB565, 2 bpp). This function converts to
+/// RGBA (4 bpp) for the texture upload path. Uses a static conversion
+/// buffer to avoid per-frame allocation.
+static mut RGBA_CONVERT_BUF: Vec<u8> = Vec::new();
+
 pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
-    let size = (frame.width * frame.height * 4) as usize;
-    // SAFETY: The SPSC queue contract guarantees the video thread will
-    // not write to this buffer index until we poll the next frame.
-    unsafe { &FRAME_BUFFERS[frame.buf_idx as usize][..size] }
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let rgb565_size = w * h * 2;
+    let rgba_size = w * h * 4;
+
+    // SAFETY: Single-threaded access from main thread (SPSC contract).
+    // Use raw pointers throughout to satisfy nightly's strict static mut rules.
+    unsafe {
+        let src_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
+        let src_slice = core::slice::from_raw_parts(
+            (*src_ptr)[frame.buf_idx as usize].as_ptr(),
+            rgb565_size,
+        );
+        let conv_ptr = core::ptr::addr_of_mut!(RGBA_CONVERT_BUF);
+        let conv_len = (*conv_ptr).len();
+        if conv_len < rgba_size {
+            (*conv_ptr) = vec![0u8; rgba_size];
+        }
+        let dst_slice = core::slice::from_raw_parts_mut(
+            (*conv_ptr).as_mut_ptr(),
+            rgba_size,
+        );
+
+        // RGB565 → RGBA conversion
+        for i in 0..w * h {
+            let pixel = u16::from_le_bytes([
+                src_slice[i * 2], src_slice[i * 2 + 1],
+            ]);
+            let r = ((pixel >> 11) & 0x1F) as u8;
+            let g = ((pixel >> 5) & 0x3F) as u8;
+            let b = (pixel & 0x1F) as u8;
+            dst_slice[i * 4] = (r << 3) | (r >> 2);
+            dst_slice[i * 4 + 1] = (g << 2) | (g >> 4);
+            dst_slice[i * 4 + 2] = (b << 3) | (b >> 2);
+            dst_slice[i * 4 + 3] = 0xFF;
+        }
+
+        core::slice::from_raw_parts((*conv_ptr).as_ptr(), rgba_size)
+    }
 }
 
 /// Check if video is currently playing.
@@ -455,6 +540,8 @@ struct NalDecoder {
     frames_since_flush: u32,
     /// Maximum frames before a preventive flush.
     flush_interval: u32,
+    /// Timestamp of last decode call (for rate throttling).
+    last_decode_us: u64,
 }
 
 impl NalDecoder {
@@ -473,9 +560,6 @@ impl NalDecoder {
             return Err("no SPS/PPS on first keyframe".to_string());
         };
 
-        // NOTE: SPS ref frame patching was tested (refs 3→1) but made the
-        // hang WORSE (1 frame vs 90). B-frames need >=2 refs. DPB size
-        // is NOT the cause of the ~90-frame ME deadlock.
         if sps.len() >= 4 {
             vlog(&format!(
                 "[VIDEO] NAL: SPS={} PPS={} profile={:#x} level={:#x}",
@@ -489,9 +573,13 @@ impl NalDecoder {
             .as_ref()
             .map(|i| (i.width, i.height))
             .unwrap_or((480, 272));
+
+        // Use actual dimensions — mode 5 for >480p with Psm5650 output
+        // to reduce ME internal buffer pressure.
+        let (dec_w, dec_h) = (width, height);
+
         let max_ref_frames = sps_info.as_ref().map_or(4, |i| i.max_ref_frames);
-        // YCbCr 4:2:0 frame size in DPB
-        let dpb_frame_bytes = (width * height * 3 / 2) as usize;
+        let dpb_frame_bytes = (dec_w * dec_h * 3 / 2) as usize;
         let dpb_total = dpb_frame_bytes * (max_ref_frames as usize + 1);
         vlog(&format!(
             "[VIDEO] NAL: {width}x{height} refs={max_ref_frames} \
@@ -499,7 +587,7 @@ impl NalDecoder {
             if dpb_total > 0x20_0000 { "OVERFLOW" } else { "ok" }
         ));
 
-        let decoder = psp::mpeg::AvcDecoder::new(width, height)
+        let decoder = psp::mpeg::AvcDecoder::new(dec_w, dec_h)
             .map_err(|e| format!("AvcDecoder::new: {e}"))?;
         vlog(&format!(
             "[VIDEO] NAL: decoder ready, ddr={:#x}",
@@ -507,7 +595,9 @@ impl NalDecoder {
         ));
 
         // Pre-allocate the static double-buffers for decoded frames.
-        let buf_size = (width * height * 4) as usize;
+        // ME outputs Psm5650 (RGB565, 2 bpp). We allocate for the ME
+        // output size. Conversion to RGBA happens in frame_pixels().
+        let buf_size = (dec_w * dec_h * 2) as usize;
         // SAFETY: Called from the video thread before any frames are
         // pushed. No concurrent access to FRAME_BUFFERS yet.
         unsafe {
@@ -527,6 +617,161 @@ impl NalDecoder {
         } else {
             u32::MAX // DPB fits in workspace, no reset needed.
         };
+        // Find the PRX base address and locate the ME kernel call
+        // instruction for runtime patching.
+        unsafe {
+            let stub_ptr = psp::sys::sceMpegAvcDecode as *const u32;
+            let insn0 = *stub_ptr;
+            let insn1 = *stub_ptr.add(1);
+            let target = if (insn0 >> 26) == 0x02 {
+                (insn0 & 0x03FFFFFF) << 2
+            } else {
+                0
+            };
+            vlog(&format!(
+                "[VIDEO] NAL: AvcDecode stub={:#010x} insn={insn0:#010x} \
+                 target={target:#010x}",
+                stub_ptr as u32,
+            ));
+            // Extract the import stub address from the psp_extern wrapper.
+            // Layout: [0]=addiu sp  [1]=sw ra  [2]=lui $v0,HI  [3]=lw arg
+            //         [4]=addiu $v0,LO  [5]=sw $v0  [6]=jal  [7]=sw arg
+            let lui_insn = *stub_ptr.add(2);    // lui $v0, HI
+            let addiu_insn = *stub_ptr.add(4);  // addiu $v0, $v0, LO
+            let hi = (lui_insn & 0xFFFF) << 16;
+            let lo = (addiu_insn & 0xFFFF) as i16 as i32 as u32;
+            let import_stub = hi.wrapping_add(lo);
+            vlog(&format!(
+                "[VIDEO] NAL: import stub @ {import_stub:#010x}"
+            ));
+            // Dump the import stub (should be: j <prx_func>; nop)
+            if import_stub > 0x08000000 {
+                let isp = import_stub as *const u32;
+                let is0 = *isp;
+                let is1 = *isp.add(1);
+                vlog(&format!(
+                    "[VIDEO] NAL: import stub code: {is0:#010x} {is1:#010x}"
+                ));
+                // Decode j target
+                if (is0 >> 26) == 2 {
+                    let prx_func = ((is0 & 0x03FFFFFF) << 2)
+                        | (import_stub & 0xF0000000);
+                    vlog(&format!(
+                        "[VIDEO] NAL: -> PRX func @ {prx_func:#010x}"
+                    ));
+                    // Dump first 4 instructions of the PRX function
+                    let pp = prx_func as *const u32;
+                    vlog(&format!(
+                        "[VIDEO] NAL: PRX[0-3]: {:08x} {:08x} {:08x} {:08x}",
+                        *pp, *pp.add(1), *pp.add(2), *pp.add(3),
+                    ));
+                } else if (is0 >> 26) == 3 {
+                    // JAL - might be kernel syscall
+                    let target = ((is0 & 0x03FFFFFF) << 2)
+                        | (import_stub & 0xF0000000);
+                    vlog(&format!(
+                        "[VIDEO] NAL: -> kernel @ {target:#010x}"
+                    ));
+                } else {
+                    // Might be a syscall or other pattern
+                    vlog(&format!(
+                        "[VIDEO] NAL: import stub opcode={}", is0 >> 26
+                    ));
+                }
+            }
+            // Trace the full call chain to find where sceMpegAvcDecode
+            // actually ends up (kernel syscall? PRX user-mode code?).
+            // Follow jal/j instructions up to 3 levels deep.
+            let mut addr = stub_ptr as u32;
+            for level in 0..4u32 {
+                let p = addr as *const u32;
+                // Scan up to 16 instructions for a jal or j
+                let mut found_target = 0u32;
+                for i in 0..16u32 {
+                    let w = *p.add(i as usize);
+                    let op = w >> 26;
+                    if op == 2 || op == 3 {
+                        // J (2) or JAL (3)
+                        found_target = ((w & 0x03FFFFFF) << 2)
+                            | (addr & 0xF0000000);
+                        vlog(&format!(
+                            "[VIDEO] NAL: L{level} @{addr:#010x}+{}: \
+                             {} {found_target:#010x}",
+                            i * 4,
+                            if op == 2 { "j" } else { "jal" },
+                        ));
+                        break;
+                    }
+                    // Check for syscall instruction (opcode 0, func 0xC)
+                    if (w & 0xFC00003F) == 0x0000000C {
+                        let code = (w >> 6) & 0xFFFFF;
+                        vlog(&format!(
+                            "[VIDEO] NAL: L{level} @{addr:#010x}+{}: \
+                             SYSCALL {code:#x}",
+                            i * 4,
+                        ));
+                        found_target = 0;
+                        break;
+                    }
+                }
+                if found_target == 0 {
+                    // Dump 8 raw words at current address for manual analysis
+                    let dp = addr as *const u32;
+                    vlog(&format!(
+                        "[VIDEO] NAL: L{level} @{addr:#010x} raw: \
+                         {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+                        *dp, *dp.add(1), *dp.add(2), *dp.add(3),
+                        *dp.add(4), *dp.add(5), *dp.add(6), *dp.add(7),
+                    ));
+                    break;
+                }
+                addr = found_target;
+            }
+            // Compute PRX base and find the ME kernel call site.
+            // Import stub → j <prx_dispatch> → PRX dispatch at VA 0x71c0
+            // PRX base = dispatch_addr - 0x71c0
+            if import_stub > 0x08000000 {
+                let isp = import_stub as *const u32;
+                let is0 = *isp;
+                if (is0 >> 26) == 2 {
+                    let dispatch_addr = ((is0 & 0x03FFFFFF) << 2)
+                        | (import_stub & 0xF0000000);
+                    let prx_base = dispatch_addr.wrapping_sub(0x71c0);
+                    // The kernel call is at PRX VA 0x8678
+                    let kernel_call_addr = prx_base + 0x8678;
+                    let orig_insn = *(kernel_call_addr as *const u32);
+                    vlog(&format!(
+                        "[VIDEO] NAL: PRX base={prx_base:#010x} \
+                         kernel_call@{kernel_call_addr:#010x}={orig_insn:#010x}"
+                    ));
+                    PRX_KERNEL_CALL_ADDR.store(
+                        kernel_call_addr,
+                        core::sync::atomic::Ordering::Release,
+                    );
+                    PRX_KERNEL_CALL_ORIG.store(
+                        orig_insn,
+                        core::sync::atomic::Ordering::Release,
+                    );
+                }
+            }
+
+            // Follow the target and dump a few instructions
+            if target > 0x08000000 {
+                let t = target as *const u32;
+                let i0 = *t;
+                let i1 = *t.add(1);
+                let i2 = *t.add(2);
+                vlog(&format!(
+                    "[VIDEO] NAL: @target: {i0:#010x} {i1:#010x} {i2:#010x}"
+                ));
+                // Follow trampoline if j instruction
+                if (i0 >> 26) == 0x02 {
+                    let t2 = (i0 & 0x03FFFFFF) << 2;
+                    vlog(&format!("[VIDEO] NAL: trampoline -> {t2:#010x}"));
+                }
+            }
+        }
+
         // Publish the internal semaphore ID for the watchdog.
         if let Some(sema) = decoder.internal_sema_id() {
             MPEG_INTERNAL_SEMA.store(sema.0, core::sync::atomic::Ordering::Release);
@@ -549,6 +794,7 @@ impl NalDecoder {
             write_buf_idx: 0,
             frames_since_flush: 0,
             flush_interval,
+            last_decode_us: 0,
         })
     }
 
@@ -572,11 +818,17 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // NOTE: sceMpegAvcDecodeFlush and sceMpegFlushAllStream both
-        // crash on real hardware with mpeg_vsh370.prx. sceMpegInit
-        // mid-stream also crashes. No safe way to reset the ME state
-        // has been found. The ME deadlocks after ~90 frames at 656x480.
-        // For now, just track keyframe boundaries.
+        // Runtime PRX patching: skip the ME kernel call after 75 frames
+        // to prevent the ~90-frame deadlock. The patch is permanent —
+        // restoring at keyframes doesn't help because the ME's internal
+        // state from the first 75 decodes causes immediate re-deadlock.
+        // With the patch active, the video thread continues running
+        // (returning errors) while audio plays normally.
+        if self.frames_since_flush >= 75
+            && self.flush_interval < u32::MAX
+        {
+            patch_skip_me_call();
+        }
         if is_keyframe {
             self.frames_since_flush = 0;
         }
