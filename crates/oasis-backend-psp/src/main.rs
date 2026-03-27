@@ -361,21 +361,15 @@ fn psp_main() {
             }
         }
 
-        // -- Decode hang watchdog (main thread, runs every 2s) --
-        // When sceMpegAvcDecode deadlocks (step=2), the video thread
-        // is permanently stuck. Fall back to audio-only mode.
+        // -- Decode hang watchdog (main thread, every 2s) --
         if tv.tuned.is_some() && viz_frame % 120 == 0 {
             let step = psp::mpeg::DECODE_STEP.load(
                 core::sync::atomic::Ordering::Relaxed,
             );
             if step == 2 {
                 oasis_backend_psp::video::vlog_force(
-                    "[WATCHDOG] ME deadlock detected, switching to audio-only"
+                    "[WATCHDOG] ME deadlock detected (video frozen)"
                 );
-                // Clear the preview texture — show a black screen with
-                // the LIVE indicator + title overlay (audio continues).
-                backend.free_video_texture();
-                tv.preview_tex = None;
             }
         }
 

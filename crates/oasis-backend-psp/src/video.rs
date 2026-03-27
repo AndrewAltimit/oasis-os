@@ -124,6 +124,51 @@ static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 =
     core::sync::atomic::AtomicI32::new(-1);
 
+/// The SceMediaEngineRpc event flag UID. The ME kernel RPC handler blocks
+/// on this with infinite timeout. Signalling it unblocks a stuck decode.
+static ME_RPC_EVFLAG: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(-1);
+
+/// Scan kernel UIDs to find the SceMediaEngineRpc event flag.
+fn find_me_rpc_event_flag() -> Option<psp::sys::SceUid> {
+    let mut info: psp::sys::SceKernelEventFlagInfo = unsafe { core::mem::zeroed() };
+    info.size = core::mem::size_of::<psp::sys::SceKernelEventFlagInfo>();
+
+    // Event flag UIDs are typically in a low range. Scan 1..4096.
+    for uid in 1..4096i32 {
+        info.name = [0u8; 32];
+        let ret = unsafe {
+            psp::sys::sceKernelReferEventFlagStatus(
+                psp::sys::SceUid(uid),
+                &mut info,
+            )
+        };
+        if ret >= 0 {
+            let name = info.name.split(|&b| b == 0).next().unwrap_or(&[]);
+            if name == b"SceMediaEngineRpc" {
+                vlog_force(&format!(
+                    "[VIDEO] found SceMediaEngineRpc evflag uid={uid:#x} \
+                     pattern={:#x}",
+                    info.current_pattern,
+                ));
+                return Some(psp::sys::SceUid(uid));
+            }
+        }
+    }
+    vlog_force("[VIDEO] SceMediaEngineRpc event flag NOT FOUND");
+    None
+}
+
+/// Signal the ME RPC event flag to unblock a stuck WaitEventFlag.
+pub fn signal_me_rpc_event_flag() {
+    let id = ME_RPC_EVFLAG.load(core::sync::atomic::Ordering::Acquire);
+    if id > 0 {
+        unsafe {
+            psp::sys::sceKernelSetEventFlag(psp::sys::SceUid(id), 1);
+        }
+    }
+}
+
 /// Address of the `jal 0x9fd4` instruction in the loaded mpeg_vsh370.prx
 /// (at PRX VA 0x8678). When patched to `jr $ra; nop`, the ME kernel call
 /// is skipped and the decode returns 0 (no frame produced).
@@ -772,6 +817,13 @@ impl NalDecoder {
             }
         }
 
+        // Find the ME RPC event flag for timeout-based recovery.
+        if ME_RPC_EVFLAG.load(core::sync::atomic::Ordering::Relaxed) < 0 {
+            if let Some(evf) = find_me_rpc_event_flag() {
+                ME_RPC_EVFLAG.store(evf.0, core::sync::atomic::Ordering::Release);
+            }
+        }
+
         // Publish the internal semaphore ID for the watchdog.
         if let Some(sema) = decoder.internal_sema_id() {
             MPEG_INTERNAL_SEMA.store(sema.0, core::sync::atomic::Ordering::Release);
@@ -818,16 +870,25 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // Runtime PRX patching: skip the ME kernel call after 75 frames
-        // to prevent the ~90-frame deadlock. The patch is permanent —
-        // restoring at keyframes doesn't help because the ME's internal
-        // state from the first 75 decodes causes immediate re-deadlock.
-        // With the patch active, the video thread continues running
-        // (returning errors) while audio plays normally.
-        if self.frames_since_flush >= 75
-            && self.flush_interval < u32::MAX
-        {
-            patch_skip_me_call();
+        // Runtime PRX patching: skip the ME kernel call after 85 frames
+        // to prevent the ~90-frame ME deadlock. Permanent once activated.
+        // Combined with 33ms throttle so 85 frames = ~2.8s of video.
+        if self.flush_interval < u32::MAX {
+            // Throttle to ~30fps to match content rate and maximize
+            // visible video duration before the patch activates.
+            let now = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
+            let elapsed = now.wrapping_sub(self.last_decode_us);
+            if elapsed < 33_000 && self.last_decode_us > 0 {
+                let wait = (33_000 - elapsed) as u32;
+                unsafe { psp::sys::sceKernelDelayThread(wait) };
+            }
+            self.last_decode_us = unsafe {
+                psp::sys::sceKernelGetSystemTimeWide()
+            } as u64;
+
+            if self.frames_since_flush >= 85 {
+                patch_skip_me_call();
+            }
         }
         if is_keyframe {
             self.frames_since_flush = 0;
