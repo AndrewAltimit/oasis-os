@@ -870,25 +870,17 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // Runtime PRX patching: skip the ME kernel call after 85 frames
-        // to prevent the ~90-frame ME deadlock. Permanent once activated.
-        // Combined with 33ms throttle so 85 frames = ~2.8s of video.
-        if self.flush_interval < u32::MAX {
-            // Throttle to ~30fps to match content rate and maximize
-            // visible video duration before the patch activates.
-            let now = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
-            let elapsed = now.wrapping_sub(self.last_decode_us);
-            if elapsed < 33_000 && self.last_decode_us > 0 {
-                let wait = (33_000 - elapsed) as u32;
-                unsafe { psp::sys::sceKernelDelayThread(wait) };
-            }
-            self.last_decode_us = unsafe {
-                psp::sys::sceKernelGetSystemTimeWide()
-            } as u64;
-
-            if self.frames_since_flush >= 85 {
-                patch_skip_me_call();
-            }
+        // The kernel PRX (oasis-plugin-psp) hooks sceKernelWaitEventFlag
+        // to add a 3-second timeout for SceMediaEngineRpc. When the ME
+        // deadlocks at ~90 frames, the WaitEventFlag times out instead
+        // of blocking forever, and sceMpegAvcDecode returns an error.
+        // The video thread handles the error and continues.
+        //
+        // Fallback: if the kernel hook isn't installed, the PRX patching
+        // at 85 frames prevents the deadlock (at the cost of no more
+        // video after that point).
+        if self.frames_since_flush >= 85 && self.flush_interval < u32::MAX {
+            patch_skip_me_call();
         }
         if is_keyframe {
             self.frames_since_flush = 0;

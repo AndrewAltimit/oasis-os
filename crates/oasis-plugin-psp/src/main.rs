@@ -29,6 +29,7 @@ mod config;
 mod font;
 mod hook;
 mod me_dump;
+mod me_watchdog;
 mod overlay;
 mod render;
 mod video;
@@ -533,6 +534,10 @@ fn psp_main() {
     // Load configuration from ms0:/seplugins/oasis.ini
     config::load_config();
     debug_log(b"[OASIS] config loaded");
+
+    // Install ME decode watchdog (hook WaitEventFlag with timeout).
+    debug_log(b"[OASIS] installing ME watchdog...");
+    me_watchdog::install();
 
     // Install the display framebuffer hook
     debug_log(b"[OASIS] installing display hook...");
