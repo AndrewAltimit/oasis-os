@@ -537,9 +537,15 @@ fn psp_main() {
     debug_log(b"[OASIS] config loaded");
 
     // Start remote development loop if enabled in config.
+    // When devloop is active, skip ALL hooks (display, ctrl, spy, ME watchdog)
+    // to avoid XMB crashes. Only run the devloop command processor.
     if config::get_config().devloop {
-        debug_log(b"[OASIS] devloop enabled, starting...");
+        debug_log(b"[OASIS] devloop mode - skipping hooks");
         devloop::start();
+        // Park the main thread — devloop runs in its own thread.
+        loop {
+            unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
+        }
     }
 
     // Install ME decode watchdog (hook WaitEventFlag with timeout).

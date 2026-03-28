@@ -1,41 +1,26 @@
-//! Remote development loop: automated EBOOT deployment and testing.
+//! Remote development loop via WiFi TCP server.
 //!
-//! Enables Claude Code to iterate on PSP builds without human intervention:
-//! 1. Plugin activates USB storage on XMB
-//! 2. Host copies EBOOT + writes command file, then ejects USB
-//! 3. Plugin detects USB disconnect → reads command → launches EBOOT
-//! 4. EBOOT runs (with watchdog) → exits or is killed → back to XMB
-//! 5. Plugin re-activates USB → host reads logs → repeat
-//!
-//! Also supports remote screenshots via framebuffer capture.
+//! Connects to saved WiFi profile 1, listens on TCP port 9293.
+//! Commands: "screenshot", "reboot", "launch <path>"
 
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-/// USB Mass Storage PID.
-const USB_STOR_PID: u32 = 0x1C8;
-
-/// Command file path (host writes this, plugin reads it).
-const CMD_FILE: &[u8] = b"ms0:/seplugins/.devloop_cmd\0";
-
-/// Status file path (plugin writes this, host reads it).
-const STATUS_FILE: &[u8] = b"ms0:/seplugins/.devloop_status\0";
-
-/// Log file path (append-mode event log).
 const LOG_FILE: &[u8] = b"ms0:/seplugins/.devloop_log\0";
 
-/// Screenshot output path.
-const SCREENSHOT_FILE: &[u8] = b"ms0:/seplugins/.devloop_screenshot.raw\0";
-
-/// Whether the devloop is enabled.
-static DEVLOOP_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Watchdog timestamp — EBOOT must update this to avoid being killed.
-static WATCHDOG_DEADLINE: AtomicU32 = AtomicU32::new(0);
-
 // -----------------------------------------------------------------------
-// Logging
+// Hex formatting + logging (no alloc)
 // -----------------------------------------------------------------------
+
+fn hex_nibble(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+fn hex_u32(val: u32, out: &mut [u8]) {
+    for i in 0..4 {
+        let b = ((val >> (24 - i * 8)) & 0xFF) as u8;
+        out[i * 2] = hex_nibble(b >> 4);
+        out[i * 2 + 1] = hex_nibble(b & 0xF);
+    }
+}
 
 fn devlog(msg: &[u8]) {
     unsafe {
@@ -54,170 +39,16 @@ fn devlog(msg: &[u8]) {
     }
 }
 
-fn write_status(status: &[u8]) {
-    unsafe {
-        let fd = psp::sys::sceIoOpen(
-            STATUS_FILE.as_ptr(),
-            psp::sys::IoOpenFlags::CREAT
-                | psp::sys::IoOpenFlags::WR_ONLY
-                | psp::sys::IoOpenFlags::TRUNC,
-            0o777,
-        );
-        if fd >= psp::sys::SceUid(0) {
-            psp::sys::sceIoWrite(fd, status.as_ptr() as *const _, status.len());
-            psp::sys::sceIoClose(fd);
-        }
-    }
-}
-
-// -----------------------------------------------------------------------
-// USB Storage Management
-// -----------------------------------------------------------------------
-
-// USB storage is managed by AlwaysUSB plugin — no USB code needed here.
-
-// -----------------------------------------------------------------------
-// Command File Parsing
-// -----------------------------------------------------------------------
-
-/// Parsed command from the host.
-enum DevCmd {
-    /// Launch an EBOOT at the given path with timeout in seconds.
-    Launch {
-        path: [u8; 128],
-        path_len: usize,
-        timeout_secs: u32,
-        wifi: bool,
-    },
-    /// Take a screenshot and save to .devloop_screenshot.raw.
-    Screenshot,
-    /// Reboot the PSP.
-    Reboot,
-    /// No-op (empty or unrecognized command).
-    None,
-}
-
-fn read_command() -> DevCmd {
-    let mut buf = [0u8; 512];
-    let fd = unsafe {
-        psp::sys::sceIoOpen(
-            CMD_FILE.as_ptr(),
-            psp::sys::IoOpenFlags::RD_ONLY,
-            0,
-        )
-    };
-    if fd < psp::sys::SceUid(0) {
-        return DevCmd::None;
-    }
-    let n = unsafe {
-        psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, 512)
-    };
-    unsafe { psp::sys::sceIoClose(fd) };
-
-    // Delete command file after reading (one-shot).
-    unsafe { psp::sys::sceIoRemove(CMD_FILE.as_ptr()) };
-
-    if n <= 0 {
-        return DevCmd::None;
-    }
-
-    let text = &buf[..n as usize];
-
-    // Simple line parser: key = value
-    let mut cmd_type = b"" as &[u8];
-    let mut path = [0u8; 128];
-    let mut path_len = 0usize;
-    let mut timeout = 60u32;
-    let mut wifi = false;
-
-    // Parse lines without allocation.
-    let mut pos = 0usize;
-    while pos < n as usize {
-        // Find end of line.
-        let line_start = pos;
-        while pos < n as usize && text[pos] != b'\n' {
-            pos += 1;
-        }
-        let line_end = if pos > line_start && text[pos - 1] == b'\r' {
-            pos - 1
-        } else {
-            pos
-        };
-        pos += 1; // skip newline
-
-        let line = &text[line_start..line_end];
-
-        // Find '=' separator.
-        let eq_pos = match line.iter().position(|&b| b == b'=') {
-            Some(p) => p,
-            None => continue,
-        };
-
-        // Extract key (trim spaces).
-        let mut key_end = eq_pos;
-        while key_end > 0 && line[key_end - 1] == b' ' {
-            key_end -= 1;
-        }
-        let key = &line[..key_end];
-
-        // Extract value (trim leading spaces).
-        let mut val_start = eq_pos + 1;
-        while val_start < line.len() && line[val_start] == b' ' {
-            val_start += 1;
-        }
-        let val = &line[val_start..];
-
-        if key == b"cmd" {
-            cmd_type = if val == b"launch" {
-                b"launch"
-            } else if val == b"screenshot" {
-                b"screenshot"
-            } else if val == b"reboot" {
-                b"reboot"
-            } else {
-                b""
-            };
-        } else if key == b"path" {
-            let take = val.len().min(127);
-            path[..take].copy_from_slice(&val[..take]);
-            path[take] = 0;
-            path_len = take;
-        } else if key == b"timeout" {
-            timeout = 0;
-            for &b in val {
-                if b >= b'0' && b <= b'9' {
-                    timeout = timeout * 10 + (b - b'0') as u32;
-                }
-            }
-        } else if key == b"wifi" {
-            wifi = val == b"true" || val == b"1";
-        }
-    }
-
-    match cmd_type {
-        b"launch" => DevCmd::Launch { path, path_len, timeout_secs: timeout, wifi },
-        b"screenshot" => DevCmd::Screenshot,
-        b"reboot" => DevCmd::Reboot,
-        _ => DevCmd::None,
-    }
-}
-
 // -----------------------------------------------------------------------
 // Screenshot
 // -----------------------------------------------------------------------
 
 fn take_screenshot() {
-    // Read the current framebuffer (VRAM at 0x04000000, 512x272 ABGR).
-    const FB_WIDTH: usize = 512;
-    const FB_HEIGHT: usize = 272;
-    const FB_BPP: usize = 4;
-    const FB_SIZE: usize = FB_WIDTH * FB_HEIGHT * FB_BPP;
-
-    let fb_ptr = 0x44000000u32 as *const u8; // uncached VRAM
-
+    const FB_SIZE: usize = 512 * 272 * 4;
+    let fb_ptr = 0x44000000u32 as *const u8;
     unsafe {
         let fd = psp::sys::sceIoOpen(
-            SCREENSHOT_FILE.as_ptr(),
+            b"ms0:/seplugins/.devloop_screenshot.raw\0".as_ptr(),
             psp::sys::IoOpenFlags::CREAT
                 | psp::sys::IoOpenFlags::WR_ONLY
                 | psp::sys::IoOpenFlags::TRUNC,
@@ -235,160 +66,210 @@ fn take_screenshot() {
 // EBOOT Launcher
 // -----------------------------------------------------------------------
 
-/// Launch an EBOOT using sctrlKernelLoadExecVSHWithApitype.
-/// Resolves the function at runtime from SystemCtrlForKernel.
-fn launch_eboot(path: &[u8]) -> bool {
-    // NID for sctrlKernelLoadExecVSHWithApitype in ARK-4.
+fn launch_eboot(path: &[u8]) {
     const NID_LOAD_EXEC_VSH: u32 = 0x1DDDAD0C;
-
-    let func_ptr = unsafe {
-        psp::hook::find_function(
-            b"SystemControl\0".as_ptr(),
-            b"SystemCtrlForKernel\0".as_ptr(),
-            NID_LOAD_EXEC_VSH,
-        )
-    };
-
-    // Also try alternative module names.
-    let func_ptr = func_ptr.or_else(|| unsafe {
-        psp::hook::find_function(
-            b"SystemCtrlForKernel\0".as_ptr(),
-            b"SystemCtrlForKernel\0".as_ptr(),
-            NID_LOAD_EXEC_VSH,
-        )
-    });
-
-    let Some(fp) = func_ptr else {
-        devlog(b"[DEV] LoadExecVSH not found");
-        return false;
-    };
-
-    // SceKernelLoadExecVSHParam struct.
-    #[repr(C)]
-    struct LoadExecParam {
-        size: u32,
-        args: u32,
-        argp: *mut c_void,
-        key: *const u8,
-        vshmain_args_size: u32,
-        vshmain_args: *mut c_void,
-        configfile: *const u8,
-        unk4: u32,
-        unk5: u32,
+    let modules: &[(&[u8], &[u8])] = &[
+        (b"SystemControl\0", b"SystemCtrlForKernel\0"),
+        (b"SystemCtrlForKernel\0", b"SystemCtrlForKernel\0"),
+    ];
+    for &(m, l) in modules {
+        if let Some(fp) = unsafe {
+            psp::hook::find_function(m.as_ptr(), l.as_ptr(), NID_LOAD_EXEC_VSH)
+        } {
+            #[repr(C)]
+            struct Param {
+                size: u32, args: u32, argp: *mut c_void, key: *const u8,
+                vshmain_args_size: u32, vshmain_args: *mut c_void,
+                configfile: *const u8, unk4: u32, unk5: u32,
+            }
+            let mut param = Param {
+                size: core::mem::size_of::<Param>() as u32,
+                args: path.len() as u32, argp: path.as_ptr() as *mut c_void,
+                key: b"game\0".as_ptr(),
+                vshmain_args_size: 0, vshmain_args: core::ptr::null_mut(),
+                configfile: b"/kd/pspbtcnf_game.txt\0".as_ptr(),
+                unk4: 0, unk5: 0,
+            };
+            type F = unsafe extern "C" fn(i32, *const u8, *mut Param) -> i32;
+            let f: F = unsafe { core::mem::transmute(fp) };
+            devlog(b"[DEV] launching...");
+            unsafe { f(0x141, path.as_ptr(), &mut param) };
+            return;
+        }
     }
-
-    let mut param = LoadExecParam {
-        size: core::mem::size_of::<LoadExecParam>() as u32,
-        args: path.len() as u32 + 1,
-        argp: path.as_ptr() as *mut c_void,
-        key: b"game\0".as_ptr(),
-        vshmain_args_size: 0,
-        vshmain_args: core::ptr::null_mut(),
-        configfile: b"/kd/pspbtcnf_game.txt\0".as_ptr(),
-        unk4: 0,
-        unk5: 0,
-    };
-
-    type LoadExecFn = unsafe extern "C" fn(
-        i32, *const u8, *mut LoadExecParam,
-    ) -> i32;
-    let load_exec: LoadExecFn = unsafe { core::mem::transmute(fp) };
-
-    devlog(b"[DEV] launching EBOOT...");
-    let ret = unsafe { load_exec(0x141, path.as_ptr(), &mut param) };
-    devlog(b"[DEV] LoadExec returned (shouldn't happen)");
-    ret >= 0
+    devlog(b"[DEV] LoadExecVSH not found");
 }
 
 // -----------------------------------------------------------------------
-// Main Devloop Thread
+// Main thread
 // -----------------------------------------------------------------------
 
-/// Start the devloop background thread.
 pub fn start() {
-    if DEVLOOP_ACTIVE.swap(true, Ordering::Relaxed) {
-        return; // already started
-    }
-
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisDev\0".as_ptr(),
             devloop_thread,
-            0x20, // priority
-            8192, // stack
+            0x20, 8192,
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
         );
         if thid >= psp::sys::SceUid(0) {
             psp::sys::sceKernelStartThread(thid, 0, core::ptr::null_mut());
-            devlog(b"[DEV] devloop thread started");
-        } else {
-            devlog(b"[DEV] thread create failed");
-            DEVLOOP_ACTIVE.store(false, Ordering::Relaxed);
         }
     }
 }
 
-unsafe extern "C" fn devloop_thread(
-    _args: usize,
-    _argp: *mut c_void,
-) -> i32 {
-    // Initial delay — let the system settle.
-    psp::sys::sceKernelDelayThread(3_000_000); // 3 seconds
+unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
+    psp::sys::sceKernelDelayThread(5_000_000);
+    devlog(b"[DEV] starting...");
 
-    // USB storage is managed by AlwaysUSB plugin (Mode=1).
-    // We just poll for the command file. When AlwaysUSB is active,
-    // ms0: is NOT accessible from PSP (host has exclusive access).
-    // We detect USB disconnect (AlwaysUSB deactivates when cable
-    // is pulled or host ejects) and then read the command file.
-    write_status(b"ready");
-    devlog(b"[DEV] waiting for commands...");
+    // Load net modules.
+    psp::sys::sceUtilityLoadNetModule(psp::sys::NetModule::NetCommon);
+    psp::sys::sceUtilityLoadNetModule(psp::sys::NetModule::NetInet);
+    psp::sys::sceKernelDelayThread(500_000);
 
-    loop {
-        // Check if command file exists (only works when USB is not active,
-        // i.e., after host ejects or cable disconnected).
-        match read_command() {
-            DevCmd::Launch { path, path_len, timeout_secs, wifi: _ } => {
-                write_status(b"launching");
-                devlog(b"[DEV] cmd=launch");
+    // Resolve net functions by NID (import stubs don't work from kernel PRX).
+    let net = &[(b"sceNet_Library\0" as &[u8], b"sceNet\0" as &[u8])];
+    let inet = &[(b"sceNetInet_Library\0" as &[u8], b"sceNetInet\0" as &[u8])];
+    let apctl = &[(b"sceNetApctl_Library\0" as &[u8], b"sceNetApctl\0" as &[u8])];
 
-                // Set watchdog deadline.
-                let now = psp::sys::sceKernelGetSystemTimeLow();
-                WATCHDOG_DEADLINE.store(
-                    now.wrapping_add(timeout_secs * 1_000_000),
-                    Ordering::Release,
-                );
-
-                // Launch the EBOOT (this call doesn't return on success).
-                launch_eboot(&path[..path_len + 1]);
-
-                // If we get here, launch failed.
-                devlog(b"[DEV] launch failed");
-                write_status(b"error_launch");
-            }
-            DevCmd::Screenshot => {
-                devlog(b"[DEV] cmd=screenshot");
-                take_screenshot();
-                write_status(b"screenshot_done");
-            }
-            DevCmd::Reboot => {
-                devlog(b"[DEV] cmd=reboot");
-                let nid: u32 = 0x0442D852;
-                if let Some(fp) = psp::hook::find_function(
-                    b"scePower_Service\0".as_ptr(),
-                    b"scePower\0".as_ptr(),
-                    nid,
-                ) {
-                    let reboot: unsafe extern "C" fn(i32) -> i32 =
-                        core::mem::transmute(fp);
-                    reboot(0);
+    macro_rules! resolve {
+        ($nid:expr, $mods:expr) => {{
+            let mut r: *mut u8 = core::ptr::null_mut();
+            for &(m, l) in $mods {
+                if let Some(fp) = psp::hook::find_function(m.as_ptr(), l.as_ptr(), $nid) {
+                    r = fp;
+                    break;
                 }
             }
-            DevCmd::None => {
-                // No command — sleep and check again.
-            }
-        }
+            r
+        }};
+    }
 
-        psp::sys::sceKernelDelayThread(2_000_000); // poll every 2 seconds
+    let p_net_init = resolve!(0x39AF39A6, net);
+    let p_inet_init = resolve!(0x17943399, inet);
+    let p_apctl_init = resolve!(0xE2F91F9B, apctl);
+    let p_connect = resolve!(0xCFB957C6, apctl);
+    let p_get_state = resolve!(0x5DEAC81B, apctl);
+    let p_socket = resolve!(0x8B7B220F, inet);
+    let p_bind = resolve!(0x1A33F9AE, inet);
+    let p_listen = resolve!(0xD10A1A7A, inet);
+    let p_accept = resolve!(0xDB094E1B, inet);
+    let p_recv = resolve!(0xCDA85C99, inet);
+    let p_send = resolve!(0x7AA671BC, inet);
+    let p_close = resolve!(0x8D7284EA, inet);
+
+    let ok = !p_net_init.is_null() && !p_inet_init.is_null()
+        && !p_apctl_init.is_null() && !p_connect.is_null()
+        && !p_socket.is_null() && !p_bind.is_null()
+        && !p_accept.is_null() && !p_recv.is_null();
+
+    if !ok {
+        devlog(b"[DEV] net resolve FAILED");
+        return 0;
+    }
+    devlog(b"[DEV] net functions resolved");
+
+    // Init net stack.
+    type F5 = unsafe extern "C" fn(i32,i32,i32,i32,i32)->i32;
+    type F0 = unsafe extern "C" fn()->i32;
+    type F2 = unsafe extern "C" fn(i32,i32)->i32;
+    type F1 = unsafe extern "C" fn(i32)->i32;
+    type F1p = unsafe extern "C" fn(*mut i32)->i32;
+    type F3 = unsafe extern "C" fn(i32,i32,i32)->i32;
+    type Fbind = unsafe extern "C" fn(i32,*const u8,u32)->i32;
+    type Faccept = unsafe extern "C" fn(i32,*mut u8,*mut u32)->i32;
+    type Frecv = unsafe extern "C" fn(i32,*mut c_void,usize,i32)->i32;
+    type Fsend = unsafe extern "C" fn(i32,*const c_void,usize,i32)->i32;
+
+    let net_init: F5 = core::mem::transmute(p_net_init);
+    let inet_init: F0 = core::mem::transmute(p_inet_init);
+    let apctl_init: F2 = core::mem::transmute(p_apctl_init);
+    let connect: F1 = core::mem::transmute(p_connect);
+    let get_state: F1p = core::mem::transmute(p_get_state);
+    let socket: F3 = core::mem::transmute(p_socket);
+    let bind: Fbind = core::mem::transmute(p_bind);
+    let listen: F2 = core::mem::transmute(p_listen);
+    let accept: Faccept = core::mem::transmute(p_accept);
+    let recv: Frecv = core::mem::transmute(p_recv);
+    let send: Fsend = core::mem::transmute(p_send);
+    let close: F1 = core::mem::transmute(p_close);
+
+    let mut r = *b"[DEV] init: XXXXXXXX";
+    let rv = net_init(0x20000, 0x20, 0x1000, 0x20, 0x1000);
+    hex_u32(rv as u32, &mut r[13..21]);
+    devlog(&r[..21]);
+
+    inet_init();
+    apctl_init(0x1800, 42);
+
+    // Connect WiFi profile 1.
+    devlog(b"[DEV] WiFi connecting...");
+    connect(1);
+    let mut connected = false;
+    for _ in 0..30 {
+        let mut state: i32 = 0;
+        get_state(&mut state);
+        if state == 4 { connected = true; break; }
+        psp::sys::sceKernelDelayThread(500_000);
+    }
+    if !connected {
+        devlog(b"[DEV] WiFi TIMEOUT");
+        return 0;
+    }
+    devlog(b"[DEV] WiFi OK");
+
+    // TCP server on port 9293.
+    let sfd = socket(2, 1, 0);
+    if sfd < 0 { devlog(b"[DEV] socket fail"); return 0; }
+
+    let mut sa = [0u8; 16];
+    sa[0] = 16; sa[1] = 2;
+    sa[2] = (9293 >> 8) as u8;
+    sa[3] = (9293 & 0xFF) as u8;
+
+    if bind(sfd, sa.as_ptr(), 16) < 0 { devlog(b"[DEV] bind fail"); return 0; }
+    if listen(sfd, 1) < 0 { devlog(b"[DEV] listen fail"); return 0; }
+    devlog(b"[DEV] TCP :9293 ready");
+
+    loop {
+        let mut ca = [0u8; 16];
+        let mut al: u32 = 16;
+        let cfd = accept(sfd, ca.as_mut_ptr(), &mut al);
+        if cfd < 0 { psp::sys::sceKernelDelayThread(1_000_000); continue; }
+
+        let mut buf = [0u8; 512];
+        let n = recv(cfd, buf.as_mut_ptr() as *mut c_void, 512, 0);
+        if n > 0 {
+            send(cfd, b"OK\n".as_ptr() as *const c_void, 3, 0);
+        }
+        close(cfd);
+        if n <= 0 { continue; }
+
+        let cmd = &buf[..n as usize];
+        let cmd = if let Some(e) = cmd.iter().position(|&b| b == b'\n' || b == b'\r') {
+            &cmd[..e]
+        } else { cmd };
+
+        devlog(b"[DEV] cmd received");
+
+        if cmd == b"screenshot" {
+            take_screenshot();
+        } else if cmd == b"reboot" {
+            devlog(b"[DEV] rebooting");
+            if let Some(fp) = psp::hook::find_function(
+                b"scePower_Service\0".as_ptr(), b"scePower\0".as_ptr(), 0x0442D852,
+            ) {
+                let f: unsafe extern "C" fn(i32)->i32 = core::mem::transmute(fp);
+                f(0);
+            }
+        } else if cmd.starts_with(b"launch ") {
+            let path = &cmd[7..];
+            let mut pb = [0u8; 128];
+            let l = path.len().min(127);
+            pb[..l].copy_from_slice(&path[..l]);
+            pb[l] = 0;
+            launch_eboot(&pb[..l+1]);
+        }
     }
 }
