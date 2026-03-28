@@ -26,6 +26,7 @@ psp::module_kernel!("OasisPlugin", 1, 0);
 
 mod audio;
 mod config;
+mod devloop;
 mod font;
 mod hook;
 mod me_dump;
@@ -534,6 +535,12 @@ fn psp_main() {
     // Load configuration from ms0:/seplugins/oasis.ini
     config::load_config();
     debug_log(b"[OASIS] config loaded");
+
+    // Start remote development loop if enabled in config.
+    if config::get_config().devloop {
+        debug_log(b"[OASIS] devloop enabled, starting...");
+        devloop::start();
+    }
 
     // Install ME decode watchdog (hook WaitEventFlag with timeout).
     debug_log(b"[OASIS] installing ME watchdog...");
