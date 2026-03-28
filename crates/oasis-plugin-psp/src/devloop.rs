@@ -74,44 +74,106 @@ fn write_status(status: &[u8]) {
 // USB Storage Management
 // -----------------------------------------------------------------------
 
+/// Resolved USB function pointers (resolved at first use via NID).
+static mut USB_START_FN: Option<unsafe extern "C" fn(*const u8, i32, *mut c_void) -> i32> = None;
+static mut USB_STOP_FN: Option<unsafe extern "C" fn(*const u8, i32, *mut c_void) -> i32> = None;
+static mut USB_ACTIVATE_FN: Option<unsafe extern "C" fn(u32) -> i32> = None;
+static mut USB_DEACTIVATE_FN: Option<unsafe extern "C" fn(u32) -> i32> = None;
+static mut USB_GET_STATE_FN: Option<unsafe extern "C" fn() -> i32> = None;
+
+fn resolve_usb_functions() {
+    unsafe {
+        // Try multiple module/library name combinations.
+        let combos: &[(&[u8], &[u8])] = &[
+            (b"sceUSB_Driver\0", b"sceUsb\0"),
+            (b"sceUSB_Driver\0", b"sceUsb_driver\0"),
+            (b"sceUsb_Driver\0", b"sceUsb\0"),
+        ];
+        for &(module, lib) in combos {
+            if USB_START_FN.is_some() { break; }
+            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xAE5DE6AF) {
+                USB_START_FN = Some(core::mem::transmute(fp));
+                devlog(b"[DEV] sceUsbStart resolved");
+            }
+        }
+        for &(module, lib) in combos {
+            if USB_STOP_FN.is_some() { break; }
+            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC2464FA0) {
+                USB_STOP_FN = Some(core::mem::transmute(fp));
+            }
+        }
+        for &(module, lib) in combos {
+            if USB_ACTIVATE_FN.is_some() { break; }
+            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0x586DB82C) {
+                USB_ACTIVATE_FN = Some(core::mem::transmute(fp));
+                devlog(b"[DEV] sceUsbActivate resolved");
+            }
+        }
+        for &(module, lib) in combos {
+            if USB_DEACTIVATE_FN.is_some() { break; }
+            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC572A9C8) {
+                USB_DEACTIVATE_FN = Some(core::mem::transmute(fp));
+            }
+        }
+        for &(module, lib) in combos {
+            if USB_GET_STATE_FN.is_some() { break; }
+            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC21645A4) {
+                USB_GET_STATE_FN = Some(core::mem::transmute(fp));
+                devlog(b"[DEV] sceUsbGetState resolved");
+            }
+        }
+    }
+}
+
 fn usb_storage_start() -> bool {
     unsafe {
-        let r1 = psp::sys::sceUsbStart(
-            b"USBBusDriver\0".as_ptr(),
-            0,
-            core::ptr::null_mut(),
-        );
-        let r2 = psp::sys::sceUsbStart(
-            b"USBStor_Driver\0".as_ptr(),
-            0,
-            core::ptr::null_mut(),
-        );
-        let r3 = psp::sys::sceUsbActivate(USB_STOR_PID);
-        devlog(b"[DEV] USB start: bus/stor/activate");
-        r3 >= 0 || r1 >= 0
+        resolve_usb_functions();
+        let start = match USB_START_FN {
+            Some(f) => f,
+            None => {
+                devlog(b"[DEV] USB start: functions not resolved");
+                return false;
+            }
+        };
+        let activate = match USB_ACTIVATE_FN {
+            Some(f) => f,
+            None => return false,
+        };
+
+        let r1 = start(b"USBBusDriver\0".as_ptr(), 0, core::ptr::null_mut());
+        let r2 = start(b"USBStor_Driver\0".as_ptr(), 0, core::ptr::null_mut());
+        let r3 = activate(USB_STOR_PID);
+        devlog(b"[DEV] USB start done");
+        // Log individual results.
+        if r1 < 0 || r2 < 0 || r3 < 0 {
+            devlog(b"[DEV] USB start: some calls failed");
+        }
+        r3 >= 0
     }
 }
 
 fn usb_storage_stop() {
     unsafe {
-        psp::sys::sceUsbDeactivate(USB_STOR_PID);
-        psp::sys::sceUsbStop(
-            b"USBStor_Driver\0".as_ptr(),
-            0,
-            core::ptr::null_mut(),
-        );
-        psp::sys::sceUsbStop(
-            b"USBBusDriver\0".as_ptr(),
-            0,
-            core::ptr::null_mut(),
-        );
+        if let Some(deactivate) = USB_DEACTIVATE_FN {
+            deactivate(USB_STOR_PID);
+        }
+        if let Some(stop) = USB_STOP_FN {
+            stop(b"USBStor_Driver\0".as_ptr(), 0, core::ptr::null_mut());
+            stop(b"USBBusDriver\0".as_ptr(), 0, core::ptr::null_mut());
+        }
     }
     devlog(b"[DEV] USB stopped");
 }
 
 fn usb_is_connected() -> bool {
-    let state = unsafe { psp::sys::sceUsbGetState() };
-    state.contains(psp::sys::UsbState::CONNECTED)
+    unsafe {
+        if let Some(get_state) = USB_GET_STATE_FN {
+            let state = get_state();
+            (state & 0x020) != 0 // CONNECTED bit
+        } else {
+            false
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
