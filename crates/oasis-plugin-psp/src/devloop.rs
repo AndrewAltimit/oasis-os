@@ -74,107 +74,7 @@ fn write_status(status: &[u8]) {
 // USB Storage Management
 // -----------------------------------------------------------------------
 
-/// Resolved USB function pointers (resolved at first use via NID).
-static mut USB_START_FN: Option<unsafe extern "C" fn(*const u8, i32, *mut c_void) -> i32> = None;
-static mut USB_STOP_FN: Option<unsafe extern "C" fn(*const u8, i32, *mut c_void) -> i32> = None;
-static mut USB_ACTIVATE_FN: Option<unsafe extern "C" fn(u32) -> i32> = None;
-static mut USB_DEACTIVATE_FN: Option<unsafe extern "C" fn(u32) -> i32> = None;
-static mut USB_GET_STATE_FN: Option<unsafe extern "C" fn() -> i32> = None;
-
-fn resolve_usb_functions() {
-    unsafe {
-        // Try multiple module/library name combinations.
-        let combos: &[(&[u8], &[u8])] = &[
-            (b"sceUSB_Driver\0", b"sceUsb\0"),
-            (b"sceUSB_Driver\0", b"sceUsb_driver\0"),
-            (b"sceUsb_Driver\0", b"sceUsb\0"),
-        ];
-        for &(module, lib) in combos {
-            if USB_START_FN.is_some() { break; }
-            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xAE5DE6AF) {
-                USB_START_FN = Some(core::mem::transmute(fp));
-                devlog(b"[DEV] sceUsbStart resolved");
-            }
-        }
-        for &(module, lib) in combos {
-            if USB_STOP_FN.is_some() { break; }
-            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC2464FA0) {
-                USB_STOP_FN = Some(core::mem::transmute(fp));
-            }
-        }
-        for &(module, lib) in combos {
-            if USB_ACTIVATE_FN.is_some() { break; }
-            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0x586DB82C) {
-                USB_ACTIVATE_FN = Some(core::mem::transmute(fp));
-                devlog(b"[DEV] sceUsbActivate resolved");
-            }
-        }
-        for &(module, lib) in combos {
-            if USB_DEACTIVATE_FN.is_some() { break; }
-            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC572A9C8) {
-                USB_DEACTIVATE_FN = Some(core::mem::transmute(fp));
-            }
-        }
-        for &(module, lib) in combos {
-            if USB_GET_STATE_FN.is_some() { break; }
-            if let Some(fp) = psp::hook::find_function(module.as_ptr(), lib.as_ptr(), 0xC21645A4) {
-                USB_GET_STATE_FN = Some(core::mem::transmute(fp));
-                devlog(b"[DEV] sceUsbGetState resolved");
-            }
-        }
-    }
-}
-
-fn usb_storage_start() -> bool {
-    unsafe {
-        resolve_usb_functions();
-        let start = match USB_START_FN {
-            Some(f) => f,
-            None => {
-                devlog(b"[DEV] USB start: functions not resolved");
-                return false;
-            }
-        };
-        let activate = match USB_ACTIVATE_FN {
-            Some(f) => f,
-            None => return false,
-        };
-
-        let r1 = start(b"USBBusDriver\0".as_ptr(), 0, core::ptr::null_mut());
-        let r2 = start(b"USBStor_Driver\0".as_ptr(), 0, core::ptr::null_mut());
-        let r3 = activate(USB_STOR_PID);
-        devlog(b"[DEV] USB start done");
-        // Log individual results.
-        if r1 < 0 || r2 < 0 || r3 < 0 {
-            devlog(b"[DEV] USB start: some calls failed");
-        }
-        r3 >= 0
-    }
-}
-
-fn usb_storage_stop() {
-    unsafe {
-        if let Some(deactivate) = USB_DEACTIVATE_FN {
-            deactivate(USB_STOR_PID);
-        }
-        if let Some(stop) = USB_STOP_FN {
-            stop(b"USBStor_Driver\0".as_ptr(), 0, core::ptr::null_mut());
-            stop(b"USBBusDriver\0".as_ptr(), 0, core::ptr::null_mut());
-        }
-    }
-    devlog(b"[DEV] USB stopped");
-}
-
-fn usb_is_connected() -> bool {
-    unsafe {
-        if let Some(get_state) = USB_GET_STATE_FN {
-            let state = get_state();
-            (state & 0x020) != 0 // CONNECTED bit
-        } else {
-            false
-        }
-    }
-}
+// USB storage is managed by AlwaysUSB plugin — no USB code needed here.
 
 // -----------------------------------------------------------------------
 // Command File Parsing
@@ -436,69 +336,59 @@ unsafe extern "C" fn devloop_thread(
     // Initial delay — let the system settle.
     psp::sys::sceKernelDelayThread(3_000_000); // 3 seconds
 
-    devlog(b"[DEV] activating USB storage...");
-    usb_storage_start();
-    write_status(b"usb_ready");
+    // USB storage is managed by AlwaysUSB plugin (Mode=1).
+    // We just poll for the command file. When AlwaysUSB is active,
+    // ms0: is NOT accessible from PSP (host has exclusive access).
+    // We detect USB disconnect (AlwaysUSB deactivates when cable
+    // is pulled or host ejects) and then read the command file.
+    write_status(b"ready");
+    devlog(b"[DEV] waiting for commands...");
 
     loop {
-        // Wait for USB to disconnect (host ejected after writing command).
-        if !usb_is_connected() {
-            devlog(b"[DEV] USB disconnected, checking for command...");
-            psp::sys::sceKernelDelayThread(500_000); // 500ms settle
+        // Check if command file exists (only works when USB is not active,
+        // i.e., after host ejects or cable disconnected).
+        match read_command() {
+            DevCmd::Launch { path, path_len, timeout_secs, wifi: _ } => {
+                write_status(b"launching");
+                devlog(b"[DEV] cmd=launch");
 
-            // Deactivate USB to regain ms0: access.
-            usb_storage_stop();
-            psp::sys::sceKernelDelayThread(500_000);
+                // Set watchdog deadline.
+                let now = psp::sys::sceKernelGetSystemTimeLow();
+                WATCHDOG_DEADLINE.store(
+                    now.wrapping_add(timeout_secs * 1_000_000),
+                    Ordering::Release,
+                );
 
-            // Read and execute command.
-            match read_command() {
-                DevCmd::Launch { path, path_len, timeout_secs, wifi: _ } => {
-                    write_status(b"launching");
-                    devlog(b"[DEV] cmd=launch");
+                // Launch the EBOOT (this call doesn't return on success).
+                launch_eboot(&path[..path_len + 1]);
 
-                    // Set watchdog deadline.
-                    let now = psp::sys::sceKernelGetSystemTimeLow();
-                    WATCHDOG_DEADLINE.store(
-                        now.wrapping_add(timeout_secs * 1_000_000),
-                        Ordering::Release,
-                    );
-
-                    // Launch the EBOOT.
-                    launch_eboot(&path[..path_len + 1]); // include null terminator
-
-                    // If we get here, launch failed.
-                    devlog(b"[DEV] launch failed, re-enabling USB");
-                    write_status(b"error_launch");
-                    usb_storage_start();
+                // If we get here, launch failed.
+                devlog(b"[DEV] launch failed");
+                write_status(b"error_launch");
+            }
+            DevCmd::Screenshot => {
+                devlog(b"[DEV] cmd=screenshot");
+                take_screenshot();
+                write_status(b"screenshot_done");
+            }
+            DevCmd::Reboot => {
+                devlog(b"[DEV] cmd=reboot");
+                let nid: u32 = 0x0442D852;
+                if let Some(fp) = psp::hook::find_function(
+                    b"scePower_Service\0".as_ptr(),
+                    b"scePower\0".as_ptr(),
+                    nid,
+                ) {
+                    let reboot: unsafe extern "C" fn(i32) -> i32 =
+                        core::mem::transmute(fp);
+                    reboot(0);
                 }
-                DevCmd::Screenshot => {
-                    devlog(b"[DEV] cmd=screenshot");
-                    take_screenshot();
-                    write_status(b"screenshot_done");
-                    usb_storage_start();
-                }
-                DevCmd::Reboot => {
-                    devlog(b"[DEV] cmd=reboot");
-                    // Cold reset.
-                    let nid: u32 = 0x0442D852; // scePowerRequestColdReset
-                    if let Some(fp) = psp::hook::find_function(
-                        b"scePower_Service\0".as_ptr(),
-                        b"scePower\0".as_ptr(),
-                        nid,
-                    ) {
-                        let reboot: unsafe extern "C" fn(i32) -> i32 =
-                            core::mem::transmute(fp);
-                        reboot(0);
-                    }
-                }
-                DevCmd::None => {
-                    devlog(b"[DEV] no command found, re-enabling USB");
-                    write_status(b"usb_ready");
-                    usb_storage_start();
-                }
+            }
+            DevCmd::None => {
+                // No command — sleep and check again.
             }
         }
 
-        psp::sys::sceKernelDelayThread(1_000_000); // poll every 1 second
+        psp::sys::sceKernelDelayThread(2_000_000); // poll every 2 seconds
     }
 }
