@@ -1122,6 +1122,47 @@ fn patch_sps_max_ref_frames(sps: &mut Vec<u8>, new_refs: u32) -> bool {
 // H.264 SPS parsing (minimal, for extracting width/height)
 // ---------------------------------------------------------------------------
 
+/// Convert raw AVCC data to Annex B format (prepend start codes).
+/// Simple version for the PSMF path — prepends SPS/PPS on keyframes.
+fn avcc_to_annex_b_simple(
+    avcc_data: &[u8],
+    prefix_size: u8,
+    sps: Option<&[u8]>,
+    pps: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+
+    // Prepend SPS/PPS with start codes if available.
+    if let Some(sps) = sps {
+        out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        out.extend_from_slice(sps);
+    }
+    if let Some(pps) = pps {
+        out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        out.extend_from_slice(pps);
+    }
+
+    // Convert AVCC length-prefixed NALs to Annex B start-coded NALs.
+    let ps = prefix_size as usize;
+    let mut pos = 0;
+    while pos + ps <= avcc_data.len() {
+        let mut nal_len = 0u32;
+        for i in 0..ps {
+            nal_len = (nal_len << 8) | avcc_data[pos + i] as u32;
+        }
+        pos += ps;
+        let end = pos + nal_len as usize;
+        if end > avcc_data.len() {
+            break;
+        }
+        out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        out.extend_from_slice(&avcc_data[pos..end]);
+        pos = end;
+    }
+
+    out
+}
+
 /// Parsed SPS info.
 struct SpsInfo {
     width: u32,
@@ -1518,16 +1559,33 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
-    // NAL-based decode (cooleyes/PMPlayer approach).
-    let mut nal_dec = match NalDecoder::try_init(&first_frame) {
+    // Try PSMF ringbuffer path first (uses AvMpegBase, no mode 5 bug).
+    // Falls back to NAL direct path (mpeg_vsh370.prx) if PSMF fails.
+    let mut psmf_dec = match crate::psmf_decode::PsmfDecoder::new(vid_w, vid_h) {
         Ok(dec) => {
-            vlog("[VIDEO] NAL decoder initialized OK");
-            dec
-        },
+            vlog("[VIDEO] PSMF decoder created, using ringbuffer path");
+            Some(dec)
+        }
         Err(e) => {
-            vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
-            return drain_stream_only();
-        },
+            vlog(&format!("[VIDEO] PSMF failed: {e}, trying NAL path"));
+            None
+        }
+    };
+
+    // NAL-based decode (cooleyes/PMPlayer approach) as fallback.
+    let mut nal_dec = if psmf_dec.is_none() {
+        match NalDecoder::try_init(&first_frame) {
+            Ok(dec) => {
+                vlog("[VIDEO] NAL decoder initialized OK");
+                Some(dec)
+            },
+            Err(e) => {
+                vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
+                return drain_stream_only();
+            },
+        }
+    } else {
+        None
     };
 
     // Decode the first keyframe.
@@ -1538,17 +1596,32 @@ fn play_stream() -> bool {
     let mut no_pic_count = 0u32;
     let mut wait_count = 0u32;
 
-    match nal_dec.decode(
-        &first_frame.data, first_frame.timestamp_secs,
-        first_frame.nal_prefix_size, true,
-    ) {
-        Ok(Some(decoded)) => {
-            decode_count += 1;
-            let _ = VIDEO_FRAME_QUEUE.push(decoded);
-            vlog("[VIDEO] play_stream: first frame decoded!");
+    // First frame decode (NAL path only — PSMF feeds via ringbuffer).
+    if let Some(ref mut nal) = nal_dec {
+        match nal.decode(
+            &first_frame.data, first_frame.timestamp_secs,
+            first_frame.nal_prefix_size, true,
+        ) {
+            Ok(Some(decoded)) => {
+                decode_count += 1;
+                let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                vlog("[VIDEO] play_stream: first frame decoded!");
+            }
+            Ok(None) => { no_pic_count += 1; }
+            Err(()) => { error_count += 1; }
         }
-        Ok(None) => { no_pic_count += 1; }
-        Err(()) => { error_count += 1; }
+    } else if let Some(ref mut psmf) = psmf_dec {
+        // Convert AVCC to Annex B for PSMF path.
+        let annex_b = avcc_to_annex_b_simple(
+            &first_frame.data,
+            first_frame.nal_prefix_size,
+            first_frame.avcc_sps.as_deref(),
+            first_frame.avcc_pps.as_deref(),
+        );
+        if psmf.feed_and_decode(&annex_b, first_frame.timestamp_secs) {
+            decode_count += 1;
+            vlog("[VIDEO] play_stream: first PSMF frame decoded!");
+        }
     }
     frames_processed += 1;
 
@@ -1581,10 +1654,33 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                match nal_dec.decode(
-                    &frame.data, frame.timestamp_secs,
-                    frame.nal_prefix_size, frame.is_keyframe,
-                ) {
+                // PSMF path: convert to Annex B and feed to ringbuffer.
+                let decode_result = if let Some(ref mut psmf) = psmf_dec {
+                    let annex_b = avcc_to_annex_b_simple(
+                        &frame.data,
+                        frame.nal_prefix_size,
+                        if frame.is_keyframe { frame.avcc_sps.as_deref() } else { None },
+                        if frame.is_keyframe { frame.avcc_pps.as_deref() } else { None },
+                    );
+                    if psmf.feed_and_decode(&annex_b, frame.timestamp_secs) {
+                        Ok(Some(DecodedFrame {
+                            buf_idx: 0, // PSMF uses its own buffer
+                            width: psmf.width,
+                            height: psmf.height,
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                } else if let Some(ref mut nal) = nal_dec {
+                    nal.decode(
+                        &frame.data, frame.timestamp_secs,
+                        frame.nal_prefix_size, frame.is_keyframe,
+                    )
+                } else {
+                    Err(())
+                };
+
+                match decode_result {
                     Ok(Some(decoded)) => {
                         decode_count += 1;
 
