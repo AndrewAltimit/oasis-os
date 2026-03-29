@@ -293,6 +293,10 @@ fn handle_client(cfd: i32) {
         handle_hold(cfd, &cmd[5..]);
     } else if cmd.starts_with(b"cursor ") {
         handle_cursor(cfd, &cmd[7..]);
+    } else if cmd.starts_with(b"video-limit ") {
+        let n = parse_u32(&cmd[12..]);
+        crate::video::set_video_frame_limit(n);
+        send_response(cfd, &format!("video-limit: {n}\n").into_bytes());
     } else if cmd == b"audio-only" {
         let current = crate::video::is_audio_only();
         crate::video::set_audio_only(!current);

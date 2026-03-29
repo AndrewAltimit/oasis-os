@@ -114,6 +114,7 @@ pub(crate) fn render_desktop(
                 tv.downloading,
                 tv.download_progress,
                 &tv.error_msg,
+                tv.preview_tex,
                 cx, cy, cw, ch, be,
             ),
             _ => Ok(()),

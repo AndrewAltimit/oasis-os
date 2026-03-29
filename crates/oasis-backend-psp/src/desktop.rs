@@ -706,6 +706,7 @@ pub(crate) fn draw_tvguide_windowed(
     downloading: bool,
     download_progress: f32,
     error_msg: &str,
+    preview_tex: Option<TextureId>,
     cx: i32,
     cy: i32,
     cw: u32,
@@ -723,6 +724,20 @@ pub(crate) fn draw_tvguide_windowed(
     if tuned {
         let mid_x = cx + cw as i32 / 2;
         let mid_y = cy + ch as i32 / 2;
+
+        // If we have a decoded video frame, blit it to fill the content area.
+        if let Some(tex) = preview_tex {
+            be.blit(tex, cx, cy, cw, ch)?;
+
+            // Title overlay at bottom of video.
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let title_y = cy + ch as i32 - 14;
+            be.fill_rect(cx, title_y - 2, cw, 14, Color::rgba(0, 0, 0, 160))?;
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(&display, tx, title_y, 8, Color::WHITE)?;
+            return Ok(());
+        }
 
         if downloading {
             // Download progress.

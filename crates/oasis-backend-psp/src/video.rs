@@ -21,10 +21,25 @@ use crate::threading::{AudioCmd, send_audio_cmd};
 static VLOG_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Audio-only mode: skip video decode entirely. Default false — the NAL
-/// decoder will attempt to decode ~80 frames before safely falling back
-/// to audio-only mode (avoiding the ~90 frame ME deadlock on >480p).
+/// decoder will attempt to decode frames before safely falling back
+/// to audio-only mode (avoiding the ME deadlock on >480p).
 /// Set to true via TCP "audio-only on" to skip video entirely.
 static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Max video frames to decode for >480p before switching to audio-only.
+/// Adjustable at runtime via TCP "video-limit <N>" command.
+static VIDEO_FRAME_LIMIT: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(15);
+
+/// Set the video frame limit for >480p content.
+pub fn set_video_frame_limit(n: u32) {
+    VIDEO_FRAME_LIMIT.store(n, Ordering::Relaxed);
+}
+
+/// Get current video frame limit.
+pub fn video_frame_limit() -> u32 {
+    VIDEO_FRAME_LIMIT.load(Ordering::Relaxed)
+}
 
 /// Set audio-only mode. When true, video frames are discarded and only
 /// audio plays. When false, video decode is attempted (may crash/hang).
@@ -1587,13 +1602,34 @@ fn play_stream() -> bool {
     // current firmware — skip video and use audio-only.
     // For ≤480p, decode with a safety cutoff.
     let video_oversized = vid_w > 480 || vid_h > 480;
-    let max_decode_frames: u32 = if video_oversized { 0 } else { 500 };
+    // Safety cutoff for >480p: ME deadlocks between frame 1-60 on mode 5.
+    // Start conservative, increase via TCP "video-limit <N>" command.
+    let max_decode_frames: u32 = if video_oversized {
+        VIDEO_FRAME_LIMIT.load(Ordering::Relaxed)
+    } else {
+        500
+    };
     let mut psmf_dec: Option<crate::psmf_decode::PsmfDecoder> = None;
     let mut nal_dec = if video_oversized {
-        vlog(&format!(
-            "[VIDEO] {vid_w}x{vid_h} exceeds 480p, audio-only (mode 5 deadlock)"
+        // >480p: try NAL decode (mode 5) with strict safety cutoff.
+        // The ME may deadlock after N frames, so we limit attempts.
+        vlog_force(&format!(
+            "[VIDEO] {vid_w}x{vid_h} is >480p (mode 5). Trying NAL decode \
+             with {max_decode_frames}-frame cutoff..."
         ));
-        None
+        match NalDecoder::try_init(&first_frame) {
+            Ok(dec) => {
+                vlog_force(&format!(
+                    "[VIDEO] NAL init OK: ddr={:#x} flush_interval={}",
+                    dec.decoder.ddr_top(), dec.flush_interval
+                ));
+                Some(dec)
+            }
+            Err(e) => {
+                vlog_force(&format!("[VIDEO] NAL init FAILED: {e}, audio-only"));
+                None
+            }
+        }
     } else {
         match NalDecoder::try_init(&first_frame) {
             Ok(dec) => {

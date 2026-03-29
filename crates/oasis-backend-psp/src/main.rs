@@ -348,7 +348,9 @@ fn psp_main() {
         }
 
         // -- Poll video decode frames --
-        if tv.tuned.is_some() && !tv.downloading {
+        // Poll regardless of download state — video decode starts as soon
+        // as the first keyframe arrives, even during HTTP streaming.
+        if tv.tuned.is_some() {
             if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
                 // Read pixels from pre-allocated static buffer, then copy
                 // into the persistent video texture (no alloc/dealloc).

@@ -271,6 +271,7 @@ pub(crate) fn render_classic(
                 tv.downloading,
                 tv.download_progress,
                 &tv.error_msg,
+                tv.preview_tex,
                 0,
                 CONTENT_TOP as i32,
                 SCREEN_WIDTH,
