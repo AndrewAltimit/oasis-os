@@ -729,7 +729,7 @@ pub(crate) fn draw_tvguide_windowed(
             let mut fbuf = [0u8; 64];
             let pct = (download_progress * 100.0) as u32;
             let status = stack_fmt(&mut fbuf, format_args!("Downloading... {}%", pct));
-            let sx = mid_x - (status.len() as i32 * 4);
+            let sx = (mid_x - (status.len() as i32 * 4)).max(cx + 4);
             be.draw_text(status, sx, mid_y - 20, 8, Color::rgb(255, 200, 80))?;
 
             // Progress bar.
@@ -743,9 +743,9 @@ pub(crate) fn draw_tvguide_windowed(
             }
 
             // Episode title below bar.
-            let max_chars = (cw / 7).max(10) as usize;
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
             let display = truncate_str(now_playing, max_chars);
-            let tx = mid_x - (display.len() as i32 * 4);
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
             be.draw_text(&display, tx, bar_y + 14, 8, lbl)?;
         } else {
             // Audio playing / idle.
@@ -759,13 +759,13 @@ pub(crate) fn draw_tvguide_windowed(
             } else {
                 Color::rgb(255, 80, 80)
             };
-            let sx = mid_x - (status.len() as i32 * 4);
+            let sx = (mid_x - (status.len() as i32 * 4)).max(cx + 4);
             be.draw_text(status, sx, mid_y - 14, 8, status_clr)?;
 
-            // Episode title.
-            let max_chars = (cw / 7).max(10) as usize;
+            // Episode title — truncate to fit window width with margin.
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
             let display = truncate_str(now_playing, max_chars);
-            let tx = mid_x - (display.len() as i32 * 4);
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
             be.draw_text(&display, tx, mid_y + 4, 8, lbl)?;
         }
         return Ok(());
