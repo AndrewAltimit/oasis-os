@@ -82,11 +82,19 @@ fn launch_eboot(path: &[u8]) {
     log(b"[DL] LoadExecVSH not found");
 }
 
+/// Default EBOOT to auto-launch from XMB.
+const AUTO_LAUNCH_PATH: &[u8] = b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0";
+
+/// Seconds to wait on XMB before auto-launching (gives host time to deploy).
+const AUTO_LAUNCH_DELAY_SECS: u32 = 20;
+
 fn psp_main() {
     // 10s delay — let AlwaysUSB fully init before any ms0: I/O.
     unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
 
     log(b"[DL] starting");
+
+    // Start the worker thread (handles TCP server in game context).
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"devloop\0".as_ptr(),
@@ -99,6 +107,56 @@ fn psp_main() {
             psp::sys::sceKernelStartThread(thid, 0, core::ptr::null_mut());
         }
     }
+
+    // On XMB: auto-launch OASIS OS after delay.
+    // Check if a "skip auto-launch" flag file exists (host can create
+    // ms0:/seplugins/devloop_noauto to prevent auto-launch).
+    let skip = unsafe {
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/seplugins/devloop_noauto\0".as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY,
+            0,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoClose(fd);
+            true
+        } else {
+            false
+        }
+    };
+
+    if skip {
+        log(b"[DL] auto-launch disabled (devloop_noauto exists)");
+    } else {
+        log(b"[DL] auto-launching in 20s...");
+        unsafe {
+            psp::sys::sceKernelDelayThread(AUTO_LAUNCH_DELAY_SECS * 1_000_000);
+        }
+
+        // Check if EBOOT exists before launching.
+        let exists = unsafe {
+            let fd = psp::sys::sceIoOpen(
+                AUTO_LAUNCH_PATH.as_ptr(),
+                psp::sys::IoOpenFlags::RD_ONLY,
+                0,
+            );
+            if fd >= psp::sys::SceUid(0) {
+                psp::sys::sceIoClose(fd);
+                true
+            } else {
+                false
+            }
+        };
+
+        if exists {
+            log(b"[DL] auto-launching OASIS OS");
+            launch_eboot(AUTO_LAUNCH_PATH);
+            log(b"[DL] auto-launch failed");
+        } else {
+            log(b"[DL] EBOOT not found, skipping auto-launch");
+        }
+    }
+
     loop { unsafe { psp::sys::sceKernelDelayThread(60_000_000) }; }
 }
 
