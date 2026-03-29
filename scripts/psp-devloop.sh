@@ -121,21 +121,67 @@ cmd_status() {
     cat "$STATUS_FILE" 2>/dev/null || echo "(no status)"
 }
 
+PSP_IP="${PSP_IP:-192.168.0.249}"
+PSP_PORT="${PSP_PORT:-9293}"
+
+cmd_tcp_deploy() {
+    local eboot="${1:?Usage: tcp-deploy <eboot_path>}"
+    local size
+    size=$(stat -c%s "$eboot")
+    echo "Deploying $eboot ($size bytes) to PSP at $PSP_IP..."
+    (echo "deploy $size"; cat "$eboot") | nc -w 30 "$PSP_IP" "$PSP_PORT"
+    echo "Deploy complete."
+}
+
+cmd_tcp_reboot() {
+    echo "Sending cold reboot..."
+    echo "reboot" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_ping() {
+    echo "ping" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_log() {
+    echo "log" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+# Full cycle: deploy new EBOOT over WiFi and reboot.
+cmd_tcp_cycle() {
+    local eboot="${1:?Usage: cycle <eboot_path>}"
+    cmd_tcp_deploy "$eboot"
+    echo "Rebooting PSP..."
+    cmd_tcp_reboot
+    echo "Waiting 35s for restart + WiFi..."
+    sleep 35
+    cmd_tcp_ping
+}
+
 case "${1:-help}" in
-    deploy)     cmd_deploy "${2:-}" "${3:-60}" ;;
-    screenshot) cmd_screenshot ;;
-    reboot)     cmd_reboot ;;
-    wait)       wait_for_mount ;;
-    logs)       cmd_logs ;;
-    status)     cmd_status ;;
+    deploy)      cmd_deploy "${2:-}" "${3:-60}" ;;
+    screenshot)  cmd_screenshot ;;
+    reboot)      cmd_reboot ;;
+    wait)        wait_for_mount ;;
+    logs)        cmd_logs ;;
+    status)      cmd_status ;;
+    tcp-deploy)  cmd_tcp_deploy "${2:-}" ;;
+    tcp-reboot)  cmd_tcp_reboot ;;
+    tcp-ping)    cmd_tcp_ping ;;
+    tcp-log)     cmd_tcp_log ;;
+    cycle)       cmd_tcp_cycle "${2:-}" ;;
     *)
-        echo "Usage: psp-devloop.sh {deploy|screenshot|reboot|wait|logs|status}"
+        echo "Usage: psp-devloop.sh <command> [args]"
         echo ""
-        echo "  deploy <eboot> [timeout]  Copy EBOOT and launch on PSP"
-        echo "  screenshot                Request framebuffer screenshot"
-        echo "  reboot                    Force PSP reboot"
+        echo "WiFi commands (PSP_IP=$PSP_IP):"
+        echo "  tcp-ping                  Test TCP connection"
+        echo "  tcp-log                   Read EBOOT log"
+        echo "  tcp-deploy <eboot>        Deploy EBOOT over WiFi"
+        echo "  tcp-reboot                Cold reboot PSP"
+        echo "  cycle <eboot>             Deploy + reboot + wait + ping"
+        echo ""
+        echo "USB commands:"
+        echo "  deploy <eboot> [timeout]  Copy EBOOT via USB"
         echo "  wait                      Wait for PSP USB to appear"
-        echo "  logs                      Read devloop + EBOOT logs"
-        echo "  status                    Read devloop status"
+        echo "  logs                      Read logs from USB"
         ;;
 esac

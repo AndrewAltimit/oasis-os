@@ -178,8 +178,23 @@ fn handle_client(cfd: i32) {
         unsafe { psp::sys::scePowerRequestColdReset(0) };
         return;
     } else if cmd == b"log" {
-        // Read last 2KB of eboot.log and send it.
         send_log(cfd);
+    } else if cmd.starts_with(b"deploy ") {
+        // Protocol: "deploy <size>\n" then <size> bytes of EBOOT data.
+        // The size is in the first recv buffer after "deploy ".
+        let size_str = &cmd[7..];
+        let size = size_str.iter().fold(0u32, |acc, &b| {
+            if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
+        });
+        if size > 0 && size < 8_000_000 {
+            // Any remaining bytes after the newline in buf are the start of the payload.
+            let header_end = raw.iter().position(|&b| b == b'\n')
+                .map(|p| p + 1).unwrap_or(n as usize);
+            let leftover = &buf[header_end..n as usize];
+            receive_deploy(cfd, size, leftover);
+        } else {
+            send_response(cfd, b"err: bad size\n");
+        }
     } else {
         send_response(cfd, b"err: unknown command\n");
     }
@@ -216,6 +231,87 @@ fn take_screenshot() {
             );
             psp::sys::sceIoClose(fd);
         }
+    }
+}
+
+/// Receive EBOOT binary over TCP and write to ms0:.
+/// Writes to a temp file first, then renames over the live EBOOT.
+fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
+    const TEMP_PATH: *const u8 =
+        b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP.tmp\0".as_ptr();
+    const FINAL_PATH: *const u8 =
+        b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0".as_ptr();
+
+    log_msg("[CMD] deploy: receiving EBOOT");
+
+    // Open temp file.
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            TEMP_PATH,
+            psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        send_response(cfd, b"err: can't create temp file\n");
+        return;
+    }
+
+    let mut received = 0u32;
+
+    // Write leftover bytes from the initial recv.
+    if !leftover.is_empty() {
+        unsafe {
+            psp::sys::sceIoWrite(
+                fd,
+                leftover.as_ptr() as *const c_void,
+                leftover.len(),
+            );
+        }
+        received += leftover.len() as u32;
+    }
+
+    // Receive remaining data in chunks.
+    let mut buf = [0u8; 4096];
+    while received < size {
+        let n = unsafe {
+            psp::sys::sceNetInetRecv(
+                cfd,
+                buf.as_mut_ptr() as *mut c_void,
+                buf.len().min((size - received) as usize),
+                0,
+            )
+        };
+        if n <= 0 {
+            break;
+        }
+        unsafe {
+            psp::sys::sceIoWrite(
+                fd,
+                buf.as_ptr() as *const c_void,
+                n as usize,
+            );
+        }
+        received += n as u32;
+    }
+
+    unsafe { psp::sys::sceIoClose(fd) };
+
+    if received == size {
+        // Rename temp → final (atomic-ish on FAT).
+        unsafe {
+            psp::sys::sceIoRemove(FINAL_PATH);
+            psp::sys::sceIoRename(TEMP_PATH, FINAL_PATH);
+        }
+        log_msg("[CMD] deploy: OK");
+        send_response(cfd, b"ok\n");
+    } else {
+        // Incomplete transfer — clean up temp.
+        unsafe { psp::sys::sceIoRemove(TEMP_PATH) };
+        log_msg("[CMD] deploy: incomplete");
+        send_response(cfd, b"err: incomplete transfer\n");
     }
 }
 
