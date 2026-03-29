@@ -259,36 +259,29 @@ pub(crate) fn render_classic(
                 dbg_log(&format!("[TV] render frame {}", viz_frame));
             }
             backend.force_bitmap_font = true;
+            use oasis_backend_psp::SCREEN_WIDTH;
+            use crate::theme::{CONTENT_TOP, CONTENT_H};
+            let _ = desktop::draw_tvguide_windowed(
+                &tv.channels,
+                &tv.catalogs,
+                tv.selected,
+                tv.scroll,
+                &tv.now_playing,
+                tv.tuned.is_some(),
+                tv.downloading,
+                tv.download_progress,
+                &tv.error_msg,
+                0,
+                CONTENT_TOP as i32,
+                SCREEN_WIDTH,
+                CONTENT_H,
+                backend,
+            );
             if tv.tuned.is_some() {
-                views::draw_tv_playing(
-                    backend,
-                    &tv.now_playing,
-                    tv.downloading,
-                    tv.download_progress,
-                    tv.preview_tex,
-                    &tv.error_msg,
-                );
                 chrome::draw_button_hints(backend, &[("O", "Untune"), ("^", "Back")]);
             } else if !tv.error_msg.is_empty() {
-                views::draw_tv_error(backend, &tv.error_msg);
                 chrome::draw_button_hints(backend, &[("X", "Retry"), ("O", "Back")]);
             } else {
-                // Use the same renderer as windowed mode, scaled to full content area.
-                use oasis_backend_psp::SCREEN_WIDTH;
-                use crate::theme::{CONTENT_TOP, CONTENT_H};
-                let _ = desktop::draw_tvguide_windowed(
-                    &tv.channels,
-                    &tv.catalogs,
-                    tv.selected,
-                    tv.scroll,
-                    &tv.now_playing,
-                    false,
-                    0,
-                    CONTENT_TOP as i32,
-                    SCREEN_WIDTH,
-                    CONTENT_H,
-                    backend,
-                );
                 chrome::draw_button_hints(backend, &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")]);
             }
             backend.force_bitmap_font = false;

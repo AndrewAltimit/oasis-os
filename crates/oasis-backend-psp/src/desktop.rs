@@ -703,6 +703,9 @@ pub(crate) fn draw_tvguide_windowed(
     scroll: usize,
     now_playing: &str,
     tuned: bool,
+    downloading: bool,
+    download_progress: f32,
+    error_msg: &str,
     cx: i32,
     cy: i32,
     cw: u32,
@@ -716,14 +719,59 @@ pub(crate) fn draw_tvguide_windowed(
     let lbl = Color::rgb(160, 160, 160);
     let hi = Color::rgb(120, 200, 255);
     let sel_bg = Color::rgba(80, 200, 255, 60);
-    let mut y = cy + 16;
 
-    if tuned && !now_playing.is_empty() {
-        be.draw_text("Now playing:", cx + 4, y, 8, lbl)?;
-        y += 10;
-        be.draw_text(now_playing, cx + 4, y, 8, hi)?;
+    if tuned {
+        let mid_x = cx + cw as i32 / 2;
+        let mid_y = cy + ch as i32 / 2;
+
+        if downloading {
+            // Download progress.
+            let mut fbuf = [0u8; 64];
+            let pct = (download_progress * 100.0) as u32;
+            let status = stack_fmt(&mut fbuf, format_args!("Downloading... {}%", pct));
+            let sx = mid_x - (status.len() as i32 * 4);
+            be.draw_text(status, sx, mid_y - 20, 8, Color::rgb(255, 200, 80))?;
+
+            // Progress bar.
+            let bar_w = (cw as i32 - 20).max(40) as u32;
+            let bar_x = cx + 10;
+            let bar_y = mid_y - 4;
+            be.fill_rect(bar_x, bar_y, bar_w, 6, Color::rgba(40, 40, 60, 200))?;
+            let fill = (bar_w as f32 * download_progress) as u32;
+            if fill > 0 {
+                be.fill_rect(bar_x, bar_y, fill, 6, Color::rgb(0, 160, 255))?;
+            }
+
+            // Episode title below bar.
+            let max_chars = (cw / 7).max(10) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let tx = mid_x - (display.len() as i32 * 4);
+            be.draw_text(&display, tx, bar_y + 14, 8, lbl)?;
+        } else {
+            // Audio playing / idle.
+            let status = if !error_msg.is_empty() {
+                error_msg
+            } else {
+                "Playing audio..."
+            };
+            let status_clr = if error_msg.is_empty() {
+                Color::rgb(120, 255, 120)
+            } else {
+                Color::rgb(255, 80, 80)
+            };
+            let sx = mid_x - (status.len() as i32 * 4);
+            be.draw_text(status, sx, mid_y - 14, 8, status_clr)?;
+
+            // Episode title.
+            let max_chars = (cw / 7).max(10) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let tx = mid_x - (display.len() as i32 * 4);
+            be.draw_text(&display, tx, mid_y + 4, 8, lbl)?;
+        }
         return Ok(());
     }
+
+    let mut y = cy + 16;
 
     if channels.is_empty() {
         be.draw_text("Loading channels...", cx + 4, y, 8, lbl)?;
@@ -780,6 +828,15 @@ pub(crate) fn draw_tvguide_windowed(
 // ---------------------------------------------------------------------------
 // Loading indicator
 // ---------------------------------------------------------------------------
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() > max {
+        let t: String = s.chars().take(max.saturating_sub(2)).collect();
+        t + ".."
+    } else {
+        s.to_string()
+    }
+}
 
 /// Format into a stack buffer, returning a `&str`. Avoids heap allocation.
 fn stack_fmt<'a>(buf: &'a mut [u8; 64], args: core::fmt::Arguments<'_>) -> &'a str {
