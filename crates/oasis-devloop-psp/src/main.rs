@@ -1,10 +1,10 @@
 //! Kernel PRX for remote PSP development automation.
 //!
-//! Coexists with AlwaysUSB (10s init delay avoids ms0: race).
-//! WiFi TCP server on port 9293 for host commands.
-//! Logs to ms0: (kernel can write despite USB storage mode).
+//! File-based command protocol via ms0: (shared with AlwaysUSB).
+//! Polls ms0:/seplugins/devloop_cmd.txt every 2 seconds.
+//! If non-empty, reads command, truncates file, executes.
 //!
-//! Commands: ping, screenshot, reboot, launch <path>
+//! Commands: reboot, launch <path>, screenshot
 
 #![no_std]
 #![no_main]
@@ -14,6 +14,7 @@ psp::module_kernel!("OasisDevloop", 1, 0);
 use core::ffi::c_void;
 
 const LOG_PATH: *const u8 = b"ms0:/seplugins/devloop.log\0".as_ptr();
+const CMD_PATH: *const u8 = b"ms0:/seplugins/devloop_cmd.txt\0".as_ptr();
 
 fn log(msg: &[u8]) {
     unsafe {
@@ -82,23 +83,47 @@ fn launch_eboot(path: &[u8]) {
     log(b"[DL] LoadExecVSH not found");
 }
 
-/// Default EBOOT to auto-launch from XMB.
-const AUTO_LAUNCH_PATH: &[u8] = b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0";
+/// Read command file, return bytes read (0 if empty/missing).
+fn read_cmd(buf: &mut [u8]) -> usize {
+    unsafe {
+        let fd = psp::sys::sceIoOpen(CMD_PATH, psp::sys::IoOpenFlags::RD_ONLY, 0);
+        if fd < psp::sys::SceUid(0) { return 0; }
+        let n = psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, buf.len() as u32);
+        psp::sys::sceIoClose(fd);
+        if n <= 0 { return 0; }
+        n as usize
+    }
+}
 
-/// Seconds to wait on XMB before auto-launching (gives host time to deploy).
-const AUTO_LAUNCH_DELAY_SECS: u32 = 20;
+/// Create/clear the command file (truncate to 0).
+fn clear_cmd() {
+    unsafe {
+        let fd = psp::sys::sceIoOpen(
+            CMD_PATH,
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoClose(fd);
+        }
+    }
+}
 
 fn psp_main() {
-    // 10s delay — let AlwaysUSB fully init before any ms0: I/O.
+    // 10s delay — let system settle before any ms0: I/O.
     unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
+    log(b"[DL] started");
 
-    log(b"[DL] starting");
+    // Create command file for file-based IPC (works when not on USB).
+    clear_cmd();
 
-    // Start the worker thread (handles TCP server in game context).
+    // Spawn TCP server thread (works in game context after EBOOT inits net).
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"devloop\0".as_ptr(),
-            worker,
+            tcp_worker,
             0x20, 4096,
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
@@ -108,62 +133,51 @@ fn psp_main() {
         }
     }
 
-    // On XMB: auto-launch OASIS OS after delay.
-    // Check if a "skip auto-launch" flag file exists (host can create
-    // ms0:/seplugins/devloop_noauto to prevent auto-launch).
-    let skip = unsafe {
-        let fd = psp::sys::sceIoOpen(
-            b"ms0:/seplugins/devloop_noauto\0".as_ptr(),
-            psp::sys::IoOpenFlags::RD_ONLY,
-            0,
-        );
-        if fd >= psp::sys::SceUid(0) {
-            psp::sys::sceIoClose(fd);
-            true
-        } else {
-            false
-        }
-    };
+    // Main thread: poll command file (fallback when WiFi not available).
+    loop {
+        unsafe { psp::sys::sceKernelDelayThread(2_000_000) };
 
-    if skip {
-        log(b"[DL] auto-launch disabled (devloop_noauto exists)");
-    } else {
-        log(b"[DL] auto-launching in 20s...");
-        unsafe {
-            psp::sys::sceKernelDelayThread(AUTO_LAUNCH_DELAY_SECS * 1_000_000);
-        }
+        let mut buf = [0u8; 256];
+        let n = read_cmd(&mut buf);
+        if n == 0 { continue; }
 
-        // Check if EBOOT exists before launching.
-        let exists = unsafe {
-            let fd = psp::sys::sceIoOpen(
-                AUTO_LAUNCH_PATH.as_ptr(),
-                psp::sys::IoOpenFlags::RD_ONLY,
-                0,
-            );
-            if fd >= psp::sys::SceUid(0) {
-                psp::sys::sceIoClose(fd);
-                true
-            } else {
-                false
-            }
-        };
-
-        if exists {
-            log(b"[DL] auto-launching OASIS OS");
-            launch_eboot(AUTO_LAUNCH_PATH);
-            log(b"[DL] auto-launch failed");
-        } else {
-            log(b"[DL] EBOOT not found, skipping auto-launch");
-        }
+        clear_cmd();
+        execute_cmd(&buf[..n]);
     }
-
-    loop { unsafe { psp::sys::sceKernelDelayThread(60_000_000) }; }
 }
 
-unsafe extern "C" fn worker(_: usize, _: *mut c_void) -> i32 {
+fn execute_cmd(raw: &[u8]) {
+    let cmd = raw.split(|&b| b == b'\n' || b == b'\r').next().unwrap_or(raw);
+
+    if cmd == b"reboot" {
+        log(b"[DL] cmd: reboot");
+        if let Some(fp) = unsafe { psp::hook::find_function(
+            b"scePower_Service\0".as_ptr(),
+            b"scePower\0".as_ptr(),
+            0x0442D852,
+        ) } {
+            let f: unsafe extern "C" fn(i32) -> i32 = unsafe { core::mem::transmute(fp) };
+            unsafe { f(0) };
+        }
+    } else if cmd == b"screenshot" {
+        log(b"[DL] cmd: screenshot");
+        take_screenshot();
+    } else if cmd.starts_with(b"launch ") && cmd.len() > 7 {
+        let path = &cmd[7..];
+        let mut pb = [0u8; 128];
+        let l = path.len().min(127);
+        pb[..l].copy_from_slice(&path[..l]);
+        pb[l] = 0;
+        log(b"[DL] cmd: launch");
+        launch_eboot(&pb[..l + 1]);
+    } else {
+        log(b"[DL] unknown cmd");
+    }
+}
+
+unsafe extern "C" fn tcp_worker(_: usize, _: *mut c_void) -> i32 {
     psp::sys::sceKernelDelayThread(3_000_000);
 
-    // Resolve net functions by NID (user-mode libs not linked in kernel PRX).
     let inet = &[(b"sceNetInet_Library\0" as &[u8], b"sceNetInet\0" as &[u8])];
     let apctl = &[(b"sceNetApctl_Library\0" as &[u8], b"sceNetApctl\0" as &[u8])];
 
@@ -179,18 +193,15 @@ unsafe extern "C" fn worker(_: usize, _: *mut c_void) -> i32 {
         }};
     }
 
-    // Wait for EBOOT to load net modules (up to 60s).
-    log(b"[DL] waiting for net...");
+    // Wait for EBOOT to load net modules.
+    log(b"[DL] TCP: waiting for net...");
     let mut p_sock: *mut u8 = core::ptr::null_mut();
-    for _ in 0..30 {
-        p_sock = find!(0x8B7B220F, inet); // sceNetInetSocket
+    for _ in 0..60 {
+        p_sock = find!(0x8B7B220F, inet);
         if !p_sock.is_null() { break; }
         psp::sys::sceKernelDelayThread(2_000_000);
     }
-    if p_sock.is_null() {
-        log(b"[DL] net not available");
-        return 0;
-    }
+    if p_sock.is_null() { log(b"[DL] TCP: net unavailable"); return 0; }
 
     let p_state = find!(0x5DEAC81B, apctl);
     let p_bind = find!(0x1A33F9AE, inet);
@@ -200,11 +211,11 @@ unsafe extern "C" fn worker(_: usize, _: *mut c_void) -> i32 {
     let p_send = find!(0x7AA671BC, inet);
     let p_close = find!(0x8D7284EA, inet);
 
-    if p_bind.is_null() || p_accept.is_null() || p_recv.is_null() {
-        log(b"[DL] incomplete net resolve");
+    if p_bind.is_null() || p_accept.is_null() {
+        log(b"[DL] TCP: incomplete resolve");
         return 0;
     }
-    log(b"[DL] net resolved");
+    log(b"[DL] TCP: net resolved");
 
     type F1 = unsafe extern "C" fn(i32)->i32;
     type Fs = unsafe extern "C" fn(*mut i32)->i32;
@@ -223,31 +234,28 @@ unsafe extern "C" fn worker(_: usize, _: *mut c_void) -> i32 {
     let send: Fsd = core::mem::transmute(p_send);
     let close: F1 = core::mem::transmute(p_close);
 
-    // Wait for WiFi connection (EBOOT handles dialog).
+    // Wait for WiFi.
     if !p_state.is_null() {
         let get_state: Fs = core::mem::transmute(p_state);
-        log(b"[DL] waiting for WiFi...");
+        log(b"[DL] TCP: waiting WiFi...");
         for _ in 0..60 {
             let mut s: i32 = 0;
             get_state(&mut s);
             if s == 4 { break; }
             psp::sys::sceKernelDelayThread(2_000_000);
         }
-    } else {
-        psp::sys::sceKernelDelayThread(15_000_000);
     }
 
-    // TCP server on port 9293.
     let sfd = socket(2, 1, 0);
-    if sfd < 0 { log(b"[DL] socket fail"); return 0; }
+    if sfd < 0 { log(b"[DL] TCP: socket fail"); return 0; }
 
     let mut sa = [0u8; 16];
     sa[0] = 16; sa[1] = 2;
     sa[2] = (9293 >> 8) as u8;
     sa[3] = (9293 & 0xFF) as u8;
 
-    if bind(sfd, sa.as_ptr(), 16) < 0 { log(b"[DL] bind fail"); close(sfd); return 0; }
-    if listen(sfd, 1) < 0 { log(b"[DL] listen fail"); close(sfd); return 0; }
+    if bind(sfd, sa.as_ptr(), 16) < 0 { log(b"[DL] TCP: bind fail"); close(sfd); return 0; }
+    if listen(sfd, 1) < 0 { log(b"[DL] TCP: listen fail"); close(sfd); return 0; }
     log(b"[DL] TCP :9293 ready");
 
     loop {
@@ -258,42 +266,18 @@ unsafe extern "C" fn worker(_: usize, _: *mut c_void) -> i32 {
 
         let mut buf = [0u8; 256];
         let n = recv(cfd, buf.as_mut_ptr() as *mut c_void, 256, 0);
-        if n <= 0 { close(cfd); continue; }
+        if n > 0 {
+            let cmd = &buf[..n as usize];
+            let cmd = cmd.split(|&b| b == b'\n' || b == b'\r').next().unwrap_or(cmd);
 
-        let cmd = &buf[..n as usize];
-        let cmd = cmd.split(|&b| b == b'\n' || b == b'\r').next().unwrap_or(cmd);
-
-        if cmd == b"ping" {
-            send(cfd, b"pong\n".as_ptr() as *const c_void, 5, 0);
-        } else if cmd == b"screenshot" {
-            take_screenshot();
-            send(cfd, b"ok\n".as_ptr() as *const c_void, 3, 0);
-            log(b"[DL] screenshot taken");
-        } else if cmd == b"reboot" {
-            send(cfd, b"ok\n".as_ptr() as *const c_void, 3, 0);
-            close(cfd);
-            log(b"[DL] rebooting");
-            if let Some(fp) = psp::hook::find_function(
-                b"scePower_Service\0".as_ptr(),
-                b"scePower\0".as_ptr(),
-                0x0442D852,
-            ) {
-                let f: unsafe extern "C" fn(i32)->i32 = core::mem::transmute(fp);
-                f(0);
+            if cmd == b"ping" {
+                send(cfd, b"pong\n".as_ptr() as *const c_void, 5, 0);
+            } else {
+                send(cfd, b"ok\n".as_ptr() as *const c_void, 3, 0);
+                close(cfd);
+                execute_cmd(&buf[..n as usize]);
+                continue;
             }
-            continue;
-        } else if cmd.starts_with(b"launch ") {
-            send(cfd, b"ok\n".as_ptr() as *const c_void, 3, 0);
-            close(cfd);
-            let path = &cmd[7..];
-            let mut pb = [0u8; 128];
-            let l = path.len().min(127);
-            pb[..l].copy_from_slice(&path[..l]);
-            pb[l] = 0;
-            launch_eboot(&pb[..l+1]);
-            continue;
-        } else {
-            send(cfd, b"err\n".as_ptr() as *const c_void, 4, 0);
         }
         close(cfd);
     }
