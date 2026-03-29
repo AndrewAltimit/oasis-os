@@ -511,6 +511,7 @@ fn psp_main() {
                 &mp,
                 &audio,
                 &mut br,
+                &tv,
             );
         }
 
