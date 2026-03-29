@@ -172,15 +172,10 @@ fn handle_client(cfd: i32) {
     } else if cmd == b"reboot" {
         send_response(cfd, b"ok\n");
         unsafe { psp::sys::sceNetInetClose(cfd) };
-        log_msg("[CMD] rebooting PSP");
+        log_msg("[CMD] cold rebooting PSP");
         psp::thread::sleep_ms(500);
-        // Restart the EBOOT (reloads plugins, refreshes everything).
-        unsafe {
-            psp::sys::sceKernelLoadExec(
-                b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0".as_ptr(),
-                core::ptr::null_mut(),
-            );
-        }
+        // Full hardware reboot — reloads firmware, CFW, plugins.
+        unsafe { psp::sys::scePowerRequestColdReset(0) };
         return;
     } else if cmd == b"log" {
         // Read last 2KB of eboot.log and send it.
