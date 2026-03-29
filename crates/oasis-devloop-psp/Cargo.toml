@@ -1,0 +1,29 @@
+# Standalone crate -- excluded from the oasis_os workspace.
+#
+# Minimal kernel-mode PRX for remote PSP development automation.
+# WiFi TCP server on port 9293 for commands: screenshot, reboot, launch.
+#
+# Build: cd crates/oasis-devloop-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Deploy: cp target/.../oasis-devloop-psp.prx ms0:/seplugins/devloop.prx
+# Enable: add "xmb, ms0:/seplugins/devloop.prx, on" to PLUGINS.TXT
+
+[workspace]
+
+[package]
+name = "oasis-devloop-psp"
+description = "PSP remote dev automation PRX: WiFi TCP command server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["kernel"] }
+
+[patch.crates-io]
+unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
