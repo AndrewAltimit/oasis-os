@@ -293,6 +293,20 @@ fn handle_client(cfd: i32) {
         handle_hold(cfd, &cmd[5..]);
     } else if cmd.starts_with(b"cursor ") {
         handle_cursor(cfd, &cmd[7..]);
+    } else if cmd == b"audio-only" {
+        let current = crate::video::is_audio_only();
+        crate::video::set_audio_only(!current);
+        if !current {
+            send_response(cfd, b"audio-only: on\n");
+        } else {
+            send_response(cfd, b"audio-only: off (video decode enabled)\n");
+        }
+    } else if cmd == b"audio-only on" {
+        crate::video::set_audio_only(true);
+        send_response(cfd, b"ok\n");
+    } else if cmd == b"audio-only off" {
+        crate::video::set_audio_only(false);
+        send_response(cfd, b"ok\n");
     } else if cmd == b"screencap" {
         send_screencap(cfd);
     } else if cmd.starts_with(b"deploy ") {
@@ -413,9 +427,10 @@ fn send_status(cfd: i32) {
     let max_blk = MAX_BLK_KB.load(Ordering::Relaxed);
     let frame = FRAME_COUNT.load(Ordering::Relaxed);
 
+    let audio_only = crate::video::is_audio_only();
     let resp = format!(
-        "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\"frame\":{}}}\n",
-        kiosk_name(kiosk), free, max_blk, frame,
+        "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\"frame\":{},\"audio_only\":{}}}\n",
+        kiosk_name(kiosk), free, max_blk, frame, audio_only,
     );
     send_response(cfd, resp.as_bytes());
 }

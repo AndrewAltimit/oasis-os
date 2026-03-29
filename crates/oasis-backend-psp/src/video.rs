@@ -20,6 +20,22 @@ use crate::threading::{AudioCmd, send_audio_cmd};
 /// decode to avoid ~5-20ms Memory Stick I/O stalls per log write.
 static VLOG_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// Audio-only mode: skip video decode entirely. Default true because
+/// both decode paths are currently broken (PSMF ringbuffer produces no
+/// output, NAL direct deadlocks after ~90 frames on >480p content).
+static AUDIO_ONLY: AtomicBool = AtomicBool::new(true);
+
+/// Set audio-only mode. When true, video frames are discarded and only
+/// audio plays. When false, video decode is attempted (may crash/hang).
+pub fn set_audio_only(enabled: bool) {
+    AUDIO_ONLY.store(enabled, Ordering::Relaxed);
+}
+
+/// Check if audio-only mode is active.
+pub fn is_audio_only() -> bool {
+    AUDIO_ONLY.load(Ordering::Relaxed)
+}
+
 /// File-based debug logging (works from video thread, unlike psp::dprintln).
 /// Suppressed when `VLOG_ENABLED` is false (during active decode).
 fn vlog(msg: &str) {
@@ -1558,6 +1574,18 @@ fn play_stream() -> bool {
     vlog(&format!(
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
+
+    // Audio-only mode: skip video decode entirely, just drain video frames
+    // and let the audio thread handle playback. Both video decode paths are
+    // currently broken:
+    // - PSMF ringbuffer: packs feed successfully but ME never produces output
+    // - NAL direct: deadlocks after ~90 frames on >480p content (mode 5 bug)
+    //
+    // TODO: Re-enable when a working decode path is available.
+    if AUDIO_ONLY.load(Ordering::Relaxed) {
+        vlog("[VIDEO] audio-only mode, skipping video decode");
+        return drain_stream_only();
+    }
 
     // Try PSMF ringbuffer path first (uses AvMpegBase, no mode 5 bug).
     // Falls back to NAL direct path (mpeg_vsh370.prx) if PSMF fails.
