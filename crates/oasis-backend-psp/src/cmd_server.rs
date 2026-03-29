@@ -4,12 +4,66 @@
 //! text commands and responds with "ok\n" or "pong\n".
 //!
 //! Commands:
-//!   ping        → "pong\n"
-//!   screenshot  → saves VRAM to ms0:/seplugins/devloop_screen.raw
-//!   reboot      → cold reset
-//!   log         → responds with last 2KB of eboot.log
+//!   ping              → "pong\n"
+//!   screenshot        → saves VRAM to ms0:/seplugins/devloop_screen.raw
+//!   reboot            → cold reset
+//!   exit              → exit to XMB
+//!   log               → responds with last 2KB of eboot.log
+//!   logfull           → responds with last 8KB of eboot.log
+//!   status            → JSON with kiosk app, free memory, uptime
+//!   press <button>    → inject button press+release (cross,circle,up,down,
+//!                        left,right,triangle,square,start,select,ltrigger,
+//!                        rtrigger)
+//!   hold <button> <ms> → inject button press, wait ms, then release
+//!   cursor <x> <y>    → move cursor to absolute position
 
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicI32, AtomicU8, Ordering};
+
+use oasis_core::input::{Button, InputEvent, Trigger};
+
+// ---------------------------------------------------------------------------
+// Shared state between main loop and TCP server
+// ---------------------------------------------------------------------------
+
+/// Injected input events from TCP commands. Main loop drains this each frame.
+static INJECT_QUEUE: psp::sync::SpscQueue<InputEvent, 32> = psp::sync::SpscQueue::new();
+
+/// Current kiosk app state, written by main loop. 0=None, 1=Terminal, etc.
+static KIOSK_STATE: AtomicU8 = AtomicU8::new(0);
+
+/// Free heap memory in KB, updated by main loop.
+static FREE_MEM_KB: AtomicI32 = AtomicI32::new(0);
+
+/// Max contiguous block in KB, updated by main loop.
+static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
+
+/// Frame counter, updated by main loop.
+static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
+
+/// Push a synthetic input event for the main loop to consume.
+pub fn inject_event(ev: InputEvent) {
+    let _ = INJECT_QUEUE.push(ev);
+}
+
+/// Drain all injected events into the given vector.
+pub fn drain_injected(out: &mut Vec<InputEvent>) {
+    while let Some(ev) = INJECT_QUEUE.pop() {
+        out.push(ev);
+    }
+}
+
+/// Update status from main loop (call each frame or periodically).
+pub fn update_status(kiosk: u8, free_kb: i32, max_blk_kb: i32, frame: i32) {
+    KIOSK_STATE.store(kiosk, Ordering::Relaxed);
+    FREE_MEM_KB.store(free_kb, Ordering::Relaxed);
+    MAX_BLK_KB.store(max_blk_kb, Ordering::Relaxed);
+    FRAME_COUNT.store(frame, Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Server thread
+// ---------------------------------------------------------------------------
 
 /// Start the network auto-connect + command server thread.
 /// Call early in EBOOT init — connects WiFi in background without
@@ -228,16 +282,24 @@ fn handle_client(cfd: i32) {
         unsafe { psp::sys::scePowerRequestColdReset(0) };
         return;
     } else if cmd == b"log" {
-        send_log(cfd);
+        send_log(cfd, 2048);
+    } else if cmd == b"logfull" {
+        send_log(cfd, 8192);
+    } else if cmd == b"status" {
+        send_status(cfd);
+    } else if cmd.starts_with(b"press ") {
+        handle_press(cfd, &cmd[6..], 0);
+    } else if cmd.starts_with(b"hold ") {
+        handle_hold(cfd, &cmd[5..]);
+    } else if cmd.starts_with(b"cursor ") {
+        handle_cursor(cfd, &cmd[7..]);
+    } else if cmd == b"screencap" {
+        send_screencap(cfd);
     } else if cmd.starts_with(b"deploy ") {
         // Protocol: "deploy <size>\n" then <size> bytes of EBOOT data.
-        // The size is in the first recv buffer after "deploy ".
         let size_str = &cmd[7..];
-        let size = size_str.iter().fold(0u32, |acc, &b| {
-            if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
-        });
+        let size = parse_u32(size_str);
         if size > 0 && size < 8_000_000 {
-            // Any remaining bytes after the newline in buf are the start of the payload.
             let header_end = raw.iter().position(|&b| b == b'\n')
                 .map(|p| p + 1).unwrap_or(n as usize);
             let leftover = &buf[header_end..n as usize];
@@ -250,6 +312,122 @@ fn handle_client(cfd: i32) {
     }
 
     unsafe { psp::sys::sceNetInetClose(cfd) };
+}
+
+// ---------------------------------------------------------------------------
+// Input injection
+// ---------------------------------------------------------------------------
+
+fn parse_button(name: &[u8]) -> Option<InputEvent> {
+    match name {
+        b"cross" | b"confirm" | b"x" => Some(InputEvent::ButtonPress(Button::Confirm)),
+        b"circle" | b"cancel" | b"o" => Some(InputEvent::ButtonPress(Button::Cancel)),
+        b"triangle" => Some(InputEvent::ButtonPress(Button::Triangle)),
+        b"square" => Some(InputEvent::ButtonPress(Button::Square)),
+        b"up" => Some(InputEvent::ButtonPress(Button::Up)),
+        b"down" => Some(InputEvent::ButtonPress(Button::Down)),
+        b"left" => Some(InputEvent::ButtonPress(Button::Left)),
+        b"right" => Some(InputEvent::ButtonPress(Button::Right)),
+        b"start" => Some(InputEvent::ButtonPress(Button::Start)),
+        b"select" => Some(InputEvent::ButtonPress(Button::Select)),
+        b"ltrigger" | b"l" => Some(InputEvent::TriggerPress(Trigger::Left)),
+        b"rtrigger" | b"r" => Some(InputEvent::TriggerPress(Trigger::Right)),
+        _ => None,
+    }
+}
+
+fn release_for(press: &InputEvent) -> InputEvent {
+    match press {
+        InputEvent::ButtonPress(b) => InputEvent::ButtonRelease(*b),
+        InputEvent::TriggerPress(t) => InputEvent::TriggerRelease(*t),
+        _ => InputEvent::ButtonRelease(Button::Confirm), // fallback
+    }
+}
+
+fn handle_press(cfd: i32, name: &[u8], hold_ms: u32) {
+    if let Some(press) = parse_button(name) {
+        let release = release_for(&press);
+        let _ = INJECT_QUEUE.push(press);
+        if hold_ms > 0 {
+            psp::thread::sleep_ms(hold_ms);
+        } else {
+            // Brief hold so the main loop sees press and release on different frames.
+            psp::thread::sleep_ms(100);
+        }
+        let _ = INJECT_QUEUE.push(release);
+        send_response(cfd, b"ok\n");
+    } else {
+        send_response(cfd, b"err: unknown button\n");
+    }
+}
+
+fn handle_hold(cfd: i32, args: &[u8]) {
+    // "hold <button> <ms>"
+    let parts: Vec<&[u8]> = args.splitn(2, |&b| b == b' ').collect();
+    if parts.len() < 2 {
+        send_response(cfd, b"err: usage: hold <button> <ms>\n");
+        return;
+    }
+    let ms = parse_u32(parts[1]);
+    if ms == 0 || ms > 10_000 {
+        send_response(cfd, b"err: ms must be 1-10000\n");
+        return;
+    }
+    handle_press(cfd, parts[0], ms);
+}
+
+fn handle_cursor(cfd: i32, args: &[u8]) {
+    // "cursor <x> <y>"
+    let parts: Vec<&[u8]> = args.splitn(2, |&b| b == b' ').collect();
+    if parts.len() < 2 {
+        send_response(cfd, b"err: usage: cursor <x> <y>\n");
+        return;
+    }
+    let x = parse_u32(parts[0]) as i32;
+    let y = parse_u32(parts[1]) as i32;
+    let _ = INJECT_QUEUE.push(InputEvent::CursorMove { x, y });
+    send_response(cfd, b"ok\n");
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+fn kiosk_name(id: u8) -> &'static str {
+    match id {
+        0 => "none",
+        1 => "terminal",
+        2 => "file_manager",
+        3 => "photo_viewer",
+        4 => "music_player",
+        5 => "browser",
+        6 => "radio",
+        7 => "tv_guide",
+        _ => "unknown",
+    }
+}
+
+fn send_status(cfd: i32) {
+    let kiosk = KIOSK_STATE.load(Ordering::Relaxed);
+    let free = FREE_MEM_KB.load(Ordering::Relaxed);
+    let max_blk = MAX_BLK_KB.load(Ordering::Relaxed);
+    let frame = FRAME_COUNT.load(Ordering::Relaxed);
+
+    let resp = format!(
+        "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\"frame\":{}}}\n",
+        kiosk_name(kiosk), free, max_blk, frame,
+    );
+    send_response(cfd, resp.as_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn parse_u32(data: &[u8]) -> u32 {
+    data.iter().fold(0u32, |acc, &b| {
+        if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
+    })
 }
 
 fn send_response(cfd: i32, data: &[u8]) {
@@ -281,6 +459,22 @@ fn take_screenshot() {
             );
             psp::sys::sceIoClose(fd);
         }
+    }
+}
+
+/// Send raw framebuffer (480x272 ABGR) over TCP.
+/// Reads from VRAM at 0x44000000 with stride 512, crops to 480 width.
+fn send_screencap(cfd: i32) {
+    // Send header: "480 272\n" then 480*272*4 bytes of pixel data.
+    send_response(cfd, b"480 272\n");
+    let vram = 0x44000000u32 as *const u8;
+    for row in 0..272u32 {
+        let row_ptr = unsafe { vram.add((row * 512 * 4) as usize) };
+        // SAFETY: reading from VRAM mapped region, 480*4 bytes per row.
+        let row_slice = unsafe {
+            core::slice::from_raw_parts(row_ptr, 480 * 4)
+        };
+        send_response(cfd, row_slice);
     }
 }
 
@@ -365,7 +559,7 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
     }
 }
 
-fn send_log(cfd: i32) {
+fn send_log(cfd: i32, max_bytes: usize) {
     let fd = unsafe {
         psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
@@ -378,24 +572,36 @@ fn send_log(cfd: i32) {
         return;
     }
 
-    // Seek to last 2KB.
+    // Seek to last N bytes.
     let size = unsafe {
         psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End)
     };
-    let offset = if size > 2048 { size - 2048 } else { 0 };
+    let offset = if size > max_bytes as i64 {
+        size - max_bytes as i64
+    } else {
+        0
+    };
     unsafe {
         psp::sys::sceIoLseek(fd, offset, psp::sys::IoWhence::Set);
     }
 
+    // Read and send in chunks (stack-friendly).
     let mut buf = [0u8; 2048];
-    let n = unsafe {
-        psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, 2048)
-    };
-    unsafe { psp::sys::sceIoClose(fd) };
-
-    if n > 0 {
+    let mut remaining = max_bytes;
+    loop {
+        let to_read = remaining.min(buf.len());
+        let n = unsafe {
+            psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, to_read as u32)
+        };
+        if n <= 0 {
+            break;
+        }
         send_response(cfd, &buf[..n as usize]);
-    } else {
-        send_response(cfd, b"(empty)\n");
+        remaining -= n as usize;
+        if remaining == 0 {
+            break;
+        }
     }
+
+    unsafe { psp::sys::sceIoClose(fd) };
 }

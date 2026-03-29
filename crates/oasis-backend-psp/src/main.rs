@@ -484,6 +484,13 @@ fn psp_main() {
                     cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
                     cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
                 }
+                // Update TCP command server with current state.
+                oasis_backend_psp::cmd_server::update_status(
+                    kiosk_app as u8,
+                    cached_free_kb,
+                    cached_max_blk_kb,
+                    viz_frame as i32,
+                );
             }
 
             // Render windowed WM windows (if any are open).

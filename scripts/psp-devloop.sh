@@ -146,14 +146,57 @@ cmd_tcp_log() {
     echo "log" | nc -w 3 "$PSP_IP" "$PSP_PORT"
 }
 
+cmd_tcp_logfull() {
+    echo "logfull" | nc -w 5 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_status() {
+    echo "status" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_press() {
+    local btn="${1:?Usage: press <button>}"
+    echo "press $btn" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_hold() {
+    local btn="${1:?Usage: hold <button> <ms>}"
+    local ms="${2:?Usage: hold <button> <ms>}"
+    echo "hold $btn $ms" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_cursor() {
+    local x="${1:?Usage: cursor <x> <y>}"
+    local y="${2:?Usage: cursor <x> <y>}"
+    echo "cursor $x $y" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_screenshot() {
+    echo "screenshot" | nc -w 3 "$PSP_IP" "$PSP_PORT"
+}
+
+cmd_tcp_screencap() {
+    local out="${1:-/tmp/psp_screen.png}"
+    local raw="/tmp/psp_screen.raw"
+    echo "Capturing screen from PSP..."
+    echo "screencap" | nc -w 5 "$PSP_IP" "$PSP_PORT" > "$raw"
+    # Strip header line "480 272\n", convert ABGR raw to PNG.
+    local header_len
+    header_len=$(head -1 "$raw" | wc -c)
+    tail -c +$((header_len + 1)) "$raw" | \
+        ffmpeg -y -f rawvideo -pixel_format abgr -video_size 480x272 \
+        -i - "$out" 2>/dev/null && echo "Saved to $out" || \
+        echo "Raw saved to $raw (install ffmpeg for PNG conversion)"
+}
+
 # Full cycle: deploy new EBOOT over WiFi and reboot.
 cmd_tcp_cycle() {
     local eboot="${1:?Usage: cycle <eboot_path>}"
     cmd_tcp_deploy "$eboot"
     echo "Rebooting PSP..."
     cmd_tcp_reboot
-    echo "Waiting 35s for restart + WiFi..."
-    sleep 35
+    echo "Waiting 40s for restart + WiFi..."
+    sleep 40
     cmd_tcp_ping
 }
 
@@ -168,13 +211,28 @@ case "${1:-help}" in
     tcp-reboot)  cmd_tcp_reboot ;;
     tcp-ping)    cmd_tcp_ping ;;
     tcp-log)     cmd_tcp_log ;;
+    tcp-logfull) cmd_tcp_logfull ;;
+    tcp-status)  cmd_tcp_status ;;
+    tcp-press)   cmd_tcp_press "${2:-}" ;;
+    tcp-hold)    cmd_tcp_hold "${2:-}" "${3:-}" ;;
+    tcp-cursor)  cmd_tcp_cursor "${2:-}" "${3:-}" ;;
+    tcp-screenshot) cmd_tcp_screenshot ;;
+    tcp-screencap) cmd_tcp_screencap "${2:-/tmp/psp_screen.png}" ;;
     cycle)       cmd_tcp_cycle "${2:-}" ;;
     *)
         echo "Usage: psp-devloop.sh <command> [args]"
         echo ""
         echo "WiFi commands (PSP_IP=$PSP_IP):"
         echo "  tcp-ping                  Test TCP connection"
-        echo "  tcp-log                   Read EBOOT log"
+        echo "  tcp-status                Get app state + memory info (JSON)"
+        echo "  tcp-log                   Read last 2KB of EBOOT log"
+        echo "  tcp-logfull               Read last 8KB of EBOOT log"
+        echo "  tcp-screenshot            Take VRAM screenshot"
+        echo "  tcp-press <button>        Send button press (cross,circle,up,"
+        echo "                            down,left,right,triangle,square,"
+        echo "                            start,select,l,r)"
+        echo "  tcp-hold <button> <ms>    Hold button for N milliseconds"
+        echo "  tcp-cursor <x> <y>        Move cursor to position"
         echo "  tcp-deploy <eboot>        Deploy EBOOT over WiFi"
         echo "  tcp-reboot                Cold reboot PSP"
         echo "  cycle <eboot>             Deploy + reboot + wait + ping"
