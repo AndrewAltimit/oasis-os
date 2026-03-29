@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zero-Touch PSP Development - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Building a fully autonomous development loop for PSP hardware — TCP command server, remote input injection, live framebuffer streaming, and a physical actuator for hard reboot recovery.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">Zero-Touch PSP Development: From TCP Commands to Physical Actuators</h1>
+    <p class="article-subtitle">
+      The PSP has no JTAG, no serial console, and no remote debug interface.
+      We built a complete autonomous development loop &mdash; WiFi auto-connect,
+      a TCP command server inside the EBOOT, remote input injection with live
+      framebuffer streaming, and a DIY linear actuator for hard reboot recovery
+      when the firmware hangs. Build, deploy, reboot, navigate the UI, take
+      screenshots, read logs &mdash; all without touching the device.
+    </p>
+    <div class="article-meta">
+      <span>Entry 09</span>
+      <span>automation, hardware, devtools</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Problem: Manual Testing Doesn&rsquo;t Scale</h2>
+
+  <p>
+    Developing for the PSP is an exercise in physical logistics. Every test cycle
+    requires walking to the device, plugging in USB, copying the EBOOT, ejecting,
+    launching the app, connecting to WiFi through a dialog, reproducing the bug,
+    reading logs via USB again, and repeating. Each iteration takes 3&ndash;5 minutes
+    of human time, most of it waiting. When you&rsquo;re chasing a firmware deadlock
+    that manifests after 90 decoded video frames
+    (<a href="08-me-deadlock-investigation.html">Entry 08</a>), that adds up fast.
+  </p>
+
+  <p>
+    We needed to close this loop. The goal: <strong>zero human intervention</strong>
+    from code change to verified result. Build the EBOOT on the host, deploy it to
+    the PSP over WiFi, reboot the device, wait for it to come back online, navigate
+    the UI remotely, capture the screen, and read logs &mdash; all from a script.
+  </p>
+
+  <h2>Layer 1: WiFi Auto-Connect</h2>
+
+  <p>
+    The PSP&rsquo;s WiFi stack doesn&rsquo;t connect automatically on boot.
+    Normally, <code>psp::net::connect_dialog()</code> shows a system dialog that
+    renders via the GU &mdash; which blocks the main thread and corrupts the
+    display list if called at the wrong time.
+  </p>
+
+  <p>
+    We added a background thread (<code>cmd_srv</code>, priority 40) that spawns
+    during EBOOT init. It waits 5 seconds for the WLAN hardware to initialize
+    after a cold boot, then calls <code>sceNetApctlConnect</code> on saved WiFi
+    profiles (trying profile 1 then 0) without any dialog. If the first attempt
+    fails, it retries once more after the main loop has had time to settle.
+  </p>
+
+  <p>
+    Key discovery: <strong><code>psp::net::is_connected()</code> uses an internal
+    flag that doesn&rsquo;t reflect the actual apctl state.</strong> We had to
+    check <code>sceNetApctlGetState</code> directly to get reliable connection
+    status. The <code>is_connected()</code> flag is only set by
+    <code>psp::net::init()</code>, not by raw <code>sceNetApctlConnect</code> calls.
+  </p>
+
+  <p>
+    Another critical finding: when WiFi is already connected (from the background
+    auto-connect), <code>ensure_net_init()</code> must early-return without calling
+    <code>psp::net::init()</code> again, and absolutely must not call
+    <code>reinit_gu_frame()</code>. That function is only safe after GU utility
+    dialogs (OSK, WiFi dialog). Calling it in the normal rendering path corrupts
+    the GU command buffer and freezes the entire EBOOT.
+  </p>
+
+  <h2>Layer 2: TCP Command Server</h2>
+
+  <p>
+    Once WiFi is up, the background thread starts a TCP server on port 9293.
+    The protocol is intentionally simple: one text command per connection,
+    one response, close. This makes it trivially scriptable with <code>nc</code>
+    (netcat):
+  </p>
+
+  <pre><code>$ echo "ping" | nc -w 3 192.168.0.249 9293
+pong</code></pre>
+
+  <p>The full command set:</p>
+
+  <table>
+    <thead>
+      <tr><th>Command</th><th>Response</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ping</code></td><td><code>pong\n</code></td><td>Connectivity check</td></tr>
+      <tr><td><code>status</code></td><td>JSON</td><td>Kiosk app, free memory, frame count</td></tr>
+      <tr><td><code>log</code></td><td>text</td><td>Last 2KB of eboot.log</td></tr>
+      <tr><td><code>logfull</code></td><td>text</td><td>Last 8KB of eboot.log</td></tr>
+      <tr><td><code>screencap</code></td><td>raw pixels</td><td>480&times;272 ABGR framebuffer stream</td></tr>
+      <tr><td><code>screenshot</code></td><td><code>ok\n</code></td><td>Save VRAM to ms0:</td></tr>
+      <tr><td><code>press &lt;button&gt;</code></td><td><code>ok\n</code></td><td>Inject button press+release</td></tr>
+      <tr><td><code>hold &lt;button&gt; &lt;ms&gt;</code></td><td><code>ok\n</code></td><td>Hold button for N milliseconds</td></tr>
+      <tr><td><code>cursor &lt;x&gt; &lt;y&gt;</code></td><td><code>ok\n</code></td><td>Move cursor to absolute position</td></tr>
+      <tr><td><code>deploy &lt;size&gt;</code></td><td><code>ok\n</code></td><td>Receive EBOOT binary over TCP</td></tr>
+      <tr><td><code>reboot</code></td><td><code>ok\n</code></td><td>Cold hardware reset via <code>scePowerRequestColdReset</code></td></tr>
+      <tr><td><code>exit</code></td><td><code>ok\n</code></td><td>Exit to XMB</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Layer 3: Remote Deploy + Cold Reboot</h2>
+
+  <p>
+    The <code>deploy</code> command receives a raw EBOOT binary over the TCP
+    connection. The protocol is minimal: send <code>deploy &lt;size&gt;\n</code>
+    followed by exactly <code>&lt;size&gt;</code> bytes of EBOOT data. The server
+    writes to a temp file first, then renames over the live EBOOT (atomic-ish on
+    FAT32). This avoids corruption if the transfer is interrupted.
+  </p>
+
+  <pre><code>$ EBOOT="target/mipsel-sony-psp-std/release/EBOOT.PBP"
+$ SIZE=$(stat -c%s "$EBOOT")
+$ (echo "deploy $SIZE"; cat "$EBOOT") | nc -w 30 192.168.0.249 9293
+ok</code></pre>
+
+  <p>
+    After deploy, <code>reboot</code> triggers
+    <code>scePowerRequestColdReset(0)</code> &mdash; a full hardware reboot that
+    reloads all firmware modules, CFW plugins, and the AutoStart EBOOT.
+    This is not <code>sceKernelLoadExec</code> (which only restarts the app) &mdash;
+    it&rsquo;s a real power cycle. The PSP shuts down, reboots, CFW initializes,
+    AutoStart launches OASIS OS, WiFi auto-connects, and the TCP server comes
+    back online. Total time: ~40 seconds.
+  </p>
+
+  <pre><code>$ echo "reboot" | nc -w 3 192.168.0.249 9293
+ok
+$ sleep 40
+$ echo "ping" | nc -w 3 192.168.0.249 9293
+pong</code></pre>
+
+  <h2>Layer 4: Remote UI Control</h2>
+
+  <p>
+    Button presses are injected through a lock-free
+    <code>SpscQueue&lt;InputEvent, 32&gt;</code> shared between the TCP server
+    thread and the main loop. Each frame, <code>poll_events_inner()</code> drains
+    the queue alongside real controller input. From the main loop&rsquo;s
+    perspective, injected events are indistinguishable from physical button presses.
+  </p>
+
+  <p>
+    The <code>cursor</code> command sets absolute cursor position, which is critical
+    for the PSP&rsquo;s cursor-based dashboard &mdash; icon clicks use hit-testing
+    at the cursor position, not d-pad grid navigation. Injected
+    <code>CursorMove</code> events update the backend&rsquo;s internal
+    <code>cursor_x</code>/<code>cursor_y</code> so that subsequent
+    <code>ButtonPress(Confirm)</code> events hit-test at the right coordinates.
+  </p>
+
+  <p>
+    With this, we can script complete UI workflows:
+  </p>
+
+  <pre><code># Navigate to TV Guide (icon at row 2, col 2)
+echo "cursor 290 200" | nc -w 3 192.168.0.249 9293
+sleep 0.3
+echo "press cross" | nc -w 3 192.168.0.249 9293
+
+# Wait for it to load, then toggle windowed mode
+sleep 5
+echo "press start" | nc -w 3 192.168.0.249 9293</code></pre>
+
+  <h2>Layer 5: Live Framebuffer Streaming</h2>
+
+  <p>
+    The <code>screencap</code> command reads the PSP&rsquo;s VRAM directly at
+    <code>0x44000000</code> (uncached framebuffer base), crops from the 512-pixel
+    stride to 480 visible pixels per row, and streams the raw ABGR pixel data
+    over TCP with a simple header (<code>480 272\n</code>).
+  </p>
+
+  <p>
+    On the host side, a one-liner converts this to a viewable PNG:
+  </p>
+
+  <pre><code>$ echo "screencap" | nc -w 5 192.168.0.249 9293 > /tmp/psp.raw
+$ tail -c +9 /tmp/psp.raw | ffmpeg -y -f rawvideo \
+    -pixel_format abgr -video_size 480x272 \
+    -i - -update 1 /tmp/psp.png</code></pre>
+
+  <p>
+    This is how we debug rendering issues remotely. We captured the TV Guide
+    in both fullscreen and windowed mode, spotted a text clipping bug where
+    episode titles leaked outside window bounds, fixed it, redeployed, and
+    verified the fix &mdash; all without touching the PSP.
+  </p>
+
+  <figure>
+    <img src="../img/09-remote-screencap.png" alt="TV Guide in windowed mode, captured remotely via TCP screencap command" style="max-width: 480px; image-rendering: pixelated;">
+    <figcaption>TV Guide in windowed mode &mdash; captured remotely via the <code>screencap</code> TCP command and converted to PNG with ffmpeg.</figcaption>
+  </figure>
+
+  <figure>
+    <img src="../img/09-dashboard-remote.png" alt="OASIS OS dashboard captured remotely" style="max-width: 480px; image-rendering: pixelated;">
+    <figcaption>The OASIS OS dashboard with all 11 app icons &mdash; the first image captured entirely via remote automation.</figcaption>
+  </figure>
+
+  <h2>Layer 6: Physical Hard Reset (The Last Mile)</h2>
+
+  <p>
+    Software reboot handles the normal case. But the PSP&rsquo;s firmware
+    occasionally hard-locks &mdash; the ME deadlock from
+    <a href="08-me-deadlock-investigation.html">Entry 08</a>, GU command buffer
+    corruption, or OOM crashes that hang the kernel. When this happens, the TCP
+    server is unreachable and the only recovery is a physical power cycle: hold
+    the power slider for several seconds.
+  </p>
+
+  <p>
+    The PSP has no Wake-on-LAN, no IPMI, no remote management interface. The
+    power switch is a physical slider on the side of the device. To close the
+    automation loop completely, we designed a hardware solution: a 12V linear
+    actuator controlled by a USB relay module, driven by a Python script on the
+    development PC.
+  </p>
+
+  <h3>How It Works</h3>
+
+  <p>
+    A small linear actuator (10mm stroke, 188N force) pushes the PSP&rsquo;s
+    power slider. A 2-channel USB relay module (LCUS-2 with CH340 serial chip)
+    is wired as an H-bridge to control the actuator&rsquo;s direction:
+  </p>
+
+  <ul>
+    <li><strong>Both relays OFF</strong> &rarr; actuator extends (pushes slider)</li>
+    <li><strong>Both relays ON</strong> &rarr; actuator retracts (releases slider)</li>
+    <li><strong>One ON, one OFF</strong> &rarr; motor stopped (both wires at same voltage)</li>
+  </ul>
+
+  <figure>
+    <img src="../img/09-actuator-wiring.png" alt="H-bridge wiring diagram for PSP power actuator" style="max-width: 600px;">
+    <figcaption>The USB relay H-bridge wiring. Two relays cross-wired to reverse polarity for extend/retract control.</figcaption>
+  </figure>
+
+  <p>
+    The Python control script sends serial commands to the relay module:
+  </p>
+
+  <pre><code>$ python psp_actuator.py on
+--- PSP POWER ON SEQUENCE ---
+Extending (pushing slider)...
+Holding for 30 seconds...
+Retracting (releasing slider)...
+Stopped.
+Done! PSP should be on.</code></pre>
+
+  <h3>Parts List</h3>
+
+  <table>
+    <thead>
+      <tr><th>Part</th><th>Approx. Price</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>12V mini linear actuator (10mm stroke)</td><td>~$15</td></tr>
+      <tr><td>2-channel USB relay module (LCUS-2, CH340)</td><td>~$12</td></tr>
+      <tr><td>12V 2A DC power adapter</td><td>~$8</td></tr>
+      <tr><td>Wago 221 lever connectors</td><td>~$8&ndash;10</td></tr>
+      <tr><td>22 AWG hookup wire</td><td>~$6</td></tr>
+      <tr><td>Wire stripper</td><td>~$10&ndash;15</td></tr>
+    </tbody>
+  </table>
+
+  <p>Total cost: <strong>~$55&ndash;65</strong>, all off-the-shelf, no soldering required.</p>
+
+  <h2>The Complete Automation Loop</h2>
+
+  <p>
+    With all six layers in place, the full development cycle looks like this:
+  </p>
+
+  <ol>
+    <li><strong>Build</strong> the EBOOT on the host (<code>cargo psp --release</code>)</li>
+    <li><strong>Deploy</strong> over WiFi via <code>deploy</code> TCP command (~5 seconds for 4.8MB)</li>
+    <li><strong>Reboot</strong> via <code>reboot</code> TCP command (cold hardware reset)</li>
+    <li><strong>Wait</strong> ~40 seconds for boot + AutoStart + WiFi auto-connect</li>
+    <li><strong>Verify</strong> via <code>ping</code>, <code>status</code>, <code>screencap</code></li>
+    <li><strong>Test</strong> via <code>cursor</code>, <code>press</code> commands to navigate UI</li>
+    <li><strong>Diagnose</strong> via <code>log</code>, <code>logfull</code>, <code>screencap</code></li>
+    <li><strong>Recover</strong> from hard locks via the physical actuator</li>
+  </ol>
+
+  <p>
+    The helper script <code>scripts/psp-devloop.sh</code> wraps all of this into
+    simple commands:
+  </p>
+
+  <pre><code># Full cycle: build, deploy, reboot, wait, verify
+$ ./scripts/psp-devloop.sh cycle target/.../EBOOT.PBP
+
+# Remote UI navigation
+$ ./scripts/psp-devloop.sh tcp-cursor 290 200
+$ ./scripts/psp-devloop.sh tcp-press cross
+
+# Capture and view screen
+$ ./scripts/psp-devloop.sh tcp-screencap /tmp/psp.png
+
+# Check device state
+$ ./scripts/psp-devloop.sh tcp-status
+{"kiosk":"tv_guide","free_kb":14230,"max_blk_kb":14100,"frame":8520}</code></pre>
+
+  <h2>What This Enables</h2>
+
+  <p>
+    With this infrastructure, an AI agent can autonomously develop for the PSP.
+    It can build code, deploy it, navigate the UI to reproduce a bug, capture
+    screenshots to verify fixes, read logs for diagnostics, and recover from
+    crashes &mdash; the same workflow a human developer follows, but without
+    any physical interaction with the device.
+  </p>
+
+  <p>
+    During this session alone, we used the remote automation to:
+  </p>
+
+  <ul>
+    <li>Debug and fix WiFi auto-connect timing (WLAN hardware warmup, apctl state checks)</li>
+    <li>Fix a GU command buffer corruption bug when TV Guide launched with WiFi already connected</li>
+    <li>Add windowed rendering for TV Guide (was showing a blank window)</li>
+    <li>Unify fullscreen and windowed TV Guide renderers into a single function</li>
+    <li>Fix text clipping overflow in windowed mode</li>
+  </ul>
+
+  <p>
+    Each fix was: code change &rarr; build &rarr; TCP deploy &rarr; cold reboot &rarr;
+    remote navigate &rarr; screencap verify. Average iteration time: under 2 minutes,
+    with zero human intervention on the device side.
+  </p>
+
+  <h2>Lessons Learned</h2>
+
+  <ul>
+    <li>
+      <strong>WiFi auto-connect is unreliable after cold boot.</strong> The WLAN
+      hardware needs 5+ seconds to initialize. Even then, success is intermittent
+      (~80%). The retry logic in <code>server_main</code> catches most failures.
+    </li>
+    <li>
+      <strong>Kernel PRXs can&rsquo;t use user-mode network functions.</strong>
+      Our first attempt was a kernel plugin that accepted commands via ms0: file
+      IPC. It worked for file operations but returned <code>0x80410005</code> for
+      any net syscall. The TCP server had to live in the EBOOT (user mode).
+    </li>
+    <li>
+      <strong><code>sceKernelLoadExec</code> doesn&rsquo;t actually reboot.</strong>
+      It restarts the current app but doesn&rsquo;t reload firmware modules or CFW
+      plugins. We needed <code>scePowerRequestColdReset(0)</code> for a real power
+      cycle that refreshes everything.
+    </li>
+    <li>
+      <strong>Input injection needs cursor state synchronization.</strong>
+      Pushing a <code>CursorMove</code> event isn&rsquo;t enough &mdash; the
+      backend&rsquo;s internal <code>cursor_x</code>/<code>cursor_y</code> fields
+      must also be updated, or hit-testing reads stale coordinates.
+    </li>
+    <li>
+      <strong>There is no substitute for physical access.</strong> Software reboot
+      covers 90% of cases, but firmware hard-locks require a physical power cycle.
+      The actuator closes the last 10%.
+    </li>
+  </ul>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+      <span>&middot;</span>
+      <a href="../">Home</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+
+</body>
+</html>
