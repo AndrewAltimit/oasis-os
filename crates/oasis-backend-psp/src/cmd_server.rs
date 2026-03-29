@@ -11,18 +11,61 @@
 
 use core::ffi::c_void;
 
-/// Start the command server thread. Call after network is initialized.
+/// Start the network auto-connect + command server thread.
+/// Call early in EBOOT init — connects WiFi in background without
+/// blocking the UI, then starts TCP server.
 pub fn spawn() {
     if let Ok(handle) = psp::thread::ThreadBuilder::new(b"cmd_srv\0")
         .priority(40)
         .stack_size(8192)
         .spawn(move || {
+            // Auto-connect WiFi in background before server starts.
+            auto_connect_wifi();
             server_main();
             0
         })
     {
         core::mem::forget(handle);
     }
+}
+
+/// Try to auto-connect to saved WiFi profile without dialog.
+/// Initializes the full network stack if not already done.
+fn auto_connect_wifi() {
+    // Check if already connected.
+    if psp::net::is_connected() {
+        return;
+    }
+
+    // Load net modules + init stack if not done yet.
+    crate::network::load_net_modules_once();
+    let _ = psp::net::init(0x20000);
+
+    // Try profiles 1 and 0.
+    for profile in [1i32, 0] {
+        let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
+        if ret < 0 { continue; }
+
+        let mut connected = false;
+        for _ in 0..30 {
+            let mut state = psp::sys::ApctlState::Disconnected;
+            unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+            if matches!(state, psp::sys::ApctlState::GotIp) {
+                connected = true;
+                break;
+            }
+            psp::thread::sleep_ms(500);
+        }
+
+        if connected {
+            log_msg("[CMD] WiFi auto-connected");
+            return;
+        }
+        unsafe { psp::sys::sceNetApctlDisconnect() };
+        psp::thread::sleep_ms(500);
+    }
+
+    log_msg("[CMD] WiFi auto-connect failed, will retry on demand");
 }
 
 fn log_msg(msg: &str) {
@@ -119,14 +162,24 @@ fn handle_client(cfd: i32) {
         take_screenshot();
         send_response(cfd, b"ok\n");
         log_msg("[CMD] screenshot");
+    } else if cmd == b"exit" {
+        send_response(cfd, b"ok\n");
+        unsafe { psp::sys::sceNetInetClose(cfd) };
+        log_msg("[CMD] exiting to XMB");
+        psp::thread::sleep_ms(500);
+        unsafe { psp::sys::sceKernelExitGame() };
+        return;
     } else if cmd == b"reboot" {
         send_response(cfd, b"ok\n");
         unsafe { psp::sys::sceNetInetClose(cfd) };
-        log_msg("[CMD] rebooting");
+        log_msg("[CMD] rebooting PSP");
         psp::thread::sleep_ms(500);
-        // Cold reset via scePower.
+        // Restart the EBOOT (reloads plugins, refreshes everything).
         unsafe {
-            psp::sys::sceKernelExitGame();
+            psp::sys::sceKernelLoadExec(
+                b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0".as_ptr(),
+                core::ptr::null_mut(),
+            );
         }
         return;
     } else if cmd == b"log" {

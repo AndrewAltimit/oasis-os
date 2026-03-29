@@ -63,7 +63,7 @@ pub fn is_net_initialized() -> bool {
 /// Must be called before `psp::net::init()` — the net syscalls
 /// (`sceNetInit`, `sceNetInetInit`, etc.) require the kernel modules
 /// to be resident, unlike PPSSPP which stubs them automatically.
-fn load_net_modules_once() {
+pub(crate) fn load_net_modules_once() {
     use std::sync::atomic::AtomicBool;
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
@@ -122,22 +122,46 @@ fn ensure_net_init() -> Result<()> {
     psp::net::init(0x20000)
         .map_err(|e| OasisError::Backend(format!("net init failed: {e}").into()))?;
 
-    // Show the PSP's built-in WiFi connection dialog.
-    // This is the standard approach used by PSP games — it lets the user
-    // select a stored WiFi profile and handles scan/auth/DHCP. Works on
-    // both real hardware and PPSSPP.
-    if let Err(e) = psp::net::connect_dialog() {
-        psp::net::term();
-        if e.is_cancelled() {
-            NET_DIALOG_DISMISSED.store(1, Ordering::Release);
+    // Try silent auto-connect to saved WiFi profiles (1 and 0) first.
+    // This avoids the connection dialog for automated dev workflows.
+    let mut auto_connected = false;
+    for profile in [1i32, 0] {
+        let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
+        if ret >= 0 {
+            // Wait for connection (state 4 = got IP), up to 15 seconds.
+            for _ in 0..30 {
+                let mut state = psp::sys::ApctlState::Disconnected;
+                unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+                if matches!(state, psp::sys::ApctlState::GotIp) {
+                    auto_connected = true;
+                    break;
+                }
+                psp::thread::sleep_ms(500);
+            }
+            if auto_connected {
+                break;
+            }
+            // Timed out — disconnect and try next profile.
+            unsafe { psp::sys::sceNetApctlDisconnect() };
+            psp::thread::sleep_ms(500);
+        }
+    }
+
+    // Fall back to the WiFi connection dialog if auto-connect failed.
+    if !auto_connected {
+        if let Err(e) = psp::net::connect_dialog() {
+            psp::net::term();
+            if e.is_cancelled() {
+                NET_DIALOG_DISMISSED.store(1, Ordering::Release);
+                return Err(OasisError::Backend(
+                    "WiFi dialog cancelled by user".to_string().into(),
+                ));
+            }
+            NET_DIALOG_DISMISSED.store(2, Ordering::Release);
             return Err(OasisError::Backend(
-                "WiFi dialog cancelled by user".to_string().into(),
+                format!("WiFi connect failed: {e}").into(),
             ));
         }
-        NET_DIALOG_DISMISSED.store(2, Ordering::Release);
-        return Err(OasisError::Backend(
-            format!("WiFi connect failed: {e}").into(),
-        ));
     }
 
     NET_INITIALIZED.store(true, Ordering::Release);
