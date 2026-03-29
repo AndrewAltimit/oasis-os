@@ -20,10 +20,11 @@ use crate::threading::{AudioCmd, send_audio_cmd};
 /// decode to avoid ~5-20ms Memory Stick I/O stalls per log write.
 static VLOG_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Audio-only mode: skip video decode entirely. Default true because
-/// both decode paths are currently broken (PSMF ringbuffer produces no
-/// output, NAL direct deadlocks after ~90 frames on >480p content).
-static AUDIO_ONLY: AtomicBool = AtomicBool::new(true);
+/// Audio-only mode: skip video decode entirely. Default false — the NAL
+/// decoder will attempt to decode ~80 frames before safely falling back
+/// to audio-only mode (avoiding the ~90 frame ME deadlock on >480p).
+/// Set to true via TCP "audio-only on" to skip video entirely.
+static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
 
 /// Set audio-only mode. When true, video frames are discarded and only
 /// audio plays. When false, video decode is attempted (may crash/hang).
@@ -1575,33 +1576,25 @@ fn play_stream() -> bool {
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
 
-    // Audio-only mode: skip video decode entirely, just drain video frames
-    // and let the audio thread handle playback. Both video decode paths are
-    // currently broken:
-    // - PSMF ringbuffer: packs feed successfully but ME never produces output
-    // - NAL direct: deadlocks after ~90 frames on >480p content (mode 5 bug)
-    //
-    // TODO: Re-enable when a working decode path is available.
+    // Audio-only mode: skip video decode entirely.
     if AUDIO_ONLY.load(Ordering::Relaxed) {
         vlog("[VIDEO] audio-only mode, skipping video decode");
         return drain_stream_only();
     }
 
-    // Try PSMF ringbuffer path first (uses AvMpegBase, no mode 5 bug).
-    // Falls back to NAL direct path (mpeg_vsh370.prx) if PSMF fails.
-    let mut psmf_dec = match crate::psmf_decode::PsmfDecoder::new(vid_w, vid_h) {
-        Ok(dec) => {
-            vlog("[VIDEO] PSMF decoder created, using ringbuffer path");
-            Some(dec)
-        }
-        Err(e) => {
-            vlog(&format!("[VIDEO] PSMF failed: {e}, trying NAL path"));
-            None
-        }
-    };
-
-    // NAL-based decode (cooleyes/PMPlayer approach) as fallback.
-    let mut nal_dec = if psmf_dec.is_none() {
+    // NAL direct path (mpeg_vsh370.prx): works for ≤480p content.
+    // >480p content (mode 5) deadlocks sceMpegAvcDecode immediately on
+    // current firmware — skip video and use audio-only.
+    // For ≤480p, decode with a safety cutoff.
+    let video_oversized = vid_w > 480 || vid_h > 480;
+    let max_decode_frames: u32 = if video_oversized { 0 } else { 500 };
+    let mut psmf_dec: Option<crate::psmf_decode::PsmfDecoder> = None;
+    let mut nal_dec = if video_oversized {
+        vlog(&format!(
+            "[VIDEO] {vid_w}x{vid_h} exceeds 480p, audio-only (mode 5 deadlock)"
+        ));
+        None
+    } else {
         match NalDecoder::try_init(&first_frame) {
             Ok(dec) => {
                 vlog("[VIDEO] NAL decoder initialized OK");
@@ -1609,12 +1602,15 @@ fn play_stream() -> bool {
             },
             Err(e) => {
                 vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
-                return drain_stream_only();
+                None
             },
         }
-    } else {
-        None
     };
+
+    // If no decoder available, go straight to audio-only drain.
+    if nal_dec.is_none() && psmf_dec.is_none() {
+        return drain_stream_only();
+    }
 
     // Decode the first keyframe.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
@@ -1682,6 +1678,19 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
+                // Safety cutoff for >480p content: stop decode before the
+                // ME deadlocks and switch to audio-only drain.
+                if frames_processed >= max_decode_frames && nal_dec.is_some() {
+                    if max_decode_frames < u32::MAX {
+                        vlog_force(&format!(
+                            "[VIDEO] safety cutoff at frame {frames_processed} \
+                             (dec={decode_count}), switching to audio-only"
+                        ));
+                        drop(nal_dec.take());
+                        return drain_stream_only();
+                    }
+                }
+
                 // PSMF path: convert to Annex B and feed to ringbuffer.
                 let decode_result = if let Some(ref mut psmf) = psmf_dec {
                     let annex_b = avcc_to_annex_b_simple(
