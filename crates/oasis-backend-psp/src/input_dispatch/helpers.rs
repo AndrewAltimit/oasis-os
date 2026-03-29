@@ -90,12 +90,20 @@ pub(super) fn dispatch_dashboard_confirm(
             if tv.channels.is_empty() {
                 if !oasis_backend_psp::network::is_net_initialized() {
                     dbg_log("[TV] init network...");
+                    // Check if WiFi is already connected (cmd_server auto-connect).
+                    // If so, ensure_net_init won't show a dialog, so we must NOT
+                    // call reinit_gu_frame (which is only safe after utility dialogs).
+                    let was_connected = psp::net::is_connected();
                     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                         dbg_log(&format!("[TV] net init failed: {e}"));
-                        backend.reinit_gu_frame();
+                        if !was_connected {
+                            backend.reinit_gu_frame();
+                        }
                     } else {
                         dbg_log("[TV] net init OK");
-                        backend.reinit_gu_frame();
+                        if !was_connected {
+                            backend.reinit_gu_frame();
+                        }
                     }
                 }
                 dbg_log("[TV] parsing channel TOML...");

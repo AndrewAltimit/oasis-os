@@ -17,7 +17,7 @@ use core::ffi::c_void;
 pub fn spawn() {
     if let Ok(handle) = psp::thread::ThreadBuilder::new(b"cmd_srv\0")
         .priority(40)
-        .stack_size(8192)
+        .stack_size(16384)
         .spawn(move || {
             // Auto-connect WiFi in background before server starts.
             auto_connect_wifi();
@@ -32,19 +32,48 @@ pub fn spawn() {
 /// Try to auto-connect to saved WiFi profile without dialog.
 /// Initializes the full network stack if not already done.
 fn auto_connect_wifi() {
-    // Check if already connected.
-    if psp::net::is_connected() {
+    // Wait for WLAN hardware to initialize after boot.
+    // Without this delay, sceNetApctlConnect fails because the
+    // WLAN chip isn't ready yet (especially on cold reboot).
+    psp::thread::sleep_ms(5000);
+
+    // Check if already connected via apctl state (more reliable than
+    // psp::net::is_connected which uses a separate flag).
+    let mut state = psp::sys::ApctlState::Disconnected;
+    unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+    if matches!(state, psp::sys::ApctlState::GotIp) {
+        log_msg("[CMD] WiFi already connected");
         return;
     }
 
     // Load net modules + init stack if not done yet.
     crate::network::load_net_modules_once();
-    let _ = psp::net::init(0x20000);
+    match psp::net::init(0x20000) {
+        Ok(_) => log_msg("[CMD] net init OK"),
+        Err(_) => log_msg("[CMD] net init err (may be already init)"),
+    }
+
+    // Check WLAN switch is on.
+    let wlan = unsafe { psp::sys::sceWlanGetSwitchState() };
+    log_msg(if wlan != 0 {
+        "[CMD] WLAN switch ON"
+    } else {
+        "[CMD] WLAN switch OFF, skipping auto-connect"
+    });
+    if wlan == 0 {
+        return;
+    }
 
     // Try profiles 1 and 0.
     for profile in [1i32, 0] {
         let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
-        if ret < 0 { continue; }
+        if ret < 0 {
+            // Log hex error code.
+            log_msg(&format!(
+                "[CMD] apctl connect({}) = 0x{:08x}", profile, ret as u32
+            ));
+            continue;
+        }
 
         let mut connected = false;
         for _ in 0..30 {
@@ -73,15 +102,36 @@ fn log_msg(msg: &str) {
 }
 
 fn server_main() {
-    // Wait for network to be fully ready.
-    for _ in 0..30 {
-        if psp::net::is_connected() {
+    // auto_connect_wifi() already ran. Check state via apctl directly
+    // since psp::net::is_connected() may not reflect apctl state.
+    let mut connected = false;
+    for _ in 0..60 {
+        let mut state = psp::sys::ApctlState::Disconnected;
+        unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+        if matches!(state, psp::sys::ApctlState::GotIp) {
+            connected = true;
             break;
         }
         psp::thread::sleep_ms(2000);
     }
 
-    if !psp::net::is_connected() {
+    if !connected {
+        // Retry auto-connect once more with a fresh attempt.
+        log_msg("[CMD] retrying WiFi auto-connect...");
+        auto_connect_wifi();
+
+        for _ in 0..30 {
+            let mut state = psp::sys::ApctlState::Disconnected;
+            unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+            if matches!(state, psp::sys::ApctlState::GotIp) {
+                connected = true;
+                break;
+            }
+            psp::thread::sleep_ms(1000);
+        }
+    }
+
+    if !connected {
         log_msg("[CMD] no network, server not started");
         return;
     }

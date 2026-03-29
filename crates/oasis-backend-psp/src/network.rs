@@ -115,6 +115,17 @@ fn ensure_net_init() -> Result<()> {
         ));
     }
 
+    // Check if WiFi is already connected (e.g. cmd_server auto-connected
+    // at boot). If so, skip module loading, init, and dialog entirely.
+    {
+        let mut state = psp::sys::ApctlState::Disconnected;
+        unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+        if matches!(state, psp::sys::ApctlState::GotIp) {
+            NET_INITIALIZED.store(true, Ordering::Release);
+            return Ok(());
+        }
+    }
+
     // Load kernel modules before initializing the network stack.
     load_net_modules_once();
 
@@ -122,28 +133,29 @@ fn ensure_net_init() -> Result<()> {
     psp::net::init(0x20000)
         .map_err(|e| OasisError::Backend(format!("net init failed: {e}").into()))?;
 
-    // Try silent auto-connect to saved WiFi profiles (1 and 0) first.
-    // This avoids the connection dialog for automated dev workflows.
+    // Try silent auto-connect to saved WiFi profiles (1 and 0).
     let mut auto_connected = false;
-    for profile in [1i32, 0] {
-        let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
-        if ret >= 0 {
-            // Wait for connection (state 4 = got IP), up to 15 seconds.
-            for _ in 0..30 {
-                let mut state = psp::sys::ApctlState::Disconnected;
-                unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-                if matches!(state, psp::sys::ApctlState::GotIp) {
-                    auto_connected = true;
+    {
+        for profile in [1i32, 0] {
+            let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
+            if ret >= 0 {
+                // Wait for connection (state 4 = got IP), up to 15 seconds.
+                for _ in 0..30 {
+                    let mut state = psp::sys::ApctlState::Disconnected;
+                    unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+                    if matches!(state, psp::sys::ApctlState::GotIp) {
+                        auto_connected = true;
+                        break;
+                    }
+                    psp::thread::sleep_ms(500);
+                }
+                if auto_connected {
                     break;
                 }
+                // Timed out — disconnect and try next profile.
+                unsafe { psp::sys::sceNetApctlDisconnect() };
                 psp::thread::sleep_ms(500);
             }
-            if auto_connected {
-                break;
-            }
-            // Timed out — disconnect and try next profile.
-            unsafe { psp::sys::sceNetApctlDisconnect() };
-            psp::thread::sleep_ms(500);
         }
     }
 
