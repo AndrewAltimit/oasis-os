@@ -34,22 +34,29 @@ unsafe extern "C" fn ringbuffer_callback(
     let available = total.saturating_sub(consumed);
     let to_copy = (num_packets as u32).min(available);
 
-    if to_copy == 0 || CB_PACK_DATA.is_null() {
-        return 0;
+    // Log callback invocation.
+    {
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(
+                fd,
+                b"[PSMF-CB] called\n".as_ptr() as *const _,
+                17,
+            );
+            psp::sys::sceIoClose(fd);
+        }
     }
 
-    let src = CB_PACK_DATA.add(consumed as usize * psmf::PACK_SIZE);
-    let dst = p_data as *mut u8;
-    core::ptr::copy_nonoverlapping(src, dst, to_copy as usize * psmf::PACK_SIZE);
-
-    // Flush D-cache so kernel/ME can read the copied data.
-    psp::sys::sceKernelDcacheWritebackInvalidateRange(
-        dst as *const c_void,
-        to_copy * psmf::PACK_SIZE as u32,
-    );
-
-    CB_PACK_CONSUMED.store(consumed + to_copy, Ordering::Release);
-    to_copy as i32
+    // TEST: Return 0 (no data) to see if crash is from copy or processing.
+    // The previous doc says "Callback returns 0 (no data) — Works! Audio plays."
+    // If returning 0 is stable, the crash is in the kernel's MPEG-PS parsing.
+    0
 }
 
 // -----------------------------------------------------------------------
@@ -89,10 +96,26 @@ impl PsmfDecoder {
 
         vlog_force("[PSMF] creating decoder...");
 
+        // Load AvMpegBase module (provides the ringbuffer sceMpeg path).
+        // This MUST be done before mpeg_vsh370.prx is loaded, because
+        // mpeg_vsh370.prx overrides sceMpeg exports and doesn't support mode 0.
+        let ret = unsafe {
+            psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase)
+        };
+        vlog_force(&format!("[PSMF] AvMpegBase load={ret:#x}"));
+        // Accept already-loaded (0x80111103).
+        if ret < 0 && ret != -0x7FEEEEFDi32 {
+            return Err(format!("AvMpegBase: {ret:#x}"));
+        }
+
         // Init MPEG subsystem.
         let ret = unsafe { psp::sys::sceMpegInit() };
-        if ret < 0 && ret != 0x80618003u32 as i32
+        vlog_force(&format!("[PSMF] sceMpegInit={ret:#x}"));
+        // Accept "already initialized" from both sceMpeg and kernel.
+        if ret < 0
+            && ret != 0x80618003u32 as i32
             && ret != 0x80618005u32 as i32
+            && ret != 0x8002013au32 as i32
         {
             return Err(format!("sceMpegInit: {ret:#x}"));
         }
@@ -163,6 +186,9 @@ impl PsmfDecoder {
         let mpeg: psp::sys::SceMpeg = unsafe {
             core::mem::transmute(mpeg_storage as *mut *mut c_void)
         };
+        // Standard ringbuffer mode: mode=0, ddr_top=0.
+        // Unlike the NAL path (mode 4/5) which needs a DDR workspace,
+        // the ringbuffer path manages its own ME memory internally.
         let ret = unsafe {
             psp::sys::sceMpegCreate(
                 mpeg,
@@ -170,8 +196,8 @@ impl PsmfDecoder {
                 mem_size,
                 &mut *ringbuffer,
                 frame_width as i32,
-                mpeg_mode,
-                ddr_aligned as i32,
+                0, // mode 0 (standard ringbuffer)
+                0, // no DDR top for ringbuffer mode
             )
         };
         if ret < 0 {
@@ -248,20 +274,35 @@ impl PsmfDecoder {
         }
     }
 
-    /// Send the PSMF header and first pack to the ringbuffer.
+    /// Send the PSMF header from the real test.pmf file.
     fn send_header(&mut self) -> Result<(), String> {
-        let hdr = psmf::generate_psmf_header(
-            self.width as u16,
-            self.height as u16,
-            0x04000000,
-        );
+        // Read the real PSMF header (first 2048 bytes) from test.pmf.
+        let mut hdr = [0u8; psmf::PSMF_HEADER_SIZE];
+        let fd = unsafe {
+            psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/test.pmf\0".as_ptr(),
+                psp::sys::IoOpenFlags::RD_ONLY,
+                0,
+            )
+        };
+        if fd < psp::sys::SceUid(0) {
+            return Err("can't open test.pmf".into());
+        }
+        unsafe {
+            psp::sys::sceIoRead(
+                fd,
+                hdr.as_mut_ptr() as *mut c_void,
+                psmf::PSMF_HEADER_SIZE as u32,
+            );
+            psp::sys::sceIoClose(fd);
+        }
 
-        // Validate header with sceMpegQueryStreamOffset.
+        // Validate with sceMpegQueryStreamOffset.
         let mut offset: i32 = 0;
         let ret = unsafe {
             psp::sys::sceMpegQueryStreamOffset(
                 self.mpeg(),
-                &hdr as *const u8 as *mut c_void,
+                hdr.as_ptr() as *mut c_void,
                 &mut offset,
             )
         };
@@ -272,18 +313,21 @@ impl PsmfDecoder {
             return Err(format!("QueryStreamOffset: {ret:#x}"));
         }
 
-        // Feed header as the first ringbuffer packet.
-        let first_pack = psmf::generate_first_pack(self.scr);
-        self.scr += 27_000_000 / 30;
+        // Also query stream size.
+        let mut stream_size: i32 = 0;
+        unsafe {
+            psp::sys::sceMpegQueryStreamSize(
+                hdr.as_ptr() as *mut c_void,
+                &mut stream_size,
+            );
+        }
+        vlog_force(&format!("[PSMF] streamSize={stream_size:#x}"));
 
-        // Pack both into the flat buffer.
-        self.pack_buf.clear();
-        self.pack_buf.extend_from_slice(&hdr);
-        self.pack_buf.extend_from_slice(&first_pack);
-
-        self.feed_packs(2)?;
+        // DON'T feed the header via ringbuffer — it's metadata, not
+        // MPEG-PS data. The ringbuffer should receive only MPEG-PS packs
+        // (starting at file offset 0x800 = the sceMpegQueryStreamOffset value).
         self.header_sent = true;
-        vlog_force("[PSMF] header sent OK");
+        vlog_force("[PSMF] header validated (not fed to ringbuffer)");
         Ok(())
     }
 
@@ -354,20 +398,67 @@ impl PsmfDecoder {
             &mut self.scr,
             &mut packs,
         );
+        let pts_90khz = (pts_secs * 90000.0) as u64;
 
-        // Flatten into contiguous buffer for callback.
-        self.pack_buf.clear();
-        for pack in &packs {
-            self.pack_buf.extend_from_slice(pack);
+        // TEST: Feed real PMF data from test.pmf instead of our generated packs.
+        // This verifies the ringbuffer path works with known-good data.
+        static TEST_COUNT: core::sync::atomic::AtomicU32 =
+            core::sync::atomic::AtomicU32::new(0);
+        let call_num = TEST_COUNT.fetch_add(1, Ordering::Relaxed);
+
+        if call_num < 16 {
+            // Read packs from real PMF file (offset 0x800 + call_num * 2048).
+            let pack_offset = 0x800 + (call_num as usize) * psmf::PACK_SIZE;
+            let mut real_pack = [0u8; psmf::PACK_SIZE];
+
+            let fd = unsafe {
+                psp::sys::sceIoOpen(
+                    b"ms0:/PSP/GAME/OASISOS/test.pmf\0".as_ptr(),
+                    psp::sys::IoOpenFlags::RD_ONLY,
+                    0,
+                )
+            };
+            if fd >= psp::sys::SceUid(0) {
+                unsafe {
+                    psp::sys::sceIoLseek(fd, pack_offset as i64, psp::sys::IoWhence::Set);
+                    psp::sys::sceIoRead(
+                        fd,
+                        real_pack.as_mut_ptr() as *mut core::ffi::c_void,
+                        psmf::PACK_SIZE as u32,
+                    );
+                    psp::sys::sceIoClose(fd);
+                }
+
+                // Log first bytes of the real pack.
+                vlog_force(&format!(
+                    "[PSMF] real pack {call_num} @{pack_offset:#x}: \
+                     {:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}",
+                    real_pack[0], real_pack[1], real_pack[2], real_pack[3],
+                    real_pack[14], real_pack[15], real_pack[16], real_pack[17],
+                ));
+
+                self.pack_buf.clear();
+                self.pack_buf.extend_from_slice(&real_pack);
+
+                vlog_force(&format!("[PSMF] feeding real pack {call_num}..."));
+                if let Err(e) = self.feed_packs(1) {
+                    vlog_force(&format!("[PSMF] feed error: {e}"));
+                    return false;
+                }
+                vlog_force(&format!("[PSMF] real pack {call_num} OK"));
+
+                // Try decode after feeding a few packs.
+                if call_num >= 4 {
+                    let result = self.try_decode();
+                    if result {
+                        vlog_force("[PSMF] DECODED A FRAME!");
+                        return true;
+                    }
+                }
+            }
         }
 
-        if let Err(e) = self.feed_packs(pack_count as u32) {
-            vlog_force(&format!("[PSMF] feed error: {e}"));
-            return false;
-        }
-
-        // Try to get a decoded frame.
-        self.try_decode()
+        false
     }
 
     /// Try to extract and decode one video AU from the ringbuffer.

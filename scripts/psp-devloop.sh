@@ -76,17 +76,12 @@ EOF
     sync
     echo "Command written. Ejecting USB..."
 
-    # Find the USB block device and eject.
+    # Unmount the filesystem only — do NOT power-off the USB device
+    # as that shuts down the PSP (cuts USB bus power).
     local dev
     dev=$(findmnt -n -o SOURCE "$PSP_MOUNT" 2>/dev/null | head -1)
     if [ -n "$dev" ]; then
         udisksctl unmount -b "$dev" --no-user-interaction 2>/dev/null || true
-        # Power off the USB device to signal the PSP.
-        local parent
-        parent=$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1)
-        if [ -n "$parent" ]; then
-            udisksctl power-off -b "/dev/$parent" --no-user-interaction 2>/dev/null || true
-        fi
     fi
 
     echo "Ejected. PSP should launch EBOOT in ~5 seconds."
