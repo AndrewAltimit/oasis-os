@@ -14,6 +14,15 @@ psp::module_kernel!("OasisDevloop", 1, 0);
 use core::ffi::c_void;
 
 const LOG_PATH: *const u8 = b"ms0:/seplugins/devloop.log\0".as_ptr();
+
+fn hex_u32(val: u32, out: &mut [u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..4 {
+        let b = ((val >> (24 - i * 8)) & 0xFF) as u8;
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0xF) as usize];
+    }
+}
 const CMD_PATH: *const u8 = b"ms0:/seplugins/devloop_cmd.txt\0".as_ptr();
 
 fn log(msg: &[u8]) {
@@ -234,20 +243,51 @@ unsafe extern "C" fn tcp_worker(_: usize, _: *mut c_void) -> i32 {
     let send: Fsd = core::mem::transmute(p_send);
     let close: F1 = core::mem::transmute(p_close);
 
-    // Wait for WiFi.
+    // Wait for WiFi (state 4 = got IP).
     if !p_state.is_null() {
         let get_state: Fs = core::mem::transmute(p_state);
         log(b"[DL] TCP: waiting WiFi...");
-        for _ in 0..60 {
+        let mut connected = false;
+        for i in 0..60u32 {
             let mut s: i32 = 0;
-            get_state(&mut s);
-            if s == 4 { break; }
+            let r = get_state(&mut s);
+            // Log first few attempts and every 10th.
+            if i < 3 || i % 10 == 0 {
+                let mut msg = *b"[DL] state=XX ret=XXXXXXXX";
+                msg[10] = b'0' + ((s / 10) % 10) as u8;
+                msg[11] = b'0' + (s % 10) as u8;
+                hex_u32(r as u32, &mut msg[17..25]);
+                log(&msg[..25]);
+            }
+            if s == 4 { connected = true; break; }
             psp::sys::sceKernelDelayThread(2_000_000);
         }
+        if connected {
+            log(b"[DL] TCP: WiFi OK");
+        } else {
+            log(b"[DL] TCP: WiFi timeout, trying anyway");
+        }
+    } else {
+        log(b"[DL] TCP: no state fn, delay 15s");
+        psp::sys::sceKernelDelayThread(15_000_000);
     }
 
-    let sfd = socket(2, 1, 0);
-    if sfd < 0 { log(b"[DL] TCP: socket fail"); return 0; }
+    // Let inet stack settle after WiFi connect.
+    psp::sys::sceKernelDelayThread(3_000_000);
+
+    // Retry socket creation a few times.
+    let mut sfd = -1i32;
+    for attempt in 0..5 {
+        sfd = socket(2, 1, 0);
+        if sfd >= 0 { break; }
+        if attempt == 0 {
+            let mut msg = *b"[DL] TCP: sock retry XXXXXXXX";
+            hex_u32(sfd as u32, &mut msg[21..29]);
+            log(&msg);
+        }
+        psp::sys::sceKernelDelayThread(2_000_000);
+    }
+    if sfd < 0 { log(b"[DL] TCP: socket fail final"); return 0; }
 
     let mut sa = [0u8; 16];
     sa[0] = 16; sa[1] = 2;
