@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 pub mod audio;
+pub mod cmd_server;
 pub mod filesystem;
 pub mod font;
 pub mod input;

@@ -250,6 +250,9 @@ fn psp_main() {
     // Frame timing via hardware tick counter.
     let mut frame_timer = psp::time::FrameTimer::new();
     boot::show_boot_screen(&mut backend, "Ready", 100);
+    // Start TCP command server for remote dev automation.
+    oasis_backend_psp::cmd_server::spawn();
+
     dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
 
