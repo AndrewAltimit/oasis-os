@@ -273,13 +273,21 @@ pub(crate) fn render_classic(
                 views::draw_tv_error(backend, &tv.error_msg);
                 chrome::draw_button_hints(backend, &[("X", "Retry"), ("O", "Back")]);
             } else {
-                views_sdi::update_tv_channels(
-                    sdi,
+                // Use the same renderer as windowed mode, scaled to full content area.
+                use oasis_backend_psp::SCREEN_WIDTH;
+                use crate::theme::{CONTENT_TOP, CONTENT_H};
+                let _ = desktop::draw_tvguide_windowed(
                     &tv.channels,
                     &tv.catalogs,
                     tv.selected,
                     tv.scroll,
-                    active_theme,
+                    &tv.now_playing,
+                    false,
+                    0,
+                    CONTENT_TOP as i32,
+                    SCREEN_WIDTH,
+                    CONTENT_H,
+                    backend,
                 );
                 chrome::draw_button_hints(backend, &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")]);
             }
