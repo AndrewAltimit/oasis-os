@@ -103,7 +103,10 @@ fn auto_connect_wifi() {
     // Load net modules + init stack if not done yet.
     crate::network::load_net_modules_once();
     match psp::net::init(0x20000) {
-        Ok(_) => log_msg("[CMD] net init OK"),
+        Ok(_) => {
+            log_msg("[CMD] net init OK");
+            crate::network::mark_net_stack_initialized();
+        }
         Err(_) => log_msg("[CMD] net init err (may be already init)"),
     }
 

@@ -40,8 +40,14 @@ pub(crate) const PSP_SO_RCVTIMEO: i32 = 0x1006;
 // Network initialization (lazy, one-shot)
 // ---------------------------------------------------------------------------
 
-/// Whether the network subsystem has been initialized.
+/// Whether the network subsystem has been fully initialized (stack + connected).
 static NET_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Whether `psp::net::init()` has been called (stack initialized, but not
+/// necessarily connected). Tracked separately from `NET_INITIALIZED` so that
+/// `ensure_net_init` doesn't call `psp::net::init()` again if `cmd_server`
+/// already initialized the stack at boot.
+static NET_STACK_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Whether the user has already dismissed the WiFi dialog.
 /// Once set, we never show the dialog again to avoid freezing the EBOOT.
@@ -51,6 +57,12 @@ static NET_DIALOG_DISMISSED: AtomicU8 = AtomicU8::new(0);
 /// Public wrapper — call from main thread (shows WiFi dialog with GU rendering).
 pub fn ensure_net_init_pub() -> Result<()> {
     ensure_net_init()
+}
+
+/// Mark the network stack as initialized (called by `cmd_server` after
+/// `psp::net::init()` so that `ensure_net_init` doesn't call it again).
+pub(crate) fn mark_net_stack_initialized() {
+    NET_STACK_INITIALIZED.store(true, Ordering::Release);
 }
 
 /// Returns `true` if the network stack has already been initialized.
@@ -130,8 +142,13 @@ fn ensure_net_init() -> Result<()> {
     load_net_modules_once();
 
     // 128 KiB memory pool for the networking stack.
-    psp::net::init(0x20000)
-        .map_err(|e| OasisError::Backend(format!("net init failed: {e}").into()))?;
+    // Skip if already initialized (e.g. cmd_server called psp::net::init at boot).
+    if !NET_STACK_INITIALIZED.load(Ordering::Acquire) {
+        psp::net::init(0x20000).map_err(|e| {
+            OasisError::Backend(format!("net init failed: {e}").into())
+        })?;
+        NET_STACK_INITIALIZED.store(true, Ordering::Release);
+    }
 
     // Try silent auto-connect to saved WiFi profiles (1 and 0).
     let mut auto_connected = false;
@@ -163,6 +180,7 @@ fn ensure_net_init() -> Result<()> {
     if !auto_connected {
         if let Err(e) = psp::net::connect_dialog() {
             psp::net::term();
+            NET_STACK_INITIALIZED.store(false, Ordering::Release);
             if e.is_cancelled() {
                 NET_DIALOG_DISMISSED.store(1, Ordering::Release);
                 return Err(OasisError::Backend(
