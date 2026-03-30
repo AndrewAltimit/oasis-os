@@ -1416,10 +1416,12 @@ fn video_thread_fn() {
             Some(VideoCmd::Stop) => {
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
                 while VIDEO_STREAM_QUEUE.pop().is_some() {}
+                while VIDEO_FRAME_QUEUE.pop().is_some() {}
                 send_audio_cmd(AudioCmd::VideoAudioStop);
             },
             Some(VideoCmd::Shutdown) => {
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
+                while VIDEO_FRAME_QUEUE.pop().is_some() {}
                 break;
             },
             None => {
@@ -1481,6 +1483,7 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
             match cmd {
                 VideoCmd::Stop | VideoCmd::Shutdown => {
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
+                    while VIDEO_FRAME_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
                     if matches!(cmd, VideoCmd::Shutdown) {
                         return true;
@@ -1723,6 +1726,7 @@ fn play_stream() -> bool {
                     VLOG_ENABLED.store(true, Ordering::Relaxed);
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
                     while VIDEO_STREAM_QUEUE.pop().is_some() {}
+                    while VIDEO_FRAME_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
                     if matches!(cmd, VideoCmd::Shutdown) {
                         return true;
@@ -1894,6 +1898,7 @@ fn drain_stream_only() -> bool {
                 VideoCmd::Stop | VideoCmd::Shutdown => {
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
                     while VIDEO_STREAM_QUEUE.pop().is_some() {}
+                    while VIDEO_FRAME_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
                     return matches!(cmd, VideoCmd::Shutdown);
                 },
