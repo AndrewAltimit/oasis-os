@@ -122,7 +122,7 @@ intensity = 1.0
 // Balatro skin: dark with neon cyan/magenta accents and glow effects.
 // ---------------------------------------------------------------------------
 
-const CYBERPUNK_STRINGS: &str = r#"
+const BALATRO_STRINGS: &str = r#"
 boot_text = [
     "OASIS_OS v2.2 [balatro]",
     "Neon subsystems: online",
@@ -247,7 +247,7 @@ pub fn balatro_skin() -> Result<Skin> {
         include_str!("../../../../skins/balatro/layout.toml"),
         include_str!("../../../../skins/balatro/features.toml"),
         include_str!("../../../../skins/balatro/theme.toml"),
-        CYBERPUNK_STRINGS,
+        BALATRO_STRINGS,
     )
 }
 

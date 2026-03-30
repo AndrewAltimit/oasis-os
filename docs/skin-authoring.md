@@ -341,7 +341,7 @@ Create `skins/neon/skin.toml`:
 name = "neon"
 version = "1.0"
 author = "Example"
-description = "Cyberpunk neon aesthetic"
+description = "Balatro neon aesthetic"
 ```
 
 Create `skins/neon/features.toml`:

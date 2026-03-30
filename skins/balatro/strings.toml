@@ -5,7 +5,7 @@ boot_text = [
     "Ready.",
 ]
 prompt_format = "neon> "
-title = "OASIS Cyberpunk"
+title = "OASIS Balatro"
 home_label = "NEON"
 welcome_message = "Welcome to the neon grid. Type 'help' for commands."
 error_prefix = "FAULT: "
