@@ -892,18 +892,7 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // The kernel PRX (oasis-plugin-psp) hooks sceKernelWaitEventFlag
-        // to add a 3-second timeout for SceMediaEngineRpc. When the ME
-        // deadlocks at ~90 frames, the WaitEventFlag times out instead
-        // of blocking forever, and sceMpegAvcDecode returns an error.
-        // The video thread handles the error and continues.
-        //
-        // Fallback: if the kernel hook isn't installed, the PRX patching
-        // at 85 frames prevents the deadlock (at the cost of no more
-        // video after that point).
-        if self.frames_since_flush >= 85 && self.flush_interval < u32::MAX {
-            patch_skip_me_call();
-        }
+        // Track frames since last keyframe for periodic reinit.
         if is_keyframe {
             self.frames_since_flush = 0;
         }
@@ -957,6 +946,44 @@ impl NalDecoder {
                     vlog(&format!("[VIDEO] NAL: decode error: {e}"));
                 }
                 Err(())
+            }
+        }
+    }
+
+    /// Reinitialize the decoder (destroy + recreate).
+    /// Call ONLY right after a successful decode when the ME is idle.
+    /// Consumes self, returns a new NalDecoder or None on failure.
+    fn reinit(self) -> Option<Self> {
+        let w = self.decoder.width();
+        let h = self.decoder.height();
+        let sps = self.sps;
+        let pps = self.pps;
+        let prefix = self.nal_prefix_size;
+        let wb = self.write_buf_idx;
+        vlog_force(&format!("[VIDEO] NAL: reinit decoder ({w}x{h})..."));
+
+        // Drop old decoder (calls sceMpegDelete + sceMpegFinish).
+        drop(self.decoder);
+
+        // Create a new decoder with the same dimensions.
+        match psp::mpeg::AvcDecoder::new(w, h) {
+            Ok(new_dec) => {
+                vlog_force("[VIDEO] NAL: reinit OK");
+                Some(NalDecoder {
+                    decoder: new_dec,
+                    sps,
+                    pps,
+                    nal_prefix_size: prefix,
+                    first_frame: true,
+                    write_buf_idx: wb,
+                    frames_since_flush: 0,
+                    flush_interval: 70, // Keep same interval
+                    last_decode_us: 0,
+                })
+            }
+            Err(e) => {
+                vlog_force(&format!("[VIDEO] NAL: reinit FAILED: {e}"));
+                None
             }
         }
     }
@@ -1717,16 +1744,23 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                // Safety cutoff for >480p content: stop decode before the
-                // ME deadlocks and switch to audio-only drain.
-                if frames_processed >= max_decode_frames && nal_dec.is_some() {
-                    if max_decode_frames < u32::MAX {
-                        vlog_force(&format!(
-                            "[VIDEO] safety cutoff at frame {frames_processed} \
-                             (dec={decode_count}), switching to audio-only"
-                        ));
-                        drop(nal_dec.take());
-                        return drain_stream_only();
+                // Periodic decoder reinit to prevent ME deadlock.
+                // The ME deadlocks after ~70-90 frames on >480p content.
+                // Reinit on keyframes every ~50 decoded frames to stay
+                // well under the threshold. The reinit destroys and
+                // recreates the sceMpeg instance, resetting ME state.
+                // Near the deadlock threshold (~70 frames), skip non-keyframes
+                // to reduce ME state accumulation. Only decode keyframes
+                // (IDR frames are independently decodable).
+                if nal_dec.is_some() {
+                    let dec = nal_dec.as_ref().unwrap();
+                    if dec.flush_interval < u32::MAX
+                        && dec.frames_since_flush >= 50
+                        && !frame.is_keyframe
+                    {
+                        // Skip this P/B-frame — just count it.
+                        frames_processed += 1;
+                        continue;
                     }
                 }
 
