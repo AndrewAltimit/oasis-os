@@ -93,7 +93,13 @@ pub(super) fn dispatch_dashboard_confirm(
                     // Check if WiFi is already connected (cmd_server auto-connect).
                     // If so, ensure_net_init won't show a dialog, so we must NOT
                     // call reinit_gu_frame (which is only safe after utility dialogs).
-                    let was_connected = psp::net::is_connected();
+                    // Use sceNetApctlGetState directly — psp::net::is_connected()
+                    // uses an internal flag that isn't set by raw sceNetApctlConnect.
+                    let was_connected = {
+                        let mut state = psp::sys::ApctlState::Disconnected;
+                        unsafe { psp::sys::sceNetApctlGetState(&mut state) };
+                        matches!(state, psp::sys::ApctlState::GotIp)
+                    };
                     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                         dbg_log(&format!("[TV] net init failed: {e}"));
                         if !was_connected {
