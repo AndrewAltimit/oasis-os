@@ -6,7 +6,7 @@ An embeddable operating system framework in Rust. One codebase renders a full de
 
 https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 
-**[All 20 skin screenshots](SCREENSHOTS.md)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
+**[All 18 skin screenshots](SCREENSHOTS.md)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
 
 | Altimit | Paper | XP | Win95 | Retro CGA |
 |:---:|:---:|:---:|:---:|:---:|
