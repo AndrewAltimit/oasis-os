@@ -350,15 +350,39 @@ fn psp_main() {
         // -- Poll video decode frames --
         // Poll regardless of download state — video decode starts as soon
         // as the first keyframe arrives, even during HTTP streaming.
+        // Always check for video frames — log state every 5 seconds.
+        if viz_frame % 300 == 1 {
+            let vp = oasis_backend_psp::video::is_video_playing();
+            oasis_backend_psp::video::vlog_force(&format!(
+                "[MAIN] tuned={} vp={} tex={:?} kiosk={:?} frame={}",
+                tv.tuned.is_some(), vp, tv.preview_tex, kiosk_app as u8, viz_frame,
+            ));
+        }
         if tv.tuned.is_some() {
             if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
                 // Read pixels from pre-allocated static buffer, then copy
                 // into the persistent video texture (no alloc/dealloc).
                 let pixels = oasis_backend_psp::video::frame_pixels(&frame);
+                let old_tex = tv.preview_tex;
                 tv.preview_tex =
                     backend.update_video_texture(frame.width, frame.height, pixels);
+                if old_tex.is_none() && tv.preview_tex.is_some() {
+                    oasis_backend_psp::video::vlog_force(&format!(
+                        "[MAIN] first video tex: {}x{} → {:?}",
+                        frame.width, frame.height, tv.preview_tex,
+                    ));
+                } else if old_tex.is_none() && tv.preview_tex.is_none() {
+                    oasis_backend_psp::video::vlog_force(&format!(
+                        "[MAIN] video tex FAILED: {}x{} pixels={}",
+                        frame.width, frame.height, pixels.len(),
+                    ));
+                }
             }
-            if !oasis_backend_psp::video::is_video_playing() {
+            // Only clear tuned state when video WAS playing and stopped
+            // (not during the startup gap before streaming begins).
+            if tv.preview_tex.is_some()
+                && !oasis_backend_psp::video::is_video_playing()
+            {
                 backend.free_video_texture();
                 tv.preview_tex = None;
                 tv.tuned = None;
