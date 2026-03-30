@@ -40,21 +40,19 @@ Core code never calls platform APIs directly. All rendering, input, networking, 
 
 ```mermaid
 graph TD
-    APP["<b>Your App Code</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>18 skins, 90+ commands"]
-    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required)<br/>SdiBackend (39 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>18 skins, 90+ commands"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) / SdiBackend (39 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
-    SDL["<b>SDL3</b><br/>Desktop + Pi<br/><i>keyboard, mouse, gamepad</i>"]
-    WASM["<b>WASM</b><br/>Canvas 2D + Web Audio<br/><i>DOM events, touch</i>"]
-    PSP["<b>PSP</b><br/>sceGu HW GPU<br/><i>controller + analog</i>"]
-    UE5["<b>UE5</b><br/>RGBA FFI buffer<br/><i>FFI input queue</i>"]
-    FB["<b>Framebuffer</b><br/>/dev/fb0 + evdev<br/><i>planned</i>"]
+    SDL["<b>SDL3</b><br/>Desktop + Pi"]
+    WASM["<b>WASM</b><br/>Canvas 2D"]
+    PSP["<b>PSP</b><br/>sceGu HW GPU"]
+    UE5["<b>UE5</b><br/>RGBA FFI"]
 
     APP --> TRAITS
     TRAITS --> SDL
     TRAITS --> WASM
     TRAITS --> PSP
     TRAITS --> UE5
-    TRAITS --> FB
 
     style APP fill:#1a1a2e,stroke:#e94560,color:#eee
     style TRAITS fill:#16213e,stroke:#0f3460,color:#eee
@@ -62,7 +60,6 @@ graph TD
     style WASM fill:#0f3460,stroke:#533483,color:#eee
     style PSP fill:#0f3460,stroke:#e94560,color:#eee
     style UE5 fill:#0f3460,stroke:#533483,color:#eee
-    style FB fill:#0f3460,stroke:#533483,color:#aaa
 ```
 
 ## Key Features
