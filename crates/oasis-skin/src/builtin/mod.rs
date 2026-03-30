@@ -6,7 +6,7 @@
 //! Skins are organized into three category modules:
 //! - `classic` -- classic/retro skins (terminal, tactical, classic, retro-cga, win95)
 //! - `modern` -- modern/desktop skins (desktop, modern, xp, macos, gnome, agent-terminal)
-//! - `special` -- special/stylized skins (corrupted, cyberpunk, paper, solarized,
+//! - `special` -- special/stylized skins (corrupted, balatro, paper, solarized,
 //!   vaporwave, highcontrast, altimit)
 //!
 //! Additionally, `generated` contains build-time generated loaders from TOML
@@ -25,7 +25,7 @@ pub mod generated {
 pub use classic::{classic_skin, retro_cga_skin, tactical_skin, terminal_skin, win95_skin};
 pub use modern::{agent_terminal_skin, desktop_skin, gnome_skin, macos_skin, modern_skin, xp_skin};
 pub use special::{
-    altimit_skin, corrupted_skin, cyberpunk_skin, highcontrast_skin, paper_skin, protanopia_skin,
+    altimit_skin, balatro_skin, corrupted_skin, highcontrast_skin, paper_skin, protanopia_skin,
     solarized_skin, tritanopia_skin, vaporwave_skin,
 };
 
@@ -55,15 +55,13 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "macos" => macos_skin(),
         "gnome" => gnome_skin(),
         "retro-cga" => retro_cga_skin(),
-        "cyberpunk" => cyberpunk_skin(),
+        "balatro" => balatro_skin(),
         "paper" => paper_skin(),
         "win95" => win95_skin(),
         "solarized" => solarized_skin(),
         "vaporwave" => vaporwave_skin(),
         "highcontrast" => highcontrast_skin(),
         "altimit" => altimit_skin(),
-        "protanopia" => protanopia_skin(),
-        "tritanopia" => tritanopia_skin(),
         _ => Err(oasis_types::error::OasisError::Config(
             format!("unknown built-in skin: {name}").into(),
         )),
@@ -102,15 +100,13 @@ pub fn builtin_names() -> &'static [&'static str] {
         "macos",
         "gnome",
         "retro-cga",
-        "cyberpunk",
+        "balatro",
         "paper",
         "win95",
         "solarized",
         "vaporwave",
         "highcontrast",
         "altimit",
-        "protanopia",
-        "tritanopia",
     ]
 }
 
@@ -461,7 +457,7 @@ mod tests {
             "xp",
             "macos",
             "gnome",
-            "cyberpunk",
+            "balatro",
             "paper",
             "solarized",
             "vaporwave",

@@ -185,7 +185,7 @@ impl Theme {
         }
     }
 
-    /// Dark theme matching the OASIS cyberpunk aesthetic.
+    /// Dark theme matching the OASIS balatro aesthetic.
     pub fn dark() -> Self {
         Self {
             background: Color::rgb(18, 18, 24),

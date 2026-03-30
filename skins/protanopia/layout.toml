@@ -1,7 +1,0 @@
-# Top bar (24px) + content area (222px) + bottom bar (26px) = 272px
-[content_bg]
-x = 0
-y = 24
-w = 480
-h = 222
-color = "#0D1117"

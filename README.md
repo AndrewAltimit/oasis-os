@@ -1,20 +1,20 @@
 # OASIS_OS
 
-An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 16 apps, 20 skins -- to a 333 MHz PSP handheld, a desktop GPU, a web browser, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
+An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 16 apps, 18 skins -- to a 333 MHz PSP handheld, a desktop GPU, a web browser, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
 
 **[Try it in your browser](https://andrewaltimit.github.io/oasis-os/demo/)** -- no install required.
 
 https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 
-**[All 18 skin screenshots](SCREENSHOTS.md)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
+**[All 20 skin screenshots](SCREENSHOTS.md)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
 
 | Altimit | Paper | XP | Win95 | Retro CGA |
 |:---:|:---:|:---:|:---:|:---:|
 | ![Altimit](screenshots/altimit/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Retro CGA](screenshots/retro-cga/01_dashboard.png) |
 
-| macOS | GNOME | Cyberpunk | Solarized | Vaporwave |
+| macOS | GNOME | Balatro | Solarized | Vaporwave |
 |:---:|:---:|:---:|:---:|:---:|
-| ![macOS](screenshots/macos/01_dashboard.png) | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Cyberpunk](screenshots/cyberpunk/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
+| ![macOS](screenshots/macos/01_dashboard.png) | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
 ## The PSP Story
 
@@ -40,7 +40,7 @@ Core code never calls platform APIs directly. All rendering, input, networking, 
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>20 skins, 90+ commands"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>18 skins, 90+ commands"]
     TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) / SdiBackend (39 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
@@ -82,7 +82,7 @@ graph TD
 - Scene graph (SDI) with z-order, gradients, rounded corners, shadows, alpha blending
 - 32 widgets: Button, Card, TabBar, ListView, ScrollView, Slider, TreeView, Modal, and more
 - Window manager with drag/resize, minimize/maximize, snap zones
-- 20 data-driven TOML skins with theme derivation from 9 base colors (includes color-vision accessibility variants)
+- 20 data-driven TOML skins with theme derivation from 9 base colors
 - Vector graphics with path operations and frame-driven animations
 - GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
 
@@ -103,15 +103,15 @@ graph TD
 
 ## Skins
 
-All 20 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
+All 18 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
 
 | Category | Skins |
 |----------|-------|
 | **Desktop** | xp, macos, gnome, win95, desktop, modern |
 | **Dashboard** | classic, altimit |
-| **Aesthetic** | cyberpunk, vaporwave, solarized, paper |
+| **Aesthetic** | balatro, vaporwave, solarized, paper |
 | **Terminal** | terminal, tactical, corrupted, agent-terminal |
-| **Accessibility** | highcontrast, retro-cga, protanopia, tritanopia |
+| **Accessibility** | highcontrast, retro-cga |
 
 Skins support animated shader wallpapers (Shadertoy-style fragment shaders: Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro) that render in real-time behind the UI.
 

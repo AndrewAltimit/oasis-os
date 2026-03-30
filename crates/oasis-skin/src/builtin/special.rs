@@ -1,6 +1,6 @@
 //! Special and stylized built-in skins.
 //!
-//! Skins: corrupted, cyberpunk, paper, solarized, vaporwave, highcontrast, altimit.
+//! Skins: corrupted, balatro, paper, solarized, vaporwave, highcontrast, altimit.
 
 use oasis_types::error::Result;
 
@@ -119,18 +119,18 @@ intensity = 1.0
 "#;
 
 // ---------------------------------------------------------------------------
-// Cyberpunk skin: dark with neon cyan/magenta accents and glow effects.
+// Balatro skin: dark with neon cyan/magenta accents and glow effects.
 // ---------------------------------------------------------------------------
 
 const CYBERPUNK_STRINGS: &str = r#"
 boot_text = [
-    "OASIS_OS v2.2 [cyberpunk]",
+    "OASIS_OS v2.2 [balatro]",
     "Neon subsystems: online",
     "Neural link: established",
     "Ready.",
 ]
 prompt_format = "neon> "
-title = "OASIS Cyberpunk"
+title = "OASIS Balatro"
 home_label = "NEON"
 welcome_message = "Welcome to the neon grid. Type 'help' for commands."
 error_prefix = "FAULT: "
@@ -240,13 +240,13 @@ pub fn corrupted_skin() -> Result<Skin> {
     )
 }
 
-/// Load the Cyberpunk skin.
-pub fn cyberpunk_skin() -> Result<Skin> {
+/// Load the Balatro skin.
+pub fn balatro_skin() -> Result<Skin> {
     Skin::from_toml_full(
-        include_str!("../../../../skins/cyberpunk/skin.toml"),
-        include_str!("../../../../skins/cyberpunk/layout.toml"),
-        include_str!("../../../../skins/cyberpunk/features.toml"),
-        include_str!("../../../../skins/cyberpunk/theme.toml"),
+        include_str!("../../../../skins/balatro/skin.toml"),
+        include_str!("../../../../skins/balatro/layout.toml"),
+        include_str!("../../../../skins/balatro/features.toml"),
+        include_str!("../../../../skins/balatro/theme.toml"),
         CYBERPUNK_STRINGS,
     )
 }

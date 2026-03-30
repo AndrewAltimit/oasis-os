@@ -237,8 +237,8 @@ mod tests {
     #[test]
     fn set_and_get_string() {
         let mut s = SettingsStore::new();
-        s.set_string("skin", "cyberpunk");
-        assert_eq!(s.get_string("skin"), Some("cyberpunk"));
+        s.set_string("skin", "balatro");
+        assert_eq!(s.get_string("skin"), Some("balatro"));
         assert!(s.is_dirty());
     }
 

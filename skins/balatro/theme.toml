@@ -105,7 +105,7 @@ press_flash_lighten = 0.4
 [background_performance]
 complexity_budget = 5000
 
-# Software shader background — Balatro swirl with cyberpunk neon colors
+# Software shader background — Balatro swirl with Balatro colors
 [[background_layers]]
 kind = "shader"
 shader = "balatro"
