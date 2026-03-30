@@ -32,7 +32,7 @@ The PSP is a 2004 handheld with a 333 MHz MIPS CPU, 32 MB RAM, and firmware from
 
 - **Closed-loop remote development** -- A [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT provides WiFi-based build-deploy-reboot-test cycles, remote input injection, live framebuffer streaming, and arbitrary file upload. A network recovery EBOOT (154 KB, triggered by holding R-trigger on boot) makes the device unbrickable over WiFi. An AI agent used this infrastructure to debug the entire H.264 pipeline -- 30+ deploy-test iterations in a single session without touching the device.
 
-https://github.com/user-attachments/assets/psp-closed-loop-automation
+https://github.com/user-attachments/assets/3d84aea5-969c-4f38-af67-c088a7c37764
 
 *Closed-loop demo: AI agent connects to PSP over WiFi, launches TV Guide, tunes a channel, windows the app, then power-cycles via USB relay-controlled actuator -- zero human contact.*
 
