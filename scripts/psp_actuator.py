@@ -98,10 +98,21 @@ class ActuatorController:
 
     def power_on_psp(self):
         print(f"\n--- PSP POWER ON SEQUENCE ---")
+        # Phase 1: Long hold to power off
+        print("Phase 1: Power OFF (long hold)")
         self.extend()
         time.sleep(EXTEND_SECONDS)
         print(f"Holding for {HOLD_SECONDS} seconds...")
         time.sleep(HOLD_SECONDS)
+        self.retract()
+        time.sleep(RETRACT_SECONDS)
+        self.stop()
+        time.sleep(3)
+        # Phase 2: Short tap to power on
+        print("Phase 2: Power ON (short tap)")
+        self.extend()
+        time.sleep(EXTEND_SECONDS)
+        time.sleep(1)
         self.retract()
         time.sleep(RETRACT_SECONDS)
         self.stop()
@@ -121,11 +132,11 @@ def interactive(ctrl):
         cmd_lower = cmd.lower()
         if cmd == "e":
             ctrl.extend_step()
-        elif cmd in ("E", "extend"):
+        elif cmd == "E" or cmd_lower == "extend":
             ctrl.extend()
         elif cmd == "r":
             ctrl.retract_step()
-        elif cmd in ("R", "retract"):
+        elif cmd == "R" or cmd_lower == "retract":
             ctrl.retract()
         elif cmd_lower in ("s", "stop"):
             ctrl.stop()
