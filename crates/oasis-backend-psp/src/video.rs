@@ -1806,7 +1806,13 @@ fn play_stream() -> bool {
                                  (dec={decode_count} total={frames_processed})",
                                 error_count,
                             ));
-                            drop(nal_dec.take());
+                            // LEAK the decoder — do NOT call sceMpegDelete/Finish
+                            // while the ME is in a bad state (causes crash).
+                            // The ~2MB DDR allocation and mpeg data are lost until
+                            // the next cold reboot, but the EBOOT stays alive.
+                            if let Some(dec) = nal_dec.take() {
+                                core::mem::forget(dec);
+                            }
                             return drain_stream_only();
                         }
                     }

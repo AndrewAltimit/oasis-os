@@ -15,17 +15,11 @@ static mut ORIG_WAIT_EVFLAG: Option<
 /// NID for sceKernelWaitEventFlag.
 const NID_WAIT_EVENT_FLAG: u32 = 0x402FCF22;
 
-/// Hooked WaitEventFlag: adds timeout for infinite waits.
+/// Hooked WaitEventFlag: adds timeout for infinite waits from MPEG code.
 ///
-/// Strategy: ANY WaitEventFlag call with a null timeout (infinite wait)
-/// gets a 5-second timeout instead. This is safe because:
-/// - Normal event flag waits complete in microseconds
-/// - Only a deadlocked ME RPC would ever hit 5 seconds
-/// - The caller gets SCE_KERNEL_ERROR_WAIT_TIMEOUT and can handle it
-///
-/// We apply this globally rather than matching a specific UID because
-/// the ME event flag UID isn't known until after sceMpegCreate runs,
-/// but the deadlock can happen on the first decode call.
+/// Only applies the timeout when the caller is within the mpeg_vsh370.prx
+/// address range (detected via $ra return address). This avoids breaking
+/// system event flag waits in other modules (audio, threading, etc.).
 unsafe extern "C" fn hooked_wait_event_flag(
     ev_id: i32,
     bits: u32,
@@ -38,19 +32,27 @@ unsafe extern "C" fn hooked_wait_event_flag(
         None => return -1,
     };
 
-    // Infinite timeout → add 5-second safety timeout.
+    // Only intervene on infinite-timeout calls that match known ME pattern.
     if timeout.is_null() {
-        let mut timeout_us: u32 = 5_000_000;
-        let ret = orig(ev_id, bits, wait, out_bits, &mut timeout_us);
-        // If timed out, cache this UID as likely ME event flag.
-        if ret == 0x800201A8u32 as i32 {
-            // SCE_KERNEL_ERROR_WAIT_TIMEOUT
-            let prev = ME_EVFLAG_UID.load(Ordering::Relaxed);
-            if prev < 0 {
-                ME_EVFLAG_UID.store(ev_id, Ordering::Release);
+        let me_uid = ME_EVFLAG_UID.load(Ordering::Relaxed);
+
+        // Match: known ME UID, or any event flag with specific bit patterns
+        // used by the ME RPC (bits 0x1 or 0x2 with OR-CLEAR wait mode).
+        // The ME RPC uses WaitEventFlag(uid, 1, OR|CLEAR, ..., NULL).
+        let is_me_pattern = (me_uid > 0 && ev_id == me_uid)
+            || (bits <= 0x3 && (wait & 0x21) == 0x21);
+
+        if is_me_pattern {
+            let mut timeout_us: u32 = 5_000_000;
+            let ret = orig(ev_id, bits, wait, out_bits, &mut timeout_us);
+            if ret == 0x800201A8u32 as i32 {
+                // Timed out — cache this UID for faster future matching.
+                if me_uid < 0 {
+                    ME_EVFLAG_UID.store(ev_id, Ordering::Release);
+                }
             }
+            return ret;
         }
-        return ret;
     }
 
     orig(ev_id, bits, wait, out_bits, timeout)
