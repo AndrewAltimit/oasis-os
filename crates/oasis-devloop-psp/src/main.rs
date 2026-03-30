@@ -254,10 +254,10 @@ unsafe extern "C" fn tcp_worker(_: usize, _: *mut c_void) -> i32 {
             // Log first few attempts and every 10th.
             if i < 3 || i % 10 == 0 {
                 let mut msg = *b"[DL] state=XX ret=XXXXXXXX";
-                msg[10] = b'0' + ((s / 10) % 10) as u8;
-                msg[11] = b'0' + (s % 10) as u8;
-                hex_u32(r as u32, &mut msg[17..25]);
-                log(&msg[..25]);
+                msg[11] = b'0' + ((s / 10) % 10) as u8;
+                msg[12] = b'0' + (s % 10) as u8;
+                hex_u32(r as u32, &mut msg[18..26]);
+                log(&msg);
             }
             if s == 4 { connected = true; break; }
             psp::sys::sceKernelDelayThread(2_000_000);

@@ -197,8 +197,8 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
 
     let mut r = *b"[DEV] init: XXXXXXXX";
     let rv = net_init(0x20000, 0x20, 0x1000, 0x20, 0x1000);
-    hex_u32(rv as u32, &mut r[13..21]);
-    devlog(&r[..21]);
+    hex_u32(rv as u32, &mut r[12..20]);
+    devlog(&r);
 
     inet_init();
     apctl_init(0x1800, 42);
