@@ -38,34 +38,31 @@ Read the full technical deep dives in the [Developer's Journal](https://andrewal
 
 Core code never calls platform APIs directly. All rendering, input, networking, and audio flow through backend traits defined in `oasis-types`. Implement 13 methods and you have a working backend; opt into up to 39 more for accelerated rendering.
 
-```
-                        +----------------------+
-                        |     Your App Code    |
-                        |  oasis-core + 11 app |
-                        |  crates, 32 widgets, |
-                        |  browser, terminal,  |
-                        |  18 skins, 90+ cmds  |
-                        +----------+-----------+
-                                   |
-                        +----------+----------+
-                        |   Backend Traits     |
-                        |                      |
-                        |  SdiCore (13 req'd)  |
-                        |  SdiBackend (39 opt) |
-                        |  InputBackend        |
-                        |  NetworkBackend      |
-                        |  AudioBackend        |
-                        +----------+-----------+
-            +----------+-----------+-----------+----------+
-            v          v           v           v          v
-       +---------++---------++---------++---------++---------+
-       |  SDL3   ||  WASM   ||   PSP   ||   UE5   ||   fb    |
-       | Desktop || Browser || sceGu   || RGBA    || /dev/fb0|
-       | + Pi    ||Canvas2D || HW GPU  || FFI buf || evdev   |
-       +---------++---------++---------++---------++---------+
-        keyboard    DOM       PSP ctrl   FFI input   planned
-        mouse       events    + analog   queue
-        gamepad     touch
+```mermaid
+graph TD
+    APP["<b>Your App Code</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>18 skins, 90+ commands"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required)<br/>SdiBackend (39 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
+
+    SDL["<b>SDL3</b><br/>Desktop + Pi<br/><i>keyboard, mouse, gamepad</i>"]
+    WASM["<b>WASM</b><br/>Canvas 2D + Web Audio<br/><i>DOM events, touch</i>"]
+    PSP["<b>PSP</b><br/>sceGu HW GPU<br/><i>controller + analog</i>"]
+    UE5["<b>UE5</b><br/>RGBA FFI buffer<br/><i>FFI input queue</i>"]
+    FB["<b>Framebuffer</b><br/>/dev/fb0 + evdev<br/><i>planned</i>"]
+
+    APP --> TRAITS
+    TRAITS --> SDL
+    TRAITS --> WASM
+    TRAITS --> PSP
+    TRAITS --> UE5
+    TRAITS --> FB
+
+    style APP fill:#1a1a2e,stroke:#e94560,color:#eee
+    style TRAITS fill:#16213e,stroke:#0f3460,color:#eee
+    style SDL fill:#0f3460,stroke:#533483,color:#eee
+    style WASM fill:#0f3460,stroke:#533483,color:#eee
+    style PSP fill:#0f3460,stroke:#e94560,color:#eee
+    style UE5 fill:#0f3460,stroke:#533483,color:#eee
+    style FB fill:#0f3460,stroke:#533483,color:#aaa
 ```
 
 ## Key Features
