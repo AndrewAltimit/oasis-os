@@ -355,42 +355,23 @@ static mut RGBA_CONVERT_BUF: Vec<u8> = Vec::new();
 pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
     let w = frame.width as usize;
     let h = frame.height as usize;
-    let rgb565_size = w * h * 2;
-    let rgba_size = w * h * 4;
+    let abgr_size = w * h * 4;
 
     // SAFETY: Single-threaded access from main thread (SPSC contract).
-    // Use raw pointers throughout to satisfy nightly's strict static mut rules.
+    // The ME CSC outputs ABGR 8888 directly — just fix alpha channel.
     unsafe {
         let src_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
-        let src_slice = core::slice::from_raw_parts(
-            (*src_ptr)[frame.buf_idx as usize].as_ptr(),
-            rgb565_size,
-        );
-        let conv_ptr = core::ptr::addr_of_mut!(RGBA_CONVERT_BUF);
-        let conv_len = (*conv_ptr).len();
-        if conv_len < rgba_size {
-            (*conv_ptr) = vec![0u8; rgba_size];
-        }
-        let dst_slice = core::slice::from_raw_parts_mut(
-            (*conv_ptr).as_mut_ptr(),
-            rgba_size,
+        let data = core::slice::from_raw_parts_mut(
+            (*src_ptr)[frame.buf_idx as usize].as_mut_ptr(),
+            abgr_size,
         );
 
-        // RGB565 → RGBA conversion
-        for i in 0..w * h {
-            let pixel = u16::from_le_bytes([
-                src_slice[i * 2], src_slice[i * 2 + 1],
-            ]);
-            let r = ((pixel >> 11) & 0x1F) as u8;
-            let g = ((pixel >> 5) & 0x3F) as u8;
-            let b = (pixel & 0x1F) as u8;
-            dst_slice[i * 4] = (r << 3) | (r >> 2);
-            dst_slice[i * 4 + 1] = (g << 2) | (g >> 4);
-            dst_slice[i * 4 + 2] = (b << 3) | (b >> 2);
-            dst_slice[i * 4 + 3] = 0xFF;
+        // CSC outputs alpha=0x00. Set alpha to 0xFF for opaque pixels.
+        for i in (3..abgr_size).step_by(4) {
+            data[i] = 0xFF;
         }
 
-        core::slice::from_raw_parts((*conv_ptr).as_ptr(), rgba_size)
+        core::slice::from_raw_parts(data.as_ptr(), abgr_size)
     }
 }
 
@@ -681,9 +662,8 @@ impl NalDecoder {
         ));
 
         // Pre-allocate the static double-buffers for decoded frames.
-        // ME outputs Psm5650 (RGB565, 2 bpp). We allocate for the ME
-        // output size. Conversion to RGBA happens in frame_pixels().
-        let buf_size = (dec_w * dec_h * 2) as usize;
+        // ME CSC outputs ABGR 8888 (4 bpp). frame_pixels() fixes alpha.
+        let buf_size = (dec_w * dec_h * 4) as usize;
         // SAFETY: Called from the video thread before any frames are
         // pushed. No concurrent access to FRAME_BUFFERS yet.
         unsafe {
@@ -1887,6 +1867,12 @@ fn drain_stream_only() -> bool {
         }
 
         if !VIDEO_PLAYING.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        // If a new stream was requested, exit drain so the main loop
+        // can pick up STREAM_REQUESTED and start a new play_stream().
+        if STREAM_REQUESTED.load(Ordering::Relaxed) {
             return false;
         }
 
