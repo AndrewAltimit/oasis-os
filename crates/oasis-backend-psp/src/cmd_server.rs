@@ -313,6 +313,25 @@ fn handle_client(cfd: i32) {
         send_response(cfd, b"ok\n");
     } else if cmd == b"screencap" {
         send_screencap(cfd);
+    } else if cmd.starts_with(b"upload ") {
+        // Protocol: "upload <size> <path>\n" then <size> bytes of file data.
+        // Example: "upload 1234 ms0:/seplugins/oasis.prx\n"<data>
+        let args = &cmd[7..];
+        let parts: Vec<&[u8]> = args.splitn(2, |&b| b == b' ').collect();
+        if parts.len() >= 2 {
+            let size = parse_u32(parts[0]);
+            let path = parts[1];
+            if size > 0 && size < 8_000_000 && !path.is_empty() {
+                let header_end = raw.iter().position(|&b| b == b'\n')
+                    .map(|p| p + 1).unwrap_or(n as usize);
+                let leftover = &buf[header_end..n as usize];
+                receive_file(cfd, size, path, leftover);
+            } else {
+                send_response(cfd, b"err: bad size or path\n");
+            }
+        } else {
+            send_response(cfd, b"err: usage: upload <size> <path>\n");
+        }
     } else if cmd.starts_with(b"deploy ") {
         // Protocol: "deploy <size>\n" then <size> bytes of EBOOT data.
         let size_str = &cmd[7..];
@@ -494,6 +513,64 @@ fn send_screencap(cfd: i32) {
             core::slice::from_raw_parts(row_ptr, 480 * 4)
         };
         send_response(cfd, row_slice);
+    }
+}
+
+/// Receive an arbitrary file over TCP and write to the given ms0: path.
+fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
+    // Build null-terminated path.
+    let mut path_buf = Vec::with_capacity(path.len() + 1);
+    path_buf.extend_from_slice(path);
+    path_buf.push(0);
+
+    log_msg(&format!("[CMD] upload: {} bytes → {}",
+        size, core::str::from_utf8(path).unwrap_or("?")));
+
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            path_buf.as_ptr(),
+            psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        send_response(cfd, b"err: can't create file\n");
+        return;
+    }
+
+    let mut received = 0u32;
+    if !leftover.is_empty() {
+        unsafe {
+            psp::sys::sceIoWrite(fd, leftover.as_ptr() as *const c_void, leftover.len());
+        }
+        received += leftover.len() as u32;
+    }
+
+    let mut buf = [0u8; 4096];
+    while received < size {
+        let n = unsafe {
+            psp::sys::sceNetInetRecv(
+                cfd, buf.as_mut_ptr() as *mut c_void,
+                buf.len().min((size - received) as usize), 0,
+            )
+        };
+        if n <= 0 { break; }
+        unsafe {
+            psp::sys::sceIoWrite(fd, buf.as_ptr() as *const c_void, n as usize);
+        }
+        received += n as u32;
+    }
+
+    unsafe { psp::sys::sceIoClose(fd) };
+
+    if received == size {
+        log_msg("[CMD] upload: OK");
+        send_response(cfd, b"ok\n");
+    } else {
+        log_msg("[CMD] upload: incomplete");
+        send_response(cfd, b"err: incomplete transfer\n");
     }
 }
 

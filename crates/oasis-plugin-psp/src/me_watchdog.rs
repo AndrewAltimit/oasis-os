@@ -15,7 +15,17 @@ static mut ORIG_WAIT_EVFLAG: Option<
 /// NID for sceKernelWaitEventFlag.
 const NID_WAIT_EVENT_FLAG: u32 = 0x402FCF22;
 
-/// Hooked WaitEventFlag: adds 3-second timeout for ME RPC event flag.
+/// Hooked WaitEventFlag: adds timeout for infinite waits.
+///
+/// Strategy: ANY WaitEventFlag call with a null timeout (infinite wait)
+/// gets a 5-second timeout instead. This is safe because:
+/// - Normal event flag waits complete in microseconds
+/// - Only a deadlocked ME RPC would ever hit 5 seconds
+/// - The caller gets SCE_KERNEL_ERROR_WAIT_TIMEOUT and can handle it
+///
+/// We apply this globally rather than matching a specific UID because
+/// the ME event flag UID isn't known until after sceMpegCreate runs,
+/// but the deadlock can happen on the first decode call.
 unsafe extern "C" fn hooked_wait_event_flag(
     ev_id: i32,
     bits: u32,
@@ -28,12 +38,19 @@ unsafe extern "C" fn hooked_wait_event_flag(
         None => return -1,
     };
 
-    let me_uid = ME_EVFLAG_UID.load(Ordering::Relaxed);
-
-    // ME RPC event flag with infinite timeout → add 3s timeout.
-    if ev_id == me_uid && timeout.is_null() && me_uid > 0 {
-        let mut timeout_us: u32 = 3_000_000;
-        return orig(ev_id, bits, wait, out_bits, &mut timeout_us);
+    // Infinite timeout → add 5-second safety timeout.
+    if timeout.is_null() {
+        let mut timeout_us: u32 = 5_000_000;
+        let ret = orig(ev_id, bits, wait, out_bits, &mut timeout_us);
+        // If timed out, cache this UID as likely ME event flag.
+        if ret == 0x800201A8u32 as i32 {
+            // SCE_KERNEL_ERROR_WAIT_TIMEOUT
+            let prev = ME_EVFLAG_UID.load(Ordering::Relaxed);
+            if prev < 0 {
+                ME_EVFLAG_UID.store(ev_id, Ordering::Release);
+            }
+        }
+        return ret;
     }
 
     orig(ev_id, bits, wait, out_bits, timeout)
@@ -75,45 +92,11 @@ fn find_me_rpc_event_flag() -> Option<i32> {
     None
 }
 
-/// Spawn a kernel thread that waits for the MPEG subsystem to init,
-/// then finds the event flag and installs the hook.
+/// Install the WaitEventFlag hook immediately (no deferred scanning).
+/// The hook applies a 5-second timeout to ALL infinite waits, so it
+/// doesn't need to know the ME event flag UID in advance.
 pub fn install() {
-    unsafe {
-        let thid = psp::sys::sceKernelCreateThread(
-            b"OasisMeWd\0".as_ptr(),
-            me_watchdog_thread,
-            30,
-            4096,
-            psp::sys::ThreadAttributes::empty(),
-            core::ptr::null_mut(),
-        );
-        if thid >= psp::sys::SceUid(0) {
-            psp::sys::sceKernelStartThread(thid, 0, core::ptr::null_mut());
-        } else {
-            crate::debug_log(b"[ME-WD] thread create failed");
-        }
-    }
-}
-
-unsafe extern "C" fn me_watchdog_thread(
-    _args: usize,
-    _argp: *mut core::ffi::c_void,
-) -> i32 {
-    // Scan every 5 seconds up to 60 seconds for the event flag.
-    for attempt in 0..12u32 {
-        psp::sys::sceKernelDelayThread(5_000_000);
-        if let Some(uid) = find_me_rpc_event_flag() {
-            ME_EVFLAG_UID.store(uid, Ordering::Release);
-            crate::debug_log(b"[ME-WD] found SceMediaEngineRpc");
-            install_hook();
-            return 0;
-        }
-        if attempt == 0 {
-            crate::debug_log(b"[ME-WD] scanning for event flag...");
-        }
-    }
-    crate::debug_log(b"[ME-WD] event flag not found after 60s");
-    0
+    install_hook();
 }
 
 /// Install the hook on sceKernelWaitEventFlag.

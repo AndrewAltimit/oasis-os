@@ -536,21 +536,22 @@ fn psp_main() {
     config::load_config();
     debug_log(b"[OASIS] config loaded");
 
+    // Install ME decode watchdog ALWAYS (hook WaitEventFlag with timeout).
+    // This prevents the ME deadlock in sceMpegAvcDecode even in devloop mode.
+    debug_log(b"[OASIS] installing ME watchdog...");
+    me_watchdog::install();
+
     // Start remote development loop if enabled in config.
-    // When devloop is active, skip ALL hooks (display, ctrl, spy, ME watchdog)
-    // to avoid XMB crashes. Only run the devloop command processor.
+    // When devloop is active, skip display/ctrl/spy hooks to avoid XMB crashes.
+    // ME watchdog still runs (installed above).
     if config::get_config().devloop {
-        debug_log(b"[OASIS] devloop mode - skipping hooks");
+        debug_log(b"[OASIS] devloop mode - skipping display hooks");
         devloop::start();
         // Park the main thread — devloop runs in its own thread.
         loop {
             unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
         }
     }
-
-    // Install ME decode watchdog (hook WaitEventFlag with timeout).
-    debug_log(b"[OASIS] installing ME watchdog...");
-    me_watchdog::install();
 
     // Install the display framebuffer hook
     debug_log(b"[OASIS] installing display hook...");

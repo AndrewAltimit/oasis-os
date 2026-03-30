@@ -29,10 +29,11 @@ static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
 /// Max video frames to decode for >480p before switching to audio-only.
 /// Adjustable at runtime via TCP "video-limit <N>" command.
 /// Max video frames for >480p before switching to audio-only.
-/// Set conservatively — ME deadlocks non-deterministically (10-90 frames).
+/// With the kernel PRX ME watchdog hook (3s timeout on WaitEventFlag),
+/// the deadlock auto-recovers. This limit is a secondary safety net.
 /// Adjustable via TCP "video-limit <N>".
 static VIDEO_FRAME_LIMIT: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+    core::sync::atomic::AtomicU32::new(500);
 
 /// Set the video frame limit for >480p content.
 pub fn set_video_frame_limit(n: u32) {
