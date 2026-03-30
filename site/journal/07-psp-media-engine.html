@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Reverse Engineering the PSP Media Engine - OASIS_OS Developer's Journal</title>
-  <meta name="description" content="Reverse engineering the PSP's Media Engine coprocessor for H.264 hardware video decode from Rust homebrew on ARK-4 CFW &mdash; discovering hidden kernel modules, mapping the RPC protocol, and achieving working video streaming via undocumented sceMpegCreate parameters.">
+  <meta name="description" content="Reverse engineering the PSP Media Engine coprocessor for stable H.264 video streaming from Rust homebrew &mdash; discovering hidden kernel modules, mapping the RPC protocol, tracing a firmware deadlock through disassembled PRX code, and building three solutions from runtime binary patching to a kernel watchdog hook.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -26,18 +26,21 @@
 <header class="article-header">
   <div class="container">
     <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Hardware Video Decode</h1>
+    <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</h1>
     <p class="article-subtitle">
       On ARK-4 CFW, H.264 video decode from PSP homebrew fails with a cryptic error &mdash;
       the official <code>sceVideocodec</code> API returns <code>0x806201FE</code> and nobody
       has documented why. We traced the problem to empty firmware stubs, discovered hidden
-      kernel modules, reverse engineered the Media Engine&rsquo;s RPC protocol, found
-      undocumented parameters in PMPlayer&rsquo;s source code, and achieved hardware-accelerated
-      H.264 video streaming from a Rust EBOOT.
+      kernel modules during UMD playback, reverse engineered the Media Engine&rsquo;s RPC
+      protocol, found undocumented parameters in PMPlayer&rsquo;s source code, achieved
+      hardware-accelerated H.264 decode, hit a firmware deadlock after 90 frames, reverse
+      engineered the loaded PRX to find the blocking kernel call, and built three
+      increasingly robust solutions &mdash; from runtime binary patching to a kernel
+      watchdog hook to P/B-frame skipping that runs stable for minutes.
     </p>
     <div class="article-meta">
       <span>Entry 07</span>
-      <span>hardware, reverse-engineering, media-engine</span>
+      <span>hardware, reverse-engineering, media-engine, firmware-patching</span>
     </div>
   </div>
 </header>
@@ -73,27 +76,27 @@
   <div class="diagram">
     <pre><code><span class="hl-bright">The Two CPUs Inside Every PSP</span>
 
-┌─────────────────────────────────────────────────┐
-│                 Tachyon SoC                      │
-│                                                  │
-│  ┌──────────────┐        ┌──────────────┐       │
-│  │  <span class="hl-accent">Main CPU</span>     │        │  <span class="hl-warn">Media Engine</span> │       │
-│  │  Allegrex     │        │  ME (VME)    │       │
-│  │  MIPS R4000   │        │  MIPS R4000  │       │
-│  │  1-333 MHz    │        │  1-333 MHz   │       │
-│  │              │        │              │       │
-│  │  Runs games, │        │  H.264 decode│       │
-│  │  homebrew,   │  <span class="hl-bright">RPC</span>  │  AAC decode  │       │
-│  │  OS kernel   │&lt;------&gt;│  MPEG-4      │       │
-│  │              │        │  ATRAC3+     │       │
-│  └──────────────┘        └──────────────┘       │
-│         │                       │                │
-│    Main RAM (64MB)       eDRAM (2MB)            │
-└─────────────────────────────────────────────────┘</code></pre>
-    <div class="diagram-caption">The ME is a full MIPS CPU with its own firmware, communicating via shared memory RPC</div>
+&#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;
+&#9474;                 Tachyon SoC                      &#9474;
+&#9474;                                                  &#9474;
+&#9474;  &#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;        &#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;       &#9474;
+&#9474;  &#9474;  <span class="hl-accent">Main CPU</span>     &#9474;        &#9474;  <span class="hl-warn">Media Engine</span> &#9474;       &#9474;
+&#9474;  &#9474;  Allegrex     &#9474;        &#9474;  ME (VME)    &#9474;       &#9474;
+&#9474;  &#9474;  MIPS R4000   &#9474;        &#9474;  MIPS R4000  &#9474;       &#9474;
+&#9474;  &#9474;  1-333 MHz    &#9474;        &#9474;  1-333 MHz   &#9474;       &#9474;
+&#9474;  &#9474;              &#9474;        &#9474;              &#9474;       &#9474;
+&#9474;  &#9474;  Runs games, &#9474;        &#9474;  H.264 decode&#9474;       &#9474;
+&#9474;  &#9474;  homebrew,   &#9474;  <span class="hl-bright">RPC</span>  &#9474;  AAC decode  &#9474;       &#9474;
+&#9474;  &#9474;  OS kernel   &#9474;&lt;------&gt;&#9474;  MPEG-4      &#9474;       &#9474;
+&#9474;  &#9474;              &#9474;        &#9474;  ATRAC3+     &#9474;       &#9474;
+&#9474;  &#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;        &#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;       &#9474;
+&#9474;         &#9474;                       &#9474;                &#9474;
+&#9474;    Main RAM (64MB)       eDRAM (2MB)            &#9474;
+&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;</code></pre>
+    <div class="diagram-caption">The ME is a full MIPS CPU with its own firmware, communicating via shared memory RPC.</div>
   </div>
 
-  <h2>Phase 1: Runtime Module Discovery</h2>
+  <h2>Runtime Module Discovery</h2>
 
   <p>
     Our kernel PRX (<code>oasis-plugin-psp</code>) hooks <code>sceDisplaySetFrameBuf</code> to
@@ -140,7 +143,7 @@
     The error <code>0x806201FE</code> comes from these empty ME submission stubs returning failure.
   </p>
 
-  <h2>Phase 2: ME Driver Architecture</h2>
+  <h2>ME Driver Architecture</h2>
 
   <p>
     With the module names in hand, we used <code>sctrlHENFindFunction</code> (an ARK-4 CFW API
@@ -189,66 +192,21 @@
   <p>
     In total, we extracted <strong>47 NIDs</strong> for internal ME driver interfaces. These NIDs
     are not present in any public NID database. The ME firmware itself is loaded from
-    <code>flash0:/kd/resource/me_t2img.img</code> &mdash; a 392 KB encrypted image. Other
-    ME firmware files referenced in older documentation (<code>meimg.img</code>,
-    <code>me_blimg.img</code>, <code>me_sdimg.img</code>) do not exist on firmware 6.61.
+    <code>flash0:/kd/resource/me_t2img.img</code> &mdash; a 392 KB encrypted image.
   </p>
 
   <p>
     Inter-processor communication uses two kernel synchronization primitives:
     a semaphore named <code>SceMeRpc</code> for mutual exclusion and an event flag named
-    <code>SceMediaEngineRpc</code> for completion signaling.
-  </p>
-
-  <h2>Phase 3: flash0 Extraction</h2>
-
-  <p>
-    To disassemble the ME driver code, we needed the actual PRX files from <code>flash0:/kd/</code>.
-    This directory is <strong>completely inaccessible from user mode</strong> &mdash; ARK-4 CFW
-    blocks all reads. However, our kernel PRX runs in kernel mode and can read any file on the
-    system.
-  </p>
-
-  <p>
-    We extracted all codec-related PRX files and the ME firmware image, writing them to
-    <code>ms0:/</code> (Memory Stick) for analysis on a desktop machine:
-  </p>
-
-  <ul>
-    <li><code>me_wrapper.prx</code> &mdash; the RPC bridge (sceMeCodecWrapper)</li>
-    <li><code>avcodec.prx</code> &mdash; the stub version loaded during homebrew</li>
-    <li><code>mpeg.prx</code>, <code>mpeg_vsh.prx</code> &mdash; MPEG demuxer layers</li>
-    <li><code>videocodec_260.prx</code> &mdash; version-specific video codec module</li>
-    <li><code>codec_09g.prx</code> &mdash; TA-090 specific codec module</li>
-    <li><code>mpegbase_260.prx</code> &mdash; MPEG base library</li>
-    <li><code>me_t2img.img</code> &mdash; encrypted ME firmware (392 KB)</li>
-  </ul>
-
-  <p>
-    All PRX files use Sony&rsquo;s <code>~PSP</code> encryption format (magic <code>0x7E505350</code>).
-    Decryption requires the PSP&rsquo;s Kirk hardware crypto engine, which we had already used
-    in <a href="05-psp-usb-research.html">the USB research</a> for firmware decryption.
-  </p>
-
-  <h2>Phase 4: RPC Protocol Reverse Engineering</h2>
-
-  <p>
-    Using the Capstone MIPS disassembly library in Python, we disassembled
-    <code>sceMeCodecWrapper</code> and traced the complete RPC protocol between the main CPU
-    and the Media Engine.
-  </p>
-
-  <h3>The Command Buffer</h3>
-
-  <p>
-    All communication flows through a 40-byte command buffer at a fixed uncached memory address:
+    <code>SceMediaEngineRpc</code> for completion signaling. All communication flows through
+    a 40-byte command buffer at a fixed uncached memory address:
   </p>
 
   <div class="diagram">
     <pre><code><span class="hl-bright">ME RPC Command Buffer: 0xBFC00600 (40 bytes)</span>
 
 Offset  Size   Field
-──────  ─────  ──────────────────────────────
+------  -----  -------------------------------
 +0x00   4B     <span class="hl-accent">Command ID</span>
 +0x04   4B     (reserved/padding)
 +0x08   4B     Parameter 1
@@ -261,21 +219,13 @@ Offset  Size   Field
 +0x24   4B     Parameter 8
 +0x28   4B     <span class="hl-warn">Return value</span> (ME writes back here)
 +0x2C   4B     (reserved)</code></pre>
-    <div class="diagram-caption">The main CPU writes command + params, the ME writes back the return value at +0x28</div>
+    <div class="diagram-caption">The main CPU writes command + params, the ME writes back the return value at +0x28.</div>
   </div>
 
   <p>
     The address <code>0xBFC00600</code> is in the uncached KSEG1 region, ensuring cache coherency
-    between the two processors without explicit flush/invalidate. The main CPU writes the command
-    ID and up to 8 parameters, triggers the ME, and reads the return value from offset
-    <code>+0x28</code>.
-  </p>
-
-  <h3>The RPC Protocol</h3>
-
-  <p>
-    Every ME operation follows the same seven-step sequence, extracted from the disassembled
-    wrapper functions:
+    between the two processors without explicit flush/invalidate. Every ME operation follows the
+    same seven-step sequence, extracted from the disassembled wrapper functions:
   </p>
 
   <div class="diagram">
@@ -289,7 +239,7 @@ Offset  Size   Field
                   1, WAIT_AND)       //   completion via event flag
 6. <span class="hl-accent">Read</span> return value from 0xBFC00628 // ME wrote result here
 7. <span class="hl-accent">SignalSema</span>(SceMeRpc)              // Release exclusive access</code></pre>
-    <div class="diagram-caption">Step 4 is the critical trigger &mdash; a SysReg reset pulse acts as the interrupt doorbell</div>
+    <div class="diagram-caption">Step 4 is the critical trigger &mdash; a SysReg reset pulse acts as the interrupt doorbell.</div>
   </div>
 
   <p>
@@ -375,433 +325,535 @@ Offset  Size   Field
   <p>
     Every video function checks a version constant <code>0x05100601</code> before dispatching.
     This appears to be a firmware compatibility marker &mdash; the ME firmware must report a
-    matching version during its boot handshake.
+    matching version during its boot handshake. The module entry point in
+    <code>sceMeCodecWrapper</code> performs the full ME boot sequence: enabling SysCtrl bus
+    gates at <code>0xBC100000</code>, configuring the ME PLL at <code>0xBCC00010</code>,
+    flushing caches, setting up COP0 interrupt routing, decrypting the ME firmware from
+    <code>flash0:/kd/resource/me_t2img.img</code> via the Kirk crypto engine, and releasing
+    the ME from reset.
   </p>
 
-  <h3>ME Boot Sequence</h3>
+  <h2>The Breakthrough: mpeg_vsh370.prx</h2>
 
   <p>
-    The module entry point in <code>sceMeCodecWrapper</code> performs the ME boot sequence:
+    With direct ME driver calls producing initialization errors (the ME responded but
+    needed the correct multi-step initialization sequence), we pivoted to the
+    <code>sceMpeg</code> API &mdash; the higher-level interface that Sony&rsquo;s own games
+    use. We tried syscall hooks to redirect calls through the VSH (Visual Shell) library,
+    loaded <code>mpeg_vsh.prx</code> directly, and tested every combination of
+    <code>AvMpegBase</code> and <code>mpeg_vsh370.prx</code>. All returned
+    <code>0x80628002</code> (AVC_DECODE_FATAL).
   </p>
 
-  <pre><code>// ME Boot (reconstructed from disassembly)
-//
-// 1. SysCtrl registers at <span class="hl-accent">0xBC100000</span>
-//    - Enable ME bus gates and clock dividers
-//    - Set ME clock to target frequency
-//
-// 2. ME clock controller at <span class="hl-accent">0xBCC00010</span>
-//    - Configure ME PLL and clock source
-//    - Wait for PLL lock
-//
-// 3. Cache invalidation
-//    - Flush all D-cache lines
-//    - Invalidate I-cache
-//
-// 4. COP0 setup
-//    - Configure ME coprocessor status registers
-//    - Set up interrupt routing
-//
-// 5. Load ME firmware from flash0:/kd/resource/me_t2img.img
-//    - Decrypt via Kirk engine
-//    - Copy to ME instruction memory
-//    - Release ME reset</code></pre>
-
-  <h2>Phase 5: Direct ME Communication &mdash; The Breakthrough</h2>
-
   <p>
-    With the complete RPC protocol mapped, we needed to test whether the ME would actually
-    respond to direct commands from our homebrew kernel PRX. The key insight: if we loaded our
-    PRX <em>alongside</em> a running UMD movie, the game&rsquo;s boot process would have already
-    loaded <code>sceMeCodecWrapper</code> and initialized the ME firmware. We could then resolve
-    the ME driver function pointers and call them directly.
+    A critical discovery: <code>mpeg_vsh370.prx</code> imports 59 functions from the
+    <code>sceMpeg</code> library (self-referencing). When the kernel links these at
+    <code>sceKernelStartModule</code> time, it registers <code>sceMpeg</code> as an
+    available library, which triggers re-linking of the EBOOT&rsquo;s weak import stubs.
+    This meant we could call <code>sceMpeg</code> functions through
+    <code>mpeg_vsh370</code> without any kernel PRX or bridge module. But decode still
+    returned <code>0x80628002</code>.
   </p>
 
-  <h3>Confirming the ME Modules Are Loaded</h3>
+  <h3>PMPlayer source code: the missing parameters</h3>
 
   <p>
-    With Spider-Man 2 UMD video playing, we attempted to load the ME wrapper ourselves:
-  </p>
-
-  <pre><code>sceKernelLoadModule("flash0:/kd/me_wrapper.prx")
-  &rarr; <span class="hl-warn">0x80020149</span> (SCE_KERNEL_ERROR_EXCLUSIVE_LOAD)</code></pre>
-
-  <p>
-    <code>EXCLUSIVE_LOAD</code> &mdash; the module is already resident in kernel memory. The UMD
-    boot process loaded it. This confirmed we could resolve its exported functions without loading
-    our own copy.
-  </p>
-
-  <h3>Resolving Function Pointers</h3>
-
-  <p>
-    Using <code>sctrlHENFindFunction</code>, we resolved every ME driver function pointer from
-    the live kernel:
-  </p>
-
-  <pre><code><span class="hl-bright">// ME Driver Function Resolution Results</span>
-
-<span class="hl-accent">sceMeVideo_driver:</span>
-  Init        = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-  ScanHeader  = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-  GetEdram    = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-  Decode      = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-
-<span class="hl-accent">sceMeCore_driver:</span>
-  RpcDispatch = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-  RpcSimple   = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-
-<span class="hl-accent">sceMeMemory_driver:</span>
-  Alloc       = 0x8841XXXX  <span class="hl-bright">[FOUND]</span>
-
-<span class="hl-accent">sceAvcodec_wrapper:</span>
-  sceVideocodecOpen       = 0x8840XXXX  <span class="hl-bright">[FOUND]</span>
-  sceAudiocodecCheckNeedMem = 0x8840XXXX  <span class="hl-bright">[FOUND]</span></code></pre>
-
-  <h3>The Tests</h3>
-
-  <p>
-    We called each function and observed the return values:
+    PMPlayer Advance (by cooleyes, <code>DavisDev/pmplayer-advance</code> on GitHub)
+    successfully decodes H.264 on this exact PSP. Reading its source code
+    (<code>/ppa/mod/mp4avcdecoder.c</code>) revealed three critical differences in the
+    <code>sceMpegCreate</code> call:
   </p>
 
   <table>
     <thead>
-      <tr><th>Call</th><th>Result</th><th>Interpretation</th></tr>
+      <tr><th>Parameter</th><th>Our Code</th><th>PMPlayer</th><th>Impact</th></tr>
     </thead>
     <tbody>
       <tr>
-        <td><code>sceVideocodecOpen</code> (via avcodec_wrapper)</td>
-        <td><code>0x806201FE</code></td>
-        <td>Empty stubs &mdash; the known failure, confirming our theory</td>
+        <td><code>sceMpegQueryMemSize</code> mode</td>
+        <td><strong>0</strong></td>
+        <td><strong>4</strong> (&le;480p) / <strong>5</strong> (&gt;480p)</td>
+        <td>Different buffer size, NAL decode path not enabled</td>
       </tr>
       <tr>
-        <td><code>sceMeVideo_driver::Init</code> (direct)</td>
-        <td><code class="hl-accent">0xFFFFFFFF</code></td>
-        <td><strong>Real error from ME!</strong> Not a stub &mdash; the ME processed the command</td>
+        <td><code>sceMpegCreate</code> unk1</td>
+        <td><strong>0</strong></td>
+        <td><strong>mpeg_mode (4/5)</strong></td>
+        <td>ME doesn&rsquo;t know which decode mode to use</td>
       </tr>
       <tr>
-        <td>RPC command <code>0x82</code> (direct)</td>
-        <td><code class="hl-accent">0xFFFFFFFD</code></td>
-        <td><strong>ME responded with error -3</strong> &mdash; invalid state or missing init</td>
+        <td><code>sceMpegCreate</code> unk2</td>
+        <td><strong>0</strong></td>
+        <td><strong>DDR top pointer</strong> (4MB-aligned 2MB buffer)</td>
+        <td>ME has no workspace for decoded frames &mdash; <strong>root cause of 0x80628002</strong></td>
       </tr>
       <tr>
-        <td><code>sceAudiocodecCheckNeedMem</code></td>
-        <td><code class="hl-bright">0x00000000</code></td>
-        <td><strong>Success!</strong> Audio codec path is fully functional</td>
+        <td>AU buffer for <code>sceMpegInitAu</code></td>
+        <td><code>sceMpegMallocAvcEsBuf</code></td>
+        <td><code>ddrtop + 0x10000</code></td>
+        <td>AU not in DDR top region where ME expects it</td>
+      </tr>
+      <tr>
+        <td>AU struct init</td>
+        <td>zeroed</td>
+        <td><code>memset(0xFF)</code></td>
+        <td>Sentinel values required for proper state tracking</td>
       </tr>
     </tbody>
   </table>
 
+  <p>
+    The &ldquo;unknown&rdquo; parameters in <code>sceMpegCreate</code> were
+    <strong>never documented</strong> in PSPSDK or any public reference &mdash;
+    they were only visible in PMPlayer&rsquo;s source. Without the DDR top
+    pointer, the ME&rsquo;s codec firmware had no output buffer to write
+    decoded YCbCr frames, causing every <code>sceMpegAvcDecode</code> call to
+    return <code>0x80628002</code> (AVC_DECODE_FATAL).
+  </p>
+
+  <h3>H.264 decode: working</h3>
+
+  <p>
+    After applying all three fixes, the full decode pipeline worked on real
+    PSP hardware. Confirmed with a 656&times;480 H.264 stream from
+    archive.org (Bits and Bytes, 1983). The working init sequence:
+  </p>
+
+  <pre><code>sceMpegInit() = 0x0
+sceMpegQueryMemSize(5) = 49535        // mode 5 for &gt;480p
+DDR top: 2MB @ 0x9000000 (4MB-aligned)
+sceMpegRingbufferConstruct(8 packets) = 0x0
+sceMpegCreate(mpeg, data, 49535, &amp;rb, 512, 5, 0x9000000) = 0x0
+sceMpegRegistStream(mpeg, 0, 0) = OK
+sceMpegInitAu(mpeg, 0x9010000, &amp;au) = 0x0   // ddrtop + 0x10000, 0xFF-filled
+sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
+
+  <p>
+    The per-frame decode sequence feeds AVCC-format NAL data
+    (length-prefixed, directly from MP4 container) via
+    <code>sceMpegGetAvcNalAu</code>, then decodes via
+    <code>sceMpegAvcDecode</code>. The ME outputs YCbCr which is converted to
+    ABGR via <code>sceMpegBaseCscAvc</code> (hardware color space converter).
+    Everything initializes. Frames decode. Video appears on screen.
+  </p>
+
+  <p>
+    Then, after exactly ~90 frames, the video freezes and never recovers.
+  </p>
+
+  <h2>Streaming Performance</h2>
+
+  <p>
+    Before investigating the deadlock, we eliminated a massive performance
+    bottleneck in the streaming pipeline. The PSP&rsquo;s 333 MHz Allegrex CPU
+    and slow heap allocator were being hammered by per-frame allocations:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Optimization</th><th>What Changed</th><th>Savings</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Pre-allocated video texture</td>
+        <td>Reuse persistent GU texture buffer across frames</td>
+        <td>~30 MB/s alloc churn eliminated</td>
+      </tr>
+      <tr>
+        <td>Remove StreamFrame copies</td>
+        <td>Send raw AVCC directly, clone SPS/PPS only on keyframes</td>
+        <td>~3 MB/s alloc churn eliminated</td>
+      </tr>
+      <tr>
+        <td>Static RGBA double-buffer</td>
+        <td><code>decode_into()</code> writes to pre-allocated buffers</td>
+        <td>~15 MB/s alloc churn eliminated</td>
+      </tr>
+      <tr>
+        <td>Semaphore-based wakeup</td>
+        <td>Replace 5ms polling with kernel semaphore</td>
+        <td>CPU waste eliminated</td>
+      </tr>
+      <tr>
+        <td>Audio thread re-pop</td>
+        <td>Immediately check queue after <code>output_blocking</code></td>
+        <td>~20 wasted wakeups/frame eliminated</td>
+      </tr>
+      <tr>
+        <td>Range D-cache flush</td>
+        <td>Replace full D-cache invalidate with range ops in AAC init</td>
+        <td>16KB D-cache thrash avoided</td>
+      </tr>
+      <tr>
+        <td>Conditional vlog</td>
+        <td>Suppress Memory Stick I/O during active decode</td>
+        <td>5&ndash;20ms stall per log eliminated</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Total: <strong>~48 MB/s of heap allocation churn eliminated</strong> on a
+    333 MHz MIPS CPU with a basic allocator. These optimizations make the first
+    ~3 seconds of video smooth and responsive, and they remain valuable
+    regardless of the deadlock fix.
+  </p>
+
+  <h2>The 70-Frame Deadlock</h2>
+
+  <p>
+    The content is 656&times;480 Main profile H.264 (mode 5 in the ME&rsquo;s
+    terminology). The first ~75 decoded frames are perfect &mdash; zero errors,
+    zero corruption. Then <code>sceMpegAvcDecode</code> enters and never returns.
+    The video thread blocks permanently. Audio continues on its own thread, but
+    the I/O thread eventually stalls too (blocked on video queue backpressure),
+    and the stream dies.
+  </p>
+
+  <p>
+    We added a <code>DECODE_STEP</code> atomic watchdog: the decode function
+    sets step=1 before <code>sceMpegGetAvcNalAu</code>, step=2 before
+    <code>sceMpegAvcDecode</code>, step=3 before
+    <code>sceMpegAvcDecodeDetail2</code>, step=4 before
+    <code>sceMpegBaseCscAvc</code>, and step=0 on return. The main thread
+    checks this every 2 seconds. Result: <strong>step=2 every time</strong>.
+    The hang is inside <code>sceMpegAvcDecode</code> itself.
+  </p>
+
+  <p>
+    We then systematically tested every mitigation we could think of:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Approach</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Full D-cache flush before every decode</td><td>No effect</td></tr>
+      <tr><td>DDR workspace 2 MB &rarr; 4 MB</td><td>No effect</td></tr>
+      <tr><td>Decode rate throttling (16ms / 33ms)</td><td>No effect</td></tr>
+      <tr><td>SPS max_ref_frames patching (3 &rarr; 1)</td><td>Made it <em>worse</em> (1 frame vs 90)</td></tr>
+      <tr><td>Pixel format Psm8888 &rarr; Psm5650 (half buffer size)</td><td>No effect</td></tr>
+      <tr><td><code>sceMpegFlushAllStream</code> mid-stream</td><td><strong>Hard crash</strong> (PSP reboot required)</td></tr>
+      <tr><td><code>sceMpegAvcDecodeFlush</code> mid-stream</td><td><strong>Hard crash</strong></td></tr>
+      <tr><td><code>sceMpegInit</code> mid-stream</td><td><strong>Hard crash</strong></td></tr>
+      <tr><td>Decoder destroy + recreate</td><td><strong>Hard crash</strong> (ME busy)</td></tr>
+      <tr><td>Mode 4 forced for &gt;480p content</td><td><code>0x80628002</code> on every frame</td></tr>
+      <tr><td>Frame skipping (&ldquo;ME rest&rdquo;)</td><td>Deadlocks on resume</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The deadlock is not caused by DPB overflow, cache coherency, decode speed,
+    pixel format, or buffer sizes. It&rsquo;s a hard ~90-frame limit in the
+    ME firmware&rsquo;s mode 5 code path. Mode 4 (&le;480p) works indefinitely
+    but cannot decode &gt;480p content at all.
+  </p>
+
+  <h2>Inside mpeg_vsh370.prx</h2>
+
+  <p>
+    The deadlock is inside the loaded PRX, not in our code. To understand it,
+    we needed to trace the full call chain from our Rust
+    <code>sceMpegAvcDecode</code> call through the PRX to the blocking point.
+    We disassembled the 42 KB code segment of <code>mpeg_vsh370.prx</code>
+    using Capstone (MIPS32 little-endian). Matching the loaded function&rsquo;s
+    prologue bytes against the raw PRX identified it as VA <code>0x71c0</code>
+    &mdash; one of four identical dispatch wrappers.
+  </p>
+
   <div class="diagram">
-    <pre><code><span class="hl-bright">The Two Paths to the Media Engine</span>
+    <pre><code><span class="hl-bright">sceMpegAvcDecode Call Chain (mpeg_vsh370.prx)</span>
 
-<span class="hl-warn">Path A: The Broken Path (what homebrew uses)</span>
-  Homebrew &rarr; sceVideocodecOpen() &rarr; avcodec.prx [EMPTY STUBS] &rarr; 0x806201FE
-                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                        These functions do nothing!
-
-<span class="hl-accent">Path B: The Working Path (what UMD games use)</span>
-  UMD Boot &rarr; loads me_wrapper.prx &rarr; sceMeCodecWrapper
-                                         imports sceMeVideo_driver
-                                         imports sceMeCore_driver
-                                                    │
-                          RPC buffer 0xBFC00600 ◄────┘
-                                    │
-                              Media Engine
-                            (processes command,
-                             writes result to
-                              0xBFC00628)
-
-<span class="hl-bright">Path C: Our Approach (direct driver calls)</span>
-  Kernel PRX &rarr; sctrlHENFindFunction("sceMeVideo_driver", NID)
-             &rarr; call function pointer directly
-             &rarr; <span class="hl-accent">ME RESPONDS!</span></code></pre>
-    <div class="diagram-caption">Bypassing the empty avcodec stubs entirely by calling the ME driver functions directly</div>
+<span class="hl-accent">VA 0x71c0</span>  dispatch wrapper
+    |  checks init state (&lt; 0x3E0 -&gt; return error)
+    |  saves registers, calls real function
+    v
+<span class="hl-accent">VA 0x1078</span>  real sceMpegAvcDecode
+    |
+    +-- <span class="hl-accent">0x26e4</span>  validate MPEG handle
+    +-- <span class="hl-accent">0x616c</span>  AU stream lookup
+    +-- <span class="hl-accent">0x8650</span>  <span class="hl-warn">ME decode trigger &lt;-- BLOCKING FUNCTION</span>
+    |     |
+    |     +-- <span class="hl-accent">0x8234</span>  WaitSema(mpeg_data+0x66c)  // mutex acquire
+    |     +-- <span class="hl-warn">0x9fd4</span>  <span class="hl-error">KERNEL IMPORT STUB &lt;-- INFINITE WAIT</span>
+    |     +-- <span class="hl-accent">0x82c4</span>  SignalSema(mpeg_data+0x66c) // mutex release
+    |
+    +-- <span class="hl-accent">0x8880</span>  pre-CSC setup
+    +-- <span class="hl-accent">0x8a80</span>  ME decode data copy
+    +-- <span class="hl-accent">0x9f6c</span>  kernel syscall (in loop)</code></pre>
+    <div class="diagram-caption">Full call chain traced via Capstone disassembly + runtime instruction dumps.</div>
   </div>
 
-  <h3>Interpreting the Errors</h3>
+  <h3>The blocking point: kernel import stub 0x9fd4</h3>
 
   <p>
-    The <code>0xFFFFFFFF</code> return from <code>sceMeVideo_driver::Init</code> is <em>not</em> a
-    stub error &mdash; it is a genuine error code from the ME firmware. The empty stubs in
-    <code>avcodec.prx</code> return <code>0x806201FE</code>, a completely different value. The ME
-    received our command, attempted to process it, and returned a meaningful failure code.
+    Function <code>0x8650</code> is the critical wrapper. It acquires a mutex
+    semaphore at <code>mpeg_data+0x66c</code>, calls the kernel import at VA
+    <code>0x9fd4</code>, then releases the mutex:
+  </p>
+
+  <pre><code>// VA 0x8650 -- ME decode trigger
+lw    $a0, 0x240($s0)      // load semaphore ID
+jal   <span class="hl-accent">0x8234</span>               // <span class="hl-accent">WaitSema</span> (acquire mutex)
+move  $a0, $s1             // decode context
+jal   <span class="hl-warn">0x9fd4</span>               // <span class="hl-error">KERNEL CALL -- blocks forever</span>
+move  $a1, $zero
+lw    $a0, 0x240($s0)      // load semaphore ID
+jal   <span class="hl-accent">0x82c4</span>               // <span class="hl-accent">SignalSema</span> (release mutex)
+move  $v0, $s1             // return result</code></pre>
+
+  <p>
+    The import stub at <code>0x9fd4</code> is patched by the kernel at module
+    load time to jump into the kernel&rsquo;s ME RPC handler. That handler calls
+    <code>WaitEventFlag(SceMediaEngineRpc, 1, WAIT_AND|CLEAR, &amp;out, 0)</code>
+    with <strong>timeout=0 (infinite)</strong>. When the ME coprocessor deadlocks
+    after ~90 frames, it never sets the event flag, and the wait blocks forever.
+    Signalling the mutex from another thread has no effect &mdash; the current
+    holder is past the mutex, stuck in the kernel.
+  </p>
+
+  <h2>Three Solutions</h2>
+
+  <p>
+    With the root cause identified &mdash; the ME firmware hangs after ~90 mode 5
+    frames and the kernel waits forever for a completion signal that will never
+    arrive &mdash; we developed three solutions of increasing robustness.
+  </p>
+
+  <h3>Solution A: Runtime Binary Patching</h3>
+
+  <p>
+    The first approach: prevent the deadlock by patching the loaded PRX in memory.
+    After the decoder initializes, we compute the PRX base address from the
+    resolved import stub (a <code>j &lt;target&gt;</code> instruction that the
+    kernel patched at load time). The <code>jal 0x9fd4</code> instruction at
+    PRX VA <code>0x8678</code> is the call to the blocking kernel function.
+    After 85 frames (safely before the ~90 deadlock threshold), we overwrite it:
+  </p>
+
+  <pre><code>// Before patch (normal ME decode):
+0x8678: <span class="hl-accent">jal 0x9fd4</span>           // call kernel ME RPC
+                              // -&gt; WaitEventFlag(infinite) -&gt; <span class="hl-error">DEADLOCK</span>
+
+// After patch (skip ME call):
+0x8678: <span class="hl-bright">addiu $v0, $zero, -1</span> // return error immediately
+                              // -&gt; caller sees error, continues</code></pre>
+
+  <p>
+    The patch is a single MIPS instruction replacement: <code>0x2402ffff</code>
+    (<code>addiu $v0, $zero, -1</code>) overwrites the <code>jal</code> instruction.
+    We flush the D-cache after patching to ensure the CPU fetches the new instruction.
+    Result: ~70 decoded video frames (~2.3 seconds at 30fps), then the patch activates
+    and every subsequent decode returns an error. The video thread handles errors gracefully.
+    Audio plays uninterrupted for the full stream duration. Tested with 940+ frames processed,
+    zero crashes.
   </p>
 
   <p>
-    The error likely indicates that the video codec context was not properly set up. The correct
-    initialization sequence requires calling functions in a specific order: allocate ME memory,
-    open the codec, initialize with video parameters (resolution, profile, level), scan headers
-    (SPS/PPS NAL units), and only then decode frames. We called <code>Init</code> without the
-    preceding steps.
+    Downside: video stops updating after ~2 seconds. The patch is a permanent kill switch
+    &mdash; once applied, no more frames can be decoded until the decoder is destroyed and
+    recreated.
+  </p>
+
+  <h3>Solution B: Kernel PRX Watchdog Hook</h3>
+
+  <p>
+    The ideal fix would add a timeout to the infinite <code>WaitEventFlag</code> call.
+    We could not enumerate the event flag UID directly (scanning UIDs 1&ndash;65536 from
+    both user mode and kernel plugin threads returned zero results). Instead, we took a
+    different approach: <strong>hook <code>sceKernelWaitEventFlag</code> itself from the
+    kernel PRX</strong>.
   </p>
 
   <p>
-    Similarly, RPC command <code>0x82</code> returned <code>0xFFFFFFFD</code> (error -3), which
-    in the ME firmware&rsquo;s error table corresponds to an invalid state error. The ME is alive,
-    processing commands, and returning structured error codes. It just needs the right
-    initialization sequence.
+    The key insight was applying the timeout <em>selectively</em>. The PSP kernel calls
+    <code>WaitEventFlag</code> frequently for many subsystems &mdash; graphics, audio,
+    file I/O. We cannot add a timeout to all of them. Instead, we use the bit pattern
+    parameter to identify ME RPC calls: the ME completion flag uses bit pattern
+    <code>0x1</code> with <code>WAIT_AND|CLEAR</code> mode and infinite timeout. When the
+    hook detects this signature, it replaces the infinite timeout with a 5-second deadline.
   </p>
 
-  <h2>The Architecture of the Problem</h2>
+  <p>
+    When the timeout fires, <code>sceKernelWaitEventFlag</code> returns an error instead
+    of blocking forever. <code>sceMpegAvcDecode</code> propagates the error to our video
+    thread, which handles it gracefully: log the timeout, skip the frame, and continue.
+    The video thread never blocks permanently.
+  </p>
 
   <p>
-    With all five phases complete, we can now explain the full picture of why homebrew H.264
-    has been broken for two decades:
+    Downside: after the first timeout, the ME is in an undefined state. Subsequent decode
+    attempts may also timeout, effectively ending video decode. But the system remains stable
+    and audio continues.
+  </p>
+
+  <h3>Solution C: P/B-Frame Skipping (Production)</h3>
+
+  <p>
+    The production solution avoids the deadlock entirely by managing what gets sent to the
+    ME. The insight: the ~90-frame deadlock occurs because the ME accumulates internal state
+    (reference frame buffers, DPB entries) that eventually exhausts some firmware resource.
+    If we prevent that accumulation, the deadlock never triggers.
+  </p>
+
+  <p>
+    The approach: decode the first ~50 frames per keyframe interval normally, then skip
+    all P-frames and B-frames until the next keyframe (IDR NAL unit). This creates a
+    repeating cycle:
+  </p>
+
+  <pre><code>Keyframe 0   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 1
+Keyframe 1   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 2
+Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
+  ...</code></pre>
+
+  <p>
+    Each keyframe resets the ME&rsquo;s internal reference state, preventing accumulation.
+    The frame threshold of ~50 is well below the ~90-frame deadlock point, providing a
+    safety margin. Video updates on every keyframe (typically every 1&ndash;3 seconds
+    depending on the encoder&rsquo;s GOP structure), creating a slideshow-like but
+    functional display. Audio plays continuously without interruption.
+  </p>
+
+  <p>
+    <strong>Result:</strong> verified 2+ minutes stable on real PSP hardware with
+    zero deadlocks, zero crashes, continuous audio, and periodic video updates. This
+    is the solution shipped in production.
+  </p>
+
+  <figure>
+    <img src="../img/07-me-video-decode.png" alt="H.264 video decoded on PSP hardware via Media Engine" style="max-width: 480px; image-rendering: pixelated;">
+    <figcaption>H.264 video from archive.org decoded on real PSP hardware via the Media Engine &mdash; captured remotely via TCP <code>screencap</code> command.</figcaption>
+  </figure>
+
+  <h2>The Pixel Pipeline</h2>
+
+  <p>
+    Getting decoded frames from the ME to the screen required solving several
+    hardware-specific problems. The ME&rsquo;s <code>sceMpegBaseCscAvc</code>
+    performs hardware color space conversion (YCbCr to RGB), but the output
+    format and memory requirements are tightly coupled to the decode mode.
+  </p>
+
+  <p>
+    The CSC output uses <code>Psm8888</code> pixel format (ABGR, 32 bits per pixel).
+    We discovered that the CSC output format is determined by the
+    <code>sceMpegAvcDecodeMode</code> setting passed during initialization &mdash; not
+    by any parameter to the CSC function itself. Setting the wrong decode mode
+    produces garbled output even if the CSC call succeeds.
+  </p>
+
+  <p>
+    The CSC output buffer must be in <strong>uncached memory</strong>
+    (<code>ptr | 0x4000_0000</code>) to ensure D-cache coherency between the ME and
+    the main CPU. Without this, the main CPU reads stale cache lines and displays
+    corrupted frames. After the CSC completes and we upload the pixel data to a GU
+    texture, a <strong>D-cache flush</strong> on the texture buffer is required for
+    the GU (Graphics Unit) to see the updated data. One additional fix: the CSC outputs
+    alpha=0x00 on every pixel, so a post-conversion alpha fixup sets every pixel&rsquo;s
+    alpha to 0xFF for correct GU compositing.
+  </p>
+
+  <h2>Graceful Degradation</h2>
+
+  <p>
+    In a streaming application, reliability matters more than maximum decode quality.
+    The production system implements a three-tier fallback chain:
   </p>
 
   <ol>
     <li>
-      <strong>The user-mode <code>avcodec.prx</code> has empty ME submission stubs.</strong>
-      When homebrew calls <code>sceVideocodecOpen</code>, it calls into functions that literally
-      do nothing and return <code>0x806201FE</code>.
+      <strong>Normal video decode</strong> &mdash; P/B-frame skipping keeps the ME under
+      the deadlock threshold. Video updates on keyframes, audio plays continuously.
     </li>
     <li>
-      <strong>The kernel-mode <code>sceAvcodec_wrapper</code> also has empty stubs.</strong>
-      This was a surprise &mdash; even kernel-mode code hits the same wall.
+      <strong>Watchdog catches deadlock</strong> &mdash; if the ME does deadlock (edge
+      case: keyframe interval longer than expected), the kernel hook&rsquo;s 5-second
+      timeout fires. <code>sceMpegAvcDecode</code> returns an error. The video thread
+      sets an <code>ME_LEAKED</code> flag and <strong>does not call
+      <code>sceMpegDelete</code></strong> &mdash; calling delete on a busy ME causes a
+      hard crash. The decoder resources are intentionally leaked.
     </li>
     <li>
-      <strong>UMD boot loads different modules.</strong> During the UMD boot sequence, the
-      firmware loads <code>sceMeCodecWrapper</code> (which imports the real ME driver libraries)
-      and replaces or supplements the stub modules. This is why games work.
-    </li>
-    <li>
-      <strong>The ME driver functions are real and work.</strong> Calling
-      <code>sceMeVideo_driver</code> functions directly bypasses the empty stubs entirely and
-      communicates with the ME through the RPC protocol.
+      <strong>Audio-only continues</strong> &mdash; with the <code>ME_LEAKED</code> flag
+      set, the video thread stops attempting decode. Audio streaming continues via
+      <code>sceAudiocodec</code> on a separate thread (audio decode does not use the
+      ME&rsquo;s video path). When the user switches to a different channel, the
+      <code>ME_LEAKED</code> flag prevents reinitializing the video decoder, avoiding
+      a crash from creating a new sceMpeg instance while the old one&rsquo;s ME state
+      is corrupt.
     </li>
   </ol>
 
-  <h2>Phase 6: The Syscall Hook Approach</h2>
-
   <p>
-    With direct ME driver calls producing initialization errors, we pivoted to the
-    <code>sceMpeg</code> API &mdash; the higher-level interface that Sony&rsquo;s own games
-    use for H.264 decode. The hypothesis: if we could get <code>sceMpeg</code> to call the
-    real <code>sceAvcodec_wrapper</code> functions (the ones loaded during UMD playback)
-    instead of the empty stubs, the full initialization sequence would happen automatically.
+    This design ensures that no matter what the ME firmware does, the application never
+    crashes and audio never stops. The worst case is a frozen video frame with continuous
+    audio &mdash; acceptable for a streaming TV app on 2005 hardware.
   </p>
 
-  <h3>NAL-Based Decode: The ME Accepts Our Data</h3>
-
-  <p>
-    We first tested whether the <code>sceMpeg</code> API could accept raw H.264 NAL units
-    rather than requiring a full MPEG-PS container. The function
-    <code>sceMpegGetAvcNalAu</code> &mdash; previously undocumented in public homebrew SDKs
-    &mdash; accepts a NAL unit buffer and produces an <code>SceMpegAu</code> (access unit)
-    suitable for the decoder:
-  </p>
-
-  <pre><code>sceMpegGetAvcNalAu(mpeg, stream_id, nal_buf, au)
-  &rarr; <span class="hl-bright">0x00000000</span>  // <span class="hl-accent">SUCCESS</span> &mdash; the ME accepted our H.264 NAL data</code></pre>
-
-  <p>
-    This was a significant finding. The <code>sceMpeg</code> layer successfully parsed our
-    NAL units and constructed an access unit for decode. The ME firmware accepted the data.
-    But the next step failed:
-  </p>
-
-  <pre><code>sceMpegAvcDecode(mpeg, au, width, ...)
-  &rarr; <span class="hl-warn">0x80628002</span>  // AVC_DECODE_FATAL &mdash; persistent, every attempt</code></pre>
-
-  <p>
-    Error <code>0x80628002</code> is distinct from the earlier <code>0x806201FE</code>. We
-    had progressed past the empty stubs into a real decode attempt, but something in the
-    kernel-side codec path was rejecting it.
-  </p>
-
-  <h3>Hooking All Five sceMpeg Functions</h3>
-
-  <p>
-    To redirect <code>sceMpeg</code> calls through the VSH (Visual Shell) library &mdash; the
-    version loaded during XMB video playback that connects to the real ME driver &mdash; we
-    used <code>sctrlHENPatchSyscall</code> to hook all five critical functions:
-  </p>
-
-  <table>
-    <thead>
-      <tr><th>Function</th><th>Hook Target</th><th>Result</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>sceMpegCreate</code></td>
-        <td><code>mpeg_vsh.prx</code></td>
-        <td>Redirected</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegGetAvcNalAu</code></td>
-        <td><code>mpeg_vsh.prx</code></td>
-        <td>Redirected</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegAvcDecode</code></td>
-        <td><code>mpeg_vsh.prx</code></td>
-        <td>Redirected</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegAvcDecodeDetail2</code></td>
-        <td><code>mpeg_vsh.prx</code></td>
-        <td>Redirected</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegBaseCscAvc</code></td>
-        <td><code>mpeg_vsh.prx</code></td>
-        <td>Redirected</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <p>
-    Same result: <code>0x80628002</code>. The VSH library itself delegates to
-    <code>sceAvcodec_wrapper</code> in kernel space, which is where the error originates.
-    The hook confirmed that the problem is not in the user-mode <code>mpeg.prx</code> vs
-    <code>mpeg_vsh.prx</code> distinction &mdash; both paths converge on the same kernel
-    codec driver.
-  </p>
-
-  <h3>The Empty Stub at +0x2388: A Red Herring</h3>
-
-  <p>
-    During Ghidra analysis of <code>sceAvcodec_wrapper</code>, we identified a suspicious
-    empty function at offset <code>+0x2388</code> in the module&rsquo;s text segment. It
-    looked like a candidate for the &ldquo;missing&rdquo; ME submission function that the
-    stubs should call. After exhaustive cross-reference analysis: <strong>zero callers</strong>.
-    No function in the entire module references this address. It is dead code, not the
-    missing bridge.
-  </p>
-
-  <h3>The Kernel Error Table</h3>
-
-  <p>
-    The actual error originates from <code>sceAvcodec_wrapper</code>&rsquo;s internal error
-    mapping table at module offset <code>+0x49A0</code>. Ghidra disassembly reveals seven
-    error codes that the kernel driver maps from internal ME return values to user-visible
-    <code>0x8062xxxx</code> errors:
-  </p>
-
-  <div class="diagram">
-    <pre><code><span class="hl-bright">sceAvcodec_wrapper error table at +0x49A0 (7 entries)</span>
-
-Offset   ME Internal    Mapped Error       Meaning
-──────   ───────────    ────────────       ────────────────────────────
-+0x49A0  <span class="hl-accent">0x00000000</span>     0x00000000         Success
-+0x49A8  <span class="hl-accent">0xFFFFFFFF</span>     <span class="hl-warn">0x80628001</span>         AVC_DECODE_ERROR (recoverable)
-+0x49B0  <span class="hl-accent">0xFFFFFFFE</span>     <span class="hl-warn">0x80628002</span>         AVC_DECODE_FATAL (our error)
-+0x49B8  <span class="hl-accent">0xFFFFFFFD</span>     <span class="hl-warn">0x80628003</span>         AVC_DECODE_INVALID_STATE
-+0x49C0  <span class="hl-accent">0xFFFFFFFC</span>     <span class="hl-warn">0x80628004</span>         AVC_DECODE_NO_MEMORY
-+0x49C8  <span class="hl-accent">0xFFFFFFFB</span>     <span class="hl-warn">0x80628005</span>         AVC_DECODE_INVALID_PARAM
-+0x49D0  <span class="hl-accent">0xFFFFFFFA</span>     <span class="hl-warn">0x80628006</span>         AVC_DECODE_UNSUPPORTED</code></pre>
-    <div class="diagram-caption">The ME returns -2 (0xFFFFFFFE) internally, which the kernel maps to 0x80628002 (AVC_DECODE_FATAL)</div>
-  </div>
-
-  <p>
-    So the ME firmware receives our decode command, attempts to process it, and returns
-    <code>-2</code> (fatal error). The kernel driver faithfully translates this to
-    <code>0x80628002</code>. The question is what state or parameter the ME expects that
-    we are not providing.
-  </p>
-
-  <h3>PMPlayer: Proof the Hardware Works</h3>
-
-  <p>
-    To rule out a hardware or firmware defect, we tested
-    <strong>PMPlayer Advance</strong> on the same PSP (PSP-3001, ARK-4 CFW,
-    firmware 6.61). PMPlayer successfully decodes and plays H.264 video with hardware
-    acceleration. The Media Engine on this exact device is fully functional &mdash; the
-    problem is strictly in our initialization or calling convention.
-  </p>
-
-  <h3>Loading mpeg_vsh.prx: LIBRARY_NOT_YET_LINKED</h3>
-
-  <p>
-    We attempted to load the VSH MPEG library directly from our kernel PRX using
-    <code>kuKernelLoadModule</code> (a CFW kernel-mode module loader):
-  </p>
-
-  <pre><code>kuKernelLoadModule("flash0:/kd/mpeg_vsh.prx", 0, NULL)
-  &rarr; module UID (load succeeds)
-
-sceKernelStartModule(uid, 0, NULL, ...)
-  &rarr; <span class="hl-warn">0x8002012F</span>  // SCE_KERNEL_ERROR_LIBRARY_NOT_YET_LINKED</code></pre>
-
-  <p>
-    The module loads into memory but fails to start because it imports libraries that are
-    not yet resident in the kernel. This confirms that <code>mpeg_vsh.prx</code> depends on
-    additional kernel modules (likely <code>sceMeCodecWrapper</code> and its ME driver
-    imports) that are only loaded during UMD boot or VSH video playback.
-  </p>
-
-  <h3>SDK Additions</h3>
-
-  <p>
-    During this phase, we added four new functions to the
-    <a href="https://github.com/AndrewAltimit/rust-psp">rust-psp</a> SDK:
-  </p>
-
-  <ul>
-    <li><code>sceMpegGetAvcNalAu</code> &mdash; accept raw H.264 NAL units into the MPEG pipeline</li>
-    <li><code>sceMpegAvcDecodeDetail2</code> &mdash; retrieve detailed decode status and error info</li>
-    <li><code>sceMpegBaseCscAvc</code> &mdash; hardware color space conversion (YCbCr &rarr; RGBA)</li>
-    <li><code>kuKernelLoadModule</code> &mdash; CFW kernel-mode module loader for flash0 PRX files</li>
-  </ul>
-
-  <h3>Next: Kernel Avcodec Disassembly</h3>
-
-  <p>
-    The error table at <code>+0x49A0</code> tells us <em>where</em> the error is generated
-    but not <em>why</em>. The next step is a full Ghidra disassembly of the kernel
-    <code>sceAvcodec_wrapper</code>&rsquo;s <code>AvcDecode</code> code path &mdash; tracing
-    from the syscall entry point through every branch that can produce ME internal error
-    <code>-2</code>, to identify the exact state check or parameter validation that rejects
-    our decode request.
-  </p>
-
-  <h2>What We Learned</h2>
-
-  <p>
-    The investigation revealed a complete, previously undocumented kernel driver architecture
-    and RPC protocol. While the direct RPC approach (Phases 1&ndash;5) produced valuable
-    documentation, the actual solution came from a different direction &mdash; discovering
-    undocumented parameters in <code>sceMpegCreate</code> by reading PMPlayer&rsquo;s source
-    code. Sometimes reverse engineering the firmware is less effective than reading existing
-    homebrew that already solved the problem. Key takeaways:
-  </p>
+  <h2>Lessons Learned</h2>
 
   <ul>
     <li>
-      <strong>Hardware H.264 decode from Rust homebrew is working.</strong> The OASIS_OS TV Guide
-      app now streams H.264 video with audio from archive.org on real PSP hardware. The
-      <a href="https://github.com/AndrewAltimit/rust-psp"><code>psp::mpeg::AvcDecoder</code></a>
-      abstraction encapsulates the full decode pipeline in a safe RAII interface &mdash; anyone
-      can decode H.264 in ~5 lines of Rust instead of the 200+ lines of unsafe syscalls.
+      <strong>The ME firmware has a hard ~90-frame limit in mode 5.</strong>
+      It&rsquo;s not DPB size (proven by SPS patching making it <em>worse</em>),
+      not cache coherency (proven by full D-cache flush), not buffer sizes
+      (proven by DDR workspace doubling), and not decode speed (proven by
+      throttling). The limit is in the ME coprocessor&rsquo;s internal state.
     </li>
     <li>
-      <strong>AvMpegBase does NOT support the NAL decode path.</strong> Tested on real hardware:
-      <code>sceUtilityLoadModule(AvMpegBase)</code> resolves stubs but returns
-      <code>0x80628002</code> even with correct mode + DDR top parameters. AvMpegBase only
-      supports the PSMF ringbuffer path (<code>sceMpegGetAvcAu</code>). The NAL path
-      (<code>sceMpegGetAvcNalAu</code>) requires <code>mpeg_vsh370.prx</code>.
+      <strong>Every sceMpeg flush/reset API crashes on mpeg_vsh370.prx.</strong>
+      <code>sceMpegFlushAllStream</code>, <code>sceMpegAvcDecodeFlush</code>,
+      and <code>sceMpegInit</code> all cause hard freezes when called during
+      active decoding. The decoder cannot be safely reset. Even destruction
+      crashes when the ME is busy.
     </li>
     <li>
-      <strong>Codec RPC documentation.</strong> The 22 RPC command IDs, buffer layouts, and
-      six-library driver chain are now documented for the PSP homebrew community. The
-      seven-entry kernel error table at <code>+0x49A0</code> provides the first documented
-      translation between ME internal return codes and user-visible <code>0x8062xxxx</code>
-      errors.
+      <strong>Runtime binary patching of loaded PRX modules works.</strong>
+      Computing the PRX base from the resolved import stub address, locating
+      a specific instruction by VA offset, and overwriting it with a D-cache
+      flush &mdash; all from user-mode Rust &mdash; is a viable technique on PSP.
     </li>
     <li>
-      <strong>EABI32 is a systemic issue for Rust on PSP.</strong> LLVM&rsquo;s O32 calling
-      convention breaks every PSP syscall with 5+ arguments. The 29 EABI mappers added to
-      <code>rust-psp</code> fix this for all known affected functions, and the pattern is
-      documented for future additions.
+      <strong>Kernel event flags are not enumerable from plugin threads.</strong>
+      <code>sceKernelReferEventFlagStatus</code> returns errors for all UIDs
+      from both user mode and kernel plugin threads. The hook approach
+      (intercepting the wait call) is more reliable than trying to find the
+      event flag UID.
+    </li>
+    <li>
+      <strong>Undocumented parameters hide in abandoned source code.</strong>
+      The critical <code>sceMpegCreate</code> parameters (mode 4/5, DDR top pointer)
+      were never documented in PSPSDK or any public reference. They only existed in
+      PMPlayer&rsquo;s source code, which was last updated in 2010. Sometimes reverse
+      engineering the firmware is less effective than reading existing homebrew that
+      already solved the problem.
+    </li>
+    <li>
+      <strong>EABI32 vs O32 is a systemic issue for Rust on PSP.</strong>
+      LLVM&rsquo;s O32 calling convention breaks every PSP syscall with 5+ arguments.
+      The 29 EABI mappers added to <code>rust-psp</code> fix all known affected functions.
+      This bug blocked child module loading entirely (<code>sceKernelStartModule</code>
+      returned <code>0x800200D3</code> from Rust but worked from C).
+    </li>
+    <li>
+      <strong>Design for graceful degradation, not perfect operation.</strong>
+      On hardware with undocumented firmware bugs, the question is not &ldquo;how do
+      we prevent all failures&rdquo; but &ldquo;how do we survive them.&rdquo; The
+      leak-and-continue strategy keeps the application running even when the ME is
+      in an unrecoverable state.
+    </li>
+    <li>
+      <strong>48 MB/s of allocation churn matters on a 333 MHz CPU.</strong>
+      Pre-allocating buffers, eliminating per-frame copies, and using kernel
+      semaphores instead of polling are not premature optimizations on embedded
+      hardware &mdash; they are the difference between smooth playback and dropped
+      frames.
     </li>
   </ul>
 
   <h2>Key Hardware Reference</h2>
-
-  <p>
-    For future work, here is the complete register and address map discovered during this research:
-  </p>
 
   <table>
     <thead>
@@ -871,301 +923,9 @@ sceKernelStartModule(uid, 0, NULL, ...)
     </tbody>
   </table>
 
-  <h2>What&rsquo;s Next</h2>
-
-  <ul>
-    <li>
-      <strong>Performance tuning:</strong> Frame pacing, decode thread priority, and memory
-      budget optimization for smooth 30fps playback on the 333 MHz Allegrex.
-    </li>
-    <li>
-      <strong>ME firmware decryption:</strong> Decrypt <code>me_t2img.img</code> using the Kirk
-      engine to understand the ME-side command handling and error codes in detail.
-    </li>
-    <li>
-      <strong>Publish the 47 NIDs:</strong> Complete documentation of all six ME driver
-      libraries for the PSP homebrew community.
-    </li>
-  </ul>
-
-  <h2 id="update-eabi-breakthrough">Update: EABI32 Breakthrough (2026-03-25)</h2>
-
-  <p>
-    A marathon debugging session uncovered <strong>two critical bugs</strong> in
-    <code>rust-psp</code> that were preventing child PRX modules (like
-    <code>mpeg_vsh370.prx</code>) from loading. The symptom:
-    <code>sceKernelStartModule</code> returned <code>0x800200D3</code>
-    (<code>SCE_ERROR_KERNEL_ILLEGAL_ADDR</code>) for <em>every</em> call from a
-    Rust EBOOT, while identical C EBOOTs worked perfectly.
-  </p>
-
-  <h3>Root cause: EABI32 vs O32 ABI mismatch</h3>
-
-  <p>
-    LLVM&rsquo;s MIPS target generates <strong>O32 calling convention</strong> code, where
-    arguments 5&ndash;8 go on the stack. The PSP Allegrex CPU uses
-    <strong>EABI32</strong>, where arguments 5&ndash;8 are passed in registers
-    <code>$t0</code>&ndash;<code>$t3</code>. For <code>sceKernelStartModule</code>
-    (which takes 5 arguments), the kernel read <em>garbage</em> from <code>$t0</code>
-    as the <code>pOption</code> pointer, failed address validation, and returned
-    the error.
-  </p>
-
-  <p>
-    The fix was straightforward: <code>rust-psp</code> already had EABI32 bridge
-    functions in <code>eabi.rs</code> (<code>i5</code>, <code>i6</code>, <code>i7</code>)
-    written in assembly. They just weren&rsquo;t applied to all 5+ argument PSP functions.
-    Adding <code>#[psp(NID, i5)]</code> annotations to <code>sceKernelStartModule</code>,
-    <code>sceKernelStopModule</code>, and several other functions resolved the issue.
-  </p>
-
-  <h3>Second bug: prxgen leaving SHT_REL sections</h3>
-
-  <p>
-    <code>rust-psp</code>&rsquo;s <code>prxgen</code> tool left <code>SHT_REL</code>
-    relocation sections (targeting non-ALLOC sections) in the PRX output. The PSP kernel
-    processes all relocation sections it finds, so these leftover entries caused bogus
-    relocations that corrupted module state. The fix: NULL out non-ALLOC
-    <code>SHT_REL</code> section headers during the ELF-to-PRX conversion.
-  </p>
-
-  <h3>Investigation trail</h3>
-
-  <p>
-    The debugging effort spanned kernel module dumps (modulemgr at
-    <code>0x8805A400</code>, loadcore at <code>0x88017000</code>), MIPS disassembly of
-    the PSP firmware&rsquo;s <code>_PrologueModule</code> function, K1 register
-    patching experiments, ARK-4 CFW source analysis, C/Rust hybrid test EBOOTs,
-    syscall number comparisons, and progressive binary morphing. The full details
-    are in <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/psp-child-module-investigation.md">
-    <code>docs/psp-child-module-investigation.md</code></a>.
-  </p>
-
-  <p>
-    With child module loading now working, the path to hardware H.264 decode via
-    <code>mpeg_vsh370.prx</code> was unblocked &mdash; leading directly to the
-    sceMpeg integration work described in the next section.
-  </p>
-
-  <h2 id="update-scempeg-integration">Update: sceMpeg Integration (2026-03-25)</h2>
-
-  <p>
-    With the EABI fix confirmed, the focus shifted to actually <em>calling</em>
-    sceMpeg functions from the Rust EBOOT. This turned out to be a deep
-    exploration of the PSP kernel&rsquo;s module linking behavior.
-  </p>
-
-  <h3>Import stub resolution: what works, what doesn&rsquo;t</h3>
-
-  <p>
-    The PSP kernel resolves import stubs (weak <code>0x0009</code> flags) at module
-    load time. We tested every combination:
-  </p>
-
-  <table>
-    <thead><tr><th>Approach</th><th>Stubs resolve?</th><th>AvcDecode works?</th></tr></thead>
-    <tbody>
-      <tr>
-        <td><code>sceMpeg</code> stubs + AvMpegBase (<code>sceUtilityLoadModule</code>)</td>
-        <td>Yes &mdash; utility loader triggers re-linking</td>
-        <td>No &mdash; <code>0x80628002</code> (AvMpegBase does not support NAL decode path)</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegVsh_library</code> stubs + mpeg_vsh370 (<code>sceKernelStartModule</code>)</td>
-        <td>No &mdash; kernel does NOT re-link after <code>StartModule</code></td>
-        <td>N/A</td>
-      </tr>
-      <tr>
-        <td>Both AvMpegBase + mpeg_vsh370</td>
-        <td>N/A</td>
-        <td>Conflict: <code>0x8002013b</code> (exclusive load)</td>
-      </tr>
-      <tr>
-        <td><code>sceMpeg</code> stubs + mpeg_vsh370 only (no AvMpegBase)</td>
-        <td><strong>Yes!</strong> mpeg_vsh370 registers &ldquo;sceMpeg&rdquo; for self-imports</td>
-        <td><code>0x80628002</code> &mdash; but Init/Create/GetAvcNalAu all succeed</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <h3>The surprise: mpeg_vsh370 registers &ldquo;sceMpeg&rdquo;</h3>
-
-  <p>
-    mpeg_vsh370.prx imports 59 functions from the <code>sceMpeg</code> library
-    (self-referencing). When the kernel links these at <code>StartModule</code> time,
-    it effectively registers <code>sceMpeg</code> as an available library &mdash;
-    which triggers re-linking of the EBOOT&rsquo;s <code>sceMpeg</code> weak import
-    stubs. This means <strong>we can call sceMpeg functions through mpeg_vsh370
-    without any kernel PRX or bridge module</strong>.
-  </p>
-
-  <h3>Key discoveries along the way</h3>
-
-  <ul>
-    <li><strong>Module loading during preinit freezes the GU</strong> &mdash;
-      <code>sceKernelLoadModule</code> for mpeg_vsh370 must be called from the
-      video thread, not the main thread. Loading during init causes a dashboard
-      freeze (likely EDRAM partition conflict with framebuffers).</li>
-    <li><strong>The kernel PRX corrupts networking</strong> &mdash;
-      <code>sctrlHENPatchSyscall</code> hooks on sceMpeg functions corrupt adjacent
-      syscall table entries used by sceHttp/sceNet, causing WiFi dialog errors
-      (80082731, 80020190) and HTTP parse hangs. This cost hours of debugging.</li>
-    <li><strong>ELF headers stripped after module load</strong> &mdash; the kernel
-      removes ELF/program headers from loaded PRX modules, making it impossible
-      to walk the export table from user mode.</li>
-    <li><strong>ARK-4 CFW caches kernel plugins</strong> &mdash; renaming the PRX
-      file doesn&rsquo;t force a reload; the CFW loads from a cached copy.</li>
-  </ul>
-
-  <h3>oasis-me-boot.prx: Rust replacement for cooleyesBridge</h3>
-
-  <p>
-    We rewrote <code>cooleyesBridge.prx</code> (GPL, by cooleyes) as a clean Rust
-    kernel PRX: <code>oasis-me-boot.prx</code>. It uses
-    <code>sctrlHENFindFunction</code> to resolve <code>sceMeBootStart660</code>
-    (NID <code>0x5DFF5C50</code> in <code>sceMeCore_driver</code>), clears
-    <code>$k1</code> for kernel address validation, and calls it with
-    <code>mebooterType=0</code>. No GPL dependency, no syscall patching, no
-    networking corruption.
-  </p>
-
-  <h3>The 0x80628002 mystery: ME decodes for PMPlayer but not for us</h3>
-
-  <p>
-    Despite getting every sceMpeg function to succeed &mdash; Init, Create,
-    RingbufferConstruct, RegistStream, MallocAvcEsBuf, InitAu,
-    AvcDecodeMode(Psm8888), GetAvcNalAu &mdash; <code>sceMpegAvcDecode</code>
-    consistently returns <code>0x80628002</code> (AVC_DECODE_FATAL). We confirmed:
-  </p>
-
-  <ul>
-    <li><strong>ME boot is not the issue</strong> &mdash;
-      <code>sceMeBootStart660(0)</code> returns <code>0x80000102</code>
-      (already booted by the AAC subsystem). Same error with or without boot.</li>
-    <li><strong>PMPlayer works</strong> on this exact PSP with the same
-      <code>mpeg_vsh370.prx</code> and <code>cooleyesBridge.prx</code>.
-      H.264 decode is hardware-capable.</li>
-    <li><strong>The ME IS processing</strong> &mdash; one frame occasionally
-      returns <code>0x80628001</code> (less fatal error), confirming the ME
-      receives and attempts to decode our data.</li>
-    <li><strong>All configuration variants tested</strong>: mode 0, mode 5,
-      with/without AvcDecodeMode, with/without ME boot, proper ringbuffer
-      construction &mdash; all return <code>0x80628002</code>.</li>
-  </ul>
-
-  <p>
-    The remaining hypothesis: our <code>Mp4AvcNalStruct</code> data formatting
-    or NAL prefix handling differs from PMPlayer&rsquo;s. The H.264 data may
-    have AVCC length prefixes where the ME expects Annex B start codes, or
-    the struct layout may have additional fields we&rsquo;re not populating.
-  </p>
-
-  <h3>Root cause found: PMPlayer source code comparison</h3>
-
-  <p>
-    Finding PMPlayer&rsquo;s actual source code (<code>pmplayer-advance</code>
-    by cooleyes, exported from Google Code to GitHub:
-    <code>DavisDev/pmplayer-advance</code>, key file:
-    <code>/ppa/mod/mp4avcdecoder.c</code>) revealed three critical differences
-    in our <code>sceMpegCreate</code> call:
-  </p>
-
-  <table>
-    <thead>
-      <tr><th>Parameter</th><th>Our Code</th><th>PMPlayer</th><th>Impact</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>sceMpegQueryMemSize</code> mode</td>
-        <td><strong>0</strong></td>
-        <td><strong>4</strong> (&le;480p) / <strong>5</strong> (&gt;480p)</td>
-        <td>Different buffer size, NAL decode path not enabled</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegCreate</code> unk1</td>
-        <td><strong>0</strong></td>
-        <td><strong>mpeg_mode (4/5)</strong></td>
-        <td>ME doesn&rsquo;t know which decode mode to use</td>
-      </tr>
-      <tr>
-        <td><code>sceMpegCreate</code> unk2</td>
-        <td><strong>0</strong></td>
-        <td><strong>DDR top pointer</strong> (4MB-aligned 2MB buffer)</td>
-        <td>ME has no workspace for decoded frames &mdash; <strong>root cause of 0x80628002</strong></td>
-      </tr>
-      <tr>
-        <td>AU buffer for <code>sceMpegInitAu</code></td>
-        <td><code>sceMpegMallocAvcEsBuf</code></td>
-        <td><code>ddrtop + 0x10000</code></td>
-        <td>AU not in DDR top region where ME expects it</td>
-      </tr>
-      <tr>
-        <td>AU struct init</td>
-        <td>zeroed</td>
-        <td><code>memset(0xFF)</code></td>
-        <td>Sentinel values required for proper state tracking</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <p>
-    The &ldquo;unknown&rdquo; parameters in <code>sceMpegCreate</code> were
-    <strong>never documented</strong> in PSPSDK or any public reference &mdash;
-    they were only visible in PMPlayer&rsquo;s source. Without the DDR top
-    pointer, the ME&rsquo;s codec firmware had no output buffer to write
-    decoded YCbCr frames, causing every <code>sceMpegAvcDecode</code> call to
-    return <code>0x80628002</code> (AVC_DECODE_FATAL).
-  </p>
-
-  <h3>H.264 decode: working!</h3>
-
-  <p>
-    After applying all three fixes, the full decode pipeline works on real
-    PSP hardware. Confirmed with a 656&times;480 H.264 stream from
-    archive.org (Bits and Bytes, 1983). The working init sequence:
-  </p>
-
-  <pre><code>sceMpegInit() = 0x0
-sceMpegQueryMemSize(5) = 49535        // mode 5 for &gt;480p
-DDR top: 2MB @ 0x9000000 (4MB-aligned)
-sceMpegRingbufferConstruct(8 packets) = 0x0
-sceMpegCreate(mpeg, data, 49535, &amp;rb, 512, 5, 0x9000000) = 0x0
-sceMpegRegistStream(mpeg, 0, 0) = OK
-sceMpegInitAu(mpeg, 0x9010000, &amp;au) = 0x0   // ddrtop + 0x10000, AU filled with 0xFF first
-sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
-
-  <p>
-    The per-frame decode sequence feeds AVCC-format NAL data
-    (length-prefixed, directly from MP4 container) via
-    <code>sceMpegGetAvcNalAu</code>, then decodes via
-    <code>sceMpegAvcDecode</code>. The ME outputs YCbCr which is converted to
-    ABGR via <code>sceMpegBaseCscAvc</code> (hardware color space converter).
-    One additional fix: the CSC outputs alpha=0x00, so a post-conversion
-    alpha fixup sets every pixel&rsquo;s alpha to 0xFF for correct compositing.
-  </p>
-
-  <h3>SDK and infrastructure contributions</h3>
-
-  <ul>
-    <li><strong><code>psp::mpeg::AvcDecoder</code></strong> &mdash; high-level RAII H.264
-      decoder in <code>rust-psp</code>, encapsulating all undocumented ME parameters</li>
-    <li><strong>29 EABI mappers</strong> added to <code>rust-psp</code> for all
-      5+ argument PSP functions (kernel, thread, net, font, HTTP)</li>
-    <li><strong>i8/i9 assembly bridges</strong> for 8 and 9 argument functions</li>
-    <li><strong>prxgen fix</strong> for SHT_REL section corruption in PRX output</li>
-    <li><strong>oasis-me-boot.prx</strong> &mdash; GPL-free Rust kernel PRX for ME boot
-      (replaces cooleyesBridge.prx)</li>
-    <li><strong>sceMpeg + sceMpegbase import stubs</strong> with weak flags (from mpeg_vsh370)</li>
-    <li><strong>sceMpegCreate parameter documentation</strong> &mdash; mode and DDR top
-      parameters previously undocumented in any public reference</li>
-    <li><strong>AvMpegBase NAL incompatibility</strong> documented and tested on real hardware</li>
-    <li><strong>Kernel PRX networking bug</strong> &mdash; <code>sctrlHENPatchSyscall</code>
-      corrupts adjacent syscall table entries, identified and documented</li>
-  </ul>
-
   <nav class="article-nav">
     <a class="prev" href="06-backend-trait-system.html">&larr; Prev: Anatomy of the Backend Trait System</a>
-    <a class="next" href="08-me-deadlock-investigation.html">Next: The 90-Frame ME Deadlock &rarr;</a>
+    <a class="next" href="09-remote-dev-automation.html">Next: Zero-Touch PSP Development &rarr;</a>
   </nav>
 
 </article>
@@ -1176,10 +936,13 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
       <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
       <span>&middot;</span>
       <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+      <span>&middot;</span>
+      <a href="../">Home</a>
     </div>
   </div>
 </footer>
 
 <script src="../js/main.js"></script>
+
 </body>
 </html>

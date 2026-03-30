@@ -118,8 +118,8 @@
 
       <a class="journal-card" href="07-psp-media-engine.html">
         <div class="journal-card-body">
-          <h3>Reverse Engineering the PSP Media Engine: From Empty Stubs to Direct RPC</h3>
-          <p>Tracing H.264 decode failures on ARK-4 CFW to empty firmware stubs, discovering hidden kernel modules during UMD playback, and reverse engineering Sony&rsquo;s internal ME codec RPC protocol &mdash; 22 command IDs, 47 driver NIDs, and the complete kernel driver chain.</p>
+          <h3>Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</h3>
+          <p>Tracing H.264 decode failures to empty firmware stubs, reverse engineering the ME&rsquo;s RPC protocol (22 command IDs, 47 NIDs), discovering a 70-frame firmware deadlock, and building three solutions &mdash; runtime binary patching, a kernel watchdog hook, and P/B-frame skipping for indefinite stable streaming.</p>
           <div class="journal-card-meta">
             <span class="journal-tag">hardware</span>
             <span class="journal-tag">reverse-engineering</span>
@@ -129,23 +129,10 @@
         <div class="journal-card-number">07</div>
       </a>
 
-      <a class="journal-card" href="08-me-deadlock-investigation.html">
-        <div class="journal-card-body">
-          <h3>The 90-Frame Deadlock: Patching a PSP Firmware Bug at Runtime</h3>
-          <p>Investigating a Media Engine deadlock in sceMpegAvcDecode that freezes H.264 video after ~90 frames &mdash; runtime binary patching of mpeg_vsh370.prx, tracing the kernel import chain via Capstone disassembly, and building an MPEG-PS ringbuffer alternative from byte-level PMF analysis.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">reverse-engineering</span>
-            <span class="journal-tag">media-engine</span>
-            <span class="journal-tag">firmware-patching</span>
-          </div>
-        </div>
-        <div class="journal-card-number">08</div>
-      </a>
-
       <a class="journal-card" href="09-remote-dev-automation.html">
         <div class="journal-card-body">
           <h3>Zero-Touch PSP Development: From TCP Commands to Physical Actuators</h3>
-          <p>Building a fully autonomous development loop for PSP hardware &mdash; WiFi auto-connect, a TCP command server with remote input injection and live framebuffer streaming, and a DIY linear actuator for hard reboot recovery when firmware hangs.</p>
+          <p>Closing the loop on embedded hardware development &mdash; WiFi auto-connect, a TCP command server with remote input injection, live framebuffer streaming, arbitrary file upload, and a DIY linear actuator. An AI agent used this infrastructure to debug H.264 video decode across 30+ iterations without touching the device.</p>
           <div class="journal-card-meta">
             <span class="journal-tag">automation</span>
             <span class="journal-tag">hardware</span>
