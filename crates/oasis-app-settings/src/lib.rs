@@ -173,7 +173,7 @@ impl SettingsApp {
         lines.push("  License:    MIT / Unlicense".to_string());
         lines.push("  Crates:     20 workspace crates".to_string());
         lines.push("  Apps:       16 built-in".to_string());
-        lines.push("  Skins:      18 built-in".to_string());
+        lines.push("  Skins:      20 built-in".to_string());
         lines.push(String::new());
         lines.push("  An embeddable operating system".to_string());
         lines.push("  framework originally ported from".to_string());

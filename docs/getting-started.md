@@ -58,7 +58,7 @@ The desktop app opens an SDL3 window at 480x272 native resolution with the defau
 
 ### Choosing a Skin
 
-OASIS_OS ships with 18 skins. Select one via environment variable:
+OASIS_OS ships with 20 skins. Select one via environment variable:
 
 ```bash
 OASIS_SKIN=modern cargo run -p oasis-app
@@ -125,7 +125,7 @@ cargo build -p oasis-app --no-default-features --features javascript
 
 ## Taking Screenshots
 
-Generate screenshots for all 18 skins:
+Generate screenshots for all 20 skins:
 
 ```bash
 cargo run -p oasis-app --bin oasis-screenshot
@@ -249,7 +249,7 @@ oasis-os/
     oasis-sdi/          Scene display interface
     oasis-ui/           32 reusable widgets
     oasis-wm/           Window manager
-    oasis-skin/         TOML skin engine (18 skins)
+    oasis-skin/         TOML skin engine (20 skins)
     oasis-terminal/     90+ commands across 17+ modules
     oasis-browser/      HTML/CSS/Gemini browser engine
     oasis-js/           JavaScript engine (QuickJS-NG)

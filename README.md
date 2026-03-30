@@ -1,6 +1,6 @@
 # OASIS_OS
 
-An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 16 apps, 18 skins -- to a 333 MHz PSP handheld, a desktop GPU, a web browser, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
+An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 16 apps, 20 skins -- to a 333 MHz PSP handheld, a desktop GPU, a web browser, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
 
 **[Try it in your browser](https://andrewaltimit.github.io/oasis-os/demo/)** -- no install required.
 
@@ -40,7 +40,7 @@ Core code never calls platform APIs directly. All rendering, input, networking, 
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>18 skins, 90+ commands"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + 11 app crates<br/>32 widgets, browser, terminal<br/>20 skins, 90+ commands"]
     TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) / SdiBackend (39 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
@@ -82,7 +82,7 @@ graph TD
 - Scene graph (SDI) with z-order, gradients, rounded corners, shadows, alpha blending
 - 32 widgets: Button, Card, TabBar, ListView, ScrollView, Slider, TreeView, Modal, and more
 - Window manager with drag/resize, minimize/maximize, snap zones
-- 18 data-driven TOML skins with theme derivation from 9 base colors
+- 20 data-driven TOML skins with theme derivation from 9 base colors (includes color-vision accessibility variants)
 - Vector graphics with path operations and frame-driven animations
 - GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
 
@@ -103,7 +103,7 @@ graph TD
 
 ## Skins
 
-All 18 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
+All 20 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
 
 | Category | Skins |
 |----------|-------|
@@ -111,7 +111,9 @@ All 18 skins are defined in TOML configuration with theme derivation from 9 base
 | **Dashboard** | classic, altimit |
 | **Aesthetic** | cyberpunk, vaporwave, solarized, paper |
 | **Terminal** | terminal, tactical, corrupted, agent-terminal |
-| **Accessibility** | highcontrast, retro-cga |
+| **Accessibility** | highcontrast, retro-cga, protanopia, tritanopia |
+
+Skins support animated shader wallpapers (Shadertoy-style fragment shaders: Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro) that render in real-time behind the UI.
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
