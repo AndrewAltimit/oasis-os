@@ -177,7 +177,7 @@ impl SettingsApp {
         lines.push(String::new());
         lines.push("  An embeddable operating system".to_string());
         lines.push("  framework originally ported from".to_string());
-        lines.push("  PSP homebrew (2006-2008).".to_string());
+        lines.push("  Inspired by PSP homebrew (PSIX).".to_string());
         lines.push(String::new());
         lines.push("  github.com/AndrewAltimit/oasis-os".to_string());
     }

@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 
 ## The PSP Story
 
-OASIS_OS started as a PSP homebrew shell written in C (2006-2008). It has been rebuilt in Rust and evolved into a cross-platform framework, but the PSP remains the most demanding target -- and the most interesting.
+OASIS_OS was built from scratch in Rust starting in early 2026, inspired by PSP homebrew shells like PSIX. The PSP is both the original muse and the most demanding target -- and the most interesting.
 
 The PSP is a 2004 handheld with a 333 MHz MIPS CPU, 32 MB RAM, and firmware from 2008. Making a modern streaming video app work on it required:
 

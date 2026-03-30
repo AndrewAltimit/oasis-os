@@ -5,9 +5,8 @@
 
 ## Context
 
-OASIS_OS needs a theming system to support multiple visual styles. The original
-PSP shell (2006-2008) had hardcoded color schemes. Modern users expect
-customizable themes.
+OASIS_OS needs a theming system to support multiple visual styles. Early
+prototypes had hardcoded color schemes. Users expect customizable themes.
 
 Requirements:
 - Hot-swappable at runtime (no recompilation)

@@ -4,7 +4,7 @@ This file provides guidance to all AI agents working on this repository. It supp
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI (SDI), command interpreter, virtual file system, plugin system, and remote terminal. It renders anywhere you provide a pixel buffer and an input stream. Originally ported from a PSP homebrew shell (2006-2008).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI (SDI), command interpreter, virtual file system, plugin system, and remote terminal. It renders anywhere you provide a pixel buffer and an input stream. Built from scratch in Rust starting early 2026, inspired by PSP homebrew shells like PSIX.
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
