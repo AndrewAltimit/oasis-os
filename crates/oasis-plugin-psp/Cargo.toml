@@ -11,7 +11,7 @@
 [package]
 name = "oasis-plugin-psp"
 description = "PSP overlay plugin PRX: in-game overlay + background music for OASIS_OS"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/AndrewAltimit/oasis-os"
@@ -19,7 +19,7 @@ authors = ["AndrewAltimit"]
 
 [dependencies]
 # Pinned to specific commit for reproducible builds.
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d833e94", features = ["kernel"] }
+psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["kernel"] }
 
 # unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
 # a lookup table issue. This fork patches the panic for the MIPS target.

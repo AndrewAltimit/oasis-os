@@ -224,4 +224,174 @@ impl PspBackend {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Pre-allocated video frame texture (avoids per-frame alloc/dealloc)
+    // -----------------------------------------------------------------------
+
+    /// Allocate a persistent video frame texture buffer sized for the given
+    /// dimensions. Call once when video playback begins; reuse via
+    /// `update_video_texture` for each decoded frame. The buffer is
+    /// power-of-2 padded and 16-byte aligned for GU, with padding rows
+    /// zeroed once at allocation time (never re-zeroed).
+    pub fn alloc_video_texture(&mut self, width: u32, height: u32) -> Option<TextureId> {
+        // Free any previous video texture.
+        if let Some(old) = self.video_tex.take() {
+            self.destroy_texture_inner(old);
+        }
+
+        let buf_w = width.next_power_of_two();
+        let buf_h = height.next_power_of_two();
+        let buf_size = (buf_w * buf_h * 4) as usize;
+
+        // Prefer volatile memory, fall back to heap.
+        let (data, layout, in_volatile) = if let Some(ref mut va) = self.volatile_alloc {
+            let p = va.alloc(buf_size);
+            if !p.is_null() {
+                (p, Layout::new::<u8>(), true)
+            } else {
+                let layout = Layout::from_size_align(buf_size, 16).ok()?;
+                // SAFETY: Layout is valid. Null check follows.
+                let p = unsafe { alloc(layout) };
+                if p.is_null() {
+                    return None;
+                }
+                (p, layout, false)
+            }
+        } else {
+            let layout = Layout::from_size_align(buf_size, 16).ok()?;
+            // SAFETY: Layout is valid. Null check follows.
+            let p = unsafe { alloc(layout) };
+            if p.is_null() {
+                return None;
+            }
+            (p, layout, false)
+        };
+
+        // Zero the entire buffer once (padding rows will never be touched
+        // again). Manual loop to avoid core::ptr::write_bytes on PSP.
+        // SAFETY: data is non-null and buf_size bytes were just allocated.
+        unsafe {
+            let slice = std::slice::from_raw_parts_mut(data, buf_size);
+            for byte in slice.iter_mut() {
+                *byte = 0;
+            }
+        }
+
+        let texture = Texture {
+            width,
+            height,
+            buf_w,
+            buf_h,
+            data,
+            layout,
+            in_volatile,
+        };
+
+        // Store in texture registry and remember the ID.
+        for (i, slot) in self.textures.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(texture);
+                let id = TextureId(i as u64);
+                self.video_tex = Some(id);
+                self.video_tex_w = width;
+                self.video_tex_h = height;
+                return Some(id);
+            }
+        }
+        let i = self.textures.len();
+        self.textures.push(Some(texture));
+        let id = TextureId(i as u64);
+        self.video_tex = Some(id);
+        self.video_tex_w = width;
+        self.video_tex_h = height;
+        Some(id)
+    }
+
+    /// Update the persistent video texture with new RGBA frame data.
+    ///
+    /// Skips allocation, zeroing, and texture registry lookup — only copies
+    /// pixel rows into the existing buffer via DMA (or CPU fallback).
+    /// Returns the TextureId on success.
+    pub fn update_video_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Option<TextureId> {
+        // Re-allocate if dimensions changed (rare — typically once per stream).
+        if self.video_tex.is_none()
+            || width != self.video_tex_w
+            || height != self.video_tex_h
+        {
+            return self.alloc_video_texture_and_update(width, height, rgba_data);
+        }
+
+        let tex_id = self.video_tex?;
+        let idx = tex_id.0 as usize;
+        let texture = self.textures.get(idx)?.as_ref()?;
+
+        let buf_w = texture.buf_w;
+        let data = texture.data;
+        let src_stride = (width * 4) as usize;
+        let dst_stride = (buf_w * 4) as usize;
+        let use_dma = src_stride >= 1024;
+
+        if use_dma {
+            // SAFETY: Writeback source from CPU cache before DMA reads it,
+            // and invalidate destination so stale lines don't overwrite.
+            unsafe {
+                psp::cache::dcache_writeback_invalidate_range(
+                    rgba_data.as_ptr() as *const std::ffi::c_void,
+                    rgba_data.len() as u32,
+                );
+                psp::cache::dcache_writeback_invalidate_range(
+                    data as *const std::ffi::c_void,
+                    (buf_w * texture.buf_h * 4) as u32,
+                );
+            }
+        }
+
+        for row in 0..height as usize {
+            // SAFETY: src and dst within allocated bounds.
+            unsafe {
+                let src = rgba_data.as_ptr().add(row * src_stride);
+                let dst = data.add(row * dst_stride);
+                if use_dma {
+                    if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
+                        continue;
+                    }
+                }
+                ptr::copy_nonoverlapping(src, dst, src_stride);
+            }
+        }
+
+        // Flush D-cache so the GU (reading via uncached mirror) sees
+        // the pixel data we just wrote via CPU cached writes.
+        unsafe {
+            psp::sys::sceKernelDcacheWritebackInvalidateAll();
+        }
+
+        Some(tex_id)
+    }
+
+    /// Allocate a new video texture and immediately fill it with frame data.
+    fn alloc_video_texture_and_update(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Option<TextureId> {
+        self.alloc_video_texture(width, height)?;
+        self.update_video_texture(width, height, rgba_data)
+    }
+
+    /// Free the persistent video texture (call when playback stops).
+    pub fn free_video_texture(&mut self) {
+        if let Some(id) = self.video_tex.take() {
+            self.destroy_texture_inner(id);
+        }
+        self.video_tex_w = 0;
+        self.video_tex_h = 0;
+    }
 }

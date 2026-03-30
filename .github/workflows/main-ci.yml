@@ -243,12 +243,36 @@ jobs:
           cd crates/oasis-backend-psp
           RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 
-      - name: Upload PSP EBOOT artifact
+      - name: Build PSP Plugin PRX
+        continue-on-error: true
+        run: |
+          cd crates/oasis-plugin-psp
+          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+      - name: Build PSP Recovery EBOOT
+        continue-on-error: true
+        run: |
+          cd crates/oasis-recovery-psp
+          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+      - name: Collect PSP artifacts
+        if: always()
+        run: |
+          mkdir -p psp-artifacts
+          cp crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP \
+            psp-artifacts/OASIS-OS.PBP 2>/dev/null || true
+          cp crates/oasis-plugin-psp/target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx \
+            psp-artifacts/oasis-overlay.prx 2>/dev/null || true
+          cp crates/oasis-recovery-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP \
+            psp-artifacts/RECOVERY.PBP 2>/dev/null || true
+          ls -la psp-artifacts/
+
+      - name: Upload PSP artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: psp-eboot
-          path: crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP
+          name: psp-artifacts
+          path: psp-artifacts/*
           if-no-files-found: ignore
           retention-days: 90
 
@@ -405,10 +429,10 @@ jobs:
           name: oasis-binaries
           path: release-artifacts/binaries
 
-      - name: Download PSP EBOOT artifact
+      - name: Download PSP artifacts
         uses: actions/download-artifact@v4
         with:
-          name: psp-eboot
+          name: psp-artifacts
           path: release-artifacts/psp
 
       - name: Determine version
@@ -456,30 +480,39 @@ jobs:
           cat << 'EOF' > release_notes.md
           ## Release ${{ steps.version.outputs.version }}
 
-          ### OASIS_OS
-
-          Pre-built binaries for the OASIS_OS framework:
+          ### Desktop
 
           | Binary | Description |
           |--------|-------------|
-          | `oasis-app` | Desktop entry point (SDL2 backend) |
-          | `oasis-screenshot` | Screenshot capture utility |
-          | `liboasis_ffi` | C-ABI shared library for UE5 and external integrations |
-          | `EBOOT.PBP` | PSP homebrew binary (runs on real hardware and PPSSPP) |
+          | `oasis-app-linux-*` | Desktop entry point (SDL3 backend) |
+          | `oasis-screenshot-linux-*` | Screenshot capture utility |
+          | `liboasis_ffi-linux-*` | C-ABI shared library for UE5 and external integrations |
 
-          ### Installation
+          ### PSP
 
+          | Binary | Install Path | Description |
+          |--------|-------------|-------------|
+          | `OASIS-OS.PBP` | `ms0:/PSP/GAME/OASISOS/EBOOT.PBP` | Main application (sceGu rendering, TLS 1.3, ME video decode) |
+          | `oasis-overlay.prx` | `ms0:/seplugins/oasis.prx` | Kernel overlay plugin (in-game UI + background MP3) |
+          | `RECOVERY.PBP` | `ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP` | Network recovery (WiFi TCP file server for unbricking) |
+
+          ### Quick Start
+
+          **Desktop:**
           ```bash
-          # Make binaries executable
-          chmod +x oasis-app-linux-* oasis-screenshot-linux-*
-
-          # Run the desktop app
+          chmod +x oasis-app-linux-*
           ./oasis-app-linux-*
           ```
 
+          **PSP:** Copy files to Memory Stick, add `game, ms0:/seplugins/oasis.prx, on` to `PLUGINS.TXT`. Requires ARK-4 or PRO CFW on firmware 6.61.
+
+          **Browser:** [Try it online](https://andrewaltimit.github.io/oasis-os/demo/) -- no install required.
+
           ### Requirements
 
-          - SDL2 runtime libraries (`libsdl2`, `libsdl2-mixer`)
+          - Desktop: SDL3 runtime libraries
+          - PSP: ARK-4 or PRO CFW, firmware 6.61
+          - Browser: Any modern browser with WebAssembly support
 
           ### Commit Information
 

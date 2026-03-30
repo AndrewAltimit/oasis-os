@@ -5,9 +5,8 @@
 
 ## Context
 
-OASIS_OS needs a theming system to support multiple visual styles. The original
-PSP shell (2006-2008) had hardcoded color schemes. Modern users expect
-customizable themes.
+OASIS_OS needs a theming system to support multiple visual styles. Early
+prototypes had hardcoded color schemes. Users expect customizable themes.
 
 Requirements:
 - Hot-swappable at runtime (no recompilation)
@@ -55,8 +54,7 @@ TOML at compile time.
 ## Consequences
 
 - `oasis-skin` crate owns parsing, resolution, and theme derivation.
-- 20 unique skins ship: 18 built-in + 14 external TOML directories in `skins/`
-  (including accessibility variants protanopia and tritanopia) -- all embedded
+- 18 unique skins ship: 18 built-in + 14 external TOML directories in `skins/`
   via `include_str!`.
 - External skins demonstrate the TOML filesystem loading path.
 - The `ActiveTheme` struct provides runtime-mutable access to all derived colors.

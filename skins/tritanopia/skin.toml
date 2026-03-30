@@ -1,6 +1,0 @@
-name = "tritanopia"
-version = "1.0"
-author = "OASIS_OS"
-description = "Color-blind-safe theme for tritanopia: avoids blue-yellow, uses red/green/magenta/cyan"
-screen_width = 480
-screen_height = 272

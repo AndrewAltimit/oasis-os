@@ -1,6 +1,0 @@
-name = "protanopia"
-version = "1.0"
-author = "OASIS_OS"
-description = "Color-blind-safe theme for protanopia: avoids red-green, uses blue/yellow/white/gray"
-screen_width = 480
-screen_height = 272

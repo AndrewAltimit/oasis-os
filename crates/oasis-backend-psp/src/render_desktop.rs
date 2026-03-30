@@ -27,6 +27,7 @@ pub(crate) fn render_desktop(
     mp: &MusicPlayerState,
     audio: &oasis_backend_psp::AudioHandle,
     br: &mut BrowserState,
+    tv: &TvGuideState,
 ) {
     let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
     let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);
@@ -103,6 +104,19 @@ pub(crate) fn render_desktop(
             },
             "packages" => desktop::draw_packages_windowed(cx, cy, cw, ch, be),
             "radio" => desktop::draw_radio_windowed(audio, cx, cy, cw, ch, be),
+            "tvguide" => desktop::draw_tvguide_windowed(
+                &tv.channels,
+                &tv.catalogs,
+                tv.selected,
+                tv.scroll,
+                &tv.now_playing,
+                tv.tuned.is_some(),
+                tv.downloading,
+                tv.download_progress,
+                &tv.error_msg,
+                tv.preview_tex,
+                cx, cy, cw, ch, be,
+            ),
             _ => Ok(()),
         },
     );

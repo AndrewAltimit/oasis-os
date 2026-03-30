@@ -250,6 +250,9 @@ fn psp_main() {
     // Frame timing via hardware tick counter.
     let mut frame_timer = psp::time::FrameTimer::new();
     boot::show_boot_screen(&mut backend, "Ready", 100);
+    // Start TCP command server for remote dev automation.
+    oasis_backend_psp::cmd_server::spawn();
+
     dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
 
@@ -345,19 +348,61 @@ fn psp_main() {
         }
 
         // -- Poll video decode frames --
-        if tv.tuned.is_some() && !tv.downloading {
+        // Poll regardless of download state — video decode starts as soon
+        // as the first keyframe arrives, even during HTTP streaming.
+        // Always check for video frames — log state every 5 seconds.
+        if viz_frame % 300 == 1 {
+            let vp = oasis_backend_psp::video::is_video_playing();
+            oasis_backend_psp::video::vlog_force(&format!(
+                "[MAIN] tuned={} vp={} tex={:?} kiosk={:?} frame={}",
+                tv.tuned.is_some(), vp, tv.preview_tex, kiosk_app as u8, viz_frame,
+            ));
+        }
+        if tv.tuned.is_some() {
             if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
-                if let Some(old) = tv.preview_tex.take() {
-                    backend.destroy_texture_inner(old);
+                // Read pixels from pre-allocated static buffer, then copy
+                // into the persistent video texture (no alloc/dealloc).
+                let pixels = oasis_backend_psp::video::frame_pixels(&frame);
+                let old_tex = tv.preview_tex;
+                tv.preview_tex =
+                    backend.update_video_texture(frame.width, frame.height, pixels);
+                if old_tex.is_none() && tv.preview_tex.is_some() {
+                    oasis_backend_psp::video::vlog_force(&format!(
+                        "[MAIN] first video tex: {}x{} → {:?}",
+                        frame.width, frame.height, tv.preview_tex,
+                    ));
+                } else if old_tex.is_none() && tv.preview_tex.is_none() {
+                    oasis_backend_psp::video::vlog_force(&format!(
+                        "[MAIN] video tex FAILED: {}x{} pixels={}",
+                        frame.width, frame.height, pixels.len(),
+                    ));
                 }
-                tv.preview_tex = backend.load_texture_inner(frame.width, frame.height, &frame.rgba);
             }
-            if !oasis_backend_psp::video::is_video_playing() {
-                if let Some(old) = tv.preview_tex.take() {
-                    backend.destroy_texture_inner(old);
-                }
+            // Only clear tuned state when video WAS playing and stopped
+            // (not during the startup gap before streaming begins).
+            if tv.preview_tex.is_some()
+                && !oasis_backend_psp::video::is_video_playing()
+            {
+                backend.free_video_texture();
+                tv.preview_tex = None;
                 tv.tuned = None;
                 tv.now_playing.clear();
+            }
+        }
+
+        // -- Decode hang watchdog (main thread, every ~0.5s) --
+        // If DECODE_STEP == 2 (stuck inside sceMpegAvcDecode), signal
+        // the internal semaphore to unblock the ME and force an error
+        // return, allowing the video thread to fall back to audio-only.
+        if tv.tuned.is_some() && viz_frame % 30 == 0 {
+            let step = psp::mpeg::DECODE_STEP.load(
+                core::sync::atomic::Ordering::Relaxed,
+            );
+            if step == 2 {
+                oasis_backend_psp::video::vlog_force(
+                    "[WATCHDOG] ME stuck in AvcDecode — unblocking"
+                );
+                oasis_backend_psp::video::unblock_stuck_decode();
             }
         }
 
@@ -469,6 +514,13 @@ fn psp_main() {
                     cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
                     cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
                 }
+                // Update TCP command server with current state.
+                oasis_backend_psp::cmd_server::update_status(
+                    kiosk_app as u8,
+                    cached_free_kb,
+                    cached_max_blk_kb,
+                    viz_frame as i32,
+                );
             }
 
             // Render windowed WM windows (if any are open).
@@ -489,6 +541,7 @@ fn psp_main() {
                 &mp,
                 &audio,
                 &mut br,
+                &tv,
             );
         }
 

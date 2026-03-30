@@ -55,6 +55,8 @@ pub struct PluginConfig {
     pub video_dir_len: usize,
     /// Enable PIP video on plugin load.
     pub pip_enabled: bool,
+    /// Enable remote development loop (USB auto-activation, command file).
+    pub devloop: bool,
 }
 
 impl PluginConfig {
@@ -86,6 +88,7 @@ impl PluginConfig {
             video_dir: vdir,
             video_dir_len: 11,
             pip_enabled: false,
+            devloop: false,
         }
     }
 
@@ -227,6 +230,9 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
                 config.video_dir_len = len;
             } else if bytes_eq_ci(key, b"pip_enabled") {
                 config.pip_enabled =
+                    bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
+            } else if bytes_eq_ci(key, b"devloop") {
+                config.devloop =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
             }
         }

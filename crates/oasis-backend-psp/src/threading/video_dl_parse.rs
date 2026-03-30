@@ -1,7 +1,7 @@
 //! MP4 parsing and stream demux helpers for video downloads: moov atom
 //! detection, sample table traversal, and interleaved sample extraction.
 
-use super::{AUDIO_QUEUE, AudioCmd, io_log_verbose};
+use super::{AUDIO_QUEUE, AudioCmd};
 use crate::video::{StreamFrame, try_push_stream_frame};
 
 // ---------------------------------------------------------------------------
@@ -206,8 +206,9 @@ pub(super) fn process_stream_chunk(
     }
 }
 
-/// Convert a raw AVCC video sample to Annex B and push it to the video
-/// decode thread via `VIDEO_STREAM_QUEUE` with backpressure.
+/// Push a raw AVCC video sample to the video decode thread via
+/// `VIDEO_STREAM_QUEUE` with backpressure. No Annex B conversion —
+/// the NAL decoder feeds AVCC data directly to the ME.
 fn push_video_sample(
     raw_data: &[u8],
     v_idx: usize,
@@ -220,39 +221,23 @@ fn push_video_sample(
     let is_keyframe = vt.sample_is_keyframe(v_idx);
     let timestamp_secs = vt.sample_timestamp(v_idx);
 
-    // Convert AVCC to Annex B (prepends SPS/PPS on keyframes).
-    let annex_b = match vt.avcc.as_ref() {
-        Some(avcc) => match oasis_video::demux_lite::avcc_to_annex_b(raw_data, avcc, is_keyframe)
-        {
-            Ok(data) => data,
-            Err(e) => {
-                io_log_verbose(&format!(
-                    "[IO-DL] AVCC→Annex B error at v_idx={v_idx}: {e}"
-                ));
-                return;
-            },
-        },
-        None => {
-            // No AVCC config — assume data is already Annex B.
-            raw_data.to_vec()
-        },
-    };
+    let prefix_size = vt.avcc.as_ref()
+        .map_or(4, |avcc| avcc.nal_length_size as u8);
 
-    // Include raw AVCC data + SPS/PPS for the NAL decoder.
-    let (raw_avcc, prefix_size, avcc_sps, avcc_pps) = match vt.avcc.as_ref() {
-        Some(avcc) => (
-            Some(raw_data.to_vec()),
-            avcc.nal_length_size as u8,
-            Some(avcc.sps.clone()),
-            Some(avcc.pps.clone()),
-        ),
-        None => (None, 4, None, None),
+    // Only include SPS/PPS on keyframes — the decoder stores them from
+    // the first keyframe and reuses them for all subsequent frames.
+    let (avcc_sps, avcc_pps) = if is_keyframe {
+        match vt.avcc.as_ref() {
+            Some(avcc) => (Some(avcc.sps.clone()), Some(avcc.pps.clone())),
+            None => (None, None),
+        }
+    } else {
+        (None, None)
     };
 
     // Blocking push with backpressure (same pattern as audio queue).
     let mut frame = StreamFrame {
-        data: annex_b,
-        raw_avcc,
+        data: raw_data.to_vec(),
         nal_prefix_size: prefix_size,
         avcc_sps,
         avcc_pps,

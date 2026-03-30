@@ -313,7 +313,8 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
     set_streaming_active(true);
 
     let mut loop_iter = 0u32;
-    loop {
+    let mut reconnect_count = 0u32;
+    'outer: loop {
         if !crate::video::is_video_playing() || DOWNLOAD_CANCEL.load(Ordering::Acquire) {
             io_log("[IO-DL] playback stopped, ending stream");
             break;
@@ -328,7 +329,45 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
             break;
         }
         if n == 0 {
-            break; // EOF
+            // EOF or connection dropped. Try to reconnect with Range
+            // request if we haven't finished downloading.
+            let should_reconnect = total
+                .map_or(false, |t| downloaded < t && reconnect_count < 3);
+            if should_reconnect {
+                reconnect_count += 1;
+                io_log(&format!(
+                    "[IO-DL] connection lost at {downloaded}/{}, \
+                     reconnecting #{reconnect_count}...",
+                    total.unwrap_or(0),
+                ));
+
+                // Drop current connection and open a new one with Range.
+                source.cleanup();
+                match TlsHttpReader::open_range(&url, downloaded) {
+                    Ok((reader, _cl)) => {
+                        source = HttpDataSource::Tls(reader);
+                        io_log(&format!(
+                            "[IO-DL] reconnected at byte {downloaded}"
+                        ));
+                        continue 'outer;
+                    }
+                    Err(e) => {
+                        io_log(&format!(
+                            "[IO-DL] reconnect failed: {e}"
+                        ));
+                        // Source already cleaned up. Set flag and break.
+                        set_streaming_active(false);
+                        io_log(&format!(
+                            "[IO-DL] stream aborted: {downloaded} bytes, \
+                             {v_idx} video, {a_idx} audio"
+                        ));
+                        crate::video::set_video_playing(false);
+                        send_audio_cmd(AudioCmd::VideoAudioStop);
+                        return;
+                    }
+                }
+            }
+            break; // Genuine EOF or max reconnects exhausted
         }
         if loop_iter < 3 {
             io_log_verbose(&format!(
@@ -338,6 +377,14 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
 
         downloaded += n as u64;
         loop_iter += 1;
+
+        // I/O heartbeat every 50 reads.
+        if loop_iter % 50 == 0 {
+            io_log(&format!(
+                "[IO-DL] heartbeat #{loop_iter}: {downloaded}B \
+                 v={v_idx} a={a_idx}"
+            ));
+        }
 
         process_stream_chunk(
             &buf[..n as usize],

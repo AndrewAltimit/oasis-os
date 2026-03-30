@@ -38,6 +38,7 @@ const TRIGGER_MAP: &[(CtrlButtons, Trigger)] = &[
 
 impl PspBackend {
     /// Poll controller input, returning events with edge detection.
+    /// Also drains any injected events from the TCP command server.
     pub fn poll_events_inner(&mut self) -> Vec<InputEvent> {
         self.controller.update();
         let mut events = Vec::new();
@@ -74,6 +75,18 @@ impl PspBackend {
                 x: self.cursor_x,
                 y: self.cursor_y,
             });
+        }
+
+        // Drain injected events from TCP command server.
+        // Update internal cursor position for injected CursorMove events
+        // so hit-testing uses the correct coordinates.
+        let pre_len = events.len();
+        crate::cmd_server::drain_injected(&mut events);
+        for ev in &events[pre_len..] {
+            if let InputEvent::CursorMove { x, y } = ev {
+                self.cursor_x = *x;
+                self.cursor_y = *y;
+            }
         }
 
         events

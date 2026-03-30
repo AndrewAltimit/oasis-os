@@ -1,0 +1,30 @@
+# Standalone crate -- excluded from the oasis_os workspace.
+#
+# Minimal PSP recovery EBOOT with WiFi TCP file server.
+# Replaces ARK-4's recovery menu with a network-enabled version
+# that accepts remote file uploads for unbricking.
+#
+# Build:  cd crates/oasis-recovery-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Deploy: cp target/.../EBOOT.PBP ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP
+# Trigger: Hold R-trigger during PSP boot to enter recovery mode
+
+[workspace]
+
+[package]
+name = "oasis-recovery-psp"
+description = "PSP network recovery EBOOT: WiFi TCP file server for unbricking"
+version = "1.3.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
+
+[patch.crates-io]
+unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

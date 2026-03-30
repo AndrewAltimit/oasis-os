@@ -99,7 +99,7 @@ td { border: 1px solid rgba(255,255,255,20); }
 <tr><td>Up/Down</td><td>Scroll page</td></tr>
 </table>
 
-<blockquote>Originally ported from a PSP homebrew shell (2006-2008).</blockquote>
+<blockquote>Built from scratch in Rust (2026), inspired by PSP homebrew shells like PSIX.</blockquote>
 
 <h2>Links</h2>
 <ol>

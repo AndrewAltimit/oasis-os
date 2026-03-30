@@ -93,7 +93,7 @@
       <a class="journal-card" href="05-psp-usb-research.html">
         <div class="journal-card-body">
           <h3>PSP USB Research: From Firmware Decryption to a Custom Device Driver</h3>
-          <p>Deep hardware RE of the PSP's USB subsystem &mdash; decrypting Sony's firmware, discovering undocumented OHCI registers, and building a working custom USB device driver in Rust for thin client communication.</p>
+          <p>Deep hardware RE of the PSP's USB subsystem &mdash; decrypting Sony's firmware, discovering a MUSB OTG controller and that accessories use side contact pads (not USB VBUS) for power, and building a custom USB device driver in Rust.</p>
           <div class="journal-card-meta">
             <span class="journal-tag">hardware</span>
             <span class="journal-tag">reverse-engineering</span>
@@ -118,8 +118,8 @@
 
       <a class="journal-card" href="07-psp-media-engine.html">
         <div class="journal-card-body">
-          <h3>Reverse Engineering the PSP Media Engine: From Empty Stubs to Direct RPC</h3>
-          <p>Tracing H.264 decode failures on ARK-4 CFW to empty firmware stubs, discovering hidden kernel modules during UMD playback, and reverse engineering Sony&rsquo;s internal ME codec RPC protocol &mdash; 22 command IDs, 47 driver NIDs, and the complete kernel driver chain.</p>
+          <h3>Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</h3>
+          <p>Tracing H.264 decode failures to empty firmware stubs, reverse engineering the ME&rsquo;s RPC protocol (22 command IDs, 47 NIDs), discovering a 70-frame firmware deadlock, and building three solutions &mdash; runtime binary patching, a kernel watchdog hook, and P/B-frame skipping for indefinite stable streaming.</p>
           <div class="journal-card-meta">
             <span class="journal-tag">hardware</span>
             <span class="journal-tag">reverse-engineering</span>
@@ -127,6 +127,19 @@
           </div>
         </div>
         <div class="journal-card-number">07</div>
+      </a>
+
+      <a class="journal-card" href="08-remote-dev-automation.html">
+        <div class="journal-card-body">
+          <h3>Zero-Touch PSP Development: From TCP Commands to Physical Actuators</h3>
+          <p>Closing the loop on embedded hardware development &mdash; WiFi auto-connect, a TCP command server with remote input injection, live framebuffer streaming, arbitrary file upload, and a DIY linear actuator. An AI agent used this infrastructure to debug H.264 video decode across 30+ iterations without touching the device.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">automation</span>
+            <span class="journal-tag">hardware</span>
+            <span class="journal-tag">devtools</span>
+          </div>
+        </div>
+        <div class="journal-card-number">08</div>
       </a>
 
     </div>

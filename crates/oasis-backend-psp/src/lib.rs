@@ -18,12 +18,15 @@
 // ---------------------------------------------------------------------------
 
 pub mod audio;
+pub mod cmd_server;
 pub mod filesystem;
 pub mod font;
 pub mod input;
 pub mod network;
 pub mod power;
 pub mod procedural;
+pub mod psmf;
+pub mod psmf_decode;
 pub mod render;
 pub mod sfx;
 pub mod shapes;
@@ -297,6 +300,12 @@ pub struct PspBackend {
     clip_stack: ClipStack,
     /// Translation offset stack (applied to all rendering coordinates).
     translate_stack: TranslateStack,
+    /// Pre-allocated video frame texture (reused across frames to avoid
+    /// per-frame alloc/dealloc churn during TV Guide playback).
+    pub(crate) video_tex: Option<oasis_core::backend::TextureId>,
+    /// Dimensions of the current video texture (0 if not allocated).
+    pub(crate) video_tex_w: u32,
+    pub(crate) video_tex_h: u32,
 }
 
 impl PspBackend {
@@ -315,6 +324,9 @@ impl PspBackend {
             force_bitmap_font: false,
             clip_stack: ClipStack::new(SCREEN_WIDTH, SCREEN_HEIGHT),
             translate_stack: TranslateStack::new(),
+            video_tex: None,
+            video_tex_w: 0,
+            video_tex_h: 0,
         }
     }
 

@@ -693,8 +693,165 @@ pub(crate) fn draw_radio_windowed(
 }
 
 // ---------------------------------------------------------------------------
+// TV Guide (windowed)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn draw_tvguide_windowed(
+    channels: &[oasis_core::apps::tv_guide::Channel],
+    catalogs: &[Option<oasis_core::apps::tv_guide::ChannelCatalog>],
+    selected: usize,
+    scroll: usize,
+    now_playing: &str,
+    tuned: bool,
+    downloading: bool,
+    download_progress: f32,
+    error_msg: &str,
+    preview_tex: Option<TextureId>,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 30, 220))?;
+    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(80, 200, 255))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let hi = Color::rgb(120, 200, 255);
+    let sel_bg = Color::rgba(80, 200, 255, 60);
+
+    if tuned {
+        let mid_x = cx + cw as i32 / 2;
+        let mid_y = cy + ch as i32 / 2;
+
+        // If we have a decoded video frame, blit it to fill the content area.
+        if let Some(tex) = preview_tex {
+            be.blit(tex, cx, cy, cw, ch)?;
+
+            // Title overlay at bottom of video.
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let title_y = cy + ch as i32 - 14;
+            be.fill_rect(cx, title_y - 2, cw, 14, Color::rgba(0, 0, 0, 160))?;
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(&display, tx, title_y, 8, Color::WHITE)?;
+            return Ok(());
+        }
+
+        if downloading {
+            // Download progress.
+            let mut fbuf = [0u8; 64];
+            let pct = (download_progress * 100.0) as u32;
+            let status = stack_fmt(&mut fbuf, format_args!("Downloading... {}%", pct));
+            let sx = (mid_x - (status.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(status, sx, mid_y - 20, 8, Color::rgb(255, 200, 80))?;
+
+            // Progress bar.
+            let bar_w = (cw as i32 - 20).max(40) as u32;
+            let bar_x = cx + 10;
+            let bar_y = mid_y - 4;
+            be.fill_rect(bar_x, bar_y, bar_w, 6, Color::rgba(40, 40, 60, 200))?;
+            let fill = (bar_w as f32 * download_progress) as u32;
+            if fill > 0 {
+                be.fill_rect(bar_x, bar_y, fill, 6, Color::rgb(0, 160, 255))?;
+            }
+
+            // Episode title below bar.
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(&display, tx, bar_y + 14, 8, lbl)?;
+        } else {
+            // Audio playing / idle.
+            let status = if !error_msg.is_empty() {
+                error_msg
+            } else {
+                "Playing audio..."
+            };
+            let status_clr = if error_msg.is_empty() {
+                Color::rgb(120, 255, 120)
+            } else {
+                Color::rgb(255, 80, 80)
+            };
+            let sx = (mid_x - (status.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(status, sx, mid_y - 14, 8, status_clr)?;
+
+            // Episode title — truncate to fit window width with margin.
+            let max_chars = ((cw as i32 - 12) / 6).max(6) as usize;
+            let display = truncate_str(now_playing, max_chars);
+            let tx = (mid_x - (display.len() as i32 * 4)).max(cx + 4);
+            be.draw_text(&display, tx, mid_y + 4, 8, lbl)?;
+        }
+        return Ok(());
+    }
+
+    let mut y = cy + 16;
+
+    if channels.is_empty() {
+        be.draw_text("Loading channels...", cx + 4, y, 8, lbl)?;
+        return Ok(());
+    }
+
+    // Draw channel list.
+    let row_h = 12i32;
+    let max_rows = ((ch as i32 - 18) / row_h).max(1) as usize;
+    let end = (scroll + max_rows).min(channels.len());
+
+    for i in scroll..end {
+        let row = (i - scroll) as i32;
+        let ry = y + row * row_h;
+
+        // Highlight selected row.
+        if i == selected {
+            be.fill_rect(cx, ry - 1, cw, row_h as u32, sel_bg)?;
+        }
+
+        let c = &channels[i];
+        let num_col = Color::rgb(200, 200, 200);
+        let name_col = if i == selected { hi } else { Color::rgb(220, 220, 220) };
+
+        // Channel number.
+        let mut fbuf = [0u8; 64];
+        let num_str = stack_fmt(&mut fbuf, format_args!("{:2}", c.number));
+        be.draw_text(num_str, cx + 4, ry, 8, num_col)?;
+
+        // Channel name.
+        let max_name_w = cw as i32 - 80;
+        let name = if c.name.len() as i32 * 6 > max_name_w {
+            let chars = (max_name_w / 6 - 2).max(3) as usize;
+            let t: String = c.name.chars().take(chars).collect();
+            t + ".."
+        } else {
+            c.name.clone()
+        };
+        be.draw_text(&name, cx + 30, ry, 8, name_col)?;
+
+        // Episode count.
+        if i < catalogs.len() {
+            if let Some(cat) = &catalogs[i] {
+                let ep_str = stack_fmt(&mut fbuf, format_args!("{}ep", cat.episodes.len()));
+                let ep_x = cx + cw as i32 - 30;
+                be.draw_text(ep_str, ep_x, ry, 8, Color::rgb(120, 200, 120))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Loading indicator
 // ---------------------------------------------------------------------------
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() > max {
+        let t: String = s.chars().take(max.saturating_sub(2)).collect();
+        t + ".."
+    } else {
+        s.to_string()
+    }
+}
 
 /// Format into a stack buffer, returning a `&str`. Avoids heap allocation.
 fn stack_fmt<'a>(buf: &'a mut [u8; 64], args: core::fmt::Arguments<'_>) -> &'a str {

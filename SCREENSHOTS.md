@@ -8,9 +8,9 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![Classic](screenshots/classic/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Modern](screenshots/modern/01_dashboard.png) | ![Desktop](screenshots/desktop/01_dashboard.png) | ![macOS](screenshots/macos/01_dashboard.png) |
 
-| GNOME | Cyberpunk | Win95 | Solarized | Vaporwave |
+| GNOME | Balatro | Win95 | Solarized | Vaporwave |
 |:---:|:---:|:---:|:---:|:---:|
-| ![GNOME](screenshots/gnome/01_dashboard.png) | ![Cyberpunk](screenshots/cyberpunk/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
+| ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
 | Retro CGA | Paper | High Contrast | Altimit |
 |:---:|:---:|:---:|:---:|
@@ -22,9 +22,9 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![Classic](screenshots/classic/04_terminal.png) | ![XP](screenshots/xp/04_terminal.png) | ![Modern](screenshots/modern/04_terminal.png) | ![Desktop](screenshots/desktop/04_terminal.png) | ![macOS](screenshots/macos/04_terminal.png) |
 
-| Terminal | Tactical | Corrupted | Agent Terminal | Cyberpunk |
+| Terminal | Tactical | Corrupted | Agent Terminal | Balatro |
 |:---:|:---:|:---:|:---:|:---:|
-| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) | ![Cyberpunk](screenshots/cyberpunk/04_terminal.png) |
+| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) | ![Balatro](screenshots/balatro/04_terminal.png) |
 
 | Win95 | Solarized | Vaporwave | High Contrast | GNOME |
 |:---:|:---:|:---:|:---:|:---:|
@@ -50,7 +50,7 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 
 ```bash
 # All skins
-for skin in classic xp modern desktop terminal tactical corrupted agent-terminal macos gnome cyberpunk retro-cga paper win95 solarized vaporwave highcontrast altimit; do
+for skin in classic xp modern desktop terminal tactical corrupted agent-terminal macos gnome balatro retro-cga paper win95 solarized vaporwave highcontrast altimit; do
   cargo run -p oasis-app --bin oasis-screenshot "$skin"
 done
 ```

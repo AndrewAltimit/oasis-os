@@ -571,9 +571,8 @@ pub(crate) fn dispatch_app_input(
                 oasis_backend_psp::threading::cancel_video_download();
                 oasis_backend_psp::video::send_video_cmd(oasis_backend_psp::video::VideoCmd::Stop);
                 audio.send(AudioCmd::VideoAudioStop);
-                if let Some(old) = tv.preview_tex.take() {
-                    backend.destroy_texture_inner(old);
-                }
+                backend.free_video_texture();
+                tv.preview_tex = None;
                 tv.tuned = None;
                 tv.downloading = false;
                 tv.now_playing.clear();

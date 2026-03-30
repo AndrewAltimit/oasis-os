@@ -26,9 +26,11 @@ psp::module_kernel!("OasisPlugin", 1, 0);
 
 mod audio;
 mod config;
+mod devloop;
 mod font;
 mod hook;
 mod me_dump;
+mod me_watchdog;
 mod overlay;
 mod render;
 mod video;
@@ -533,6 +535,23 @@ fn psp_main() {
     // Load configuration from ms0:/seplugins/oasis.ini
     config::load_config();
     debug_log(b"[OASIS] config loaded");
+
+    // Install ME decode watchdog ALWAYS (hook WaitEventFlag with timeout).
+    // This prevents the ME deadlock in sceMpegAvcDecode even in devloop mode.
+    debug_log(b"[OASIS] installing ME watchdog...");
+    me_watchdog::install();
+
+    // Start remote development loop if enabled in config.
+    // When devloop is active, skip display/ctrl/spy hooks to avoid XMB crashes.
+    // ME watchdog still runs (installed above).
+    if config::get_config().devloop {
+        debug_log(b"[OASIS] devloop mode - skipping display hooks");
+        devloop::start();
+        // Park the main thread — devloop runs in its own thread.
+        loop {
+            unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
+        }
+    }
 
     // Install the display framebuffer hook
     debug_log(b"[OASIS] installing display hook...");

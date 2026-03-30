@@ -1,11 +1,11 @@
 boot_text = [
-    "OASIS_OS v2.2 [cyberpunk]",
+    "OASIS_OS v2.2 [balatro]",
     "Neon subsystems: online",
     "Neural link: established",
     "Ready.",
 ]
 prompt_format = "neon> "
-title = "OASIS Cyberpunk"
+title = "OASIS Balatro"
 home_label = "NEON"
 welcome_message = "Welcome to the neon grid. Type 'help' for commands."
 error_prefix = "FAULT: "

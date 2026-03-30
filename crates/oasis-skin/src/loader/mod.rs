@@ -1220,16 +1220,16 @@ border_radius = 4
     }
 
     #[test]
-    fn load_cyberpunk_skin() {
+    fn load_balatro_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../../skins/cyberpunk/skin.toml"),
-            include_str!("../../../../skins/cyberpunk/layout.toml"),
-            include_str!("../../../../skins/cyberpunk/features.toml"),
-            include_str!("../../../../skins/cyberpunk/theme.toml"),
+            include_str!("../../../../skins/balatro/skin.toml"),
+            include_str!("../../../../skins/balatro/layout.toml"),
+            include_str!("../../../../skins/balatro/features.toml"),
+            include_str!("../../../../skins/balatro/theme.toml"),
             "",
         )
         .unwrap();
-        assert_eq!(skin.manifest.name, "cyberpunk");
+        assert_eq!(skin.manifest.name, "balatro");
         assert_eq!(skin.manifest.screen_width, 800);
         assert!(skin.features.window_manager);
         assert_eq!(skin.theme.primary, "#00F0FF");

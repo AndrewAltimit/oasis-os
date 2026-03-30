@@ -18,7 +18,7 @@ use crate::theme;
 pub(crate) enum PspSkinPreset {
     Psix,
     Classic,
-    Cyberpunk,
+    Balatro,
     RetroCga,
     Solarized,
     HighContrast,
@@ -32,7 +32,7 @@ impl PspSkinPreset {
     pub(crate) const ALL: &[Self] = &[
         Self::Psix,
         Self::Classic,
-        Self::Cyberpunk,
+        Self::Balatro,
         Self::RetroCga,
         Self::Solarized,
         Self::HighContrast,
@@ -46,7 +46,7 @@ impl PspSkinPreset {
         match self {
             Self::Psix => "PSIX",
             Self::Classic => "Classic",
-            Self::Cyberpunk => "Cyberpunk",
+            Self::Balatro => "Balatro",
             Self::RetroCga => "Retro CGA",
             Self::Solarized => "Solarized",
             Self::HighContrast => "High Contrast",
@@ -61,7 +61,7 @@ impl PspSkinPreset {
         match self {
             Self::Psix => "psix",
             Self::Classic => "classic",
-            Self::Cyberpunk => "cyberpunk",
+            Self::Balatro => "balatro",
             Self::RetroCga => "retro-cga",
             Self::Solarized => "solarized",
             Self::HighContrast => "highcontrast",
@@ -107,7 +107,7 @@ impl PspSkinPreset {
                 Color::rgb(0xC0, 0xC0, 0xD8), // output
                 Color::rgb(0xFF, 0x44, 0x66), // error
             ],
-            Self::Cyberpunk => [
+            Self::Balatro => [
                 Color::rgb(0x0A, 0x0A, 0x14),        // background
                 Color::rgb(0x00, 0xF0, 0xFF),        // primary
                 Color::rgb(0x1A, 0x1A, 0x2E),        // secondary

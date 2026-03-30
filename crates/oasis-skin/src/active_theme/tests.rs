@@ -323,7 +323,7 @@ disabled_text = "#555555"
                 ],
             ),
             (
-                "Cyberpunk",
+                "Balatro",
                 [
                     Color::rgb(0x0A, 0x0A, 0x14),
                     Color::rgb(0x00, 0xF0, 0xFF),
