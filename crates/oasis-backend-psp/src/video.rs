@@ -28,8 +28,11 @@ static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
 
 /// Max video frames to decode for >480p before switching to audio-only.
 /// Adjustable at runtime via TCP "video-limit <N>" command.
+/// Max video frames for >480p before switching to audio-only.
+/// Set conservatively — ME deadlocks non-deterministically (10-90 frames).
+/// Adjustable via TCP "video-limit <N>".
 static VIDEO_FRAME_LIMIT: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(15);
+    core::sync::atomic::AtomicU32::new(0);
 
 /// Set the video frame limit for >480p content.
 pub fn set_video_frame_limit(n: u32) {
@@ -937,11 +940,18 @@ impl NalDecoder {
         // frame is in-flight, so the write buffer is always free.
         let dst = unsafe { &mut FRAME_BUFFERS[buf_idx as usize] };
 
+        // Time the decode call — if it takes >2 seconds, the ME is stuck
+        // and we should stop video decode entirely.
+        let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
+
         match self.decoder.decode_into(&nal, dst) {
             Ok(true) => {
+                let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
+                    - t0) / 1000;
                 if verbose {
-                    vlog("[VIDEO] NAL: FRAME DECODED!");
+                    vlog(&format!("[VIDEO] NAL: FRAME DECODED! ({}ms)", dt_ms));
                 }
+                self.last_decode_us = dt_ms * 1000;
                 self.write_buf_idx = 1 - buf_idx;
                 Ok(Some(DecodedFrame {
                     buf_idx,
@@ -1786,6 +1796,18 @@ fn play_stream() -> bool {
                     }
                     Err(()) => {
                         error_count += 1;
+                        // If the watchdog unblocked a stuck decode, the ME
+                        // is in a bad state. Switch to audio-only immediately.
+                        if error_count >= 3 && nal_dec.is_some() {
+                            vlog_force(&format!(
+                                "[VIDEO] {} consecutive errors, ME likely unblocked \
+                                 by watchdog. Switching to audio-only \
+                                 (dec={decode_count} total={frames_processed})",
+                                error_count,
+                            ));
+                            drop(nal_dec.take());
+                            return drain_stream_only();
+                        }
                     }
                 }
                 frames_processed += 1;

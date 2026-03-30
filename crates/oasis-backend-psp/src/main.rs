@@ -366,15 +366,19 @@ fn psp_main() {
             }
         }
 
-        // -- Decode hang watchdog (main thread, every 2s) --
-        if tv.tuned.is_some() && viz_frame % 120 == 0 {
+        // -- Decode hang watchdog (main thread, every ~0.5s) --
+        // If DECODE_STEP == 2 (stuck inside sceMpegAvcDecode), signal
+        // the internal semaphore to unblock the ME and force an error
+        // return, allowing the video thread to fall back to audio-only.
+        if tv.tuned.is_some() && viz_frame % 30 == 0 {
             let step = psp::mpeg::DECODE_STEP.load(
                 core::sync::atomic::Ordering::Relaxed,
             );
             if step == 2 {
                 oasis_backend_psp::video::vlog_force(
-                    "[WATCHDOG] ME deadlock detected (video frozen)"
+                    "[WATCHDOG] ME stuck in AvcDecode — unblocking"
                 );
+                oasis_backend_psp::video::unblock_stuck_decode();
             }
         }
 
