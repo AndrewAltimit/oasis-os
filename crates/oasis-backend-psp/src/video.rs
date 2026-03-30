@@ -26,6 +26,11 @@ static VLOG_ENABLED: AtomicBool = AtomicBool::new(true);
 /// Set to true via TCP "audio-only on" to skip video entirely.
 static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
 
+/// Set to true after the decoder is leaked (ME deadlock recovery).
+/// Once leaked, sceMpegCreate will fail on subsequent tunes because
+/// the DDR workspace is still allocated. Skip video init entirely.
+static ME_LEAKED: AtomicBool = AtomicBool::new(false);
+
 /// Max video frames to decode for >480p before switching to audio-only.
 /// Adjustable at runtime via TCP "video-limit <N>" command.
 /// Max video frames for >480p before switching to audio-only.
@@ -1608,6 +1613,12 @@ fn play_stream() -> bool {
         return drain_stream_only();
     }
 
+    // ME was leaked from a previous deadlock — can't reinit until reboot.
+    if ME_LEAKED.load(Ordering::Relaxed) {
+        vlog("[VIDEO] ME leaked from prior deadlock, audio-only until reboot");
+        return drain_stream_only();
+    }
+
     // NAL direct path (mpeg_vsh370.prx): works for ≤480p content.
     // >480p content (mode 5) deadlocks sceMpegAvcDecode immediately on
     // current firmware — skip video and use audio-only.
@@ -1812,6 +1823,7 @@ fn play_stream() -> bool {
                             // the next cold reboot, but the EBOOT stays alive.
                             if let Some(dec) = nal_dec.take() {
                                 core::mem::forget(dec);
+                                ME_LEAKED.store(true, Ordering::Release);
                             }
                             return drain_stream_only();
                         }
