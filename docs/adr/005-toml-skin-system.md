@@ -55,7 +55,6 @@ TOML at compile time.
 
 - `oasis-skin` crate owns parsing, resolution, and theme derivation.
 - 18 unique skins ship: 18 built-in + 14 external TOML directories in `skins/`
-  (including accessibility variants protanopia and tritanopia) -- all embedded
   via `include_str!`.
 - External skins demonstrate the TOML filesystem loading path.
 - The `ActiveTheme` struct provides runtime-mutable access to all derived colors.

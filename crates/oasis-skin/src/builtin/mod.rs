@@ -25,8 +25,8 @@ pub mod generated {
 pub use classic::{classic_skin, retro_cga_skin, tactical_skin, terminal_skin, win95_skin};
 pub use modern::{agent_terminal_skin, desktop_skin, gnome_skin, macos_skin, modern_skin, xp_skin};
 pub use special::{
-    altimit_skin, balatro_skin, corrupted_skin, highcontrast_skin, paper_skin, protanopia_skin,
-    solarized_skin, tritanopia_skin, vaporwave_skin,
+    altimit_skin, balatro_skin, corrupted_skin, highcontrast_skin, paper_skin, solarized_skin,
+    vaporwave_skin,
 };
 
 use oasis_types::error::Result;
