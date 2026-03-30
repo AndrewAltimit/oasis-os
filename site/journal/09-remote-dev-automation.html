@@ -301,10 +301,61 @@ Done! PSP should be on.</code></pre>
 
   <p>Total cost: <strong>~$55&ndash;65</strong>, all off-the-shelf, no soldering required.</p>
 
+  <h2>Layer 7: Network Recovery (The Safety Net)</h2>
+
+  <p>
+    The actuator handles hard locks, but there&rsquo;s a worse scenario: a bad
+    EBOOT that crashes on boot. If the main application won&rsquo;t start, the
+    TCP server never comes up, and there&rsquo;s no way to deploy a fix &mdash;
+    even the actuator just power-cycles into the same crash.
+  </p>
+
+  <p>
+    ARK-4 CFW has a recovery mode: hold the R-trigger during boot and it loads a
+    separate recovery application from
+    <code>ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP</code> instead of the normal
+    boot path. All game plugins are disabled. We replaced ARK&rsquo;s default
+    recovery menu with a <strong>154 KB Rust EBOOT</strong> that does exactly one
+    thing: connect to WiFi and accept file uploads.
+  </p>
+
+  <pre><code>$ echo "ping" | nc -w 3 192.168.0.249 9293
+pong
+$ echo "status" | nc -w 3 192.168.0.249 9293
+{"mode":"recovery","free_kb":23681,"max_blk_kb":23454,"wifi":true}</code></pre>
+
+  <p>
+    The recovery EBOOT uses the same TCP protocol as the main application &mdash;
+    <code>upload</code>, <code>reboot</code>, <code>ping</code>, <code>status</code>.
+    A bricked OASIS OS can be fixed by uploading a new EBOOT from the recovery
+    server, then rebooting:
+  </p>
+
+  <pre><code># PSP is in recovery mode (R-trigger held during boot)
+$ SIZE=$(stat -c%s "EBOOT.PBP")
+$ (echo "upload $SIZE ms0:/PSP/GAME/OASISOS/EBOOT.PBP"; cat "EBOOT.PBP") | nc -w 30 192.168.0.249 9293
+ok
+$ echo "reboot" | nc -w 3 192.168.0.249 9293
+ok
+# PSP reboots normally with fixed EBOOT</code></pre>
+
+  <p>
+    With a second actuator on the R-trigger, the full recovery sequence is
+    automatable: power on with R-trigger held &rarr; recovery WiFi connects &rarr;
+    upload fixed files &rarr; reboot normally. The PSP becomes
+    <strong>unbrickable over WiFi</strong>.
+  </p>
+
+  <p>
+    Verified: uploaded a 4.8 MB EBOOT through the recovery server, rebooted,
+    and OASIS OS came up normally &mdash; the full round trip from recovery
+    to working application in under 30 seconds.
+  </p>
+
   <h2>The Complete Automation Loop</h2>
 
   <p>
-    With all six layers in place, the full development cycle looks like this:
+    With all seven layers in place, the full development cycle looks like this:
   </p>
 
   <ol>
@@ -316,6 +367,7 @@ Done! PSP should be on.</code></pre>
     <li><strong>Test</strong> via <code>cursor</code>, <code>press</code> commands to navigate UI</li>
     <li><strong>Diagnose</strong> via <code>log</code>, <code>logfull</code>, <code>screencap</code></li>
     <li><strong>Recover</strong> from hard locks via the physical actuator</li>
+    <li><strong>Unbrick</strong> via network recovery if the EBOOT is broken (R-trigger boot + upload fix)</li>
   </ol>
 
   <p>
