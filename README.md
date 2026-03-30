@@ -58,7 +58,7 @@ graph TD
     style TRAITS fill:#16213e,stroke:#0f3460,color:#eee
     style SDL fill:#0f3460,stroke:#533483,color:#eee
     style WASM fill:#0f3460,stroke:#533483,color:#eee
-    style PSP fill:#0f3460,stroke:#e94560,color:#eee
+    style PSP fill:#0f3460,stroke:#533483,color:#eee
     style UE5 fill:#0f3460,stroke:#533483,color:#eee
 ```
 
