@@ -355,23 +355,24 @@ static mut RGBA_CONVERT_BUF: Vec<u8> = Vec::new();
 pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
     let w = frame.width as usize;
     let h = frame.height as usize;
-    let abgr_size = w * h * 4;
+    let size = w * h * 4; // Psm8888 = 4 bpp
 
     // SAFETY: Single-threaded access from main thread (SPSC contract).
-    // The ME CSC outputs ABGR 8888 directly — just fix alpha channel.
+    // CSC outputs Psm8888 (LE bytes: R, G, B, A). GU Psm8888 reads the
+    // same byte order. Just fix alpha (CSC outputs 0x00, we need 0xFF).
     unsafe {
-        let src_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
+        let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
         let data = core::slice::from_raw_parts_mut(
-            (*src_ptr)[frame.buf_idx as usize].as_mut_ptr(),
-            abgr_size,
+            (*buf_ptr)[frame.buf_idx as usize].as_mut_ptr(),
+            size,
         );
 
-        // CSC outputs alpha=0x00. Set alpha to 0xFF for opaque pixels.
-        for i in (3..abgr_size).step_by(4) {
+        // Fix alpha channel: CSC outputs 0x00, GU needs 0xFF for opaque.
+        for i in (3..size).step_by(4) {
             data[i] = 0xFF;
         }
 
-        core::slice::from_raw_parts(data.as_ptr(), abgr_size)
+        core::slice::from_raw_parts(data.as_ptr(), size)
     }
 }
 
@@ -662,7 +663,7 @@ impl NalDecoder {
         ));
 
         // Pre-allocate the static double-buffers for decoded frames.
-        // ME CSC outputs ABGR 8888 (4 bpp). frame_pixels() fixes alpha.
+        // Psm8888 = 4 bpp. frame_pixels() fixes alpha channel.
         let buf_size = (dec_w * dec_h * 4) as usize;
         // SAFETY: Called from the video thread before any frames are
         // pushed. No concurrent access to FRAME_BUFFERS yet.

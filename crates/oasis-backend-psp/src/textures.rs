@@ -366,6 +366,12 @@ impl PspBackend {
             }
         }
 
+        // Flush D-cache so the GU (reading via uncached mirror) sees
+        // the pixel data we just wrote via CPU cached writes.
+        unsafe {
+            psp::sys::sceKernelDcacheWritebackInvalidateAll();
+        }
+
         Some(tex_id)
     }
 
