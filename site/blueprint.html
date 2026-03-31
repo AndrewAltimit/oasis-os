@@ -32,6 +32,18 @@
   #back-link a{color:#4af9;text-decoration:none;transition:color .2s}
   #back-link a:hover{color:#4af}
   .state-note{position:fixed;bottom:50px;right:20px;font-size:10px;color:#4af6;pointer-events:none;z-index:10;text-align:right;max-width:200px;line-height:1.6}
+  #gallery{display:none;position:fixed;inset:0;background:#0a1628;z-index:200;overflow:auto}
+  #gallery.active{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px}
+  #gallery h1{font-size:20px;font-weight:400;letter-spacing:4px;text-transform:uppercase;color:#4af;text-shadow:0 0 10px #4af6;margin-bottom:6px}
+  #gallery .sub{font-size:12px;color:#4af9;letter-spacing:1px;margin-bottom:40px}
+  #gallery .cards{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
+  #gallery .card{border:1px solid #1e2e44;background:#0e1628;border-radius:6px;overflow:hidden;width:420px;cursor:pointer;transition:border-color .2s,transform .2s}
+  #gallery .card:hover{border-color:#4af6;transform:translateY(-2px)}
+  #gallery .card img{width:100%;height:220px;object-fit:cover;display:block;opacity:0.85}
+  #gallery .card:hover img{opacity:1}
+  #gallery .card-body{padding:14px 16px}
+  #gallery .card-title{font-size:13px;color:#4af;letter-spacing:1px;margin-bottom:4px}
+  #gallery .card-desc{font-size:11px;color:#4af9;line-height:1.5}
 </style>
 </head>
 <body>
@@ -62,6 +74,27 @@
 </div>
 
 <div class="state-note" id="state-note"></div>
+
+<div id="gallery">
+  <h1>Hardware Blueprints</h1>
+  <div class="sub">Interactive 3D diagrams &mdash; click to explore</div>
+  <div class="cards">
+    <a class="card" href="blueprint.html?diagram=psp-usb-adapter">
+      <img src="img/psp-usb-adapter-diagram.png" alt="PSP USB-C Adapter">
+      <div class="card-body">
+        <div class="card-title">PSP Universal USB-C Adapter</div>
+        <div class="card-desc">Passive bridge combining proprietary power pads + Mini-B data into a single USB-C receptacle. Pogo pin contacts, screw-mounted shell.</div>
+      </div>
+    </a>
+    <a class="card" href="blueprint.html?diagram=psp-relay">
+      <img src="img/09-actuator-wiring.png" alt="PSP Hard Reset Relay">
+      <div class="card-body">
+        <div class="card-title">PSP Hard Reset Automation</div>
+        <div class="card-desc">H-bridge wiring with 2-channel USB relay driving a 12V linear actuator to push the PSP power slider for remote hard reboot.</div>
+      </div>
+    </a>
+  </div>
+</div>
 
 <!-- Engine + diagrams (order matters: three.js → loader → engine → diagram files) -->
 <script src="js/three.min.js"></script>

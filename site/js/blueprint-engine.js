@@ -504,7 +504,16 @@ function init(){
   cleanup();
 
   var params = new URLSearchParams(window.location.search);
-  var id = params.get('diagram') || Object.keys(diagrams)[0];
+  var id = params.get('diagram');
+
+  // No diagram specified — show gallery index
+  if(!id){
+    document.getElementById('loading').style.display = 'none';
+    var gallery = document.getElementById('gallery');
+    if(gallery) gallery.classList.add('active');
+    return;
+  }
+
   var diagram = diagrams[id];
   if(!diagram){
     document.getElementById('loading').style.display='flex';

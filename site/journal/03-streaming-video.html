@@ -202,44 +202,32 @@
     streaming</strong> with hardware audio decode.
   </p>
 
-  <div class="diagram">
-    <pre><code><span class="hl-bright">PSP Streaming Pipeline</span>
+  <pre class="mermaid">
+flowchart TD
+    DL["I/O Thread - 512KB stack\nHTTPS GET file.mp4"]
+    MOOV["Buffer moov atom\n~1-3MB"]
+    PARSE["Parse with demux_lite::Mp4Lite\nlightweight no-std MP4 parser"]
+    EXTRACT["Extract interleaved samples\nfrom mdat in file-offset order"]
+    VIDEO["Video H.264 NALUs\nskipped"]
+    AUDIO["Audio AAC frames"]
+    DECODE["sceAudiocodecDecode\nhardware AAC decoder"]
+    OUTPUT["AudioChannel::output_blocking\nPSP audio hardware"]
+    BACKPRESSURE["Backpressure:\noutput_blocking blocks when\naudio queue full, throttling\ndownload to real-time speed"]
 
-  <span class="hl-accent">I/O Thread</span> (512KB stack)
-  ───────────────────────
-  HTTP(S) GET file.mp4
-        │
-        ▼
-  Buffer moov atom (~1-3MB)
-        │
-        ▼
-  Parse with demux_lite::Mp4Lite
-  (lightweight no-std MP4 parser)
-        │
-        ▼
-  Extract interleaved samples
-  from mdat in file-offset order
-        │
-        ├── <span class="hl-dim">Video H.264 NALUs → skip</span>
-        │   <span class="hl-dim">(ME hardware not wired for streaming)</span>
-        │
-        └── <span class="hl-accent">Audio AAC frames</span>
-            │
-            ▼
-      sceAudiocodecDecode
-      (hardware AAC decoder)
-            │
-            ▼
-      AudioChannel::output_blocking
-      (PSP audio hardware)
-            │
-            ▼
-      <span class="hl-warn">Backpressure:</span> output_blocking
-      blocks when audio queue full,
-      naturally throttling download
-      to real-time playback speed</code></pre>
-    <div class="diagram-caption">In-memory streaming with hardware decode — no disk I/O</div>
-  </div>
+    DL --> MOOV --> PARSE --> EXTRACT
+    EXTRACT -->|"H.264"| VIDEO
+    EXTRACT -->|"AAC"| AUDIO
+    AUDIO --> DECODE --> OUTPUT --> BACKPRESSURE
+    BACKPRESSURE -.->|"throttle"| DL
+
+    style DL fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style VIDEO fill:#1a1a2e,stroke:#666,color:#888
+    style AUDIO fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style DECODE fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style OUTPUT fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style BACKPRESSURE fill:#2e1a1a,stroke:#f59e0b,color:#e0e0e0
+  </pre>
+  <div class="diagram-caption">In-memory streaming with hardware decode — no disk I/O</div>
 
   <h3>The No-Std Demuxer</h3>
 
@@ -367,5 +355,9 @@
 </footer>
 
 <script src="../js/main.js"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+</script>
 </body>
 </html>
