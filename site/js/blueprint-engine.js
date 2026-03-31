@@ -453,6 +453,7 @@ var _canvas = null;
 var _resizeHandler = null;
 var _windowPointerUp = null;
 var _windowPointerMove = null;
+var _rafId = null;
 
 function cleanup(){
   // Remove old canvas from DOM
@@ -464,6 +465,11 @@ function cleanup(){
   if(_resizeHandler){
     window.removeEventListener('resize', _resizeHandler);
     _resizeHandler = null;
+  }
+  // Cancel animation frame loop
+  if(_rafId !== null){
+    cancelAnimationFrame(_rafId);
+    _rafId = null;
   }
   // Remove orbit control listeners from window
   if(_windowPointerUp){
@@ -547,7 +553,7 @@ function initDiagram(diagram){
 
   // Render loop
   (function animate(){
-    requestAnimationFrame(animate);
+    _rafId = requestAnimationFrame(animate);
     renderer.render(scene, camera);
   })();
 
