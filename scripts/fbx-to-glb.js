@@ -7,7 +7,11 @@ const path = require('path');
 const http = require('http');
 const puppeteer = require('puppeteer');
 
-const INPUT = process.argv[2] || '/home/mikunpc/Downloads/PSP_Model/psp_low_final.fbx';
+const INPUT = process.argv[2];
+if (!INPUT) {
+  console.error('Usage: node scripts/fbx-to-glb.js <input.fbx> [output.glb]');
+  process.exit(1);
+}
 const OUTPUT = process.argv[3] || path.join(__dirname, '..', 'site', 'models', 'psp.glb');
 
 const PROJ_ROOT = path.join(__dirname, '..');

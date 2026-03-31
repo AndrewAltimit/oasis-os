@@ -351,7 +351,8 @@ function createExplodeController(groups, explodeSmallY, explodeGrid){
   }
 
   var slider = document.getElementById('explode');
-  slider.addEventListener('input',function(){apply(parseFloat(slider.value));});
+  _sliderHandler = function(){apply(parseFloat(slider.value));};
+  slider.addEventListener('input', _sliderHandler);
   apply(parseFloat(slider.value));
 
   return {apply:apply, slider:slider};
@@ -454,6 +455,7 @@ var _resizeHandler = null;
 var _windowPointerUp = null;
 var _windowPointerMove = null;
 var _rafId = null;
+var _sliderHandler = null;
 
 function cleanup(){
   // Remove old canvas from DOM
@@ -479,6 +481,12 @@ function cleanup(){
   if(_windowPointerMove){
     window.removeEventListener('pointermove', _windowPointerMove);
     _windowPointerMove = null;
+  }
+  // Remove slider listener
+  if(_sliderHandler){
+    var slider = document.getElementById('explode');
+    if(slider) slider.removeEventListener('input', _sliderHandler);
+    _sliderHandler = null;
   }
   // Clear tabs
   document.getElementById('tabs').innerHTML = '';
