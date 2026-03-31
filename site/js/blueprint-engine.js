@@ -125,7 +125,7 @@ function dimLine(p1,p2,label,col){
 var helpers = {
   lm:lm, fm:fm, v:v,
   wireBox:wireBox, cyl:cyl, plane:plane, ring:ring, circle:circle, sphere:sphere,
-  cable:cable, tag:tag, tag3D:tag, dimLine:dimLine
+  cable:cable, tag:tag, tag3D:tag3D, dimLine:dimLine
 };
 
 
