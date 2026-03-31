@@ -111,32 +111,29 @@
 
   <h2>The Five Backends</h2>
 
-  <div class="diagram">
-    <pre><code><span class="hl-bright">Deployment Topology</span>
+  <pre class="mermaid">
+graph TD
+    CORE["oasis-core\n16 apps · browser · terminal\nskin engine · window manager\nagent · plugins · scripting"]
+    SDL["backend-sdl\nSDL3 + OpenGL\nLinux/Mac/Win/Pi"]
+    WASM["backend-wasm\nCanvas 2D · Web Audio\nDOM Input"]
+    UE5["backend-ue5\nSoftware RGBA\nUnreal Engine 5"]
+    PSP["backend-psp\nsceGu + VRAM\nFull OS shell · TLS 1.3"]
+    PRX["plugin-psp\nKernel PRX overlay\nHooks sceDisplaySet\nDraws into game FB"]
 
-                        ┌──────────────────────────────────┐
-                        │          <span class="hl-accent">oasis-core</span>              │
-                        │  16 apps · browser · terminal    │
-                        │  skin engine · window manager     │
-                        │  agent · plugins · scripting      │
-                        └──────────┬───────────────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │                    │                     │
-     ┌────────▼────────┐  ┌───────▼────────┐  ┌────────▼────────┐
-     │ <span class="hl-accent">backend-sdl</span>     │  │ <span class="hl-accent">backend-wasm</span>   │  │ <span class="hl-accent">backend-ue5</span>     │
-     │ SDL3 + OpenGL   │  │ Canvas 2D      │  │ Software RGBA   │
-     │ Linux/Mac/Win/Pi│  │ Web Audio       │  │ Unreal Engine 5 │
-     └─────────────────┘  │ DOM Input       │  └─────────────────┘
-                          └────────────────┘
-              ┌──────────────────┐    ┌───────────────────────┐
-              │ <span class="hl-purple">backend-psp</span>      │    │ <span class="hl-purple">plugin-psp</span>            │
-              │ sceGu + VRAM     │    │ Kernel PRX overlay    │
-              │ Full OS shell    │    │ Hooks sceDisplaySet   │
-              │ TLS 1.3 + Stream │    │ Draws into game FB    │
-              └──────────────────┘    └───────────────────────┘</code></pre>
-    <div class="diagram-caption">Five backends sharing one core — from game engines to bare metal MIPS</div>
-  </div>
+    CORE --> SDL
+    CORE --> WASM
+    CORE --> UE5
+    CORE --> PSP
+    CORE -.-> PRX
+
+    style CORE fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style SDL fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style WASM fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style UE5 fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style PSP fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style PRX fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+  </pre>
+  <div class="diagram-caption">Five backends sharing one core — from game engines to bare metal MIPS</div>
 
   <h3>SDL3 Desktop (oasis-backend-sdl)</h3>
   <p>
@@ -318,5 +315,9 @@
 </footer>
 
 <script src="../js/main.js"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+</script>
 </body>
 </html>

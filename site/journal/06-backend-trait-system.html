@@ -173,30 +173,33 @@ Canvas = browser Canvas 2D API, &mdash; = uses default (no-op or software)</span
     core rendering and back:
   </p>
 
-  <div class="diagram">
-    <pre><code><span class="hl-bright">Frame Rendering Flow</span>
+  <pre class="mermaid">
+flowchart TD
+    LOOP["Backend main loop\nSDL / WASM / PSP / UE5"]
+    CLEAR["backend.clear - bg_color"]
+    TICK["oasis-core::tick\n&amp;mut backend, &amp;mut sdi, &amp;mut state"]
+    DASH["dashboard.update_sdi\ncreates/updates named objects"]
+    APP["active_app.update_sdi"]
+    STATUS["status_bar.update_sdi"]
+    DRAW["sdi.draw - &amp;mut backend\niterates objects by z-order"]
+    BASE["sdi.draw_base_layer\nnon-overlay objects"]
+    OBJ["for each visible object:\nfill_rect / blit / draw_text"]
+    OVERLAY["sdi.draw_overlay_layer\nbars, toasts, cursors"]
+    SWAP["backend.swap_buffers"]
 
-<span class="hl-accent">Backend main loop</span> (SDL/WASM/PSP/UE5)
-  &#9474;
-  &#9500;&#9472; backend.<span class="hl-accent">clear</span>(bg_color)
-  &#9474;
-  &#9500;&#9472; <span class="hl-purple">oasis-core</span>::tick(&amp;mut backend, &amp;mut sdi, &amp;mut state)
-  &#9474;   &#9474;
-  &#9474;   &#9500;&#9472; dashboard.update_sdi(&amp;mut sdi, &amp;theme)  <span class="hl-dim">// creates/updates named objects</span>
-  &#9474;   &#9500;&#9472; active_app.update_sdi(&amp;mut sdi, &amp;theme)
-  &#9474;   &#9500;&#9472; status_bar.update_sdi(&amp;mut sdi, &amp;theme)
-  &#9474;   &#9492;&#9472; sdi.<span class="hl-accent">draw</span>(&amp;mut backend)                   <span class="hl-dim">// iterates objects by z-order</span>
-  &#9474;       &#9474;
-  &#9474;       &#9500;&#9472; sdi.draw_base_layer(&amp;mut backend)      <span class="hl-dim">// non-overlay objects</span>
-  &#9474;       &#9474;   &#9492;&#9472; for each visible object:
-  &#9474;       &#9474;       &#9500;&#9472; backend.<span class="hl-accent">fill_rect</span>(...)      <span class="hl-dim">// or fill_rounded_rect</span>
-  &#9474;       &#9474;       &#9500;&#9472; backend.<span class="hl-accent">blit</span>(texture, ...)  <span class="hl-dim">// if textured</span>
-  &#9474;       &#9474;       &#9492;&#9472; backend.<span class="hl-accent">draw_text</span>(...)      <span class="hl-dim">// if has text</span>
-  &#9474;       &#9492;&#9472; sdi.draw_overlay_layer(&amp;mut backend)    <span class="hl-dim">// bars, toasts, cursors</span>
-  &#9474;
-  &#9492;&#9472; backend.<span class="hl-accent">swap_buffers</span>()</code></pre>
-    <div class="diagram-caption">The SDI registry mediates between application state and backend draw calls</div>
-  </div>
+    LOOP --> CLEAR --> TICK
+    TICK --> DASH --> APP --> STATUS --> DRAW
+    DRAW --> BASE --> OBJ
+    DRAW --> OVERLAY
+    OVERLAY --> SWAP
+
+    style LOOP fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style TICK fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style DRAW fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style OBJ fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style SWAP fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+  </pre>
+  <div class="diagram-caption">The SDI registry mediates between application state and backend draw calls</div>
 
   <h2>The SDI Registry: Named Object Scene Graph</h2>
 
@@ -289,24 +292,32 @@ SdiObject {
 
   <h2>The Compilation Firewall</h2>
 
-  <div class="diagram">
-    <pre><code><span class="hl-bright">Dependency Direction</span>
+  <pre class="mermaid">
+flowchart TD
+    TYPES["oasis-types\ndefines backend traits"]
+    UI["oasis-ui"]
+    BROWSER["oasis-browser"]
+    TERMINAL["oasis-terminal"]
+    CORE["oasis-core"]
+    SDL["oasis-backend-sdl"]
+    WASM["oasis-backend-wasm"]
+    UE5["oasis-backend-ue5"]
+    PSP["oasis-backend-psp"]
 
-  <span class="hl-accent">oasis-types</span>   defines backend traits
-       &#9474;
-       &#9660;
-  <span class="hl-accent">oasis-ui</span>      uses &amp;mut dyn SdiBackend
-  <span class="hl-accent">oasis-browser</span> uses &amp;mut dyn SdiBackend
-  <span class="hl-accent">oasis-terminal</span> uses &amp;mut dyn SdiBackend
-  <span class="hl-accent">oasis-core</span>    uses &amp;mut dyn SdiBackend
-       &#9474;
-       &#9660;
-  <span class="hl-purple">oasis-backend-sdl</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
-  <span class="hl-purple">oasis-backend-wasm</span> implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
-  <span class="hl-purple">oasis-backend-ue5</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
-  <span class="hl-purple">oasis-backend-psp</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span></code></pre>
-    <div class="diagram-caption">Backends depend on core. Core never depends on backends.</div>
-  </div>
+    TYPES --> UI & BROWSER & TERMINAL & CORE
+    UI & BROWSER & TERMINAL & CORE --> SDL & WASM & UE5 & PSP
+
+    style TYPES fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style UI fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style BROWSER fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style TERMINAL fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style CORE fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style SDL fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style WASM fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style UE5 fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style PSP fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+  </pre>
+  <div class="diagram-caption">Backends depend on core. Core never depends on backends.</div>
 
   <p>
     This is the key architectural insight: <strong>backend crates are leaf nodes</strong>.
@@ -422,5 +433,9 @@ SdiObject {
 </footer>
 
 <script src="../js/main.js"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+</script>
 </body>
 </html>

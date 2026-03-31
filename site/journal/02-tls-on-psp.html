@@ -223,28 +223,35 @@ to_be_bytes() on this u32 (WRONG — double swap):
     This creates a uniquely PSP-specific problem:
   </p>
 
-  <div class="diagram">
-    <pre><code><span class="hl-bright">Archive.org CDN Flow on PSP</span>
+  <pre class="mermaid">
+flowchart TD
+    REQ["GET http://archive.org/download/file.mp4"]
+    REDIRECT{"302 redirect\nCDN node type?"}
+    IA["ia*.us.archive.org\nHTTP-friendly"]
+    DN["dn*.us.archive.org\nHTTPS-only"]
+    OK_A["200 OK\nStream data"]
+    REDIR301["301 redirect to HTTPS"]
+    DEFAULT{"sceHttp default:\nauto-follow redirects?"}
+    FAIL["SSL 3.0 handshake fails\nError: 0x80431079"]
+    FIX["sceHttpDisableRedirect\nDetect HTTP-to-HTTPS redirect"]
+    TLS["Raw TCP + embedded-tls\nConnect CDN host:443\nTLS 1.3 handshake"]
+    OK_B["Stream data"]
 
-<span class="hl-accent">Request:</span> GET http://archive.org/download/file.mp4
+    REQ --> REDIRECT
+    REDIRECT -->|"Case A"| IA --> OK_A
+    REDIRECT -->|"Case B"| DN --> REDIR301
+    REDIR301 --> DEFAULT
+    DEFAULT -->|"Yes (broken)"| FAIL
+    DEFAULT -->|"No (fixed)"| FIX --> TLS --> OK_B
 
-<span class="hl-dim">Case A: HTTP-friendly CDN node</span>
-  302 → http://ia601234.us.archive.org/file.mp4
-  200 OK → <span class="hl-accent">stream data</span>
-
-<span class="hl-dim">Case B: HTTPS-only CDN node</span>
-  302 → http://dn543210.us.archive.org/file.mp4
-  <span class="hl-warn">301 → https://dn543210.us.archive.org/file.mp4</span>  ← redirect loop!
-
-<span class="hl-dim">PSP sceHttp default behavior:</span>
-  Auto-follows redirects → tries HTTPS → <span class="hl-warn">SSL 3.0 handshake fails</span>
-  Error: 0x80431079 (misdiagnosed as connection pool corruption)
-
-<span class="hl-dim">Fix: sceHttpDisableRedirect(template_id)</span>
-  Detect HTTP→HTTPS redirect → switch to raw TCP + embedded-tls
-  Connect to <span class="hl-accent">CDN host:443</span> → TLS 1.3 handshake → <span class="hl-accent">stream data</span></code></pre>
-    <div class="diagram-caption">CDN randomness creates a protocol-level routing problem</div>
-  </div>
+    style REQ fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style FAIL fill:#2e1a1a,stroke:#f59e0b,color:#e0e0e0
+    style OK_A fill:#1a2e1a,stroke:#00d4aa,color:#e0e0e0
+    style OK_B fill:#1a2e1a,stroke:#00d4aa,color:#e0e0e0
+    style TLS fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style FIX fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+  </pre>
+  <div class="diagram-caption">CDN randomness creates a protocol-level routing problem</div>
 
   <div class="callout warning">
     <div class="callout-title">Critical Fix</div>
@@ -322,5 +329,9 @@ tls.flush()?;  // ← sends the actual TLS record</code></pre>
 </footer>
 
 <script src="../js/main.js"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+</script>
 </body>
 </html>
