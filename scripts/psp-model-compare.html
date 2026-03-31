@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>PSP Model Comparison</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0a1628;color:#4af;font-family:'Courier New',monospace;overflow:auto}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;padding:4px;height:100vh}
+  .cell{position:relative;border:1px solid #1e2e44}
+  .cell canvas{width:100%!important;height:100%!important}
+  .label{position:absolute;top:8px;left:8px;font-size:12px;z-index:1;pointer-events:none;line-height:1.5}
+  .label b{color:#4af}
+  .label span{color:#4af9;font-size:10px}
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+
+<script src="../site/js/three.min.js"></script>
+<script src="../site/js/GLTFLoader.js"></script>
+<script>
+var STYLES = [
+  {
+    name: 'Wireframe Only',
+    desc: 'EdgesGeometry, cyan lines',
+    setup: function(mesh){ return edgesOnly(mesh, 0x4488ff); }
+  },
+  {
+    name: 'Wireframe + Dark Fill',
+    desc: 'Edges + semi-transparent dark fill',
+    setup: function(mesh){ return edgesAndFill(mesh, 0x4488ff, 0x0e0e18, 0.25); }
+  },
+  {
+    name: 'Wireframe Teal',
+    desc: 'Teal edges, darker fill',
+    setup: function(mesh){ return edgesAndFill(mesh, 0x22aa88, 0x0a1a18, 0.2); }
+  },
+  {
+    name: 'Blueprint Classic',
+    desc: 'Dim cyan edges, very subtle fill',
+    setup: function(mesh){ return edgesAndFill(mesh, 0x335577, 0x0e1628, 0.15); }
+  },
+  {
+    name: 'X-Ray',
+    desc: 'Bright edges, transparent body',
+    setup: function(mesh){ return edgesAndFill(mesh, 0x44aaff, 0x112244, 0.08); }
+  },
+  {
+    name: 'Current (Procedural)',
+    desc: 'For comparison: hand-built wireBox PSP',
+    setup: null // special: builds procedural PSP
+  }
+];
+
+// Clone entire group hierarchy, replacing mesh materials
+function edgesOnly(root, lineColor){
+  var clone = root.clone(true);
+  clone.traverse(function(child){
+    if(child.isMesh){
+      // Replace mesh with its edge wireframe
+      child.material = new THREE.MeshBasicMaterial({visible:false});
+      var edges = new THREE.EdgesGeometry(child.geometry, 30);
+      var line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color:lineColor}));
+      child.parent.add(line);
+      line.position.copy(child.position);
+      line.rotation.copy(child.rotation);
+      line.scale.copy(child.scale);
+    }
+  });
+  return clone;
+}
+
+function edgesAndFill(root, lineColor, fillColor, fillOpacity){
+  var clone = root.clone(true);
+  clone.traverse(function(child){
+    if(child.isMesh){
+      // Replace material with transparent fill
+      child.material = new THREE.MeshBasicMaterial({
+        color:fillColor, transparent:true, opacity:fillOpacity, side:THREE.DoubleSide
+      });
+      // Add edges
+      var edges = new THREE.EdgesGeometry(child.geometry, 30);
+      var line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color:lineColor}));
+      child.parent.add(line);
+      line.position.copy(child.position);
+      line.rotation.copy(child.rotation);
+      line.scale.copy(child.scale);
+    }
+  });
+  return clone;
+}
+
+// Build procedural PSP for comparison (simplified version)
+function buildProceduralPSP(){
+  var g = new THREE.Group();
+  var lm = function(c){return new THREE.LineBasicMaterial({color:c});};
+  var fm = function(c,o){return new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:o||0.35,side:THREE.DoubleSide});};
+  function wb(w,h,d,l,f){
+    var gr=new THREE.Group();
+    var geo=new THREE.BoxGeometry(w,h,d);
+    gr.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo),l));
+    if(f)gr.add(new THREE.Mesh(geo,f));
+    return gr;
+  }
+  var pW=17,pH=7.14,pD=1.86,pCY=pH/2,fZ=pD/2+0.02;
+  var body=wb(pW,pH,pD,lm(0x333344),fm(0x0e0e18,0.3));body.position.set(0,pCY,0);g.add(body);
+  var gL=wb(3.5,pH-1,pD+0.4,lm(0x2a2a3a),fm(0x0e0e18,0.15));gL.position.set(-7.5,pCY-0.3,0);g.add(gL);
+  var gR=wb(3.5,pH-1,pD+0.4,lm(0x2a2a3a),fm(0x0e0e18,0.15));gR.position.set(7.5,pCY-0.3,0);g.add(gR);
+  var bz=wb(11,5.2,0.15,lm(0x222233),fm(0x060610,0.4));bz.position.set(0,pCY+0.2,fZ);g.add(bz);
+  var sc=new THREE.Mesh(new THREE.PlaneGeometry(9.5,4.5),fm(0x112844,0.5));sc.position.set(0,pCY+0.2,fZ+0.02);g.add(sc);
+  return g;
+}
+
+// Load GLB model
+var loader = new THREE.GLTFLoader();
+loader.load('/site/models/psp.glb', function(gltf){
+  console.log('Model loaded, creating grid...');
+
+  // Transform: FBX model lies flat. BBox: X=[-23,23], Y=[0,6.35], Z=[-23,23]
+  // Y is the thin axis (depth=6.35), X=width, Z=height when standing
+  // We want it standing upright: FBX-Z → scene-Y (height), FBX-Y → scene-Z (depth)
+  var modelScene = gltf.scene;
+
+  // Wrap in a pivot group for clean transform
+  var pivot = new THREE.Group();
+  pivot.add(modelScene);
+
+  // Rotate to stand upright with screen facing camera (+Z)
+  // FBX model: lying flat with screen up (+Y), we need screen toward +Z and standing
+  modelScene.rotation.x = -Math.PI/2;  // tilt to stand
+  modelScene.rotation.z = Math.PI;      // flip so screen faces +Z
+
+  // Compute actual model extent before scaling
+  var rawBox = new THREE.Box3().setFromObject(pivot);
+  var rawWidth = rawBox.max.x - rawBox.min.x;
+  console.log('Raw width before scale:', rawWidth.toFixed(2));
+  var scaleFactor = 17 / rawWidth;
+  console.log('Scale factor:', scaleFactor.toFixed(4));
+  pivot.scale.set(scaleFactor, scaleFactor, scaleFactor);
+
+  // After rotation+scale: need to figure out actual Y offset
+  // Update world matrices to compute real bbox
+  pivot.updateMatrixWorld(true);
+  var box = new THREE.Box3().setFromObject(pivot);
+  console.log('Transformed bbox:', JSON.stringify({
+    min: [box.min.x.toFixed(2), box.min.y.toFixed(2), box.min.z.toFixed(2)],
+    max: [box.max.x.toFixed(2), box.max.y.toFixed(2), box.max.z.toFixed(2)]
+  }));
+
+  // Shift so bottom sits at Y=0
+  pivot.position.y = -box.min.y;
+  pivot.updateMatrixWorld(true);
+
+  // Recompute for reference
+  var box2 = new THREE.Box3().setFromObject(pivot);
+  console.log('Final bbox:', JSON.stringify({
+    min: [box2.min.x.toFixed(2), box2.min.y.toFixed(2), box2.min.z.toFixed(2)],
+    max: [box2.max.x.toFixed(2), box2.max.y.toFixed(2), box2.max.z.toFixed(2)]
+  }));
+
+  var gridEl = document.getElementById('grid');
+
+  STYLES.forEach(function(style, i){
+    var cell = document.createElement('div');
+    cell.className = 'cell';
+    var label = document.createElement('div');
+    label.className = 'label';
+    label.innerHTML = '<b>' + style.name + '</b><br><span>' + style.desc + '</span>';
+    cell.appendChild(label);
+    gridEl.appendChild(cell);
+
+    // Scene
+    var scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x0a1628, 0.015);
+    scene.add(new THREE.GridHelper(30, 30, 0x152540, 0x0e1a2e));
+
+    var targetY = 3.3;
+    if(style.setup){
+      var styledModel = style.setup(pivot);
+      scene.add(styledModel);
+    } else {
+      scene.add(buildProceduralPSP());
+    }
+
+    var camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+    // Camera from front-right, slightly above — shows screen face
+    camera.position.set(5, targetY+6, 28);
+    camera.lookAt(0, targetY, 1);
+
+    var renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setClearColor(0x0a1628);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    cell.appendChild(renderer.domElement);
+
+    // Resize to cell
+    function resize(){
+      var w = cell.clientWidth, h = cell.clientHeight;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Render
+    (function animate(){
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    })();
+  });
+}, undefined, function(err){
+  console.error('Failed to load GLB:', err);
+  document.body.innerHTML = '<p style="color:red;padding:20px">Failed to load PSP model: ' + err.message + '</p>';
+});
+</script>
+</body>
+</html>

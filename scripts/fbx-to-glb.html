@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head><title>FBX to GLB Converter</title></head>
+<body>
+<script src="../site/js/three.min.js"></script>
+<script src="../site/js/fflate.js"></script>
+<script src="../site/js/NURBSUtils.js"></script>
+<script src="../site/js/NURBSCurve.js"></script>
+<script src="../site/js/FBXLoader.js"></script>
+<script>
+// Load FBX, extract geometry stats, and export wireframe data
+window.convertFBX = function(arrayBuffer) {
+  var loader = new THREE.FBXLoader();
+  var scene = loader.parse(arrayBuffer);
+
+  var stats = { meshes: [], totalVertices: 0, totalFaces: 0 };
+  var allPositions = [];
+  var allIndices = [];
+  var vertexOffset = 0;
+
+  scene.traverse(function(child) {
+    if (child.isMesh && child.geometry && child.name !== 'ground') {
+      var geo = child.geometry;
+      var pos = geo.attributes.position;
+      var idx = geo.index;
+
+      // Apply world transform
+      child.updateWorldMatrix(true, false);
+      geo.applyMatrix4(child.matrixWorld);
+
+      var vCount = pos.count;
+      var fCount = idx ? idx.count / 3 : vCount / 3;
+
+      stats.meshes.push({
+        name: child.name,
+        vertices: vCount,
+        faces: fCount
+      });
+      stats.totalVertices += vCount;
+      stats.totalFaces += fCount;
+
+      // Collect positions
+      for (var i = 0; i < pos.count; i++) {
+        allPositions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      }
+
+      // Collect indices (offset by vertex count of previous meshes)
+      if (idx) {
+        for (var i = 0; i < idx.count; i++) {
+          allIndices.push(idx.getX(i) + vertexOffset);
+        }
+      } else {
+        for (var i = 0; i < vCount; i++) {
+          allIndices.push(i + vertexOffset);
+        }
+      }
+      vertexOffset += vCount;
+    }
+  });
+
+  stats.positionsLength = allPositions.length;
+  stats.indicesLength = allIndices.length;
+
+  // Compute bounding box
+  var minX=Infinity, minY=Infinity, minZ=Infinity;
+  var maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
+  for (var i = 0; i < allPositions.length; i += 3) {
+    var x = allPositions[i], y = allPositions[i+1], z = allPositions[i+2];
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+  }
+  stats.boundingBox = {
+    min: [minX, minY, minZ],
+    max: [maxX, maxY, maxZ],
+    size: [maxX-minX, maxY-minY, maxZ-minZ]
+  };
+
+  // Export as merged geometry JSON (positions + indices)
+  window._exportData = {
+    positions: new Float32Array(allPositions),
+    indices: new Uint32Array(allIndices),
+    stats: stats
+  };
+
+  return stats;
+};
+</script>
+</body>
+</html>
