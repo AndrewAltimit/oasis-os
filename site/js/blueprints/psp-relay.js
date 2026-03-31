@@ -149,6 +149,6 @@ function buildDims(G){
   G.add(h.dimLine(v(-6,0,-4), v(6,0,-4), '~50mm relay PCB'));
 }
 
-function v(x,y,z){ return new THREE.Vector3(x,y,z); }
+function v(x,y,z){ return h.v(x,y,z); }
 
 })();

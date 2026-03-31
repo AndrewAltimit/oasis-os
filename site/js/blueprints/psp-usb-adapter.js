@@ -58,8 +58,8 @@ BlueprintEngine.register('psp-usb-adapter', {
         {group:G.wires, label:'Signal Routing', desc:'VBUS: 5V from left+right power pads routed to USB-C VBUS pin. D+/D-: Mini-B data lines passed through to USB-C data pins. CC1/CC2: 5.1k pulldowns to GND for USB-C device identification.<br><span class="dim">All passive &mdash; no level shifters or active components needed</span>'}
       ],
       tabStates: {
-        'assembled': {note: 'Assembled view: adapter clipped onto PSP\nPogo pins contact power pads\nMini-B plug inserted for data'},
-        'exploded': {note: 'Exploded view: PSP, adapter, and\nexternal device separated for clarity'}
+        'assembled': {note: 'Assembled view: adapter clipped onto PSP\nPogo pins contact power pads\nMini-B plug inserted for data', explode: 20},
+        'exploded': {note: 'Exploded view: PSP, adapter, and\nexternal device separated for clarity', explode: 80}
       }
     };
   }
@@ -149,6 +149,6 @@ function buildDims(G, pW, pH, pD){
   G.add(h.dimLine(v(pW/2+1.5, 0, pD/2+1.5), v(pW/2+1.5, pH, pD/2+1.5), '71.4mm'));
 }
 
-function v(x,y,z){ return new THREE.Vector3(x,y,z); }
+function v(x,y,z){ return h.v(x,y,z); }
 
 })();

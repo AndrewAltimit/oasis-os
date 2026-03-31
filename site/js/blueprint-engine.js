@@ -8,6 +8,7 @@ var BlueprintEngine = (function(){
 // ── Drawing Helpers ──────────────────────────────────────
 function lm(c){ return new THREE.LineBasicMaterial({color:c}); }
 function fm(c,op){ return new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:op||0.35,side:THREE.DoubleSide}); }
+function v(x,y,z){ return new THREE.Vector3(x,y,z); }
 
 function wireBox(w,h,d,lineMat,fillMat){
   var g = new THREE.Group();
@@ -20,6 +21,22 @@ function wireBox(w,h,d,lineMat,fillMat){
 function cyl(r,h,segs,material){
   var geo = new THREE.CylinderGeometry(r,r,h,segs);
   return new THREE.LineSegments(new THREE.EdgesGeometry(geo), material);
+}
+
+function plane(w,h,mat){
+  return new THREE.Mesh(new THREE.PlaneGeometry(w,h), mat);
+}
+
+function ring(inner,outer,segs,mat){
+  return new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.RingGeometry(inner,outer,segs)), mat);
+}
+
+function circle(r,segs,mat){
+  return new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.CircleGeometry(r,segs)), mat);
+}
+
+function sphere(r,segs,mat){
+  return new THREE.Mesh(new THREE.SphereGeometry(r,segs,segs), mat);
 }
 
 function cable(pts, material){
@@ -60,13 +77,20 @@ function dimLine(p1,p2,label,col){
   return g;
 }
 
-var helpers = { lm:lm, fm:fm, wireBox:wireBox, cyl:cyl, cable:cable, tag:tag, dimLine:dimLine };
+var helpers = {
+  lm:lm, fm:fm, v:v,
+  wireBox:wireBox, cyl:cyl, plane:plane, ring:ring, circle:circle, sphere:sphere,
+  cable:cable, tag:tag, dimLine:dimLine
+};
 
 
 // ── Shared Components ────────────────────────────────────
 
-// Creates a detailed PSP-3001 body (standing upright, screen facing +Z)
-// Returns { group, topY, pH, pW, pD, faceZ }
+// Creates a detailed PSP-3001 body (standing upright, screen facing +Z).
+// Unit system: 1 unit = 10mm.
+// PSP-3001 specs: 169.4 × 71.4 × 18.6mm → pW=16.94, pH=7.14, pD=1.86
+// (pW rounded to 17 for cleaner wireframe alignment)
+// Returns { topY, pH, pW, pD, faceZ }
 function buildPSP(parentGroup){
   var pW = 17, pH = 7.14, pD = 1.86;
   var pCY = pH/2;
@@ -92,41 +116,39 @@ function buildPSP(parentGroup){
   G.add(bezel);
 
   // LCD screen
-  var scrGeo = new THREE.PlaneGeometry(9.5, 4.5);
-  var scrMesh = new THREE.Mesh(scrGeo, fm(0x112844, 0.5));
+  var scrMesh = plane(9.5, 4.5, fm(0x112844, 0.5));
   scrMesh.position.set(0, pCY+0.2, faceZ+0.02);
   G.add(scrMesh);
-  var scrBorder = new THREE.LineSegments(new THREE.EdgesGeometry(scrGeo), lm(0x224466));
+  var scrBorder = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(9.5, 4.5)), lm(0x224466));
   scrBorder.position.copy(scrMesh.position);
   G.add(scrBorder);
 
   // Scan lines
   for(var sl=0; sl<8; sl++){
-    var scan = new THREE.Mesh(new THREE.PlaneGeometry(9.3, 0.02), fm(0x44aaff, 0.08));
+    var scan = plane(9.3, 0.02, fm(0x44aaff, 0.08));
     scan.position.set(0, pCY+0.2-4.5/2+0.3+sl*(4.5/8), faceZ+0.03);
     G.add(scan);
   }
 
   // D-pad
-  var dpad = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.RingGeometry(0.6, 0.8, 16)), lm(0x444455));
+  var dpad = ring(0.6, 0.8, 16, lm(0x444455));
   dpad.position.set(-7, pCY, faceZ+0.02);
   G.add(dpad);
   [[0,0.55,0,-0.55],[0.55,0,-0.55,0]].forEach(function(c){
     G.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-7+c[0], pCY+c[1], faceZ+0.03),
-      new THREE.Vector3(-7+c[2], pCY+c[3], faceZ+0.03)
+      v(-7+c[0], pCY+c[1], faceZ+0.03), v(-7+c[2], pCY+c[3], faceZ+0.03)
     ]), lm(0x444455)));
   });
 
   // Face buttons
   [[0,0.6,0x55aa77],[0.6,0,0xff5566],[0,-0.6,0x5566cc],[-0.6,0,0xcc55aa]].forEach(function(b){
-    var btn = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.RingGeometry(0.2, 0.3, 10)), lm(b[2]));
+    var btn = ring(0.2, 0.3, 10, lm(b[2]));
     btn.position.set(7+b[0], pCY+b[1], faceZ+0.02);
     G.add(btn);
   });
 
   // Analog nub
-  var nub = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.CircleGeometry(0.4, 12)), lm(0x555566));
+  var nub = circle(0.4, 12, lm(0x555566));
   nub.position.set(-5, pCY-2, faceZ+0.02);
   G.add(nub);
 
@@ -155,11 +177,11 @@ function buildPSP(parentGroup){
   G.add(pwr);
 
   // SONY logo
-  G.add(tag('SONY', new THREE.Vector3(7, pCY-2.5, faceZ+0.1), '#333344'));
+  G.add(tag('SONY', v(7, pCY-2.5, faceZ+0.1), '#333344'));
 
   // Bottom bar
   [['HOME',-6.5],['VOL',-4],['PSP',0],['SELECT',4],['START',6.5]].forEach(function(l){
-    G.add(tag(l[0], new THREE.Vector3(l[1], 0.3, faceZ+0.1), '#334455'));
+    G.add(tag(l[0], v(l[1], 0.3, faceZ+0.1), '#334455'));
   });
 
   // Mini-B port on top edge
@@ -172,10 +194,10 @@ function buildPSP(parentGroup){
     var pad = wireBox(0.6, 0.2, 0.5, lm(p.c), fm(p.c,0.5));
     pad.position.set(p.x, pH+0.1, 0);
     G.add(pad);
-    G.add(tag(p.l, new THREE.Vector3(p.x, pH+0.8, 0), p.c===0xffaa00?'#ffaa00':'#888888'));
+    G.add(tag(p.l, v(p.x, pH+0.8, 0), p.c===0xffaa00?'#ffaa00':'#888888'));
   });
 
-  G.add(tag('Mini-B USB', new THREE.Vector3(0, pH-0.5, -pD/2-1.5), '#cc44ff', new THREE.Vector3(0, pH+0.3, 0)));
+  G.add(tag('Mini-B USB', v(0, pH-0.5, -pD/2-1.5), '#cc44ff', v(0, pH+0.3, 0)));
 
   return { topY: pH, pH: pH, pW: pW, pD: pD, faceZ: faceZ };
 }
@@ -244,6 +266,7 @@ function createExplodeController(groups, explodeSmallY, explodeGrid){
   function apply(t){
     var f=t/100, f1=Math.min(f*2,1), f2=Math.max((f-0.5)*2,0);
     Object.keys(groups).forEach(function(k){
+      // Dims stay fixed as measurement references during explode
       if(k==='dims') return;
       var oy=(explodeSmallY[k]||0)*f1;
       var grid=explodeGrid[k]||{x:0,y:0,z:0};
@@ -263,7 +286,7 @@ function createExplodeController(groups, explodeSmallY, explodeGrid){
 
 // ── Hover Tooltips ───────────────────────────────────────
 function createHoverSystem(camera, renderer, hoverData){
-  if(!hoverData) return;
+  if(!hoverData || !hoverData.length) return;
   var tooltipEl = document.getElementById('tooltip');
   var raycaster = new THREE.Raycaster();
   var mouse = new THREE.Vector2();
@@ -297,32 +320,41 @@ function createHoverSystem(camera, renderer, hoverData){
   });
 }
 
-// ── Tab System ───────────────────────────────────────────
+// ── Tab System (data-driven) ─────────────────────────────
 function createTabs(tabs, tabStates, explodeCtrl){
   if(!tabs || !tabs.length) return;
   var tabsEl = document.getElementById('tabs');
   var activeId = tabs[0].id;
 
+  function activateTab(id){
+    activeId = id;
+    tabsEl.querySelectorAll('button').forEach(function(b){
+      b.classList.toggle('active', b.dataset.tabId===id);
+    });
+    var state = tabStates && tabStates[id];
+    if(state){
+      if(state.note){
+        document.getElementById('state-note').innerHTML = state.note.replace(/\n/g,'<br>');
+      }
+      // Data-driven explode: diagram declares the slider value per tab
+      if(typeof state.explode === 'number'){
+        explodeCtrl.slider.value = state.explode;
+        explodeCtrl.apply(state.explode);
+      }
+    }
+  }
+
   tabs.forEach(function(tab, i){
     var btn = document.createElement('button');
     btn.textContent = tab.label;
+    btn.dataset.tabId = tab.id;
     if(i===0) btn.classList.add('active');
-    btn.addEventListener('click', function(){
-      activeId = tab.id;
-      tabsEl.querySelectorAll('button').forEach(function(b){b.classList.remove('active');});
-      btn.classList.add('active');
-      if(tabStates && tabStates[tab.id] && tabStates[tab.id].note){
-        document.getElementById('state-note').innerHTML = tabStates[tab.id].note.replace(/\n/g,'<br>');
-      }
-      if(tab.id==='exploded'){explodeCtrl.slider.value=80; explodeCtrl.apply(80);}
-      else if(tab.id==='assembled'){explodeCtrl.slider.value=20; explodeCtrl.apply(20);}
-    });
+    btn.addEventListener('click', function(){ activateTab(tab.id); });
     tabsEl.appendChild(btn);
   });
 
-  if(tabStates && tabStates[activeId] && tabStates[activeId].note){
-    document.getElementById('state-note').innerHTML = tabStates[activeId].note.replace(/\n/g,'<br>');
-  }
+  // Apply initial tab state
+  activateTab(activeId);
 }
 
 // ── HUD Population ───────────────────────────────────────
@@ -343,12 +375,35 @@ function populateHUD(diagram){
   }
 }
 
+// ── Scene Lifecycle ──────────────────────────────────────
+var _canvas = null;
+var _resizeHandler = null;
+
+function cleanup(){
+  // Remove old canvas from DOM
+  if(_canvas && _canvas.parentNode){
+    _canvas.parentNode.removeChild(_canvas);
+    _canvas = null;
+  }
+  // Remove old resize listener
+  if(_resizeHandler){
+    window.removeEventListener('resize', _resizeHandler);
+    _resizeHandler = null;
+  }
+  // Clear tabs
+  document.getElementById('tabs').innerHTML = '';
+  // Reset HUD
+  document.getElementById('state-note').innerHTML = '';
+  document.getElementById('tooltip').style.display = 'none';
+}
+
 // ── Main Init ────────────────────────────────────────────
 var diagrams = {};
 
 function register(id, config){ diagrams[id] = config; }
 
 function init(){
+  cleanup();
   document.getElementById('loading').style.display = 'none';
 
   var params = new URLSearchParams(window.location.search);
@@ -373,12 +428,28 @@ function init(){
   renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setClearColor(0x0a1628);
-  document.body.appendChild(renderer.domElement);
+  _canvas = renderer.domElement;
+  document.body.appendChild(_canvas);
 
   createOrbitControls(camera, renderer, cam);
 
-  // Build diagram
-  var result = diagram.build(scene, helpers);
+  // Build diagram with error handling
+  var result;
+  try {
+    result = diagram.build(scene, helpers);
+  } catch(e) {
+    document.getElementById('loading').style.display='flex';
+    document.getElementById('loading').textContent='BUILD ERROR: '+e.message;
+    return;
+  }
+
+  // Provide defaults for missing return fields
+  result.groups = result.groups || {};
+  result.explodeSmallY = result.explodeSmallY || {};
+  result.explodeGrid = result.explodeGrid || {};
+  result.hoverData = result.hoverData || [];
+  result.tabStates = result.tabStates || {};
+
   var explodeCtrl = createExplodeController(result.groups, result.explodeSmallY, result.explodeGrid);
   createHoverSystem(camera, renderer, result.hoverData);
   createTabs(diagram.tabs, result.tabStates, explodeCtrl);
@@ -389,11 +460,12 @@ function init(){
     renderer.render(scene, camera);
   })();
 
-  window.addEventListener('resize',function(){
+  _resizeHandler = function(){
     camera.aspect=innerWidth/innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
-  });
+  };
+  window.addEventListener('resize', _resizeHandler);
 }
 
 // Public API
