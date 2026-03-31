@@ -86,110 +86,86 @@ var helpers = {
 
 // ── Shared Components ────────────────────────────────────
 
-// Creates a detailed PSP-3001 body (standing upright, screen facing +Z).
+// Cached PSP GLB model (loaded async before diagram build)
+var _pspModel = null; // THREE.Group or null
+var _pspModelHeight = 7.14; // updated from model bbox after load
+
+// Preload PSP model from GLB. Returns a Promise.
+function preloadPSPModel(){
+  return new Promise(function(resolve){
+    if(_pspModel){ resolve(_pspModel); return; }
+    if(typeof THREE.GLTFLoader === 'undefined'){ resolve(null); return; }
+    var loader = new THREE.GLTFLoader();
+    loader.load('models/psp.glb', function(gltf){
+      var scene = gltf.scene;
+      // Orient: FBX model lies flat. Stand upright with screen facing +Z, d-pad on left.
+      // PI/2-0.75 compensates for the model's built-in tilt from the FBX export.
+      scene.rotation.set(Math.PI/2 - 0.75, 0, 0);
+      // Wrap in pivot for clean transform
+      var pivot = new THREE.Group();
+      pivot.add(scene);
+      // Scale to match unit system (1 unit = 10mm, PSP ~17 units wide)
+      pivot.updateMatrixWorld(true);
+      var box = new THREE.Box3().setFromObject(pivot);
+      var rawWidth = box.max.x - box.min.x;
+      var scale = 17 / rawWidth;
+      pivot.scale.set(scale, scale, scale);
+      // Shift so bottom sits at Y=0
+      pivot.updateMatrixWorld(true);
+      var box2 = new THREE.Box3().setFromObject(pivot);
+      pivot.position.y = -box2.min.y;
+      // Measure actual height for adapter positioning
+      var finalBox = new THREE.Box3().setFromObject(pivot);
+      _pspModelHeight = finalBox.max.y;
+      _pspModel = pivot;
+      resolve(pivot);
+    }, undefined, function(){
+      resolve(null); // fallback to procedural
+    });
+  });
+}
+
+// Creates a PSP-3001 body (standing upright, screen facing +Z).
+// Uses GLB model with wireframe + dark fill if available, falls back to procedural.
 // Unit system: 1 unit = 10mm.
-// PSP-3001 specs: 169.4 × 71.4 × 18.6mm → pW=16.94, pH=7.14, pD=1.86
-// (pW rounded to 17 for cleaner wireframe alignment)
+// PSP-3001 specs: 169.4 × 71.4 × 18.6mm (Sony product specifications)
 // Returns { topY, pH, pW, pD, faceZ }
 function buildPSP(parentGroup){
-  var pW = 17, pH = 7.14, pD = 1.86;
-  var pCY = pH/2;
+  var pW = 17, pD = 1.86;
   var faceZ = pD/2 + 0.02;
   var G = parentGroup;
+  // pH derived from model if available, otherwise fallback
+  var pH = _pspModel ? _pspModelHeight : 7.14;
 
-  // Main body
-  var body = wireBox(pW, pH, pD, lm(0x333344), fm(0x0e0e18,0.3));
-  body.position.set(0, pCY, 0);
-  G.add(body);
-
-  // Grips
-  var gripL = wireBox(3.5, pH-1, pD+0.4, lm(0x2a2a3a), fm(0x0e0e18,0.15));
-  gripL.position.set(-7.5, pCY-0.3, 0);
-  G.add(gripL);
-  var gripR = wireBox(3.5, pH-1, pD+0.4, lm(0x2a2a3a), fm(0x0e0e18,0.15));
-  gripR.position.set(7.5, pCY-0.3, 0);
-  G.add(gripR);
-
-  // Screen bezel
-  var bezel = wireBox(11, 5.2, 0.15, lm(0x222233), fm(0x060610,0.4));
-  bezel.position.set(0, pCY+0.2, faceZ);
-  G.add(bezel);
-
-  // LCD screen
-  var scrMesh = plane(9.5, 4.5, fm(0x112844, 0.5));
-  scrMesh.position.set(0, pCY+0.2, faceZ+0.02);
-  G.add(scrMesh);
-  var scrBorder = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(9.5, 4.5)), lm(0x224466));
-  scrBorder.position.copy(scrMesh.position);
-  G.add(scrBorder);
-
-  // Scan lines
-  for(var sl=0; sl<8; sl++){
-    var scan = plane(9.3, 0.02, fm(0x44aaff, 0.08));
-    scan.position.set(0, pCY+0.2-4.5/2+0.3+sl*(4.5/8), faceZ+0.03);
-    G.add(scan);
+  if(_pspModel){
+    // Clone the cached model and apply wireframe + dark fill style
+    var clone = _pspModel.clone(true);
+    clone.traverse(function(child){
+      if(child.isMesh){
+        // Semi-transparent dark fill
+        child.material = fm(0x0e0e18, 0.25);
+        // Add edge wireframe as sibling
+        var edges = new THREE.EdgesGeometry(child.geometry, 30);
+        var line = new THREE.LineSegments(edges, lm(0x4488ff));
+        line.position.copy(child.position);
+        line.rotation.copy(child.rotation);
+        line.scale.copy(child.scale);
+        child.parent.add(line);
+      }
+    });
+    G.add(clone);
+  } else {
+    // Procedural fallback (no model loaded)
+    buildPSPProcedural(G, pW, pH, pD, faceZ);
   }
 
-  // D-pad
-  var dpad = ring(0.6, 0.8, 16, lm(0x444455));
-  dpad.position.set(-7, pCY, faceZ+0.02);
-  G.add(dpad);
-  [[0,0.55,0,-0.55],[0.55,0,-0.55,0]].forEach(function(c){
-    G.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-      v(-7+c[0], pCY+c[1], faceZ+0.03), v(-7+c[2], pCY+c[3], faceZ+0.03)
-    ]), lm(0x444455)));
-  });
-
-  // Face buttons
-  [[0,0.6,0x55aa77],[0.6,0,0xff5566],[0,-0.6,0x5566cc],[-0.6,0,0xcc55aa]].forEach(function(b){
-    var btn = ring(0.2, 0.3, 10, lm(b[2]));
-    btn.position.set(7+b[0], pCY+b[1], faceZ+0.02);
-    G.add(btn);
-  });
-
-  // Analog nub
-  var nub = circle(0.4, 12, lm(0x555566));
-  nub.position.set(-5, pCY-2, faceZ+0.02);
-  G.add(nub);
-
-  // Speaker grilles
-  [-5.8, 5.8].forEach(function(x){
-    for(var r=0; r<3; r++){
-      for(var c=0; c<2; c++){
-        var dot = new THREE.Mesh(new THREE.CircleGeometry(0.06, 6), fm(0x222233, 0.6));
-        dot.position.set(x+c*0.25, pCY+0.8-r*0.25, faceZ+0.02);
-        G.add(dot);
-      }
-    }
-  });
-
-  // Shoulder buttons
-  var shL = wireBox(2.5, 0.5, pD-0.3, lm(0x444455));
-  shL.position.set(-6.5, pH, 0);
-  G.add(shL);
-  var shR = wireBox(2.5, 0.5, pD-0.3, lm(0x444455));
-  shR.position.set(6.5, pH, 0);
-  G.add(shR);
-
-  // Power slider
-  var pwr = wireBox(1.5, 0.3, 0.4, lm(0x556655));
-  pwr.position.set(-8.2, pH, 0);
-  G.add(pwr);
-
-  // SONY logo
-  G.add(tag('SONY', v(7, pCY-2.5, faceZ+0.1), '#333344'));
-
-  // Bottom bar
-  [['HOME',-6.5],['VOL',-4],['PSP',0],['SELECT',4],['START',6.5]].forEach(function(l){
-    G.add(tag(l[0], v(l[1], 0.3, faceZ+0.1), '#334455'));
-  });
-
-  // Mini-B port on top edge
+  // Top-edge details (always added on top of either model or procedural)
+  // Mini-B port
   var miniB = wireBox(1.2, 0.6, 0.8, lm(0xcc44ff));
   miniB.position.set(0, pH+0.3, 0);
   G.add(miniB);
 
-  // Power pads on top edge
+  // Power pads
   [{x:-4,c:0xffaa00,l:'5V'},{x:-2.5,c:0x888888,l:'GND'},{x:2.5,c:0x888888,l:'GND'},{x:4,c:0xffaa00,l:'5V'}].forEach(function(p){
     var pad = wireBox(0.6, 0.2, 0.5, lm(p.c), fm(p.c,0.5));
     pad.position.set(p.x, pH+0.1, 0);
@@ -200,6 +176,42 @@ function buildPSP(parentGroup){
   G.add(tag('Mini-B USB', v(0, pH-0.5, -pD/2-1.5), '#cc44ff', v(0, pH+0.3, 0)));
 
   return { topY: pH, pH: pH, pW: pW, pD: pD, faceZ: faceZ };
+}
+
+// Procedural PSP fallback (used when GLB model isn't available)
+function buildPSPProcedural(G, pW, pH, pD, faceZ){
+  var pCY = pH/2;
+
+  var body = wireBox(pW, pH, pD, lm(0x333344), fm(0x0e0e18,0.3));
+  body.position.set(0, pCY, 0); G.add(body);
+  var gripL = wireBox(3.5, pH-1, pD+0.4, lm(0x2a2a3a), fm(0x0e0e18,0.15));
+  gripL.position.set(-7.5, pCY-0.3, 0); G.add(gripL);
+  var gripR = wireBox(3.5, pH-1, pD+0.4, lm(0x2a2a3a), fm(0x0e0e18,0.15));
+  gripR.position.set(7.5, pCY-0.3, 0); G.add(gripR);
+
+  var bezel = wireBox(11, 5.2, 0.15, lm(0x222233), fm(0x060610,0.4));
+  bezel.position.set(0, pCY+0.2, faceZ); G.add(bezel);
+  var scrMesh = plane(9.5, 4.5, fm(0x112844, 0.5));
+  scrMesh.position.set(0, pCY+0.2, faceZ+0.02); G.add(scrMesh);
+
+  var dpad = ring(0.6, 0.8, 16, lm(0x444455));
+  dpad.position.set(-7, pCY, faceZ+0.02); G.add(dpad);
+  [[0,0.6,0x55aa77],[0.6,0,0xff5566],[0,-0.6,0x5566cc],[-0.6,0,0xcc55aa]].forEach(function(b){
+    var btn = ring(0.2, 0.3, 10, lm(b[2]));
+    btn.position.set(7+b[0], pCY+b[1], faceZ+0.02); G.add(btn);
+  });
+  var nub = circle(0.4, 12, lm(0x555566));
+  nub.position.set(-5, pCY-2, faceZ+0.02); G.add(nub);
+
+  var shL = wireBox(2.5, 0.5, pD-0.3, lm(0x444455));
+  shL.position.set(-6.5, pH, 0); G.add(shL);
+  var shR = wireBox(2.5, 0.5, pD-0.3, lm(0x444455));
+  shR.position.set(6.5, pH, 0); G.add(shR);
+
+  G.add(tag('SONY', v(7, pCY-2.5, faceZ+0.1), '#333344'));
+  [['HOME',-6.5],['VOL',-4],['PSP',0],['SELECT',4],['START',6.5]].forEach(function(l){
+    G.add(tag(l[0], v(l[1], 0.3, faceZ+0.1), '#334455'));
+  });
 }
 
 // ── Orbit Controls ───────────────────────────────────────
@@ -404,7 +416,6 @@ function register(id, config){ diagrams[id] = config; }
 
 function init(){
   cleanup();
-  document.getElementById('loading').style.display = 'none';
 
   var params = new URLSearchParams(window.location.search);
   var id = params.get('diagram') || Object.keys(diagrams)[0];
@@ -415,6 +426,14 @@ function init(){
     return;
   }
 
+  // Preload PSP model, then build diagram
+  preloadPSPModel().then(function(){
+    document.getElementById('loading').style.display = 'none';
+    initDiagram(diagram);
+  });
+}
+
+function initDiagram(diagram){
   populateHUD(diagram);
 
   // Scene

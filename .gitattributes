@@ -9,3 +9,4 @@
 *.json text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
+*.glb filter=lfs diff=lfs merge=lfs -text
