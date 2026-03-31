@@ -301,8 +301,8 @@ function createOrbitControls(camera, renderer, camConfig){
     orbit.drag=true;
   });
   el.addEventListener('contextmenu',function(e){e.preventDefault();});
-  window.addEventListener('pointerup',function(){orbit.drag=false; orbit.mode=null;});
-  window.addEventListener('pointermove',function(e){
+  _windowPointerUp = function(){orbit.drag=false; orbit.mode=null;};
+  _windowPointerMove = function(e){
     if(!orbit.drag) return;
     var dx=e.clientX-orbit.px, dy=e.clientY-orbit.py;
     orbit.px=e.clientX; orbit.py=e.clientY;
@@ -316,7 +316,9 @@ function createOrbitControls(camera, renderer, camConfig){
       orbit.target.add(up.multiplyScalar(dy*ps));
     }
     update();
-  });
+  };
+  window.addEventListener('pointerup', _windowPointerUp);
+  window.addEventListener('pointermove', _windowPointerMove);
   el.addEventListener('wheel',function(e){orbit.r+=e.deltaY*0.03;update();},{passive:true});
   el.addEventListener('mousedown',function(e){if(e.button===1)e.preventDefault();});
 
@@ -449,6 +451,8 @@ function populateHUD(diagram){
 // ── Scene Lifecycle ──────────────────────────────────────
 var _canvas = null;
 var _resizeHandler = null;
+var _windowPointerUp = null;
+var _windowPointerMove = null;
 
 function cleanup(){
   // Remove old canvas from DOM
@@ -460,6 +464,15 @@ function cleanup(){
   if(_resizeHandler){
     window.removeEventListener('resize', _resizeHandler);
     _resizeHandler = null;
+  }
+  // Remove orbit control listeners from window
+  if(_windowPointerUp){
+    window.removeEventListener('pointerup', _windowPointerUp);
+    _windowPointerUp = null;
+  }
+  if(_windowPointerMove){
+    window.removeEventListener('pointermove', _windowPointerMove);
+    _windowPointerMove = null;
   }
   // Clear tabs
   document.getElementById('tabs').innerHTML = '';
