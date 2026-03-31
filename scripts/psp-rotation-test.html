@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>PSP Rotation Fine-Tune</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0a1628;color:#4af;font-family:'Courier New',monospace}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;padding:4px;height:100vh}
+  .cell{position:relative;border:1px solid #1e2e44}
+  .label{position:absolute;top:4px;left:4px;font-size:11px;z-index:1;pointer-events:none;line-height:1.4;background:#0a1628cc;padding:2px 6px}
+  .label b{color:#4af}
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+<script src="../site/js/three.min.js"></script>
+<script src="../site/js/GLTFLoader.js"></script>
+<script>
+// Fine-tune around x=PI/2 (the closest match)
+// Testing small offsets to eliminate the downward tilt
+var PI = Math.PI;
+var ROTATIONS = [
+  {name:'x=PI/2 - 0.65', rx:PI/2-0.65, ry:0, rz:0},
+  {name:'x=PI/2 - 0.70', rx:PI/2-0.70, ry:0, rz:0},
+  {name:'x=PI/2 - 0.72', rx:PI/2-0.72, ry:0, rz:0},
+  {name:'x=PI/2 - 0.74', rx:PI/2-0.74, ry:0, rz:0},
+  {name:'x=PI/2 - 0.75', rx:PI/2-0.75, ry:0, rz:0},
+  {name:'x=PI/2 - 0.76', rx:PI/2-0.76, ry:0, rz:0},
+  {name:'x=PI/2 - 0.78', rx:PI/2-0.78, ry:0, rz:0},
+  {name:'x=PI/2 - 0.80', rx:PI/2-0.80, ry:0, rz:0}
+];
+
+var loader = new THREE.GLTFLoader();
+loader.load('/site/models/psp.glb', function(gltf){
+  var gridEl = document.getElementById('grid');
+
+  ROTATIONS.forEach(function(rot){
+    var cell = document.createElement('div');
+    cell.className = 'cell';
+    var label = document.createElement('div');
+    label.className = 'label';
+    label.innerHTML = '<b>'+rot.name+'</b>';
+    cell.appendChild(label);
+    gridEl.appendChild(cell);
+
+    var scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x0a1628, 0.01);
+    scene.add(new THREE.GridHelper(30,30,0x152540,0x0e1a2e));
+
+    var modelClone = gltf.scene.clone(true);
+    modelClone.rotation.set(rot.rx, rot.ry, rot.rz);
+
+    var pivot = new THREE.Group();
+    pivot.add(modelClone);
+    pivot.updateMatrixWorld(true);
+    var box = new THREE.Box3().setFromObject(pivot);
+    var w = box.max.x - box.min.x;
+    var scale = 17 / Math.max(w, 0.01);
+    pivot.scale.set(scale, scale, scale);
+    pivot.updateMatrixWorld(true);
+    var box2 = new THREE.Box3().setFromObject(pivot);
+    pivot.position.y = -box2.min.y;
+
+    pivot.traverse(function(child){
+      if(child.isMesh){
+        child.material = new THREE.MeshBasicMaterial({color:0x0e0e18,transparent:true,opacity:0.25,side:THREE.DoubleSide});
+        var edges = new THREE.EdgesGeometry(child.geometry, 30);
+        var line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color:0x4488ff}));
+        line.position.copy(child.position);
+        line.rotation.copy(child.rotation);
+        line.scale.copy(child.scale);
+        child.parent.add(line);
+      }
+    });
+    scene.add(pivot);
+
+    var camera = new THREE.PerspectiveCamera(30,1,0.1,200);
+    camera.position.set(3, 5, 24);
+    camera.lookAt(0, 3.5, 0);
+
+    var renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setClearColor(0x0a1628);
+    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    cell.appendChild(renderer.domElement);
+
+    function resize(){
+      var w=cell.clientWidth, h=cell.clientHeight;
+      camera.aspect=w/h; camera.updateProjectionMatrix();
+      renderer.setSize(w,h);
+    }
+    resize();
+    window.addEventListener('resize',resize);
+    (function animate(){requestAnimationFrame(animate);renderer.render(scene,camera);})();
+  });
+});
+</script>
+</body>
+</html>

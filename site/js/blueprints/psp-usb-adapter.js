@@ -58,7 +58,7 @@ BlueprintEngine.register('psp-usb-adapter', {
         {group:G.wires, label:'Signal Routing', desc:'VBUS: 5V from left+right power pads routed to USB-C VBUS pin. D+/D-: Mini-B data lines passed through to USB-C data pins. CC1/CC2: 5.1k pulldowns to GND for USB-C device identification.<br><span class="dim">All passive &mdash; no level shifters or active components needed</span>'}
       ],
       tabStates: {
-        'assembled': {note: 'Assembled view: adapter clipped onto PSP\nPogo pins contact power pads\nMini-B plug inserted for data', explode: 20},
+        'assembled': {note: 'Assembled view: adapter clipped onto PSP\nPogo pins contact power pads\nMini-B plug inserted for data', explode: 0},
         'exploded': {note: 'Exploded view: PSP, adapter, and\nexternal device separated for clarity', explode: 80}
       }
     };
@@ -66,54 +66,56 @@ BlueprintEngine.register('psp-usb-adapter', {
 });
 
 // Returns { topY, botY, centerY, width, height }
+// Layout matches PSP top-edge hardware (from Go!Cam reference photos):
+//   [screw x=-2.0] [5V x=-1.1] [GND x=-0.7] [Mini-B x=0] [GND x=0.7] [5V x=1.1] [screw x=2.0]
 function buildAdapter(G, teY, pD){
   var aW = 5, aH = 3, aD = pD+1;
   var aBot = teY + 0.15;
   var aCY = aBot + aH/2;
   var aTop = aBot + aH;
 
-  // Shell
+  // Shell (spans screw-to-screw width plus margin)
   var shell = h.wireBox(aW, aH, aD, h.lm(0x667788), h.fm(0x112233,0.15));
   shell.position.set(0, aCY, 0); G.add(shell);
 
-  // Carrier PCB
-  var pcb = h.wireBox(aW-1, 0.3, pD-0.3, h.lm(0x22aa66), h.fm(0x0a2818,0.4));
+  // Carrier PCB (inside shell)
+  var pcb = h.wireBox(aW-0.6, 0.3, pD-0.3, h.lm(0x22aa66), h.fm(0x0a2818,0.4));
   pcb.position.set(0, aCY+0.3, 0); G.add(pcb);
 
-  // USB-C receptacle
-  var usbc = h.wireBox(1.2, 0.5, 0.8, h.lm(0x4488ff), h.fm(0x112840,0.5));
+  // USB-C receptacle (top of adapter)
+  var usbc = h.wireBox(1.0, 0.4, 0.7, h.lm(0x4488ff), h.fm(0x112840,0.5));
   usbc.position.set(0, aTop, 0); G.add(usbc);
 
-  // CC pulldowns
-  [-0.8, 0.8].forEach(function(x){
-    var r = h.wireBox(0.2, 0.15, 0.15, h.lm(0x44ff44), h.fm(0x22aa22,0.5));
-    r.position.set(x, aCY+0.5, 0); G.add(r);
+  // CC pulldown resistors (on PCB, flanking USB-C)
+  [-0.7, 0.7].forEach(function(x){
+    var r = h.wireBox(0.15, 0.12, 0.12, h.lm(0x44ff44), h.fm(0x22aa22,0.5));
+    r.position.set(x, aCY+0.45, 0); G.add(r);
   });
 
-  // Pogo pins
-  [-1.8, -1, 1, 1.8].forEach(function(x){
-    var p = h.wireBox(0.15, 0.6, 0.15, h.lm(0xccaa00));
-    p.position.set(x, aBot-0.15, 0); G.add(p);
+  // Pogo pins — one per side, align with PSP 5V power pads at ±1.0
+  [-1.0, 1.0].forEach(function(x){
+    var p = h.wireBox(0.12, 0.7, 0.12, h.lm(0xccaa00));
+    p.position.set(x, aBot-0.2, 0); G.add(p);
   });
 
-  // Mini-B male plug
-  var plug = h.wireBox(0.8, 0.6, 0.5, h.lm(0xcc44ff));
+  // Mini-B male plug (center, aligns with PSP Mini-B port)
+  var plug = h.wireBox(0.7, 0.6, 0.5, h.lm(0xcc44ff));
   plug.position.set(0, aBot-0.15, 0); G.add(plug);
 
-  // Screw mounts
-  [-aW/2-0.3, aW/2+0.3].forEach(function(x){
-    var s = h.cyl(0.2, aH+0.5, 6, h.lm(0x888888));
+  // Screw mounts — align with PSP screw holes (x=±2.0)
+  [-2.0, 2.0].forEach(function(x){
+    var s = h.cyl(0.15, aH+0.8, 6, h.lm(0x888888));
     s.position.set(x, aCY-0.2, 0); G.add(s);
   });
 
   // Labels
   G.add(h.tag('ADAPTER SHELL', v(aW/2+1.5, aCY+1, 0), '#667788', v(aW/2, aCY, 0)));
-  G.add(h.tag('Passive carrier PCB', v(aW/2+1.5, aCY+0.3, 0), '#22aa66', v(aW/2-0.5, aCY+0.3, 0)));
-  G.add(h.tag('USB-C receptacle', v(aW/2+1.5, aTop+0.3, 0), '#4488ff', v(0.8, aTop, 0)));
+  G.add(h.tag('Passive carrier PCB', v(aW/2+1.5, aCY+0.3, 0), '#22aa66', v(aW/2-0.3, aCY+0.3, 0)));
+  G.add(h.tag('USB-C receptacle', v(aW/2+1.5, aTop+0.3, 0), '#4488ff', v(0.7, aTop, 0)));
   G.add(h.tag('5.1k CC pulldowns', v(aW/2+1.5, aCY+0.5, 0), '#44ff44'));
-  G.add(h.tag('Pogo pins (5V)', v(-aW/2-1.5, aBot-0.2, 0), '#ccaa00', v(-1.8, aBot-0.15, 0)));
+  G.add(h.tag('Pogo pins (5V)', v(-aW/2-1.5, aBot-0.2, 0), '#ccaa00', v(-1.0, aBot-0.2, 0)));
   G.add(h.tag('Mini-B male', v(-aW/2-1.5, aBot-0.8, 0), '#cc44ff', v(-0.5, aBot-0.15, 0)));
-  G.add(h.tag('Screw mount', v(-aW/2-1.5, aCY, 0), '#888888', v(-aW/2-0.3, aCY, 0)));
+  G.add(h.tag('Screw mount', v(-aW/2-1.5, aCY, 0), '#888888', v(-2.0, aCY, 0)));
 
   return {topY: aTop, botY: aBot, centerY: aCY, width: aW, height: aH};
 }
@@ -130,17 +132,22 @@ function buildDevice(G, adapterTopY){
 }
 
 function buildTraces(G, teY, adapter){
-  // VBUS: power pads → pogo pins → PCB → USB-C
-  [-4, 4].forEach(function(x){
+  // VBUS: power pads (±1.0) → pogo pins → PCB → USB-C
+  [-1.0, 1.0].forEach(function(x){
     G.add(h.cable([
-      v(x, teY+0.2, 0), v(x, teY+0.5, 0),
-      v(x*0.4, adapter.botY, 0), v(x*0.15, adapter.centerY+0.3, 0),
+      v(x, teY+0.15, 0),
+      v(x, adapter.botY, 0),
+      v(x*0.5, adapter.centerY+0.3, 0),
       v(x*0.1, adapter.topY, 0)
     ], h.lm(0xffaa00)));
   });
-  // D+/D-: Mini-B → USB-C
-  [-0.2, 0.2].forEach(function(x){
-    G.add(h.cable([v(x, teY+0.4, 0), v(x, adapter.centerY, 0), v(x, adapter.topY, 0)], h.lm(0xcc44ff)));
+  // D+/D-: Mini-B (center) → USB-C data
+  [-0.15, 0.15].forEach(function(x){
+    G.add(h.cable([
+      v(x, teY+0.3, 0),
+      v(x, adapter.centerY, 0),
+      v(x, adapter.topY, 0)
+    ], h.lm(0xcc44ff)));
   });
 }
 

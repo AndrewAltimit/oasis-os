@@ -47,17 +47,31 @@ function cable(pts, material){
 
 function tag(text, pos, color, target){
   var g = new THREE.Group();
-  var c = document.createElement('canvas'); c.width=512; c.height=64;
+
+  // Fixed 3D text — canvas sized to fit, centered
+  var measure = document.createElement('canvas').getContext('2d');
+  measure.font = 'bold 22px Courier New';
+  var textW = Math.ceil(measure.measureText(text).width) + 16;
+  var canW = Math.max(textW, 64);
+  var canH = 40;
+
+  var c = document.createElement('canvas'); c.width=canW; c.height=canH;
   var ctx = c.getContext('2d');
   ctx.font = 'bold 22px Courier New';
   ctx.fillStyle = color || '#4488cc';
-  ctx.fillText(text, 6, 36);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canW/2, canH/2);
+
   var tex = new THREE.CanvasTexture(c);
   tex.minFilter = THREE.LinearFilter;
-  var sp = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:false}));
-  sp.scale.set(6.5, 0.85, 1);
-  sp.position.copy(pos);
-  g.add(sp);
+  var mat = new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, side:THREE.DoubleSide});
+  var planeW = canW * 0.013;
+  var planeH = canH * 0.013;
+  var mesh = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
+  mesh.position.copy(pos);
+  g.add(mesh);
+
   if(target){
     var lineGeo = new THREE.BufferGeometry().setFromPoints([pos, target]);
     var lineCol = parseInt((color||'#4488cc').replace('#',''),16);
@@ -67,6 +81,37 @@ function tag(text, pos, color, target){
     g.add(dot);
   }
   return g;
+}
+
+// Fixed 3D text label — stays in world space, doesn't billboard.
+// Faces +Z by default (toward camera in front view). Optional rotation.
+function tag3D(text, pos, color, rotX, rotY){
+  // Size canvas to fit text tightly
+  var measure = document.createElement('canvas').getContext('2d');
+  measure.font = 'bold 28px Courier New';
+  var textW = Math.ceil(measure.measureText(text).width) + 16;
+  var canW = Math.max(textW, 64);
+  var canH = 48;
+
+  var c = document.createElement('canvas'); c.width=canW; c.height=canH;
+  var ctx = c.getContext('2d');
+  ctx.font = 'bold 28px Courier New';
+  ctx.fillStyle = color || '#4488cc';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canW/2, canH/2);
+
+  var tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  var mat = new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, side:THREE.DoubleSide});
+  // Scale: ~0.013 world units per canvas pixel
+  var planeW = canW * 0.013;
+  var planeH = canH * 0.013;
+  var mesh = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
+  mesh.position.copy(pos);
+  if(rotX) mesh.rotation.x = rotX;
+  if(rotY) mesh.rotation.y = rotY;
+  return mesh;
 }
 
 function dimLine(p1,p2,label,col){
@@ -80,7 +125,7 @@ function dimLine(p1,p2,label,col){
 var helpers = {
   lm:lm, fm:fm, v:v,
   wireBox:wireBox, cyl:cyl, plane:plane, ring:ring, circle:circle, sphere:sphere,
-  cable:cable, tag:tag, dimLine:dimLine
+  cable:cable, tag:tag, tag3D:tag, dimLine:dimLine
 };
 
 
@@ -114,9 +159,12 @@ function preloadPSPModel(){
       pivot.updateMatrixWorld(true);
       var box2 = new THREE.Box3().setFromObject(pivot);
       pivot.position.y = -box2.min.y;
-      // Measure actual height for adapter positioning
+      // Measure actual dimensions and center on Z axis
       var finalBox = new THREE.Box3().setFromObject(pivot);
       _pspModelHeight = finalBox.max.y;
+      // Center Z so model sits at Z=0 (adapter components are at Z=0)
+      var zCenter = (finalBox.min.z + finalBox.max.z) / 2;
+      pivot.position.z = -zCenter;
       _pspModel = pivot;
       resolve(pivot);
     }, undefined, function(){
@@ -160,20 +208,31 @@ function buildPSP(parentGroup){
   }
 
   // Top-edge details (always added on top of either model or procedural)
-  // Mini-B port
-  var miniB = wireBox(1.2, 0.6, 0.8, lm(0xcc44ff));
-  miniB.position.set(0, pH+0.3, 0);
+  // Layout matches real PSP-3001 top edge (from photos):
+  //   [screw]  [5V pad] [GND pad]  [Mini-B USB]  [GND pad] [5V pad]  [screw]
+  //   x=-2.0   x=-1.1   x=-0.7     x=0           x=0.7     x=1.1     x=2.0
+
+  // Mini-B port (~8mm wide)
+  var miniB = wireBox(0.8, 0.5, 0.6, lm(0xcc44ff));
+  miniB.position.set(0, pH+0.25, 0);
   G.add(miniB);
 
-  // Power pads
-  [{x:-4,c:0xffaa00,l:'5V'},{x:-2.5,c:0x888888,l:'GND'},{x:2.5,c:0x888888,l:'GND'},{x:4,c:0xffaa00,l:'5V'}].forEach(function(p){
-    var pad = wireBox(0.6, 0.2, 0.5, lm(p.c), fm(p.c,0.5));
-    pad.position.set(p.x, pH+0.1, 0);
+  // Power pads (one 5V pad on each side of USB port)
+  [-1.0, 1.0].forEach(function(x){
+    var pad = wireBox(0.3, 0.15, 0.4, lm(0xffaa00), fm(0xffaa00,0.6));
+    pad.position.set(x, pH+0.1, 0);
     G.add(pad);
-    G.add(tag(p.l, v(p.x, pH+0.8, 0), p.c===0xffaa00?'#ffaa00':'#888888'));
+    G.add(tag('5V', v(x, pH+0.7, 0), '#ffaa00'));
   });
 
-  G.add(tag('Mini-B USB', v(0, pH-0.5, -pD/2-1.5), '#cc44ff', v(0, pH+0.3, 0)));
+  // Screw holes (far edges of top panel)
+  [-2.0, 2.0].forEach(function(x){
+    var hole = ring(0.08, 0.15, 8, lm(0x888888));
+    hole.position.set(x, pH+0.15, 0);
+    G.add(hole);
+  });
+
+  G.add(tag('Mini-B USB', v(0, pH-0.5, -pD/2-1.5), '#cc44ff', v(0, pH+0.25, 0)));
 
   return { topY: pH, pH: pH, pW: pW, pD: pD, faceZ: faceZ };
 }

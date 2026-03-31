@@ -58,9 +58,9 @@ BlueprintEngine.register('psp-relay', {
         {group:G.wires, label:'H-Bridge Wiring', desc:'Cross-wired relay outputs form an H-bridge. 12V+ connects to relay 1 NC and relay 2 NO. GND connects to relay 1 NO and relay 2 NC. COM terminals connect to actuator motor leads. Polarity reversal drives extend/retract.<br><span class="dim">22 AWG hookup wire + Wago 221 lever connectors</span>'}
       ],
       tabStates: {
-        'both-off': {note: 'Both relays OFF: NC contacts closed\n12V+ -> red wire, GND -> black wire\nActuator EXTENDS (pushes slider)'},
-        'both-on': {note: 'Both relays ON: NO contacts closed\nGND -> red wire, 12V+ -> black wire\nActuator RETRACTS (releases slider)'},
-        'mixed': {note: 'One ON, one OFF: same voltage on both wires\nMotor STOPPED (braking)'}
+        'both-off': {note: 'Both relays OFF: NC contacts closed\nNC1=12V+ via COM1 to motor+\nNC2=GND via COM2 to motor-\nActuator EXTENDS (pushes slider)'},
+        'both-on': {note: 'Both relays ON: NO contacts closed\nNO1=GND via COM1 to motor+\nNO2=12V+ via COM2 to motor-\nActuator RETRACTS (releases slider)'},
+        'mixed': {note: 'One ON, one OFF:\nBoth COM get same voltage\nMotor STOPPED (braking)'}
       }
     };
   }
@@ -88,7 +88,7 @@ function buildPC(G){
 function buildRelay(G){
   var pcb = h.wireBox(12, 0.8, 7, h.lm(0x22aa66), h.fm(0x0a2818,0.3));
   pcb.position.set(0, 4, 0); G.add(pcb);
-  var usb = h.wireBox(1.2, 0.6, 0.8, h.lm(0x888888)); usb.position.set(-5, 4.5, -3.2); G.add(usb);
+  var usb = h.wireBox(1.2, 0.6, 0.8, h.lm(0x888888)); usb.position.set(0, 4.5, -3.2); G.add(usb);
 
   // Relay cubes
   var r1 = h.wireBox(4, 3.5, 4, h.lm(0x4488cc), h.fm(0x112840,0.4)); r1.position.set(-2.5, 6.5, 0.5); G.add(r1);
@@ -96,14 +96,18 @@ function buildRelay(G){
   var r2 = h.wireBox(4, 3.5, 4, h.lm(0x4488cc), h.fm(0x112840,0.4)); r2.position.set(3.5, 6.5, 0.5); G.add(r2);
   G.add(h.tag('RELAY 2', new THREE.Vector3(3.5, 9, 0.5), '#4488cc', new THREE.Vector3(3.5, 8.2, 0.5)));
 
-  // Terminal blocks
-  ['NC','COM','NO'].forEach(function(l, i){
-    var t = h.wireBox(1.2,1.5,1.2, h.lm(0x44cc88)); t.position.set(-4.5+i*2, 4, 3.8); G.add(t);
-    G.add(h.tag(l, new THREE.Vector3(-4.5+i*2, 3, 4.8), '#44cc88'));
+  // Terminal blocks — matches PCB silk screen layout
+  // Relay 1 (left to right): NO1, NC1, COM1
+  ['NO1','NC1','COM1'].forEach(function(l, i){
+    var x = -4.5+i*2;
+    var t = h.wireBox(1.2,1.5,1.2, h.lm(0x44cc88)); t.position.set(x, 4, 3.8); G.add(t);
+    G.add(h.tag(l, new THREE.Vector3(x, 2.8, 4.5), '#44cc88'));
   });
-  ['NO','NC','COM'].forEach(function(l, i){
-    var t = h.wireBox(1.2,1.5,1.2, h.lm(0x44cc88)); t.position.set(1.5+i*2, 4, 3.8); G.add(t);
-    G.add(h.tag(l, new THREE.Vector3(1.5+i*2, 3, 4.8), '#44cc88'));
+  // Relay 2 (left to right): NO2, NC2, COM2
+  ['NO2','NC2','COM2'].forEach(function(l, i){
+    var x = 1.5+i*2;
+    var t = h.wireBox(1.2,1.5,1.2, h.lm(0x44cc88)); t.position.set(x, 4, 3.8); G.add(t);
+    G.add(h.tag(l, new THREE.Vector3(x, 2.8, 4.5), '#44cc88'));
   });
 
   // LEDs
@@ -124,24 +128,35 @@ function buildActuator(G){
 }
 
 function buildWires(G){
-  // 12V+ to relay 1 NC
-  G.add(h.cable([v(-12.5,3.5,-6), v(-12.5,4,-3), v(-4.5,4,3.8)], h.lm(0xff4444)));
+  // Terminal positions: NO1=-4.5, NC1=-2.5, COM1=-0.5, NO2=1.5, NC2=3.5, COM2=5.5
+  // All terminals at Y=4, Z=3.8
+
+  // === FROM 12V ADAPTER (red wires) ===
+  // 12V+ to NC1 (relay 1, normally closed)
+  G.add(h.cable([v(-12.5,3.5,-6), v(-12.5,4,-2), v(-2.5,4,3.8)], h.lm(0xff4444)));
   G.add(h.tag('12V+', v(-9, 5, -2), '#ff4444'));
-  // GND to relay 2 NC
-  G.add(h.cable([v(-15.5,3.5,-6), v(-15.5,4,-3), v(-15.5,2,2), v(3.5,2,2), v(3.5,4,3.8)], h.lm(0x888888)));
+  // 12V+ to NO2 (relay 2, normally open — swapped pattern)
+  G.add(h.cable([v(-12.5,3.2,-6), v(-12.5,2.5,-2), v(1.5,2.5,2), v(1.5,4,3.8)], h.lm(0xff4444)));
+  G.add(h.tag('12V+', v(-4, 3, 0), '#ff4444'));
+
+  // === FROM 12V ADAPTER (black wires) ===
+  // GND to NO1 (relay 1, normally open)
+  G.add(h.cable([v(-15.5,3.5,-6), v(-15.5,4,-2), v(-4.5,4,3.8)], h.lm(0x888888)));
   G.add(h.tag('GND', v(-15.5, 5, -3), '#888888'));
-  // H-bridge cross: 12V+ to relay 2 NO
-  G.add(h.cable([v(-4.5,3.5,3.8), v(-4.5,2,5), v(1.5,2,5), v(1.5,3.5,3.8)], h.lm(0xff4444)));
-  // H-bridge cross: GND to relay 1 NO
-  G.add(h.cable([v(3.5,3.5,3.8), v(3.5,1.5,5.5), v(-0.5,1.5,5.5), v(-0.5,3.5,3.8)], h.lm(0x888888)));
-  // COM1 to actuator red
-  G.add(h.cable([v(-2.5,4,3.8), v(-2.5,4,6), v(-0.5,3,8.5), v(-0.5,2,9.5)], h.lm(0xffaa00)));
-  G.add(h.tag('Red wire', v(-3.5, 4.5, 7), '#ffaa00'));
-  // COM2 to actuator black
+  // GND to NC2 (relay 2, normally closed — swapped pattern)
+  G.add(h.cable([v(-15.5,3.2,-6), v(-15.5,1.8,-2), v(3.5,1.8,2), v(3.5,4,3.8)], h.lm(0x888888)));
+  G.add(h.tag('GND', v(-6, 2.3, 0), '#888888'));
+
+  // === TO ACTUATOR (from COM terminals) ===
+  // COM1 → actuator lead (red wire to motor)
+  G.add(h.cable([v(-0.5,4,3.8), v(-0.5,4,6), v(-0.5,3,8.5), v(-0.5,2,9.5)], h.lm(0xffaa00)));
+  G.add(h.tag('To motor +', v(-2.5, 4.5, 7), '#ffaa00'));
+  // COM2 → actuator lead (black wire to motor)
   G.add(h.cable([v(5.5,4,3.8), v(5.5,4,6), v(0.5,3,8.5), v(0.5,2,9.5)], h.lm(0xffaa00)));
-  G.add(h.tag('Black wire', v(6.5, 4.5, 7), '#ffaa00'));
-  // USB cable
-  G.add(h.cable([v(11.5,2,-6), v(8,2,-6), v(2,3,-4), v(-5,4.5,-3.2)], h.lm(0x4488ff)));
+  G.add(h.tag('To motor -', v(7, 4.5, 7), '#ffaa00'));
+
+  // === USB cable (PC to relay module) ===
+  G.add(h.cable([v(11.5,2,-6), v(8,2,-6), v(2,3,-4), v(0,4.5,-3.2)], h.lm(0x4488ff)));
   G.add(h.tag('USB (Micro-B)', v(6, 3, -5), '#4488ff'));
 }
 

@@ -8,10 +8,10 @@
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:#0a1628;overflow:hidden;font-family:'Courier New',monospace;color:#4af}
   canvas{display:block}
-  #hud{position:fixed;top:0;left:0;right:0;padding:14px 20px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:10}
+  #hud{position:fixed;top:24px;left:0;right:0;padding:14px 20px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:10}
   #hud h1{font-size:16px;font-weight:400;letter-spacing:3px;text-transform:uppercase;color:#4af;text-shadow:0 0 10px #4af6}
   #hud .sub{font-size:11px;color:#4af9;margin-top:4px;letter-spacing:1px}
-  #controls{font-size:11px;text-align:right;color:#4af9;line-height:1.7}
+  #controls{font-size:11px;text-align:right;color:#4af9;line-height:1.7;white-space:nowrap}
   #legend{position:fixed;bottom:16px;left:20px;font-size:11px;line-height:2;pointer-events:none;z-index:10}
   #legend .row{display:flex;align-items:center;gap:8px}
   #legend .swatch{width:22px;height:3px;border-radius:1px;display:inline-block}
@@ -21,14 +21,14 @@
   #explode-slider{position:fixed;bottom:18px;right:20px;z-index:10;display:flex;align-items:center;gap:10px;font-size:11px}
   #explode-slider input{width:120px;accent-color:#4af}
   #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0a1628;z-index:100;font-size:14px;letter-spacing:2px}
-  #dims{position:fixed;top:50px;right:20px;font-size:10px;color:#4af7;pointer-events:none;z-index:10;text-align:right;line-height:1.8;letter-spacing:.5px}
-  #tabs{position:fixed;top:48px;left:20px;z-index:10;display:flex;gap:0;flex-wrap:wrap}
+  #dims{position:fixed;top:100px;right:20px;font-size:10px;color:#4af7;pointer-events:none;z-index:10;text-align:right;line-height:2;letter-spacing:.5px}
+  #tabs{position:fixed;top:80px;left:20px;z-index:10;display:flex;gap:0;flex-wrap:wrap}
   #tabs button{background:none;border:1px solid #4af3;color:#4af9;font-family:'Courier New',monospace;font-size:11px;padding:6px 14px;cursor:pointer;letter-spacing:1px;transition:all .2s}
   #tabs button:first-child{border-radius:3px 0 0 3px}
   #tabs button:last-child{border-radius:0 3px 3px 0}
   #tabs button.active{background:#4af2;color:#4af;border-color:#4af6}
   #tabs button:hover:not(.active){background:#4af1;color:#4af}
-  #back-link{position:fixed;top:14px;left:20px;z-index:15;font-size:11px;letter-spacing:1px;pointer-events:auto}
+  #back-link{position:fixed;top:10px;left:20px;z-index:15;font-size:11px;letter-spacing:1px;pointer-events:auto}
   #back-link a{color:#4af9;text-decoration:none;transition:color .2s}
   #back-link a:hover{color:#4af}
   .state-note{position:fixed;bottom:50px;right:20px;font-size:10px;color:#4af6;pointer-events:none;z-index:10;text-align:right;max-width:200px;line-height:1.6}
@@ -57,7 +57,7 @@
 
 <div id="explode-slider">
   <span>Compact</span>
-  <input type="range" id="explode" min="0" max="100" value="20">
+  <input type="range" id="explode" min="0" max="100" value="0">
   <span>Exploded</span>
 </div>
 
