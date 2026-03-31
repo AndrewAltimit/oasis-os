@@ -44,7 +44,7 @@ Interactive 3D diagrams of the custom hardware built for PSP development. Click 
 
 | PSP USB-C Adapter | PSP Hard Reset Relay |
 |:---:|:---:|
-| [![USB-C Adapter](site/img/psp-usb-adapter-diagram.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-usb-adapter) | [![Relay Wiring](site/img/09-actuator-wiring.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-relay) |
+| [![USB-C Adapter 3D](site/img/blueprint-psp-usb-adapter.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-usb-adapter) | [![Relay Wiring 3D](site/img/blueprint-psp-relay.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-relay) |
 | Passive bridge: power pads + Mini-B data into one USB-C port | H-bridge wiring: USB relay drives actuator for remote hard reboot |
 
 **[View all blueprints](https://andrewaltimit.github.io/oasis-os/blueprint.html)**
