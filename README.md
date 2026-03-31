@@ -47,8 +47,6 @@ Interactive 3D diagrams of the custom hardware built for PSP development. Click 
 | [![USB-C Adapter 3D](site/img/blueprint-psp-usb-adapter.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-usb-adapter) | [![Relay Wiring 3D](site/img/blueprint-psp-relay.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-relay) |
 | Passive bridge: power pads + Mini-B data into one USB-C port | H-bridge wiring: USB relay drives actuator for remote hard reboot |
 
-**[View all blueprints](https://andrewaltimit.github.io/oasis-os/blueprint.html)**
-
 ## Architecture: Write Once, Render Anywhere
 
 Core code never calls platform APIs directly. All rendering, input, networking, and audio flow through backend traits defined in `oasis-types`. Implement 13 methods and you have a working backend; opt into up to 39 more for accelerated rendering.
