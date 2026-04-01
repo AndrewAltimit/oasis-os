@@ -42,7 +42,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v20-frameskip";
+const BUILD_ID: &str = "v21-audio-buf64";
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
