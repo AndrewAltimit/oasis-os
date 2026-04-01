@@ -42,7 +42,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v25-revert-stable";
+const BUILD_ID: &str = "v26-zero-copy";
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
@@ -162,38 +162,37 @@ fn log_msg(msg: &str) {
 }
 
 fn server_main() {
-    // auto_connect_wifi() already ran. Check state via apctl directly
-    // since psp::net::is_connected() may not reflect apctl state.
-    let mut connected = false;
-    for _ in 0..60 {
+    // Retry WiFi connection indefinitely. Previous behavior gave up
+    // after 2 attempts, requiring a hard reboot to recover networking.
+    loop {
+        // Check if already connected.
         let mut state = psp::sys::ApctlState::Disconnected;
         unsafe { psp::sys::sceNetApctlGetState(&mut state) };
         if matches!(state, psp::sys::ApctlState::GotIp) {
-            connected = true;
+            log_msg("[CMD] WiFi connected");
             break;
         }
-        psp::thread::sleep_ms(2000);
-    }
 
-    if !connected {
-        // Retry auto-connect once more with a fresh attempt.
-        log_msg("[CMD] retrying WiFi auto-connect...");
-        auto_connect_wifi();
-
+        // Wait up to 60 seconds for auto-connect to succeed.
+        let mut connected = false;
         for _ in 0..30 {
-            let mut state = psp::sys::ApctlState::Disconnected;
-            unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-            if matches!(state, psp::sys::ApctlState::GotIp) {
+            let mut st = psp::sys::ApctlState::Disconnected;
+            unsafe { psp::sys::sceNetApctlGetState(&mut st) };
+            if matches!(st, psp::sys::ApctlState::GotIp) {
                 connected = true;
                 break;
             }
-            psp::thread::sleep_ms(1000);
+            psp::thread::sleep_ms(2000);
         }
-    }
+        if connected {
+            log_msg("[CMD] WiFi connected");
+            break;
+        }
 
-    if !connected {
-        log_msg("[CMD] no network, server not started");
-        return;
+        // Not connected — retry auto-connect after a pause.
+        log_msg("[CMD] WiFi not connected, retrying in 10s...");
+        psp::thread::sleep_ms(10_000);
+        auto_connect_wifi();
     }
 
     // Create TCP server socket.

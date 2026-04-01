@@ -379,8 +379,10 @@ fn psp_main() {
                     let pixels =
                         oasis_backend_psp::video::frame_pixels_raw(&frame);
                     let old_tex = tv.preview_tex;
+                    // Pass stride as width so texture buf_w matches CSC
+                    // stride (both 512px). This eliminates row-by-row copy.
                     tv.preview_tex = backend.update_video_texture(
-                        frame.width, frame.height, pixels,
+                        frame.stride, frame.height, pixels,
                     );
                     let dt = (unsafe {
                         psp::sys::sceKernelGetSystemTimeWide()

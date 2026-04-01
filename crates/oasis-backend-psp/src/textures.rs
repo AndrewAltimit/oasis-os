@@ -335,24 +335,44 @@ impl PspBackend {
         let data = texture.data;
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
+        let total = dst_stride * height as usize;
 
-        // Copy rows with alpha fixup, then flush to make visible to GU.
-        unsafe {
-            for row in 0..height as usize {
-                let src = rgba_data.as_ptr().add(row * src_stride);
-                let dst = data.add(row * dst_stride);
-                ptr::copy_nonoverlapping(src, dst, src_stride);
-                // Alpha fixup: CSC outputs 0x00, GU needs 0xFF.
-                let words = dst as *mut u32;
-                let n = src_stride / 4;
+        // When source stride matches texture stride (both 512px from CSC),
+        // do a single bulk copy + alpha fixup. No row-by-row needed.
+        if src_stride == dst_stride && rgba_data.len() >= total {
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    rgba_data.as_ptr(), data, total,
+                );
+                // Alpha fixup on entire buffer at once.
+                let words = data as *mut u32;
+                let n = total / 4;
                 for i in 0..n {
                     *words.add(i) |= 0xFF00_0000;
                 }
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
+                );
             }
-            psp::cache::dcache_writeback_range(
-                data as *const core::ffi::c_void,
-                (dst_stride * height as usize) as u32,
-            );
+        } else {
+            // Fallback: row-by-row copy with alpha fixup.
+            unsafe {
+                for row in 0..height as usize {
+                    let src = rgba_data.as_ptr().add(row * src_stride);
+                    let dst = data.add(row * dst_stride);
+                    ptr::copy_nonoverlapping(src, dst, src_stride);
+                    let words = dst as *mut u32;
+                    let n = src_stride / 4;
+                    for i in 0..n {
+                        *words.add(i) |= 0xFF00_0000;
+                    }
+                }
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
+                );
+            }
         }
 
         Some(tex_id)

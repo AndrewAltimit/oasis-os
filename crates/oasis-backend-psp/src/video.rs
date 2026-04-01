@@ -216,6 +216,8 @@ pub struct DecodedFrame {
     pub buf_idx: u8,
     pub width: u32,
     pub height: u32,
+    /// CSC output stride in pixels (512 for ≤480p). Matches texture buf_w.
+    pub stride: u32,
 }
 
 /// Pre-allocated double-buffer for decoded RGBA frames. Each buffer holds
@@ -447,9 +449,9 @@ pub fn poll_video_frame() -> Option<DecodedFrame> {
 }
 
 /// Return raw frame buffer reference WITHOUT alpha fixup.
-/// The caller (update_video_texture) does alpha fixup during copy.
+/// Buffer uses CSC stride (512px), matching texture buf_w.
 pub fn frame_pixels_raw(frame: &DecodedFrame) -> &[u8] {
-    let size = (frame.width * frame.height * 4) as usize;
+    let size = (frame.stride * frame.height * 4) as usize;
     // SAFETY: Single-threaded access from main thread (SPSC contract).
     unsafe {
         let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
@@ -790,8 +792,12 @@ impl NalDecoder {
         ));
 
         // Pre-allocate the static double-buffers for decoded frames.
-        // Psm8888 = 4 bpp. frame_pixels() fixes alpha channel.
-        let buf_size = (dec_w * dec_h * 4) as usize;
+        // Use CSC stride (512px for ≤480p) so CSC can write directly here
+        // and the texture upload needs only alpha fixup + cache flush
+        // (no row-by-row stride conversion copy).
+        let csc_stride = decoder.stride();
+        let out_h = ((dec_h + 15) / 16) * 16; // CSC rounds up to 16
+        let buf_size = (csc_stride * out_h * 4) as usize;
         // SAFETY: Called from the video thread before any frames are
         // pushed. No concurrent access to FRAME_BUFFERS yet.
         unsafe {
@@ -1038,7 +1044,10 @@ impl NalDecoder {
         // and we should stop video decode entirely.
         let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
-        match self.decoder.decode_into(&nal, dst) {
+        // Use strided decode — CSC writes directly to FRAME_BUFFER
+        // at 512px stride, matching the texture buffer stride.
+        // No intermediate tight-pack copy needed.
+        match self.decoder.decode_into_strided(&nal, dst) {
             Ok(true) => {
                 let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
                     - t0) / 1000;
@@ -1051,6 +1060,7 @@ impl NalDecoder {
                     buf_idx,
                     width: self.decoder.width(),
                     height: self.decoder.height(),
+                    stride: self.decoder.stride(),
                 }))
             }
             Ok(false) => {
@@ -1928,6 +1938,7 @@ fn play_stream() -> bool {
                             buf_idx: 0, // PSMF uses its own buffer
                             width: psmf.width,
                             height: psmf.height,
+                            stride: psmf.width,
                         }))
                     } else {
                         Ok(None)
