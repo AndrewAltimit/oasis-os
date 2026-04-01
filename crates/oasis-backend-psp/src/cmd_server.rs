@@ -238,6 +238,10 @@ fn server_main() {
             continue;
         }
 
+        // Set receive timeout (30 seconds) so stale connections don't block
+        // the server thread indefinitely.
+        set_recv_timeout(cfd, 30);
+
         handle_client(cfd);
     }
 }
@@ -336,14 +340,21 @@ fn handle_client(cfd: i32) {
             send_response(cfd, b"err: usage: upload <size> <path>\n");
         }
     } else if cmd.starts_with(b"deploy ") {
-        // Protocol: "deploy <size>\n" then <size> bytes of EBOOT data.
-        let size_str = &cmd[7..];
-        let size = parse_u32(size_str);
+        // Protocol: "deploy <size> [<crc32_hex>]\n" then <size> bytes of EBOOT data.
+        // CRC32 is optional for backward compatibility.
+        let args = &cmd[7..];
+        let parts: Vec<&[u8]> = args.splitn(2, |&b| b == b' ').collect();
+        let size = parse_u32(parts[0]);
+        let expected_crc = if parts.len() >= 2 && !parts[1].is_empty() {
+            Some(parse_hex_u32(parts[1]))
+        } else {
+            None
+        };
         if size > 0 && size < 8_000_000 {
             let header_end = raw.iter().position(|&b| b == b'\n')
                 .map(|p| p + 1).unwrap_or(n as usize);
             let leftover = &buf[header_end..n as usize];
-            receive_deploy(cfd, size, leftover);
+            receive_deploy(cfd, size, leftover, expected_crc);
         } else {
             send_response(cfd, b"err: bad size\n");
         }
@@ -465,6 +476,68 @@ fn send_status(cfd: i32) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Set SO_RCVTIMEO on a socket (timeout in seconds).
+fn set_recv_timeout(fd: i32, secs: u32) {
+    // struct timeval { long tv_sec; long tv_usec; }
+    let timeval: [i32; 2] = [secs as i32, 0];
+    unsafe {
+        psp::sys::sceNetInetSetsockopt(
+            fd,
+            0xFFFF, // SOL_SOCKET
+            0x1006, // SO_RCVTIMEO
+            timeval.as_ptr() as *const c_void,
+            8,      // sizeof(timeval) on PSP
+        );
+    }
+}
+
+/// CRC32 (ISO 3309) — same polynomial as zlib.crc32() on the host.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Incrementally update a running CRC32 value with a new chunk.
+fn crc32_update(crc: u32, data: &[u8]) -> u32 {
+    let mut crc = !crc;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Parse a hex string (e.g. b"1a2b3c4d") into a u32.
+fn parse_hex_u32(data: &[u8]) -> u32 {
+    let mut val = 0u32;
+    for &b in data {
+        let nibble = match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            _ => continue,
+        };
+        val = (val << 4) | nibble as u32;
+    }
+    val
+}
+
 fn parse_u32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| {
         if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
@@ -579,7 +652,8 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
 
 /// Receive EBOOT binary over TCP and write to ms0:.
 /// Writes to a temp file first, then renames over the live EBOOT.
-fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
+/// If `expected_crc` is provided, validates CRC32 after transfer.
+fn receive_deploy(cfd: i32, size: u32, leftover: &[u8], expected_crc: Option<u32>) {
     const TEMP_PATH: *const u8 =
         b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP.tmp\0".as_ptr();
     const FINAL_PATH: *const u8 =
@@ -603,6 +677,7 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
     }
 
     let mut received = 0u32;
+    let mut running_crc: u32 = 0;
 
     // Write leftover bytes from the initial recv.
     if !leftover.is_empty() {
@@ -612,6 +687,9 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
                 leftover.as_ptr() as *const c_void,
                 leftover.len(),
             );
+        }
+        if expected_crc.is_some() {
+            running_crc = crc32_update(running_crc, leftover);
         }
         received += leftover.len() as u32;
     }
@@ -630,32 +708,51 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8]) {
         if n <= 0 {
             break;
         }
+        let chunk = &buf[..n as usize];
         unsafe {
             psp::sys::sceIoWrite(
                 fd,
-                buf.as_ptr() as *const c_void,
-                n as usize,
+                chunk.as_ptr() as *const c_void,
+                chunk.len(),
             );
+        }
+        if expected_crc.is_some() {
+            running_crc = crc32_update(running_crc, chunk);
         }
         received += n as u32;
     }
 
     unsafe { psp::sys::sceIoClose(fd) };
 
-    if received == size {
-        // Rename temp → final (atomic-ish on FAT).
-        unsafe {
-            psp::sys::sceIoRemove(FINAL_PATH);
-            psp::sys::sceIoRename(TEMP_PATH, FINAL_PATH);
-        }
-        log_msg("[CMD] deploy: OK");
-        send_response(cfd, b"ok\n");
-    } else {
+    if received != size {
         // Incomplete transfer — clean up temp.
         unsafe { psp::sys::sceIoRemove(TEMP_PATH) };
         log_msg("[CMD] deploy: incomplete");
         send_response(cfd, b"err: incomplete transfer\n");
+        return;
     }
+
+    // CRC32 validation if client provided a checksum.
+    if let Some(expected) = expected_crc {
+        if running_crc != expected {
+            unsafe { psp::sys::sceIoRemove(TEMP_PATH) };
+            log_msg(&format!(
+                "[CMD] deploy: CRC mismatch (got {:08x}, expected {:08x})",
+                running_crc, expected,
+            ));
+            send_response(cfd, b"err: crc mismatch\n");
+            return;
+        }
+    }
+
+    // Rename temp → final (atomic-ish on FAT).
+    unsafe {
+        psp::sys::sceIoRemove(FINAL_PATH);
+        psp::sys::sceIoRename(TEMP_PATH, FINAL_PATH);
+    }
+    let resp = format!("ok {:08x}\n", running_crc);
+    log_msg("[CMD] deploy: OK");
+    send_response(cfd, resp.as_bytes());
 }
 
 fn send_log(cfd: i32, max_bytes: usize) {

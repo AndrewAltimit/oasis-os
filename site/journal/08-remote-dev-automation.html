@@ -282,13 +282,13 @@ $ tail -c +9 /tmp/psp.raw | ffmpeg -y -f rawvideo \
     The Python control script sends serial commands to the relay module:
   </p>
 
-  <pre><code>$ python psp_actuator.py on
---- PSP POWER ON SEQUENCE ---
-Extending (pushing slider)...
-Holding for 30 seconds...
-Retracting (releasing slider)...
-Stopped.
-Done! PSP should be on.</code></pre>
+  <pre><code>$ python psp_actuator.py reboot
+--- PSP HARD REBOOT ---
+Phase 1: Power OFF (3/4 extend, 10s hold)
+Holding 10 seconds...
+Releasing slider...
+Phase 2: Power ON (quick tap)
+Done! PSP should be booting.</code></pre>
 
   <h3>Parts List</h3>
 
@@ -378,26 +378,36 @@ ok
   </ol>
 
   <p>
-    The helper script <code>scripts/psp-devloop.sh</code> wraps all of this into
-    simple commands:
+    The unified toolkit <code>scripts/psp_remote.py</code> wraps all of this into
+    simple commands, with retry logic, CRC32 deploy verification, and built-in
+    PNG screencap (no ffmpeg dependency):
   </p>
 
   <pre><code># Full cycle: build, deploy, reboot, wait, verify
-$ ./scripts/psp-devloop.sh cycle target/.../EBOOT.PBP
+$ python3 scripts/psp_remote.py cycle target/.../EBOOT.PBP
+
+# Or build + deploy + reboot in one step
+$ python3 scripts/psp_remote.py build-cycle
 
 # Remote UI navigation
-$ ./scripts/psp-devloop.sh tcp-cursor 290 200
-$ ./scripts/psp-devloop.sh tcp-press cross
+$ python3 scripts/psp_remote.py cursor 290 200
+$ python3 scripts/psp_remote.py press cross
 
-# Capture and view screen
-$ ./scripts/psp-devloop.sh tcp-screencap /tmp/psp.png
+# Capture and view screen (pure-Python PNG, no ffmpeg needed)
+$ python3 scripts/psp_remote.py screencap /tmp/psp.png
 
 # Upload kernel plugin over WiFi
-$ ./scripts/psp-devloop.sh tcp-upload oasis.prx ms0:/seplugins/oasis.prx
+$ python3 scripts/psp_remote.py upload oasis.prx ms0:/seplugins/oasis.prx
 
 # Check device state
-$ ./scripts/psp-devloop.sh tcp-status
-{"kiosk":"tv_guide","free_kb":14230,"max_blk_kb":14100,"frame":8520,"audio_only":false}</code></pre>
+$ python3 scripts/psp_remote.py status
+{"kiosk":"tv_guide","free_kb":14230,"max_blk_kb":14100,"frame":8520,"audio_only":false}
+
+# Run a repeatable test sequence from YAML
+$ python3 scripts/psp_remote.py sequence scripts/sequences/smoke-test.yaml
+
+# Hard reboot via USB relay actuator when PSP is frozen
+$ python3 scripts/psp_remote.py hard-reboot</code></pre>
 
   <h2>Proving It: Debugging H.264 Video Decode Remotely</h2>
 
