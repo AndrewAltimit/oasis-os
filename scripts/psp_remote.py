@@ -240,7 +240,9 @@ class PspConnection:
 
         # Convert ABGR to RGBA for PNG.
         rgba = bytearray(expected)
-        for i in range(0, min(len(pixels), expected), 4):
+        limit = min(len(pixels), expected)
+        limit -= limit % 4
+        for i in range(0, limit, 4):
             a, b, g, r = pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]
             rgba[i] = r
             rgba[i + 1] = g
