@@ -54,6 +54,9 @@ screenshots/psp/
 # WASM build output
 pkg/
 
+# Python
+__pycache__/
+
 # Scratch
 scratch/
 .local/
