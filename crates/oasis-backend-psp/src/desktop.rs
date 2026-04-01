@@ -713,21 +713,9 @@ pub(crate) fn draw_tvguide_windowed(
     ch: u32,
     be: &mut dyn SdiBackend,
 ) -> oasis_backend_psp::OasisResult<()> {
-    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 30, 220))?;
-    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(80, 200, 255))?;
-    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
-
-    let lbl = Color::rgb(160, 160, 160);
-    let hi = Color::rgb(120, 200, 255);
-    let sel_bg = Color::rgba(80, 200, 255, 60);
-
+    // Fullscreen video: skip ALL UI drawing — only blit video + title.
+    // This eliminates flickering from UI elements rendered before the blit.
     if tuned {
-        let mid_x = cx + cw as i32 / 2;
-        let mid_y = cy + ch as i32 / 2;
-
-        // If we have a decoded video frame, blit it fullscreen.
-        // This covers the wallpaper and status/bottom bars, preventing
-        // Z-order flickering between the UI chrome and video.
         if let Some(tex) = preview_tex {
             be.blit(tex, 0, 0, 480, 272)?;
 
@@ -740,6 +728,19 @@ pub(crate) fn draw_tvguide_windowed(
             be.draw_text(&display, tx, title_y, 8, Color::WHITE)?;
             return Ok(());
         }
+    }
+
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 30, 220))?;
+    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(80, 200, 255))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let hi = Color::rgb(120, 200, 255);
+    let sel_bg = Color::rgba(80, 200, 255, 60);
+
+    if tuned {
+        let mid_x = cx + cw as i32 / 2;
+        let mid_y = cy + ch as i32 / 2;
 
         if downloading {
             // Download progress.

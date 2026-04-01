@@ -476,7 +476,9 @@ fn psp_main() {
         // -- Unified render path --
         if kiosk_app != KioskApp::None {
             // Hide all floating window decorations during fullscreen.
-            wm.hide_all_window_sdi(&mut sdi);
+            if !video_fullscreen {
+                wm.hide_all_window_sdi(&mut sdi);
+            }
 
             // Kiosk app active: render it fullscreen using Classic renderers.
             render_classic::render_classic(
@@ -558,17 +560,19 @@ fn psp_main() {
             );
         }
 
-        // Status bar + bottom bar + taskbar (always visible via SDI overlay).
-        active_theme.bar.url_text.clear();
-        status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
-        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
-        taskbar.update_sdi(
-            &mut sdi,
-            &active_theme,
-            wm.windows(),
-            wm.active_window(),
-            false,
-        );
+        // Status bar + bottom bar + taskbar — skip during fullscreen video.
+        if !video_fullscreen {
+            active_theme.bar.url_text.clear();
+            status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+            bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+            taskbar.update_sdi(
+                &mut sdi,
+                &active_theme,
+                wm.windows(),
+                wm.active_window(),
+                false,
+            );
+        }
 
         // SDI two-pass rendering for PSP performance:
         // - Base layer for kiosk apps that use SDI (file manager, terminal, etc.)
