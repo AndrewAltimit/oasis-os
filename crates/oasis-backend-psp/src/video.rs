@@ -77,6 +77,8 @@ pub struct VideoStats {
     pub dropped: u32,
     pub polled: u32,
     pub poll_attempts: u32,
+    pub upload_us: u32,
+    pub upload_count: u32,
     pub audio_only: bool,
     pub me_leaked: bool,
     pub frame_limit: u32,
@@ -97,6 +99,8 @@ pub fn video_stats() -> VideoStats {
         dropped: VIDEO_FRAMES_DROPPED.load(Ordering::Relaxed),
         polled: VIDEO_FRAMES_POLLED.load(Ordering::Relaxed),
         poll_attempts: VIDEO_POLL_ATTEMPTS.load(Ordering::Relaxed),
+        upload_us: VIDEO_UPLOAD_US.load(Ordering::Relaxed),
+        upload_count: VIDEO_UPLOAD_COUNT.load(Ordering::Relaxed),
         audio_only: AUDIO_ONLY.load(Ordering::Relaxed),
         me_leaked: ME_LEAKED.load(Ordering::Relaxed),
         frame_limit: VIDEO_FRAME_LIMIT.load(Ordering::Relaxed),
@@ -113,6 +117,8 @@ fn reset_stats() {
     VIDEO_FRAMES_DROPPED.store(0, Ordering::Relaxed);
     VIDEO_FRAMES_POLLED.store(0, Ordering::Relaxed);
     VIDEO_POLL_ATTEMPTS.store(0, Ordering::Relaxed);
+    VIDEO_UPLOAD_US.store(0, Ordering::Relaxed);
+    VIDEO_UPLOAD_COUNT.store(0, Ordering::Relaxed);
     VIDEO_WIDTH.store(0, Ordering::Relaxed);
     VIDEO_HEIGHT.store(0, Ordering::Relaxed);
 }
@@ -420,6 +426,16 @@ pub fn send_video_cmd(cmd: VideoCmd) {
 /// before the next `poll_video_frame` call overwrites it.
 /// Number of times poll_video_frame was called (regardless of result).
 static VIDEO_POLL_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+/// Cumulative microseconds spent in frame_pixels + update_video_texture.
+static VIDEO_UPLOAD_US: AtomicU32 = AtomicU32::new(0);
+/// Number of texture uploads performed.
+static VIDEO_UPLOAD_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Record texture upload timing from main thread.
+pub fn record_upload_time(us: u32) {
+    VIDEO_UPLOAD_US.fetch_add(us, Ordering::Relaxed);
+    VIDEO_UPLOAD_COUNT.fetch_add(1, Ordering::Relaxed);
+}
 
 pub fn poll_video_frame() -> Option<DecodedFrame> {
     VIDEO_POLL_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
@@ -428,6 +444,20 @@ pub fn poll_video_frame() -> Option<DecodedFrame> {
         VIDEO_FRAMES_POLLED.fetch_add(1, Ordering::Relaxed);
     }
     frame
+}
+
+/// Return raw frame buffer reference WITHOUT alpha fixup.
+/// The caller (update_video_texture) does alpha fixup during copy.
+pub fn frame_pixels_raw(frame: &DecodedFrame) -> &[u8] {
+    let size = (frame.width * frame.height * 4) as usize;
+    // SAFETY: Single-threaded access from main thread (SPSC contract).
+    unsafe {
+        let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
+        core::slice::from_raw_parts(
+            (*buf_ptr)[frame.buf_idx as usize].as_ptr(),
+            size,
+        )
+    }
 }
 
 /// Convert RGB565 frame data to RGBA and return a reference.

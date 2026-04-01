@@ -42,7 +42,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v13-predecode-wait";
+const BUILD_ID: &str = "v19-stable";
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
@@ -492,10 +492,12 @@ fn send_video_status(cfd: i32) {
         "{{\"state\":\"{state_name}\",\"width\":{},\"height\":{},\
          \"decoded\":{},\"errors\":{},\"no_pic\":{},\"processed\":{},\
          \"pushed\":{},\"dropped\":{},\"polled\":{},\"poll_try\":{},\
+         \"upload_avg_us\":{},\
          \"audio_only\":{},\"me_leaked\":{},\"frame_limit\":{},\
          \"decode_step\":{}}}\n",
         s.width, s.height, s.decoded, s.errors, s.no_pic,
         s.processed, s.pushed, s.dropped, s.polled, s.poll_attempts,
+        if s.upload_count > 0 { s.upload_us / s.upload_count } else { 0 },
         s.audio_only, s.me_leaked, s.frame_limit, s.decode_step,
     );
     send_response(cfd, resp.as_bytes());

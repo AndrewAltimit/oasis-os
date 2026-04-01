@@ -336,15 +336,19 @@ impl PspBackend {
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
 
-        // Copy pixel rows via cached writes (fast), then flush the
-        // written region so the GU sees it via uncached mirror.
+        // Copy rows with alpha fixup, then flush to make visible to GU.
         unsafe {
             for row in 0..height as usize {
                 let src = rgba_data.as_ptr().add(row * src_stride);
                 let dst = data.add(row * dst_stride);
                 ptr::copy_nonoverlapping(src, dst, src_stride);
+                // Alpha fixup: CSC outputs 0x00, GU needs 0xFF.
+                let words = dst as *mut u32;
+                let n = src_stride / 4;
+                for i in 0..n {
+                    *words.add(i) |= 0xFF00_0000;
+                }
             }
-            // Targeted writeback — only the texture region, not entire cache.
             psp::cache::dcache_writeback_range(
                 data as *const core::ffi::c_void,
                 (dst_stride * height as usize) as u32,

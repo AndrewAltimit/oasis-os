@@ -369,10 +369,16 @@ fn psp_main() {
                 latest = Some(newer);
             }
             if let Some(frame) = latest {
-                let pixels = oasis_backend_psp::video::frame_pixels(&frame);
+                let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32;
+                // Pass raw pixels — update_video_texture does alpha fixup
+                // during copy (single pass instead of two).
+                let pixels = oasis_backend_psp::video::frame_pixels_raw(&frame);
                 let old_tex = tv.preview_tex;
                 tv.preview_tex =
                     backend.update_video_texture(frame.width, frame.height, pixels);
+                let dt = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32)
+                    .wrapping_sub(t0);
+                oasis_backend_psp::video::record_upload_time(dt);
                 if old_tex.is_none() && tv.preview_tex.is_some() {
                     oasis_backend_psp::video::vlog_force(&format!(
                         "[MAIN] first video tex: {}x{} → {:?}",
