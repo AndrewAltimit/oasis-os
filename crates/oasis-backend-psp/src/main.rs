@@ -359,36 +359,40 @@ fn psp_main() {
             ));
         }
         if tv.tuned.is_some() {
-            // Drain all queued frames, keep only the latest.
-            // At ~8fps main loop vs ~15fps decode, multiple frames may
-            // queue between renders. Uploading only the newest avoids
-            // wasting time on frames that would be immediately replaced.
+            // Drain all queued frames to keep the queue clear.
             let mut latest = oasis_backend_psp::video::poll_video_frame();
             while let Some(newer) = oasis_backend_psp::video::poll_video_frame()
             {
                 latest = Some(newer);
             }
+            // Frameskip: only upload texture every 3rd frame.
+            // The ~81ms texture upload starves the audio thread, causing
+            // stutters. Skipping 2 out of 3 uploads gives audio 162ms
+            // of uninterrupted CPU time between uploads (~10fps video).
+            let do_upload = latest.is_some()
+                && (tv.preview_tex.is_none() || viz_frame % 3 == 0);
             if let Some(frame) = latest {
-                let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32;
-                // Pass raw pixels — update_video_texture does alpha fixup
-                // during copy (single pass instead of two).
-                let pixels = oasis_backend_psp::video::frame_pixels_raw(&frame);
-                let old_tex = tv.preview_tex;
-                tv.preview_tex =
-                    backend.update_video_texture(frame.width, frame.height, pixels);
-                let dt = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32)
-                    .wrapping_sub(t0);
-                oasis_backend_psp::video::record_upload_time(dt);
-                if old_tex.is_none() && tv.preview_tex.is_some() {
-                    oasis_backend_psp::video::vlog_force(&format!(
-                        "[MAIN] first video tex: {}x{} → {:?}",
-                        frame.width, frame.height, tv.preview_tex,
-                    ));
-                } else if old_tex.is_none() && tv.preview_tex.is_none() {
-                    oasis_backend_psp::video::vlog_force(&format!(
-                        "[MAIN] video tex FAILED: {}x{} pixels={}",
-                        frame.width, frame.height, pixels.len(),
-                    ));
+                if do_upload {
+                    let t0 = unsafe {
+                        psp::sys::sceKernelGetSystemTimeWide()
+                    } as u32;
+                    let pixels =
+                        oasis_backend_psp::video::frame_pixels_raw(&frame);
+                    let old_tex = tv.preview_tex;
+                    tv.preview_tex = backend.update_video_texture(
+                        frame.width, frame.height, pixels,
+                    );
+                    let dt = (unsafe {
+                        psp::sys::sceKernelGetSystemTimeWide()
+                    } as u32)
+                        .wrapping_sub(t0);
+                    oasis_backend_psp::video::record_upload_time(dt);
+                    if old_tex.is_none() && tv.preview_tex.is_some() {
+                        oasis_backend_psp::video::vlog_force(&format!(
+                            "[MAIN] first video tex: {}x{} → {:?}",
+                            frame.width, frame.height, tv.preview_tex,
+                        ));
+                    }
                 }
             }
             // Only clear tuned state when video WAS playing and stopped
