@@ -1,7 +1,25 @@
 """
 PSP Power Slider Actuator Controller
+
 Controls a JQDML 12V linear actuator via a LCUS 2-channel USB relay
-wired as an H-bridge for bidirectional control.
+wired as an H-bridge for bidirectional control. The actuator pushes the
+PSP's physical power slider up (extend) and down (retract).
+
+Hardware: LCUS 2-channel relay (CH340 USB-serial) + JQDML 12V linear actuator.
+The two relays form an H-bridge: both OFF = extend, both ON = retract,
+R1 ON + R2 OFF = brake/stop.
+
+Usage:
+    python3 psp_actuator.py reboot     # Hard reboot (recommended)
+    python3 psp_actuator.py on         # Legacy full-travel power on
+    python3 psp_actuator.py extend     # Manual extend (interactive stop)
+    python3 psp_actuator.py retract    # Manual retract (interactive stop)
+    python3 psp_actuator.py stop       # Emergency stop
+    python3 psp_actuator.py            # Interactive mode
+
+IMPORTANT: Never use full extend. The actuator should only travel 3/4 of its
+range to avoid over-driving the PSP power slider. The `hard_reboot` command
+handles this automatically.
 """
 
 import serial
@@ -96,7 +114,41 @@ class ActuatorController:
         self.ser.write(RELAY2_OFF)
         print("Stopped.")
 
+    def _extend_3_4(self):
+        """Extend 3/4 of full travel. Never use full extend."""
+        duration = EXTEND_SECONDS * 3 / 4
+        self.extend()
+        time.sleep(duration)
+        self.stop()
+
+    def _retract_3_4(self):
+        """Retract 3/4 of full travel."""
+        duration = RETRACT_SECONDS * 3 / 4
+        self.retract()
+        time.sleep(duration)
+        self.stop()
+
+    def hard_reboot(self):
+        """Hard reboot: long hold to power off, then short tap to power on."""
+        print("\n--- PSP HARD REBOOT ---")
+        # Phase 1: Push slider up 3/4 and hold for 10s (force power off)
+        print("Phase 1: Power OFF (3/4 extend, 10s hold)")
+        self._extend_3_4()
+        print("Holding 10 seconds...")
+        time.sleep(10)
+        # Release slider
+        print("Releasing slider...")
+        self._retract_3_4()
+        time.sleep(3)
+        # Phase 2: Quick tap to power on
+        print("Phase 2: Power ON (quick tap)")
+        self._extend_3_4()
+        time.sleep(0.5)
+        self._retract_3_4()
+        print("Done! PSP should be booting.\n")
+
     def power_on_psp(self):
+        """Legacy full-travel power on sequence."""
         print(f"\n--- PSP POWER ON SEQUENCE ---")
         # Phase 1: Long hold to power off
         print("Phase 1: Power OFF (long hold)")
@@ -123,7 +175,8 @@ class ActuatorController:
         self.ser.close()
 
 def interactive(ctrl):
-    print("\nCommands: [e] extend 1/4  [E] extend full  [r] retract 1/4  [R] retract full  [s]top  [on] full sequence  [q]uit")
+    print("\nCommands: [e] extend 1/4  [E] extend full  [r] retract 1/4  [R] retract full")
+    print("          [s]top  [reboot] hard reboot  [on] legacy full sequence  [q]uit")
     while True:
         try:
             cmd = input("> ").strip()
@@ -140,19 +193,23 @@ def interactive(ctrl):
             ctrl.retract()
         elif cmd_lower in ("s", "stop"):
             ctrl.stop()
+        elif cmd_lower == "reboot":
+            ctrl.hard_reboot()
         elif cmd_lower == "on":
             ctrl.power_on_psp()
         elif cmd_lower in ("q", "quit", "exit"):
             break
         else:
-            print("Unknown command. Use: e / E / r / R / s / on / q")
+            print("Unknown command. Use: e / E / r / R / s / reboot / on / q")
 
 def main():
     ctrl = ActuatorController()
     try:
         if len(sys.argv) > 1:
             cmd = sys.argv[1].lower()
-            if cmd == "on":
+            if cmd == "reboot":
+                ctrl.hard_reboot()
+            elif cmd == "on":
                 ctrl.power_on_psp()
             elif cmd == "extend":
                 ctrl.extend()

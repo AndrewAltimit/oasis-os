@@ -1,0 +1,11 @@
+# Smoke test: deploy, boot, navigate to TV Guide, capture screenshot.
+# Usage: python3 scripts/psp_remote.py sequence scripts/sequences/smoke-test.yaml
+
+- deploy: crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP
+- reboot:
+- wait-online: 60
+- status:
+- press: cross           # open first app
+- wait: 2
+- screencap: /tmp/psp-smoke-test.png
+- status:
