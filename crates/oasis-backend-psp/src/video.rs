@@ -50,6 +50,12 @@ static VIDEO_NOPIC_COUNT: AtomicU32 = AtomicU32::new(0);
 static VIDEO_WIDTH: AtomicU32 = AtomicU32::new(0);
 static VIDEO_HEIGHT: AtomicU32 = AtomicU32::new(0);
 static VIDEO_FRAMES_PROCESSED: AtomicU32 = AtomicU32::new(0);
+/// Frames successfully pushed to VIDEO_FRAME_QUEUE.
+static VIDEO_FRAMES_PUSHED: AtomicU32 = AtomicU32::new(0);
+/// Frames dropped because VIDEO_FRAME_QUEUE was full.
+static VIDEO_FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Frames polled by the main thread (successful pops).
+static VIDEO_FRAMES_POLLED: AtomicU32 = AtomicU32::new(0);
 
 /// Video state constants for `VIDEO_STATE`.
 pub const VSTATE_IDLE: u32 = 0;
@@ -67,6 +73,10 @@ pub struct VideoStats {
     pub errors: u32,
     pub no_pic: u32,
     pub processed: u32,
+    pub pushed: u32,
+    pub dropped: u32,
+    pub polled: u32,
+    pub poll_attempts: u32,
     pub audio_only: bool,
     pub me_leaked: bool,
     pub frame_limit: u32,
@@ -83,6 +93,10 @@ pub fn video_stats() -> VideoStats {
         errors: VIDEO_ERROR_COUNT.load(Ordering::Relaxed),
         no_pic: VIDEO_NOPIC_COUNT.load(Ordering::Relaxed),
         processed: VIDEO_FRAMES_PROCESSED.load(Ordering::Relaxed),
+        pushed: VIDEO_FRAMES_PUSHED.load(Ordering::Relaxed),
+        dropped: VIDEO_FRAMES_DROPPED.load(Ordering::Relaxed),
+        polled: VIDEO_FRAMES_POLLED.load(Ordering::Relaxed),
+        poll_attempts: VIDEO_POLL_ATTEMPTS.load(Ordering::Relaxed),
         audio_only: AUDIO_ONLY.load(Ordering::Relaxed),
         me_leaked: ME_LEAKED.load(Ordering::Relaxed),
         frame_limit: VIDEO_FRAME_LIMIT.load(Ordering::Relaxed),
@@ -95,6 +109,10 @@ fn reset_stats() {
     VIDEO_ERROR_COUNT.store(0, Ordering::Relaxed);
     VIDEO_NOPIC_COUNT.store(0, Ordering::Relaxed);
     VIDEO_FRAMES_PROCESSED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_PUSHED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_DROPPED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_POLLED.store(0, Ordering::Relaxed);
+    VIDEO_POLL_ATTEMPTS.store(0, Ordering::Relaxed);
     VIDEO_WIDTH.store(0, Ordering::Relaxed);
     VIDEO_HEIGHT.store(0, Ordering::Relaxed);
 }
@@ -400,8 +418,16 @@ pub fn send_video_cmd(cmd: VideoCmd) {
 /// Returns the frame metadata. Pixel data is in the static
 /// `FRAME_BUFFERS[frame.buf_idx]` — the caller must copy it
 /// before the next `poll_video_frame` call overwrites it.
+/// Number of times poll_video_frame was called (regardless of result).
+static VIDEO_POLL_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+
 pub fn poll_video_frame() -> Option<DecodedFrame> {
-    VIDEO_FRAME_QUEUE.pop()
+    VIDEO_POLL_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let frame = VIDEO_FRAME_QUEUE.pop();
+    if frame.is_some() {
+        VIDEO_FRAMES_POLLED.fetch_add(1, Ordering::Relaxed);
+    }
+    frame
 }
 
 /// Convert RGB565 frame data to RGBA and return a reference.
@@ -1620,6 +1646,28 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
     false
 }
 
+/// Push a decoded frame to the output queue, retrying with brief sleeps.
+/// Returns true if the frame was pushed, false if dropped.
+fn push_frame_with_retry(frame: DecodedFrame) -> bool {
+    let mut item = frame;
+    for _ in 0..6 {
+        match VIDEO_FRAME_QUEUE.push(item) {
+            Ok(()) => return true,
+            Err(ret) => {
+                item = ret;
+                // SAFETY: brief sleep to yield to main thread.
+                unsafe { psp::sys::sceKernelDelayThread(3_000); }
+            }
+        }
+    }
+    // Last-ditch: drop oldest frame, push newer one.
+    let _ = VIDEO_FRAME_QUEUE.pop();
+    match VIDEO_FRAME_QUEUE.push(item) {
+        Ok(()) => true,
+        Err(_) => false,
+    }
+}
+
 /// Streaming playback: receive pre-demuxed H.264 frames from I/O thread
 /// and decode them via sceMpeg.
 ///
@@ -1882,7 +1930,15 @@ fn play_stream() -> bool {
                             start_us = now_us.wrapping_sub(pts_us);
                         }
 
-                        let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                        if VIDEO_FRAME_QUEUE.push(decoded).is_ok() {
+                            VIDEO_FRAMES_PUSHED.fetch_add(
+                                1, Ordering::Relaxed,
+                            );
+                        } else {
+                            VIDEO_FRAMES_DROPPED.fetch_add(
+                                1, Ordering::Relaxed,
+                            );
+                        }
                     }
                     Ok(None) => {
                         no_pic_count += 1;

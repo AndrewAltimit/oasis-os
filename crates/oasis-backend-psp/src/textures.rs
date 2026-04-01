@@ -366,10 +366,15 @@ impl PspBackend {
             }
         }
 
-        // Flush D-cache so the GU (reading via uncached mirror) sees
-        // the pixel data we just wrote via CPU cached writes.
+        // Writeback the texture region so the GU (reading via uncached
+        // mirror) sees the CPU's cached writes. Use targeted writeback
+        // instead of full D-cache flush to avoid trashing the entire
+        // working set (~2ms for full flush, ~0.5ms for targeted).
         unsafe {
-            psp::sys::sceKernelDcacheWritebackInvalidateAll();
+            psp::cache::dcache_writeback_range(
+                data as *const core::ffi::c_void,
+                (buf_w * height * 4) as u32,
+            );
         }
 
         Some(tex_id)

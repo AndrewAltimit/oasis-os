@@ -359,9 +359,16 @@ fn psp_main() {
             ));
         }
         if tv.tuned.is_some() {
-            if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
-                // Read pixels from pre-allocated static buffer, then copy
-                // into the persistent video texture (no alloc/dealloc).
+            // Drain all queued frames, keep only the latest.
+            // At ~8fps main loop vs ~15fps decode, multiple frames may
+            // queue between renders. Uploading only the newest avoids
+            // wasting time on frames that would be immediately replaced.
+            let mut latest = oasis_backend_psp::video::poll_video_frame();
+            while let Some(newer) = oasis_backend_psp::video::poll_video_frame()
+            {
+                latest = Some(newer);
+            }
+            if let Some(frame) = latest {
                 let pixels = oasis_backend_psp::video::frame_pixels(&frame);
                 let old_tex = tv.preview_tex;
                 tv.preview_tex =
@@ -572,7 +579,14 @@ fn psp_main() {
         if needs_base {
             let _ = sdi.draw_base_layer(&mut backend);
         }
-        let _ = sdi.draw_overlay_layer(&mut backend);
+        // Skip overlay (status/bottom bars) during TV Guide video playback
+        // to prevent Z-order flickering over the video frame.
+        let skip_overlay = kiosk_app == KioskApp::TvGuide
+            && tv.tuned.is_some()
+            && tv.preview_tex.is_some();
+        if !skip_overlay {
+            let _ = sdi.draw_overlay_layer(&mut backend);
+        }
 
         // Post-SDI overlays drawn directly on the backend.
         if kiosk_app == KioskApp::None {

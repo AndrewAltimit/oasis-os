@@ -42,7 +42,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v3-no-reinit";
+const BUILD_ID: &str = "v7-targeted-flush";
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
@@ -491,11 +491,12 @@ fn send_video_status(cfd: i32) {
     let resp = format!(
         "{{\"state\":\"{state_name}\",\"width\":{},\"height\":{},\
          \"decoded\":{},\"errors\":{},\"no_pic\":{},\"processed\":{},\
+         \"pushed\":{},\"dropped\":{},\"polled\":{},\"poll_try\":{},\
          \"audio_only\":{},\"me_leaked\":{},\"frame_limit\":{},\
          \"decode_step\":{}}}\n",
         s.width, s.height, s.decoded, s.errors, s.no_pic,
-        s.processed, s.audio_only, s.me_leaked, s.frame_limit,
-        s.decode_step,
+        s.processed, s.pushed, s.dropped, s.polled, s.poll_attempts,
+        s.audio_only, s.me_leaked, s.frame_limit, s.decode_step,
     );
     send_response(cfd, resp.as_bytes());
 }
