@@ -41,6 +41,9 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 /// Frame counter, updated by main loop.
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
+/// Build identifier — bump this on each deploy iteration.
+const BUILD_ID: &str = "v3-no-reinit";
+
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
     let _ = INJECT_QUEUE.push(ev);
@@ -312,6 +315,8 @@ fn handle_client(cfd: i32) {
         } else {
             send_response(cfd, b"audio-only: off (video decode enabled)\n");
         }
+    } else if cmd == b"video-status" {
+        send_video_status(cfd);
     } else if cmd == b"audio-only on" {
         crate::video::set_audio_only(true);
         send_response(cfd, b"ok\n");
@@ -466,8 +471,31 @@ fn send_status(cfd: i32) {
 
     let audio_only = crate::video::is_audio_only();
     let resp = format!(
-        "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\"frame\":{},\"audio_only\":{}}}\n",
-        kiosk_name(kiosk), free, max_blk, frame, audio_only,
+        "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\
+         \"frame\":{},\"audio_only\":{},\"build\":\"{}\"}}\n",
+        kiosk_name(kiosk), free, max_blk, frame, audio_only, BUILD_ID,
+    );
+    send_response(cfd, resp.as_bytes());
+}
+
+fn send_video_status(cfd: i32) {
+    let s = crate::video::video_stats();
+    let state_name = match s.state {
+        crate::video::VSTATE_IDLE => "idle",
+        crate::video::VSTATE_WAITING_KEYFRAME => "waiting_keyframe",
+        crate::video::VSTATE_DECODING => "decoding",
+        crate::video::VSTATE_AUDIO_ONLY => "audio_only",
+        crate::video::VSTATE_ME_LEAKED => "me_leaked",
+        _ => "unknown",
+    };
+    let resp = format!(
+        "{{\"state\":\"{state_name}\",\"width\":{},\"height\":{},\
+         \"decoded\":{},\"errors\":{},\"no_pic\":{},\"processed\":{},\
+         \"audio_only\":{},\"me_leaked\":{},\"frame_limit\":{},\
+         \"decode_step\":{}}}\n",
+        s.width, s.height, s.decoded, s.errors, s.no_pic,
+        s.processed, s.audio_only, s.me_leaked, s.frame_limit,
+        s.decode_step,
     );
     send_response(cfd, resp.as_bytes());
 }

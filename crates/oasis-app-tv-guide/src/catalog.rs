@@ -231,28 +231,65 @@ impl ChannelCatalog {
 ///
 /// Prefers IA "h.264" derivatives (always smaller/optimized), filters to files
 /// under `max_bytes`, and among candidates prefers width >= `min_width` (for
-/// watchability on small screens like PSP 480x272). Falls back to the smallest
-/// file if nothing meets the threshold.
+/// watchability on small screens like PSP 480x272). When `max_width > 0`,
+/// strongly prefers files that fit within that resolution (e.g. 480 for PSP
+/// hardware decode). Falls back to the smallest file if nothing meets the
+/// threshold.
 pub fn select_smallest_for(
     episodes: &[VideoEpisode],
     max_bytes: u64,
     min_width: u32,
 ) -> Option<&VideoEpisode> {
+    select_smallest_with_max_width(episodes, max_bytes, min_width, 0)
+}
+
+/// Like [`select_smallest_for`] but with an additional `max_width` preference.
+///
+/// When `max_width > 0`, the selection order becomes:
+/// 1. h.264 derivative, <=max_width, >=min_width, <=max_bytes (ideal)
+/// 2. Any format, <=max_width, >=min_width, <=max_bytes
+/// 3. h.264 derivative, >=min_width, <=max_bytes (may be >max_width)
+/// 4. Original `select_smallest_for` fallback chain
+pub fn select_smallest_with_max_width(
+    episodes: &[VideoEpisode],
+    max_bytes: u64,
+    min_width: u32,
+    max_width: u32,
+) -> Option<&VideoEpisode> {
     if episodes.is_empty() {
         return None;
     }
 
-    // Partition into h.264 derivatives and others.
     let is_h264_deriv = |ep: &&VideoEpisode| ep.format.is_h264() && ep.original.is_some();
+    let fits_res = |ep: &&VideoEpisode| max_width == 0 || ep.width == 0 || ep.width <= max_width;
 
-    // First try: h.264 derivatives under max_bytes with acceptable width.
+    // Tier 1: h.264 derivative, <=max_width, >=min_width, <=max_bytes.
     let mut best: Option<&VideoEpisode> = episodes
         .iter()
         .filter(is_h264_deriv)
+        .filter(fits_res)
         .filter(|ep| ep.size_bytes <= max_bytes && ep.width >= min_width)
         .min_by_key(|ep| ep.size_bytes);
 
-    // Second: h.264 derivatives under max_bytes (any width).
+    // Tier 2: any format, <=max_width, >=min_width, <=max_bytes.
+    if best.is_none() && max_width > 0 {
+        best = episodes
+            .iter()
+            .filter(fits_res)
+            .filter(|ep| ep.size_bytes <= max_bytes && ep.width >= min_width)
+            .min_by_key(|ep| ep.size_bytes);
+    }
+
+    // Tier 3: h.264 derivative, >=min_width, <=max_bytes (any resolution).
+    if best.is_none() {
+        best = episodes
+            .iter()
+            .filter(is_h264_deriv)
+            .filter(|ep| ep.size_bytes <= max_bytes && ep.width >= min_width)
+            .min_by_key(|ep| ep.size_bytes);
+    }
+
+    // Tier 4: h.264 derivatives under max_bytes (any width).
     if best.is_none() {
         best = episodes
             .iter()
@@ -261,7 +298,7 @@ pub fn select_smallest_for(
             .min_by_key(|ep| ep.size_bytes);
     }
 
-    // Third: any file under max_bytes with acceptable width.
+    // Tier 5: any file under max_bytes with acceptable width.
     if best.is_none() {
         best = episodes
             .iter()
@@ -269,7 +306,7 @@ pub fn select_smallest_for(
             .min_by_key(|ep| ep.size_bytes);
     }
 
-    // Fourth: any file under max_bytes.
+    // Tier 6: any file under max_bytes.
     if best.is_none() {
         best = episodes
             .iter()
@@ -785,5 +822,65 @@ mod tests {
         )];
         let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
         assert_eq!(best.filename, "exact.mp4");
+    }
+
+    // -----------------------------------------------------------------------
+    // max_width resolution preference tests
+    // -----------------------------------------------------------------------
+
+    /// With max_width=480, prefer 320px h.264 over 640px h.264.
+    #[test]
+    fn select_max_width_prefers_low_res() {
+        let eps = vec![
+            make_ep("hd.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 640),
+            make_ep("sd.mp4", "h.264 IA", Some("a.mp4"), 6_000_000, 320),
+        ];
+        let best = select_smallest_with_max_width(&eps, 20_000_000, 320, 480).unwrap();
+        assert_eq!(best.filename, "sd.mp4");
+    }
+
+    /// With max_width=480, falls back to >480p if no <=480p available.
+    #[test]
+    fn select_max_width_falls_back_to_oversized() {
+        let eps = vec![make_ep("hd.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 640)];
+        let best = select_smallest_with_max_width(&eps, 20_000_000, 320, 480).unwrap();
+        assert_eq!(best.filename, "hd.mp4");
+    }
+
+    /// max_width=0 behaves identically to select_smallest_for.
+    #[test]
+    fn select_max_width_zero_same_as_default() {
+        let eps = vec![
+            make_ep("hd.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 640),
+            make_ep("sd.mp4", "h.264 IA", Some("a.mp4"), 6_000_000, 320),
+        ];
+        let a = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        let b = select_smallest_with_max_width(&eps, 20_000_000, 320, 0).unwrap();
+        assert_eq!(a.filename, b.filename);
+    }
+
+    /// With max_width, prefer non-h264 within resolution over h264 outside.
+    #[test]
+    fn select_max_width_prefers_resolution_over_codec() {
+        let eps = vec![
+            make_ep("hd_h264.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 640),
+            make_ep("sd_mpeg4.mp4", "MPEG4", None, 10_000_000, 480),
+        ];
+        let best = select_smallest_with_max_width(&eps, 20_000_000, 320, 480).unwrap();
+        assert_eq!(best.filename, "sd_mpeg4.mp4");
+    }
+
+    /// Width=0 in metadata is treated as unknown — passes max_width filter.
+    #[test]
+    fn select_max_width_unknown_width_passes() {
+        let eps = vec![make_ep(
+            "unknown.mp4",
+            "h.264 IA",
+            Some("a.mp4"),
+            5_000_000,
+            0,
+        )];
+        let best = select_smallest_with_max_width(&eps, 20_000_000, 0, 480).unwrap();
+        assert_eq!(best.filename, "unknown.mp4");
     }
 }
