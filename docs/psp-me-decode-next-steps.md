@@ -316,3 +316,41 @@ It's not reachable through the 5 Pattern 2 sites. Must come from a different mec
 | `docs/psp-me-firmware-analysis.md` | Full ME architecture docs |
 | `ms0:/PSP/GAME/OASISOS/mpeg_vsh370_patched.prx` | Patched PRX (weak imports) |
 | `ms0:/PSP/GAME/UoPMPlayer_660/src/` | cooleyesBridge source code |
+
+## Update: Streaming Refinement (2026-04-01)
+
+After the initial decode breakthrough, extensive real-hardware iteration refined the
+streaming pipeline. Key findings:
+
+### ME Stability
+- **≤480p decode is indefinitely stable**: 8300+ frames decoded with zero errors
+- **sceMpegDelete crashes after prolonged decode** (~900+ frames). The firmware
+  cleanup path corrupts ME state. **Never call sceMpegDelete** after extended playback.
+  The decoder is intentionally leaked (`core::mem::forget`) on ME deadlock recovery.
+- **Periodic reinit was the crash cause**: The original approach of reinitializing
+  the decoder every N frames triggered the sceMpegDelete crash. Removing reinit
+  entirely solved stability.
+- **ME deadlock is intermittent**: The watchdog (main thread signals sceMpeg internal
+  semaphore when DECODE_STEP == 2 for >0.5s) handles most cases, but recovery is
+  not guaranteed — some deadlocks require a cold reboot.
+
+### Frame Delivery Pipeline
+- **Pre-decode queue wait** (video thread checks output queue before decoding)
+  reduced frame drops from 72% to 3%
+- **Drain-latest** (main thread pops all queued frames, uploads only newest) prevents
+  redundant texture uploads when main loop is slower than decode rate
+- **Frameskip** (upload every 3rd frame) gives audio DMA breathing room, reducing stutter
+- **Texture upload** takes ~80ms (322KB memcpy + 491KB dcache writeback). This is the
+  hardware ceiling — uncached writes and per-row flushes were both slower.
+- **Zero-copy strided CSC** (`decode_into_strided` in rust-psp): CSC writes at 512px
+  stride matching GU texture, eliminating two stride-conversion copies per frame
+
+### Audio Continuity
+- **64-slot audio queue** (~1.5s buffer at 44.1kHz/1024 AAC) absorbs network I/O jitter
+- Non-blocking video push (too aggressive) caused playback death — reverted to blocking
+  push with 8ms retry
+- Pre-decode 1ms yield worsened ME deadlock timing — reverted
+
+### Content Selection
+- `select_smallest_with_max_width(max_width=480)` prefers ≤480p content on PSP
+- ≤20MB file size cap, ≥320px minimum width for watchability

@@ -139,7 +139,16 @@ The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which canno
 
 ### PSP Video Streaming
 
-TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O thread downloads HTTP(S) data, buffers the MP4 `moov` atom (~1-3MB), parses track tables via `demux_lite::Mp4Lite`, then extracts interleaved audio/video samples from the `mdat` stream in file-offset order. Video samples are skipped (H.264 decode requires real ME hardware, not available on PPSSPP). Audio AAC frames are decoded via `sceAudiocodec` hardware and output through `AudioChannel::output_blocking`. Backpressure is applied via retry-with-sleep when the audio command queue is full, naturally throttling the download to real-time playback speed.
+TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O thread downloads HTTP(S) data, buffers the MP4 `moov` atom (~1-3MB), parses track tables via `demux_lite::Mp4Lite`, then extracts interleaved audio/video samples from the `mdat` stream in file-offset order. Video H.264 frames are decoded via ME hardware (`sceMpeg` NAL direct path with `mpeg_vsh370.prx`); audio AAC frames are decoded via `sceAudiocodec` hardware and output through `AudioChannel::output_blocking`. Content selection prefers ≤480p via `select_smallest_with_max_width(max_width=480)` since the ME handles ≤480p decode indefinitely (tested 8300+ frames, 0 errors) while >480p triggers firmware deadlocks.
+
+Key mechanisms:
+- **Frame delivery** — Pre-decode queue wait: video thread checks `VIDEO_FRAME_QUEUE` (capacity 2) has space before committing to ~50ms ME decode, reducing frame drops from ~72% to ~3%. Main thread drains all queued frames per render, uploads only the latest.
+- **Frameskip** — Texture upload (~80ms for 322KB copy + cache flush) only runs every 3rd main loop frame, giving audio DMA uninterrupted CPU time to prevent stuttering.
+- **Strided CSC** — `decode_into_strided()` writes CSC output at 512px stride matching the GU texture buffer, eliminating two stride-conversion copies per frame.
+- **Audio buffering** — 64-slot audio command queue (~1.5s at 44.1kHz/1024 AAC frames) absorbs network I/O jitter that previously caused audible stuttering.
+- **Fullscreen blit** — During video playback, all UI chrome (wallpaper, status bar, bottom bar, SDI overlay) is skipped; only the video blit + title overlay renders.
+- **ME safety** — `sceMpegDelete` crashes after prolonged decode; the decoder is intentionally leaked on ME deadlock recovery (watchdog signals sceMpeg internal semaphore). `ME_LEAKED` flag prevents reinit until reboot.
+- **WiFi retry** — TCP command server retries WiFi connection indefinitely instead of giving up after 2 attempts.
 
 ### Desktop Video Streaming
 
@@ -179,7 +188,7 @@ The framework is split into 37 crates (35 workspace members + 2 excluded PSP cra
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop uses `StreamingBuffer` sliding-window for progressive playback with deferred tail probe, CDN failover, and PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP) with backpressure-throttled I/O
+- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop uses `StreamingBuffer` sliding-window for progressive playback with deferred tail probe, CDN failover, and PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceMpeg` H.264 ME hardware decode (NAL direct path via `mpeg_vsh370.prx`, ≤480p indefinite, >480p limited) with pre-decode queue wait, frameskip, 64-slot audio buffering, and fullscreen video blit
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates

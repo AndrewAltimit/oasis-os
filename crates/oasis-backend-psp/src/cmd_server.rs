@@ -1,21 +1,31 @@
 //! TCP command server for remote development automation.
 //!
-//! Listens on port 9293 after WiFi connects. Accepts single-line
-//! text commands and responds with "ok\n" or "pong\n".
+//! Listens on port 9293 after WiFi connects. Retries WiFi connection
+//! indefinitely if initial auto-connect fails.
 //!
 //! Commands:
 //!   ping              → "pong\n"
 //!   screenshot        → saves VRAM to ms0:/seplugins/devloop_screen.raw
+//!   screencap         → streams raw ABGR pixels (480x272)
 //!   reboot            → cold reset
 //!   exit              → exit to XMB
 //!   log               → responds with last 2KB of eboot.log
 //!   logfull           → responds with last 8KB of eboot.log
-//!   status            → JSON with kiosk app, free memory, uptime
+//!   status            → JSON: kiosk, free_kb, max_blk_kb, frame,
+//!                        audio_only, build
+//!   video-status      → JSON: state, width, height, decoded, errors,
+//!                        no_pic, processed, pushed, dropped, polled,
+//!                        poll_try, upload_avg_us, audio_only, me_leaked,
+//!                        frame_limit, decode_step
+//!   video-limit <N>   → set max video frames for >480p
+//!   audio-only [on|off] → toggle/set video decode bypass
 //!   press <button>    → inject button press+release (cross,circle,up,down,
 //!                        left,right,triangle,square,start,select,ltrigger,
 //!                        rtrigger)
 //!   hold <button> <ms> → inject button press, wait ms, then release
 //!   cursor <x> <y>    → move cursor to absolute position
+//!   deploy <size> [crc] → receive EBOOT binary with optional CRC32
+//!   upload <size> <path> → write file to ms0:
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicI32, AtomicU8, Ordering};
