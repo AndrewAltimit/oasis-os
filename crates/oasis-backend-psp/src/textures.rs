@@ -336,18 +336,19 @@ impl PspBackend {
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
 
-        // Write directly via uncached pointer — bypasses D-cache entirely,
-        // so the GU (reading via uncached mirror) sees writes immediately
-        // without any cache flush. Slower per-byte than cached writes, but
-        // eliminates the expensive dcache writeback/invalidate calls.
+        // Copy pixel rows via cached writes (fast), then flush the
+        // written region so the GU sees it via uncached mirror.
         unsafe {
-            let dst_uncached = psp::cache::UncachedPtr::from_cached_addr(data)
-                .as_ptr();
             for row in 0..height as usize {
                 let src = rgba_data.as_ptr().add(row * src_stride);
-                let dst = dst_uncached.add(row * dst_stride);
+                let dst = data.add(row * dst_stride);
                 ptr::copy_nonoverlapping(src, dst, src_stride);
             }
+            // Targeted writeback — only the texture region, not entire cache.
+            psp::cache::dcache_writeback_range(
+                data as *const core::ffi::c_void,
+                (dst_stride * height as usize) as u32,
+            );
         }
 
         Some(tex_id)

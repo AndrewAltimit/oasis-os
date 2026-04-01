@@ -414,64 +414,68 @@ fn psp_main() {
         }
 
         // -- Render --
-        // Throttle expensive kernel syscalls to every 15th frame (~4Hz at 60fps).
-        // StatusBarInfo::poll() issues 6+ kernel calls (battery, RTC, USB, WiFi).
-        if viz_frame % 15 == 0 {
-            cached_status = StatusBarInfo::poll();
-        }
-        let status = cached_status;
-        let fps = frame_timer.fps();
-        let usb_active = usb_storage.is_some();
-
-        // Feed PSP status info into oasis-core's StatusBar for SDI rendering.
-        {
-            let sys_time = SystemTime {
-                year: status.year,
-                month: status.month as u8,
-                day: status.day as u8,
-                hour: status.hour as u8,
-                minute: status.minute as u8,
-                second: 0,
-            };
-            let bat_state = if status.ac_power && !status.battery_charging {
-                BatteryState::Full
-            } else if status.battery_charging {
-                BatteryState::Charging
-            } else if status.battery_percent < 0 {
-                BatteryState::NoBattery
-            } else {
-                BatteryState::Discharging
-            };
-            let power = PowerInfo {
-                battery_percent: if status.battery_percent >= 0 {
-                    Some(status.battery_percent as u8)
-                } else {
-                    None
-                },
-                battery_minutes: None,
-                state: bat_state,
-                cpu: CpuClock {
-                    current_mhz: sysinfo.cpu_mhz as u32,
-                    max_mhz: 333,
-                },
-            };
-            status_bar.update_info(Some(&sys_time), Some(&power));
-        }
-
-        // Update bottom bar page tracking.
-        bottom_bar.current_page = dashboard_state.page;
-        bottom_bar.total_pages = dashboard_state.page_count();
-        bottom_bar.tick_animation(&active_theme);
-
         // Skip clear + wallpaper when video covers the entire screen.
         let video_fullscreen = kiosk_app == KioskApp::TvGuide
             && tv.tuned.is_some()
             && tv.preview_tex.is_some();
+
+        // During fullscreen video, skip all non-video rendering:
+        // status bar polling (6+ kernel calls), bar updates, wallpaper,
+        // SDI updates, WM operations. Just blit video + swap.
         if !video_fullscreen {
+            // Throttle expensive kernel syscalls (~4Hz at 60fps).
+            if viz_frame % 15 == 0 {
+                cached_status = StatusBarInfo::poll();
+            }
+
+            // Feed PSP status info into oasis-core's StatusBar.
+            {
+                let st = cached_status;
+                let sys_time = SystemTime {
+                    year: st.year,
+                    month: st.month as u8,
+                    day: st.day as u8,
+                    hour: st.hour as u8,
+                    minute: st.minute as u8,
+                    second: 0,
+                };
+                let bat_state = if st.ac_power && !st.battery_charging {
+                    BatteryState::Full
+                } else if st.battery_charging {
+                    BatteryState::Charging
+                } else if st.battery_percent < 0 {
+                    BatteryState::NoBattery
+                } else {
+                    BatteryState::Discharging
+                };
+                let power = PowerInfo {
+                    battery_percent: if st.battery_percent >= 0 {
+                        Some(st.battery_percent as u8)
+                    } else {
+                        None
+                    },
+                    battery_minutes: None,
+                    state: bat_state,
+                    cpu: CpuClock {
+                        current_mhz: sysinfo.cpu_mhz as u32,
+                        max_mhz: 333,
+                    },
+                };
+                status_bar.update_info(Some(&sys_time), Some(&power));
+            }
+
+            // Update bottom bar page tracking.
+            bottom_bar.current_page = dashboard_state.page;
+            bottom_bar.total_pages = dashboard_state.page_count();
+            bottom_bar.tick_animation(&active_theme);
+
             backend.clear_inner(Color::BLACK);
             // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
             backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
         }
+        let status = cached_status;
+        let fps = frame_timer.fps();
+        let usb_active = usb_storage.is_some();
 
         // -- Unified render path --
         if kiosk_app != KioskApp::None {
