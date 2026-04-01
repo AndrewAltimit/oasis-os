@@ -235,7 +235,9 @@ fn push_video_sample(
         (None, None)
     };
 
-    // Blocking push with backpressure (same pattern as audio queue).
+    // Short retry: try up to 3 times with 2ms sleep. Keeps the I/O
+    // thread responsive to audio while still delivering video frames.
+    // The old blocking loop (8ms × unlimited) starved audio.
     let mut frame = StreamFrame {
         data: raw_data.to_vec(),
         nal_prefix_size: prefix_size,
@@ -244,21 +246,18 @@ fn push_video_sample(
         timestamp_secs,
         is_keyframe,
     };
-    loop {
+    for _ in 0..3 {
         match try_push_stream_frame(frame) {
-            Ok(()) => break,
+            Ok(()) => return,
             Err(returned) => {
                 frame = returned;
                 if !crate::video::is_video_playing() {
-                    break;
+                    return;
                 }
-                // SAFETY: sceKernelDelayThread sleeps the current thread.
-                // Sleep 8ms — video frames arrive less frequently than
-                // audio (~30fps vs ~43fps), so backpressure is rare.
-                unsafe {
-                    psp::sys::sceKernelDelayThread(8_000);
-                }
-            },
+                unsafe { psp::sys::sceKernelDelayThread(2_000); }
+            }
         }
     }
+    // Drop frame after 3 retries — audio priority.
+    drop(frame);
 }
