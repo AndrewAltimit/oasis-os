@@ -1869,9 +1869,20 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                // No periodic reinit — sceMpegDelete crashes after
-                // prolonged decoding. Instead, rely on the main thread
-                // watchdog to detect and recover from ME hangs.
+                // Wait for output queue space BEFORE decoding.
+                // ME decode takes ~50ms per frame. Without this, we
+                // decode frames that will be dropped because the queue
+                // is full, wasting ~30% of ME time.
+                {
+                    let mut waits = 0u32;
+                    while VIDEO_FRAME_QUEUE.len()
+                        >= VIDEO_FRAME_QUEUE.capacity() as u32
+                    {
+                        unsafe { psp::sys::sceKernelDelayThread(3_000); }
+                        waits += 1;
+                        if waits > 20 { break; } // 60ms max wait
+                    }
+                }
 
                 // PSMF path: convert to Annex B and feed to ringbuffer.
                 let decode_result = if let Some(ref mut psmf) = psmf_dec {
@@ -1930,28 +1941,13 @@ fn play_stream() -> bool {
                             start_us = now_us.wrapping_sub(pts_us);
                         }
 
-                        // Backpressure: wait up to ~50ms for queue
-                        // space. At ~30fps main loop, a slot opens every
-                        // ~33ms. This prevents dropping ~40% of frames.
-                        let mut item = decoded;
-                        let mut ok = false;
-                        for _ in 0..10 {
-                            match VIDEO_FRAME_QUEUE.push(item) {
-                                Ok(()) => { ok = true; break; }
-                                Err(ret) => {
-                                    item = ret;
-                                    unsafe {
-                                        psp::sys::sceKernelDelayThread(5_000);
-                                    }
-                                }
-                            }
-                        }
-                        if ok {
+                        // Queue space was checked before decode. Push
+                        // should succeed; if not, drop gracefully.
+                        if VIDEO_FRAME_QUEUE.push(decoded).is_ok() {
                             VIDEO_FRAMES_PUSHED.fetch_add(
                                 1, Ordering::Relaxed,
                             );
                         } else {
-                            // Still full after 50ms — drop this frame.
                             VIDEO_FRAMES_DROPPED.fetch_add(
                                 1, Ordering::Relaxed,
                             );
