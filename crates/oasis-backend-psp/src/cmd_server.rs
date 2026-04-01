@@ -42,7 +42,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v7-targeted-flush";
+const BUILD_ID: &str = "v9-uncached-tex";
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {

@@ -335,46 +335,19 @@ impl PspBackend {
         let data = texture.data;
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
-        let use_dma = src_stride >= 1024;
 
-        if use_dma {
-            // SAFETY: Writeback source from CPU cache before DMA reads it,
-            // and invalidate destination so stale lines don't overwrite.
-            unsafe {
-                psp::cache::dcache_writeback_invalidate_range(
-                    rgba_data.as_ptr() as *const std::ffi::c_void,
-                    rgba_data.len() as u32,
-                );
-                psp::cache::dcache_writeback_invalidate_range(
-                    data as *const std::ffi::c_void,
-                    (buf_w * texture.buf_h * 4) as u32,
-                );
-            }
-        }
-
-        for row in 0..height as usize {
-            // SAFETY: src and dst within allocated bounds.
-            unsafe {
+        // Write directly via uncached pointer — bypasses D-cache entirely,
+        // so the GU (reading via uncached mirror) sees writes immediately
+        // without any cache flush. Slower per-byte than cached writes, but
+        // eliminates the expensive dcache writeback/invalidate calls.
+        unsafe {
+            let dst_uncached = psp::cache::UncachedPtr::from_cached_addr(data)
+                .as_ptr();
+            for row in 0..height as usize {
                 let src = rgba_data.as_ptr().add(row * src_stride);
-                let dst = data.add(row * dst_stride);
-                if use_dma {
-                    if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
-                        continue;
-                    }
-                }
+                let dst = dst_uncached.add(row * dst_stride);
                 ptr::copy_nonoverlapping(src, dst, src_stride);
             }
-        }
-
-        // Writeback the texture region so the GU (reading via uncached
-        // mirror) sees the CPU's cached writes. Use targeted writeback
-        // instead of full D-cache flush to avoid trashing the entire
-        // working set (~2ms for full flush, ~0.5ms for targeted).
-        unsafe {
-            psp::cache::dcache_writeback_range(
-                data as *const core::ffi::c_void,
-                (buf_w * height * 4) as u32,
-            );
         }
 
         Some(tex_id)

@@ -463,9 +463,15 @@ fn psp_main() {
         bottom_bar.total_pages = dashboard_state.page_count();
         bottom_bar.tick_animation(&active_theme);
 
-        backend.clear_inner(Color::BLACK);
-        // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
-        backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        // Skip clear + wallpaper when video covers the entire screen.
+        let video_fullscreen = kiosk_app == KioskApp::TvGuide
+            && tv.tuned.is_some()
+            && tv.preview_tex.is_some();
+        if !video_fullscreen {
+            backend.clear_inner(Color::BLACK);
+            // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
+            backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        }
 
         // -- Unified render path --
         if kiosk_app != KioskApp::None {
