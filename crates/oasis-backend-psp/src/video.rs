@@ -1930,11 +1930,28 @@ fn play_stream() -> bool {
                             start_us = now_us.wrapping_sub(pts_us);
                         }
 
-                        if VIDEO_FRAME_QUEUE.push(decoded).is_ok() {
+                        // Backpressure: wait up to ~50ms for queue
+                        // space. At ~30fps main loop, a slot opens every
+                        // ~33ms. This prevents dropping ~40% of frames.
+                        let mut item = decoded;
+                        let mut ok = false;
+                        for _ in 0..10 {
+                            match VIDEO_FRAME_QUEUE.push(item) {
+                                Ok(()) => { ok = true; break; }
+                                Err(ret) => {
+                                    item = ret;
+                                    unsafe {
+                                        psp::sys::sceKernelDelayThread(5_000);
+                                    }
+                                }
+                            }
+                        }
+                        if ok {
                             VIDEO_FRAMES_PUSHED.fetch_add(
                                 1, Ordering::Relaxed,
                             );
                         } else {
+                            // Still full after 50ms — drop this frame.
                             VIDEO_FRAMES_DROPPED.fetch_add(
                                 1, Ordering::Relaxed,
                             );
