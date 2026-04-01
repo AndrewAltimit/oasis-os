@@ -1914,10 +1914,6 @@ fn play_stream() -> bool {
                     }
                 }
 
-                // Yield briefly before ME decode to reduce memory bus
-                // contention with audio DMA. The ME coprocessor shares
-                // the main memory bus; continuous decode starves audio.
-                unsafe { psp::sys::sceKernelDelayThread(1_000); }
 
                 // PSMF path: convert to Annex B and feed to ringbuffer.
                 let decode_result = if let Some(ref mut psmf) = psmf_dec {
