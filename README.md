@@ -245,7 +245,7 @@ format check -> clippy -> nightly clippy -> docs -> markdown links -> tests -> r
 
 ## Security Notice
 
-> **OpenAI/Codex integrations are disabled.** OpenAI permits government partners unrestricted use of its models within their own definition of legality. Anthropic maintains explicit prohibitions on mass surveillance and autonomous weapons. We default to the stricter policy. To re-enable at your own risk: `CODEX_ENABLED=true`.
+> **OpenAI/Google integrations are disabled within PR reviews.** OpenAI/Google permits government partners unrestricted use of their models. We only allow models with explicit prohibitions on mass surveillance and autonomous weapons.
 
 ## License
 

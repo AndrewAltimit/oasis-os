@@ -359,23 +359,42 @@ fn psp_main() {
             ));
         }
         if tv.tuned.is_some() {
-            if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
-                // Read pixels from pre-allocated static buffer, then copy
-                // into the persistent video texture (no alloc/dealloc).
-                let pixels = oasis_backend_psp::video::frame_pixels(&frame);
-                let old_tex = tv.preview_tex;
-                tv.preview_tex =
-                    backend.update_video_texture(frame.width, frame.height, pixels);
-                if old_tex.is_none() && tv.preview_tex.is_some() {
-                    oasis_backend_psp::video::vlog_force(&format!(
-                        "[MAIN] first video tex: {}x{} → {:?}",
-                        frame.width, frame.height, tv.preview_tex,
-                    ));
-                } else if old_tex.is_none() && tv.preview_tex.is_none() {
-                    oasis_backend_psp::video::vlog_force(&format!(
-                        "[MAIN] video tex FAILED: {}x{} pixels={}",
-                        frame.width, frame.height, pixels.len(),
-                    ));
+            // Drain all queued frames to keep the queue clear.
+            let mut latest = oasis_backend_psp::video::poll_video_frame();
+            while let Some(newer) = oasis_backend_psp::video::poll_video_frame()
+            {
+                latest = Some(newer);
+            }
+            // Frameskip: only upload texture every 3rd frame.
+            // The ~81ms texture upload starves the audio thread, causing
+            // stutters. Skipping 2 out of 3 uploads gives audio 162ms
+            // of uninterrupted CPU time between uploads (~10fps video).
+            let do_upload = latest.is_some()
+                && (tv.preview_tex.is_none() || viz_frame % 3 == 0);
+            if let Some(frame) = latest {
+                if do_upload {
+                    let t0 = unsafe {
+                        psp::sys::sceKernelGetSystemTimeWide()
+                    } as u32;
+                    let pixels =
+                        oasis_backend_psp::video::frame_pixels_raw(&frame);
+                    let old_tex = tv.preview_tex;
+                    // Pass stride as width so texture buf_w matches CSC
+                    // stride (both 512px). This eliminates row-by-row copy.
+                    tv.preview_tex = backend.update_video_texture(
+                        frame.stride, frame.height, pixels,
+                    );
+                    let dt = (unsafe {
+                        psp::sys::sceKernelGetSystemTimeWide()
+                    } as u32)
+                        .wrapping_sub(t0);
+                    oasis_backend_psp::video::record_upload_time(dt);
+                    if old_tex.is_none() && tv.preview_tex.is_some() {
+                        oasis_backend_psp::video::vlog_force(&format!(
+                            "[MAIN] first video tex: {}x{} → {:?}",
+                            frame.width, frame.height, tv.preview_tex,
+                        ));
+                    }
                 }
             }
             // Only clear tuned state when video WAS playing and stopped
@@ -407,63 +426,75 @@ fn psp_main() {
         }
 
         // -- Render --
-        // Throttle expensive kernel syscalls to every 15th frame (~4Hz at 60fps).
-        // StatusBarInfo::poll() issues 6+ kernel calls (battery, RTC, USB, WiFi).
-        if viz_frame % 15 == 0 {
-            cached_status = StatusBarInfo::poll();
+        // Skip clear + wallpaper when video covers the entire screen.
+        let video_fullscreen = kiosk_app == KioskApp::TvGuide
+            && tv.tuned.is_some()
+            && tv.preview_tex.is_some();
+
+        // During fullscreen video, skip all non-video rendering:
+        // status bar polling (6+ kernel calls), bar updates, wallpaper,
+        // SDI updates, WM operations. Just blit video + swap.
+        if !video_fullscreen {
+            // Throttle expensive kernel syscalls (~4Hz at 60fps).
+            if viz_frame % 15 == 0 {
+                cached_status = StatusBarInfo::poll();
+            }
+
+            // Feed PSP status info into oasis-core's StatusBar.
+            {
+                let st = cached_status;
+                let sys_time = SystemTime {
+                    year: st.year,
+                    month: st.month as u8,
+                    day: st.day as u8,
+                    hour: st.hour as u8,
+                    minute: st.minute as u8,
+                    second: 0,
+                };
+                let bat_state = if st.ac_power && !st.battery_charging {
+                    BatteryState::Full
+                } else if st.battery_charging {
+                    BatteryState::Charging
+                } else if st.battery_percent < 0 {
+                    BatteryState::NoBattery
+                } else {
+                    BatteryState::Discharging
+                };
+                let power = PowerInfo {
+                    battery_percent: if st.battery_percent >= 0 {
+                        Some(st.battery_percent as u8)
+                    } else {
+                        None
+                    },
+                    battery_minutes: None,
+                    state: bat_state,
+                    cpu: CpuClock {
+                        current_mhz: sysinfo.cpu_mhz as u32,
+                        max_mhz: 333,
+                    },
+                };
+                status_bar.update_info(Some(&sys_time), Some(&power));
+            }
+
+            // Update bottom bar page tracking.
+            bottom_bar.current_page = dashboard_state.page;
+            bottom_bar.total_pages = dashboard_state.page_count();
+            bottom_bar.tick_animation(&active_theme);
+
+            backend.clear_inner(Color::BLACK);
+            // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
+            backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
         }
         let status = cached_status;
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
 
-        // Feed PSP status info into oasis-core's StatusBar for SDI rendering.
-        {
-            let sys_time = SystemTime {
-                year: status.year,
-                month: status.month as u8,
-                day: status.day as u8,
-                hour: status.hour as u8,
-                minute: status.minute as u8,
-                second: 0,
-            };
-            let bat_state = if status.ac_power && !status.battery_charging {
-                BatteryState::Full
-            } else if status.battery_charging {
-                BatteryState::Charging
-            } else if status.battery_percent < 0 {
-                BatteryState::NoBattery
-            } else {
-                BatteryState::Discharging
-            };
-            let power = PowerInfo {
-                battery_percent: if status.battery_percent >= 0 {
-                    Some(status.battery_percent as u8)
-                } else {
-                    None
-                },
-                battery_minutes: None,
-                state: bat_state,
-                cpu: CpuClock {
-                    current_mhz: sysinfo.cpu_mhz as u32,
-                    max_mhz: 333,
-                },
-            };
-            status_bar.update_info(Some(&sys_time), Some(&power));
-        }
-
-        // Update bottom bar page tracking.
-        bottom_bar.current_page = dashboard_state.page;
-        bottom_bar.total_pages = dashboard_state.page_count();
-        bottom_bar.tick_animation(&active_theme);
-
-        backend.clear_inner(Color::BLACK);
-        // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
-        backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
         // -- Unified render path --
         if kiosk_app != KioskApp::None {
             // Hide all floating window decorations during fullscreen.
-            wm.hide_all_window_sdi(&mut sdi);
+            if !video_fullscreen {
+                wm.hide_all_window_sdi(&mut sdi);
+            }
 
             // Kiosk app active: render it fullscreen using Classic renderers.
             render_classic::render_classic(
@@ -545,17 +576,19 @@ fn psp_main() {
             );
         }
 
-        // Status bar + bottom bar + taskbar (always visible via SDI overlay).
-        active_theme.bar.url_text.clear();
-        status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
-        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
-        taskbar.update_sdi(
-            &mut sdi,
-            &active_theme,
-            wm.windows(),
-            wm.active_window(),
-            false,
-        );
+        // Status bar + bottom bar + taskbar — skip during fullscreen video.
+        if !video_fullscreen {
+            active_theme.bar.url_text.clear();
+            status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+            bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+            taskbar.update_sdi(
+                &mut sdi,
+                &active_theme,
+                wm.windows(),
+                wm.active_window(),
+                false,
+            );
+        }
 
         // SDI two-pass rendering for PSP performance:
         // - Base layer for kiosk apps that use SDI (file manager, terminal, etc.)
@@ -572,7 +605,11 @@ fn psp_main() {
         if needs_base {
             let _ = sdi.draw_base_layer(&mut backend);
         }
-        let _ = sdi.draw_overlay_layer(&mut backend);
+        // Skip overlay (status/bottom bars) during TV Guide video playback
+        // to prevent Z-order flickering over the video frame.
+        if !video_fullscreen {
+            let _ = sdi.draw_overlay_layer(&mut backend);
+        }
 
         // Post-SDI overlays drawn directly on the backend.
         if kiosk_app == KioskApp::None {

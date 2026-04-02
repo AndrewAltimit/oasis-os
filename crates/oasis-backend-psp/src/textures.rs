@@ -335,41 +335,46 @@ impl PspBackend {
         let data = texture.data;
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
-        let use_dma = src_stride >= 1024;
+        let total = dst_stride * height as usize;
 
-        if use_dma {
-            // SAFETY: Writeback source from CPU cache before DMA reads it,
-            // and invalidate destination so stale lines don't overwrite.
+        // When source stride matches texture stride (both 512px from CSC),
+        // do a single bulk copy + alpha fixup. No row-by-row needed.
+        if src_stride == dst_stride && rgba_data.len() >= total {
             unsafe {
-                psp::cache::dcache_writeback_invalidate_range(
-                    rgba_data.as_ptr() as *const std::ffi::c_void,
-                    rgba_data.len() as u32,
+                ptr::copy_nonoverlapping(
+                    rgba_data.as_ptr(), data, total,
                 );
-                psp::cache::dcache_writeback_invalidate_range(
-                    data as *const std::ffi::c_void,
-                    (buf_w * texture.buf_h * 4) as u32,
+                // Alpha fixup on entire buffer at once.
+                let words = data as *mut u32;
+                let n = total / 4;
+                for i in 0..n {
+                    *words.add(i) |= 0xFF00_0000;
+                }
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
                 );
             }
-        }
-
-        for row in 0..height as usize {
-            // SAFETY: src and dst within allocated bounds.
+        } else {
+            // Fallback: row-by-row copy with alpha fixup.
             unsafe {
-                let src = rgba_data.as_ptr().add(row * src_stride);
-                let dst = data.add(row * dst_stride);
-                if use_dma {
-                    if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
-                        continue;
+                for row in 0..height as usize {
+                    let src = rgba_data.as_ptr().add(row * src_stride);
+                    let dst = data.add(row * dst_stride);
+                    ptr::copy_nonoverlapping(src, dst, src_stride);
+                    let words = dst as *mut u32;
+                    // Alpha fixup covers full dst_stride so GU doesn't
+                    // sample transparent padding pixels at the right edge.
+                    let n = dst_stride / 4;
+                    for i in 0..n {
+                        *words.add(i) |= 0xFF00_0000;
                     }
                 }
-                ptr::copy_nonoverlapping(src, dst, src_stride);
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
+                );
             }
-        }
-
-        // Flush D-cache so the GU (reading via uncached mirror) sees
-        // the pixel data we just wrote via CPU cached writes.
-        unsafe {
-            psp::sys::sceKernelDcacheWritebackInvalidateAll();
         }
 
         Some(tex_id)

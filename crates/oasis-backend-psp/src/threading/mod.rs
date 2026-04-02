@@ -25,7 +25,9 @@ use crate::sfx::SfxId;
 // ---------------------------------------------------------------------------
 
 /// Audio command queue: main thread pushes, audio thread pops.
-static AUDIO_QUEUE: SpscQueue<AudioCmd, 16> = SpscQueue::new();
+/// 64 slots buffer ~1.5 seconds of AAC at 44.1kHz (23ms per frame),
+/// absorbing network I/O jitter that causes audio stuttering.
+static AUDIO_QUEUE: SpscQueue<AudioCmd, 64> = SpscQueue::new();
 /// I/O command queue: main thread pushes, I/O thread pops.
 static IO_CMD_QUEUE: SpscQueue<IoCmd, 16> = SpscQueue::new();
 /// I/O response queue: I/O thread pushes, main thread pops.

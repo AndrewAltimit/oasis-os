@@ -11,7 +11,7 @@
 //! API is used instead of the lower-level sceVideocodec because sceVideocodec
 //! weak imports fail to resolve on many CFW configurations (error 0x806201fe).
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
 use crate::threading::{AudioCmd, send_audio_cmd};
@@ -32,13 +32,96 @@ static AUDIO_ONLY: AtomicBool = AtomicBool::new(false);
 static ME_LEAKED: AtomicBool = AtomicBool::new(false);
 
 /// Max video frames to decode for >480p before switching to audio-only.
-/// Adjustable at runtime via TCP "video-limit <N>" command.
-/// Max video frames for >480p before switching to audio-only.
 /// With the kernel PRX ME watchdog hook (3s timeout on WaitEventFlag),
 /// the deadlock auto-recovers. This limit is a secondary safety net.
 /// Adjustable via TCP "video-limit <N>".
-static VIDEO_FRAME_LIMIT: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(500);
+static VIDEO_FRAME_LIMIT: AtomicU32 = AtomicU32::new(500);
+
+// ---------------------------------------------------------------------------
+// Video statistics (readable from cmd_server via public accessors)
+// ---------------------------------------------------------------------------
+
+/// Video decode state for diagnostics.
+/// 0=Idle, 1=WaitingKeyframe, 2=Decoding, 3=AudioOnly, 4=MeLeaked
+static VIDEO_STATE: AtomicU32 = AtomicU32::new(0);
+static VIDEO_DECODE_COUNT: AtomicU32 = AtomicU32::new(0);
+static VIDEO_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
+static VIDEO_NOPIC_COUNT: AtomicU32 = AtomicU32::new(0);
+static VIDEO_WIDTH: AtomicU32 = AtomicU32::new(0);
+static VIDEO_HEIGHT: AtomicU32 = AtomicU32::new(0);
+static VIDEO_FRAMES_PROCESSED: AtomicU32 = AtomicU32::new(0);
+/// Frames successfully pushed to VIDEO_FRAME_QUEUE.
+static VIDEO_FRAMES_PUSHED: AtomicU32 = AtomicU32::new(0);
+/// Frames dropped because VIDEO_FRAME_QUEUE was full.
+static VIDEO_FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Frames polled by the main thread (successful pops).
+static VIDEO_FRAMES_POLLED: AtomicU32 = AtomicU32::new(0);
+
+/// Video state constants for `VIDEO_STATE`.
+pub const VSTATE_IDLE: u32 = 0;
+pub const VSTATE_WAITING_KEYFRAME: u32 = 1;
+pub const VSTATE_DECODING: u32 = 2;
+pub const VSTATE_AUDIO_ONLY: u32 = 3;
+pub const VSTATE_ME_LEAKED: u32 = 4;
+
+/// Snapshot of video decode statistics for diagnostics.
+pub struct VideoStats {
+    pub state: u32,
+    pub width: u32,
+    pub height: u32,
+    pub decoded: u32,
+    pub errors: u32,
+    pub no_pic: u32,
+    pub processed: u32,
+    pub pushed: u32,
+    pub dropped: u32,
+    pub polled: u32,
+    pub poll_attempts: u32,
+    pub upload_us: u32,
+    pub upload_count: u32,
+    pub audio_only: bool,
+    pub me_leaked: bool,
+    pub frame_limit: u32,
+    pub decode_step: u32,
+}
+
+/// Read a consistent snapshot of video decode statistics.
+pub fn video_stats() -> VideoStats {
+    VideoStats {
+        state: VIDEO_STATE.load(Ordering::Relaxed),
+        width: VIDEO_WIDTH.load(Ordering::Relaxed),
+        height: VIDEO_HEIGHT.load(Ordering::Relaxed),
+        decoded: VIDEO_DECODE_COUNT.load(Ordering::Relaxed),
+        errors: VIDEO_ERROR_COUNT.load(Ordering::Relaxed),
+        no_pic: VIDEO_NOPIC_COUNT.load(Ordering::Relaxed),
+        processed: VIDEO_FRAMES_PROCESSED.load(Ordering::Relaxed),
+        pushed: VIDEO_FRAMES_PUSHED.load(Ordering::Relaxed),
+        dropped: VIDEO_FRAMES_DROPPED.load(Ordering::Relaxed),
+        polled: VIDEO_FRAMES_POLLED.load(Ordering::Relaxed),
+        poll_attempts: VIDEO_POLL_ATTEMPTS.load(Ordering::Relaxed),
+        upload_us: VIDEO_UPLOAD_US.load(Ordering::Relaxed),
+        upload_count: VIDEO_UPLOAD_COUNT.load(Ordering::Relaxed),
+        audio_only: AUDIO_ONLY.load(Ordering::Relaxed),
+        me_leaked: ME_LEAKED.load(Ordering::Relaxed),
+        frame_limit: VIDEO_FRAME_LIMIT.load(Ordering::Relaxed),
+        decode_step: psp::mpeg::DECODE_STEP.load(Ordering::Relaxed),
+    }
+}
+
+fn reset_stats() {
+    VIDEO_DECODE_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_ERROR_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_NOPIC_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_PROCESSED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_PUSHED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_DROPPED.store(0, Ordering::Relaxed);
+    VIDEO_FRAMES_POLLED.store(0, Ordering::Relaxed);
+    VIDEO_POLL_ATTEMPTS.store(0, Ordering::Relaxed);
+    VIDEO_UPLOAD_US.store(0, Ordering::Relaxed);
+    VIDEO_UPLOAD_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_WIDTH.store(0, Ordering::Relaxed);
+    VIDEO_HEIGHT.store(0, Ordering::Relaxed);
+}
 
 /// Set the video frame limit for >480p content.
 pub fn set_video_frame_limit(n: u32) {
@@ -133,6 +216,8 @@ pub struct DecodedFrame {
     pub buf_idx: u8,
     pub width: u32,
     pub height: u32,
+    /// CSC output stride in pixels (512 for ≤480p). Matches texture buf_w.
+    pub stride: u32,
 }
 
 /// Pre-allocated double-buffer for decoded RGBA frames. Each buffer holds
@@ -341,8 +426,40 @@ pub fn send_video_cmd(cmd: VideoCmd) {
 /// Returns the frame metadata. Pixel data is in the static
 /// `FRAME_BUFFERS[frame.buf_idx]` — the caller must copy it
 /// before the next `poll_video_frame` call overwrites it.
+/// Number of times poll_video_frame was called (regardless of result).
+static VIDEO_POLL_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+/// Cumulative microseconds spent in frame_pixels + update_video_texture.
+static VIDEO_UPLOAD_US: AtomicU32 = AtomicU32::new(0);
+/// Number of texture uploads performed.
+static VIDEO_UPLOAD_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Record texture upload timing from main thread.
+pub fn record_upload_time(us: u32) {
+    VIDEO_UPLOAD_US.fetch_add(us, Ordering::Relaxed);
+    VIDEO_UPLOAD_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn poll_video_frame() -> Option<DecodedFrame> {
-    VIDEO_FRAME_QUEUE.pop()
+    VIDEO_POLL_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let frame = VIDEO_FRAME_QUEUE.pop();
+    if frame.is_some() {
+        VIDEO_FRAMES_POLLED.fetch_add(1, Ordering::Relaxed);
+    }
+    frame
+}
+
+/// Return raw frame buffer reference WITHOUT alpha fixup.
+/// Buffer uses CSC stride (512px), matching texture buf_w.
+pub fn frame_pixels_raw(frame: &DecodedFrame) -> &[u8] {
+    let size = (frame.stride * frame.height * 4) as usize;
+    // SAFETY: Single-threaded access from main thread (SPSC contract).
+    unsafe {
+        let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
+        core::slice::from_raw_parts(
+            (*buf_ptr)[frame.buf_idx as usize].as_ptr(),
+            size,
+        )
+    }
 }
 
 /// Convert RGB565 frame data to RGBA and return a reference.
@@ -368,8 +485,20 @@ pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
         );
 
         // Fix alpha channel: CSC outputs 0x00, GU needs 0xFF for opaque.
-        for i in (3..size).step_by(4) {
-            data[i] = 0xFF;
+        // Use 32-bit word OR when buffer is aligned (4x fewer memory ops).
+        let ptr = data.as_mut_ptr();
+        if ptr as usize % 4 == 0 && size % 4 == 0 {
+            let words = core::slice::from_raw_parts_mut(
+                ptr as *mut u32,
+                size / 4,
+            );
+            for w in words.iter_mut() {
+                *w |= 0xFF00_0000;
+            }
+        } else {
+            for i in (3..size).step_by(4) {
+                data[i] = 0xFF;
+            }
         }
 
         core::slice::from_raw_parts(data.as_ptr(), size)
@@ -663,8 +792,12 @@ impl NalDecoder {
         ));
 
         // Pre-allocate the static double-buffers for decoded frames.
-        // Psm8888 = 4 bpp. frame_pixels() fixes alpha channel.
-        let buf_size = (dec_w * dec_h * 4) as usize;
+        // Use CSC stride (512px for ≤480p) so CSC can write directly here
+        // and the texture upload needs only alpha fixup + cache flush
+        // (no row-by-row stride conversion copy).
+        let csc_stride = decoder.stride();
+        let out_h = ((dec_h + 15) / 16) * 16; // CSC rounds up to 16
+        let buf_size = (csc_stride * out_h * 4) as usize;
         // SAFETY: Called from the video thread before any frames are
         // pushed. No concurrent access to FRAME_BUFFERS yet.
         unsafe {
@@ -672,17 +805,13 @@ impl NalDecoder {
             FRAME_BUFFERS[1] = vec![0u8; buf_size];
         }
 
-        // Compute preventive flush interval: how many frames until the
-        // DPB approaches the 2MB DDR workspace limit. The ME stores
-        // ref_frames+1 decoded pictures in YCbCr 4:2:0 format.
-        // If the total DPB exceeds ~1.8MB (leaving margin), we flush.
+        // Flush interval: only used for >480p content where the DPB
+        // exceeds the 2MB workspace. For <=480p, no periodic reset
+        // (sceMpegDelete crashes after prolonged decode).
         let flush_interval = if dpb_total > 0x1C_0000 {
-            // DPB close to workspace limit — flush decoder periodically.
-            // Use 70 frames (~2.3s at 30fps) to stay safely under the
-            // ~90-frame hang threshold observed on real hardware.
             70u32
         } else {
-            u32::MAX // DPB fits in workspace, no reset needed.
+            u32::MAX
         };
         // Find the PRX base address and locate the ME kernel call
         // instruction for runtime patching.
@@ -892,11 +1021,6 @@ impl NalDecoder {
 
         self.frames_since_flush += 1;
 
-        // Track frames since last keyframe for periodic reinit.
-        if is_keyframe {
-            self.frames_since_flush = 0;
-        }
-
         let is_first = self.first_frame;
         self.first_frame = false;
 
@@ -920,7 +1044,10 @@ impl NalDecoder {
         // and we should stop video decode entirely.
         let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
-        match self.decoder.decode_into(&nal, dst) {
+        // Use strided decode — CSC writes directly to FRAME_BUFFER
+        // at 512px stride, matching the texture buffer stride.
+        // No intermediate tight-pack copy needed.
+        match self.decoder.decode_into_strided(&nal, dst) {
             Ok(true) => {
                 let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
                     - t0) / 1000;
@@ -933,6 +1060,7 @@ impl NalDecoder {
                     buf_idx,
                     width: self.decoder.width(),
                     height: self.decoder.height(),
+                    stride: self.decoder.stride(),
                 }))
             }
             Ok(false) => {
@@ -960,6 +1088,7 @@ impl NalDecoder {
         let pps = self.pps;
         let prefix = self.nal_prefix_size;
         let wb = self.write_buf_idx;
+        let interval = self.flush_interval;
         vlog_force(&format!("[VIDEO] NAL: reinit decoder ({w}x{h})..."));
 
         // Drop old decoder (calls sceMpegDelete + sceMpegFinish).
@@ -977,7 +1106,7 @@ impl NalDecoder {
                     first_frame: true,
                     write_buf_idx: wb,
                     frames_since_flush: 0,
-                    flush_interval: 70, // Keep same interval
+                    flush_interval: interval,
                     last_decode_us: 0,
                 })
             }
@@ -1557,17 +1686,42 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
     false
 }
 
+/// Push a decoded frame to the output queue, retrying with brief sleeps.
+/// Returns true if the frame was pushed, false if dropped.
+fn push_frame_with_retry(frame: DecodedFrame) -> bool {
+    let mut item = frame;
+    for _ in 0..6 {
+        match VIDEO_FRAME_QUEUE.push(item) {
+            Ok(()) => return true,
+            Err(ret) => {
+                item = ret;
+                // SAFETY: brief sleep to yield to main thread.
+                unsafe { psp::sys::sceKernelDelayThread(3_000); }
+            }
+        }
+    }
+    // Last-ditch: drop oldest frame, push newer one.
+    let _ = VIDEO_FRAME_QUEUE.pop();
+    match VIDEO_FRAME_QUEUE.push(item) {
+        Ok(()) => true,
+        Err(_) => false,
+    }
+}
+
 /// Streaming playback: receive pre-demuxed H.264 frames from I/O thread
 /// and decode them via sceMpeg.
 ///
 /// Returns `true` if Shutdown was received (caller should exit thread).
 fn play_stream() -> bool {
     vlog("[VIDEO] play_stream: starting streaming decode");
+    reset_stats();
+    VIDEO_STATE.store(VSTATE_WAITING_KEYFRAME, Ordering::Relaxed);
 
     // Drain stale commands that may have been queued during moov buffering.
     while let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
         if matches!(cmd, VideoCmd::Shutdown) {
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
+            VIDEO_STATE.store(VSTATE_IDLE, Ordering::Relaxed);
             vlog("[VIDEO] play_stream: shutdown during drain");
             return true;
         }
@@ -1614,6 +1768,8 @@ fn play_stream() -> bool {
     let (vid_w, vid_h) = first_frame.avcc_sps.as_ref()
         .and_then(|sps| parse_sps_rbsp(sps))
         .unwrap_or((480, 272));
+    VIDEO_WIDTH.store(vid_w, Ordering::Relaxed);
+    VIDEO_HEIGHT.store(vid_h, Ordering::Relaxed);
     vlog(&format!(
         "[VIDEO] play_stream: SPS dimensions = {vid_w}x{vid_h}"
     ));
@@ -1621,12 +1777,14 @@ fn play_stream() -> bool {
     // Audio-only mode: skip video decode entirely.
     if AUDIO_ONLY.load(Ordering::Relaxed) {
         vlog("[VIDEO] audio-only mode, skipping video decode");
+        VIDEO_STATE.store(VSTATE_AUDIO_ONLY, Ordering::Relaxed);
         return drain_stream_only();
     }
 
     // ME was leaked from a previous deadlock — can't reinit until reboot.
     if ME_LEAKED.load(Ordering::Relaxed) {
         vlog("[VIDEO] ME leaked from prior deadlock, audio-only until reboot");
+        VIDEO_STATE.store(VSTATE_ME_LEAKED, Ordering::Relaxed);
         return drain_stream_only();
     }
 
@@ -1681,8 +1839,10 @@ fn play_stream() -> bool {
         return drain_stream_only();
     }
 
+    VIDEO_STATE.store(VSTATE_DECODING, Ordering::Relaxed);
+
     // Decode the first keyframe.
-    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
+    let mut start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
     let mut decode_count = 0u32;
     let mut frames_processed = 0u32;
     let mut error_count = 0u32;
@@ -1697,7 +1857,7 @@ fn play_stream() -> bool {
         ) {
             Ok(Some(decoded)) => {
                 decode_count += 1;
-                let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                push_frame_with_retry(decoded);
                 vlog("[VIDEO] play_stream: first frame decoded!");
             }
             Ok(None) => { no_pic_count += 1; }
@@ -1725,6 +1885,7 @@ fn play_stream() -> bool {
                 VideoCmd::Stop | VideoCmd::Shutdown => {
                     VLOG_ENABLED.store(true, Ordering::Relaxed);
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
+                    VIDEO_STATE.store(VSTATE_IDLE, Ordering::Relaxed);
                     while VIDEO_STREAM_QUEUE.pop().is_some() {}
                     while VIDEO_FRAME_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
@@ -1748,25 +1909,21 @@ fn play_stream() -> bool {
         // Pop next pre-demuxed H.264 frame from stream queue.
         match VIDEO_STREAM_QUEUE.pop() {
             Some(frame) => {
-                // Periodic decoder reinit to prevent ME deadlock.
-                // The ME deadlocks after ~70-90 frames on >480p content.
-                // Reinit on keyframes every ~50 decoded frames to stay
-                // well under the threshold. The reinit destroys and
-                // recreates the sceMpeg instance, resetting ME state.
-                // Near the deadlock threshold (~70 frames), skip non-keyframes
-                // to reduce ME state accumulation. Only decode keyframes
-                // (IDR frames are independently decodable).
-                if nal_dec.is_some() {
-                    let dec = nal_dec.as_ref().unwrap();
-                    if dec.flush_interval < u32::MAX
-                        && dec.frames_since_flush >= 50
-                        && !frame.is_keyframe
+                // Wait for output queue space BEFORE decoding.
+                // ME decode takes ~50ms per frame. Without this, we
+                // decode frames that will be dropped because the queue
+                // is full, wasting ~30% of ME time.
+                {
+                    let mut waits = 0u32;
+                    while VIDEO_FRAME_QUEUE.len()
+                        >= VIDEO_FRAME_QUEUE.capacity() as u32
                     {
-                        // Skip this P/B-frame — just count it.
-                        frames_processed += 1;
-                        continue;
+                        unsafe { psp::sys::sceKernelDelayThread(3_000); }
+                        waits += 1;
+                        if waits > 20 { break; } // 60ms max wait
                     }
                 }
+
 
                 // PSMF path: convert to Annex B and feed to ringbuffer.
                 let decode_result = if let Some(ref mut psmf) = psmf_dec {
@@ -1781,6 +1938,7 @@ fn play_stream() -> bool {
                             buf_idx: 0, // PSMF uses its own buffer
                             width: psmf.width,
                             height: psmf.height,
+                            stride: psmf.width,
                         }))
                     } else {
                         Ok(None)
@@ -1797,13 +1955,14 @@ fn play_stream() -> bool {
                 match decode_result {
                     Ok(Some(decoded)) => {
                         decode_count += 1;
+                        VIDEO_DECODE_COUNT.store(decode_count, Ordering::Relaxed);
 
                         // Suppress verbose logging after first frame.
                         if decode_count == 1 {
                             VLOG_ENABLED.store(false, Ordering::Relaxed);
                         }
 
-                        // Frame pacing via PTS.
+                        // Frame pacing via PTS with drift correction.
                         let pts_us =
                             (frame.timestamp_secs * 1_000_000.0) as u64;
                         let now_us = unsafe {
@@ -1818,15 +1977,31 @@ fn play_stream() -> bool {
                                     psp::sys::sceKernelDelayThread(wait);
                                 }
                             }
+                        } else if elapsed > pts_us + 200_000 {
+                            // Decoder >200ms behind — reset baseline to
+                            // prevent permanent fast-forward.
+                            start_us = now_us.wrapping_sub(pts_us);
                         }
 
-                        let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                        // Queue space was checked before decode. Push
+                        // should succeed; if not, drop gracefully.
+                        if VIDEO_FRAME_QUEUE.push(decoded).is_ok() {
+                            VIDEO_FRAMES_PUSHED.fetch_add(
+                                1, Ordering::Relaxed,
+                            );
+                        } else {
+                            VIDEO_FRAMES_DROPPED.fetch_add(
+                                1, Ordering::Relaxed,
+                            );
+                        }
                     }
                     Ok(None) => {
                         no_pic_count += 1;
+                        VIDEO_NOPIC_COUNT.store(no_pic_count, Ordering::Relaxed);
                     }
                     Err(()) => {
                         error_count += 1;
+                        VIDEO_ERROR_COUNT.store(error_count, Ordering::Relaxed);
                         // If the watchdog unblocked a stuck decode, the ME
                         // is in a bad state. Switch to audio-only immediately.
                         if error_count >= 3 && nal_dec.is_some() {
@@ -1844,15 +2019,19 @@ fn play_stream() -> bool {
                                 core::mem::forget(dec);
                                 ME_LEAKED.store(true, Ordering::Release);
                             }
+                            VIDEO_STATE.store(VSTATE_ME_LEAKED, Ordering::Relaxed);
                             return drain_stream_only();
                         }
                     }
                 }
                 frames_processed += 1;
+                VIDEO_FRAMES_PROCESSED.store(
+                    frames_processed, Ordering::Relaxed,
+                );
 
-                // Periodic diagnostic (unconditional) — every 10 frames
-                // so we can diagnose decode failures quickly.
-                if frames_processed % 10 == 0 {
+                // Periodic diagnostic (unconditional) — every 50 frames
+                // to reduce ~5-20ms per-write I/O overhead.
+                if frames_processed % 50 == 0 {
                     vlog_force(&format!(
                         "[VIDEO] #{frames_processed}: dec={decode_count} \
                          err={error_count} nopic={no_pic_count}"
@@ -1880,6 +2059,7 @@ fn play_stream() -> bool {
     }
 
     VLOG_ENABLED.store(true, Ordering::Relaxed);
+    VIDEO_STATE.store(VSTATE_IDLE, Ordering::Relaxed);
     vlog(&format!(
         "[VIDEO] play_stream ended: proc={frames_processed} \
          dec={decode_count} err={error_count} nopic={no_pic_count}"

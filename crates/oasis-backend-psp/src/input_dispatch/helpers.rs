@@ -336,10 +336,14 @@ pub(super) fn dispatch_tv_confirm(
                 "[TV] catalog has {} episodes",
                 catalog.episodes.len()
             ));
-            let best =
-                oasis_core::apps::tv_guide::select_smallest_for(&catalog.episodes, 20_000_000, 320);
+            let best = oasis_core::apps::tv_guide::select_smallest_with_max_width(
+                &catalog.episodes, 20_000_000, 320, 480,
+            );
             if let Some(ep) = best {
-                dbg_log(&format!("[TV] episode: {} ({}B)", ep.title, ep.width));
+                dbg_log(&format!(
+                    "[TV] episode: {} ({}x{} {}B)",
+                    ep.title, ep.width, ep.height, ep.size_bytes,
+                ));
                 if !oasis_backend_psp::network::is_net_initialized() {
                     dbg_log("[TV] calling ensure_net_init_pub...");
                     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {

@@ -278,7 +278,8 @@ pub(crate) fn render_classic(
                 CONTENT_H,
                 backend,
             );
-            if tv.tuned.is_some() {
+            if tv.tuned.is_some() && tv.preview_tex.is_none() {
+                // Only draw hints when video texture isn't covering screen.
                 chrome::draw_button_hints(backend, &[("O", "Untune"), ("^", "Back")]);
             } else if !tv.error_msg.is_empty() {
                 chrome::draw_button_hints(backend, &[("X", "Retry"), ("O", "Back")]);
