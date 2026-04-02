@@ -363,7 +363,9 @@ impl PspBackend {
                     let dst = data.add(row * dst_stride);
                     ptr::copy_nonoverlapping(src, dst, src_stride);
                     let words = dst as *mut u32;
-                    let n = src_stride / 4;
+                    // Alpha fixup covers full dst_stride so GU doesn't
+                    // sample transparent padding pixels at the right edge.
+                    let n = dst_stride / 4;
                     for i in 0..n {
                         *words.add(i) |= 0xFF00_0000;
                     }

@@ -607,10 +607,7 @@ fn psp_main() {
         }
         // Skip overlay (status/bottom bars) during TV Guide video playback
         // to prevent Z-order flickering over the video frame.
-        let skip_overlay = kiosk_app == KioskApp::TvGuide
-            && tv.tuned.is_some()
-            && tv.preview_tex.is_some();
-        if !skip_overlay {
+        if !video_fullscreen {
             let _ = sdi.draw_overlay_layer(&mut backend);
         }
 

@@ -1857,7 +1857,7 @@ fn play_stream() -> bool {
         ) {
             Ok(Some(decoded)) => {
                 decode_count += 1;
-                let _ = VIDEO_FRAME_QUEUE.push(decoded);
+                push_frame_with_retry(decoded);
                 vlog("[VIDEO] play_stream: first frame decoded!");
             }
             Ok(None) => { no_pic_count += 1; }
