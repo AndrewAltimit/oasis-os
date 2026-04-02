@@ -35,8 +35,7 @@ rust-std-src
 .crush/
 
 # CI review artifacts
-codex-review.md
-gemini-review.md
+*-review.md
 
 # Docker overrides
 docker-compose.override.yml
