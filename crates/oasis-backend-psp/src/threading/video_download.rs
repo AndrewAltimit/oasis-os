@@ -394,7 +394,7 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
 
         // I/O heartbeat every 50 reads.
         if loop_iter % 50 == 0 {
-            let cancel = DOWNLOAD_CANCEL.load(Ordering::Relaxed);
+            let cancel = DOWNLOAD_CANCEL.load(Ordering::Acquire);
             let playing = crate::video::is_video_playing();
             io_log(&format!(
                 "[IO-DL] heartbeat #{loop_iter}: {downloaded}B \

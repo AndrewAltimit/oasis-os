@@ -2114,6 +2114,14 @@ fn play_stream() -> bool {
     ));
     VIDEO_PLAYING.store(false, Ordering::Relaxed);
     send_audio_cmd(AudioCmd::VideoAudioStop);
+    // Wait for I/O thread to stop before dropping decoders,
+    // consistent with the Stop-command path.
+    for _i in 0..200u32 {
+        if crate::threading::is_download_stopped() {
+            break;
+        }
+        unsafe { psp::sys::sceKernelDelayThread(10_000); }
+    }
     // Drop decoders explicitly, then give ME time to clean up.
     drop(nal_dec);
     drop(psmf_dec);

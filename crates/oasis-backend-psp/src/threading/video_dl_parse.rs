@@ -159,7 +159,7 @@ pub(super) fn process_stream_chunk(
 
             if video_sample_data.len() == *sample_size as usize {
                 // Bail early if cancelled (don't push stale frames).
-                if DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+                if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
                     return;
                 }
                 // Convert AVCC→Annex B and push to video thread.
@@ -179,7 +179,7 @@ pub(super) fn process_stream_chunk(
 
             if sample_data.len() == *sample_size as usize {
                 // Bail early if cancelled.
-                if DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+                if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
                     return;
                 }
                 let data = core::mem::take(sample_data);
