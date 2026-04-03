@@ -364,7 +364,7 @@ pub(super) fn dispatch_tv_confirm(
                 let url = oasis_core::apps::tv_guide::ChannelCatalog::download_url(ep);
                 dbg_log(&format!("[TV] starting download: {url}"));
                 // Note: DOWNLOAD_CANCEL is reset at the START of
-                // handle_video_download_inner (not here) to avoid
+                // handle_video_download (not here) to avoid
                 // clearing a cancel that the old download hasn't seen.
                 tv.now_playing = ep.title.clone();
                 tv.downloading = true;
