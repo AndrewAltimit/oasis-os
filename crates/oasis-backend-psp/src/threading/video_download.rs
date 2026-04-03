@@ -7,8 +7,8 @@ use super::tls_http::TlsHttpReader;
 use super::video_dl_http::{HttpDataSource, http_open_with_redirect};
 use super::video_dl_parse::{find_moov_end, process_stream_chunk};
 use super::{
-    AudioCmd, DOWNLOAD_CANCEL, DOWNLOAD_STOPPED, IO_RESP_QUEUE, IoResponse, io_log,
-    io_log_verbose, send_audio_cmd, set_streaming_active,
+    AudioCmd, DOWNLOAD_CANCEL, DOWNLOAD_STOPPED, IO_CMD_QUEUE, IO_RESP_QUEUE, IoResponse,
+    io_log, io_log_verbose, send_audio_cmd, set_streaming_active,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,8 +130,8 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
     let mut last_progress: u64 = 0;
 
     loop {
-        // Check for cancellation (user pressed Circle during download).
-        if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
+        // Check for cancellation or new command (channel switch).
+        if DOWNLOAD_CANCEL.load(Ordering::Acquire) || !IO_CMD_QUEUE.is_empty() {
             io_log("[IO-DL] cancelled during moov buffering");
             source.cleanup();
             return;
@@ -326,6 +326,13 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
             io_log("[IO-DL] playback stopped, ending stream");
             break;
         }
+        // Check if a new download command was queued (user switched
+        // channels). Abort the current download to let the I/O thread
+        // process the new command.
+        if !IO_CMD_QUEUE.is_empty() {
+            io_log("[IO-DL] new command queued, aborting current stream");
+            break;
+        }
 
         if loop_iter < 3 {
             io_log_verbose(&format!("[IO-DL] phase2 read #{loop_iter}..."));
@@ -387,9 +394,11 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
 
         // I/O heartbeat every 50 reads.
         if loop_iter % 50 == 0 {
+            let cancel = DOWNLOAD_CANCEL.load(Ordering::Relaxed);
+            let playing = crate::video::is_video_playing();
             io_log(&format!(
                 "[IO-DL] heartbeat #{loop_iter}: {downloaded}B \
-                 v={v_idx} a={a_idx}"
+                 v={v_idx} a={a_idx} cancel={cancel} playing={playing}"
             ));
         }
 
