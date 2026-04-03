@@ -1756,8 +1756,10 @@ fn play_stream() -> bool {
     vlog("[VIDEO] play_stream: waiting for first keyframe...");
     let mut first_frame: Option<StreamFrame> = None;
 
-    for _ in 0..500 {
-        // ~5 seconds timeout (500 × 10ms)
+    for _ in 0..3000 {
+        // ~30 seconds timeout (3000 × 10ms). Needs to be long enough
+        // for: old download abort (2s) + TLS handshake (5-10s) +
+        // moov buffering (1-3s) + first keyframe extraction.
         if let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
             if matches!(cmd, VideoCmd::Stop | VideoCmd::Shutdown) {
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
