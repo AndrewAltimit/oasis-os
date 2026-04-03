@@ -245,6 +245,10 @@ static VIDEO_PLAYING: AtomicBool = AtomicBool::new(false);
 /// Set by I/O thread to signal video thread to enter streaming mode.
 /// The video thread clears it once it starts `play_stream()`.
 static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Guards against starting a new stream before the previous decoder
+/// has fully cleaned up (sceMpegDelete + sceMpegFinish). Set to false
+/// before decoder drop, true after drop + ME cooldown delay.
+static DECODER_READY: AtomicBool = AtomicBool::new(true);
 
 /// The sceMpeg internal semaphore ID (at mpeg_data+0x66c).
 static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 =
@@ -1044,10 +1048,12 @@ impl NalDecoder {
         // and we should stop video decode entirely.
         let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
-        // Use strided decode — CSC writes directly to FRAME_BUFFER
-        // at 512px stride, matching the texture buffer stride.
-        // No intermediate tight-pack copy needed.
-        match self.decoder.decode_into_strided(&nal, dst) {
+        // Strided decode with cached copy — CSC writes to internal
+        // output_buf, then dcache-invalidated cached read to dst.
+        // decode_csc_direct crashes on 2nd decoder instance (ME CSC
+        // state issue with external buffers after sceMpegDelete).
+        let result = self.decoder.decode_into_strided(&nal, dst);
+        match result {
             Ok(true) => {
                 let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
                     - t0) / 1000;
@@ -1713,6 +1719,25 @@ fn push_frame_with_retry(frame: DecodedFrame) -> bool {
 ///
 /// Returns `true` if Shutdown was received (caller should exit thread).
 fn play_stream() -> bool {
+    // Wait for previous decoder cleanup to complete before starting
+    // a new stream. sceMpegDelete + sceMpegFinish need time for
+    // kernel-side ME cleanup; starting sceMpegCreate too soon corrupts state.
+    if !DECODER_READY.load(Ordering::Acquire) {
+        vlog("[VIDEO] play_stream: waiting for previous decoder cleanup...");
+        for _ in 0..100 {
+            // 100 × 10ms = 1 second max wait
+            if DECODER_READY.load(Ordering::Acquire) {
+                break;
+            }
+            unsafe { psp::sys::sceKernelDelayThread(10_000); }
+        }
+        if !DECODER_READY.load(Ordering::Acquire) {
+            vlog("[VIDEO] play_stream: cleanup timeout, proceeding anyway");
+        } else {
+            vlog("[VIDEO] play_stream: previous decoder cleanup done");
+        }
+    }
+
     vlog("[VIDEO] play_stream: starting streaming decode");
     reset_stats();
     VIDEO_STATE.store(VSTATE_WAITING_KEYFRAME, Ordering::Relaxed);
@@ -1789,55 +1814,37 @@ fn play_stream() -> bool {
     }
 
     // NAL direct path (mpeg_vsh370.prx): works for ≤480p content.
-    // >480p content (mode 5) deadlocks sceMpegAvcDecode immediately on
-    // current firmware — skip video and use audio-only.
-    // For ≤480p, decode with a safety cutoff.
+    // >480p content deadlocks sceMpegAvcDecode (mode 5 firmware bug).
+    // Skip video decode entirely and use audio-only for >480p.
     let video_oversized = vid_w > 480 || vid_h > 480;
-    // Safety cutoff for >480p: ME deadlocks between frame 1-60 on mode 5.
-    // Start conservative, increase via TCP "video-limit <N>" command.
-    let max_decode_frames: u32 = if video_oversized {
-        VIDEO_FRAME_LIMIT.load(Ordering::Relaxed)
-    } else {
-        500
-    };
-    let mut psmf_dec: Option<crate::psmf_decode::PsmfDecoder> = None;
-    let mut nal_dec = if video_oversized {
-        // >480p: try NAL decode (mode 5) with strict safety cutoff.
-        // The ME may deadlock after N frames, so we limit attempts.
+    if video_oversized {
         vlog_force(&format!(
-            "[VIDEO] {vid_w}x{vid_h} is >480p (mode 5). Trying NAL decode \
-             with {max_decode_frames}-frame cutoff..."
+            "[VIDEO] {vid_w}x{vid_h} is >480p — audio-only \
+             (mode 5 deadlocks ME firmware)"
         ));
-        match NalDecoder::try_init(&first_frame) {
-            Ok(dec) => {
-                vlog_force(&format!(
-                    "[VIDEO] NAL init OK: ddr={:#x} flush_interval={}",
-                    dec.decoder.ddr_top(), dec.flush_interval
-                ));
-                Some(dec)
-            }
-            Err(e) => {
-                vlog_force(&format!("[VIDEO] NAL init FAILED: {e}, audio-only"));
-                None
-            }
-        }
-    } else {
-        match NalDecoder::try_init(&first_frame) {
-            Ok(dec) => {
-                vlog("[VIDEO] NAL decoder initialized OK");
-                Some(dec)
-            },
-            Err(e) => {
-                vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
-                None
-            },
-        }
+        VIDEO_STATE.store(VSTATE_AUDIO_ONLY, Ordering::Relaxed);
+        return drain_stream_only();
+    }
+
+    let mut psmf_dec: Option<crate::psmf_decode::PsmfDecoder> = None;
+    let mut nal_dec = match NalDecoder::try_init(&first_frame) {
+        Ok(dec) => {
+            vlog("[VIDEO] NAL decoder initialized OK");
+            Some(dec)
+        },
+        Err(e) => {
+            vlog(&format!("[VIDEO] NAL decoder failed: {e}, audio-only"));
+            None
+        },
     };
 
     // If no decoder available, go straight to audio-only drain.
     if nal_dec.is_none() && psmf_dec.is_none() {
         return drain_stream_only();
     }
+
+    // Decoder created — mark not ready for new streams until cleanup.
+    DECODER_READY.store(false, Ordering::Release);
 
     VIDEO_STATE.store(VSTATE_DECODING, Ordering::Relaxed);
 
@@ -1889,14 +1896,21 @@ fn play_stream() -> bool {
                     while VIDEO_STREAM_QUEUE.pop().is_some() {}
                     while VIDEO_FRAME_QUEUE.pop().is_some() {}
                     send_audio_cmd(AudioCmd::VideoAudioStop);
-                    if matches!(cmd, VideoCmd::Shutdown) {
-                        return true;
-                    }
-                    vlog(&format!(
-                        "[VIDEO] play_stream stopped: proc={frames_processed} \
+                    let is_shutdown = matches!(cmd, VideoCmd::Shutdown);
+                    vlog_force(&format!(
+                        "[VIDEO] STOP: proc={frames_processed} \
                          dec={decode_count} err={error_count} nopic={no_pic_count}"
                     ));
-                    return false;
+                    // Drop decoder explicitly with logging at each step.
+                    vlog_force("[VIDEO] STOP: dropping nal_dec...");
+                    drop(nal_dec.take());
+                    vlog_force("[VIDEO] STOP: nal_dec dropped OK");
+                    drop(psmf_dec.take());
+                    vlog_force("[VIDEO] STOP: cooldown 200ms...");
+                    unsafe { psp::sys::sceKernelDelayThread(200_000); }
+                    DECODER_READY.store(true, Ordering::Release);
+                    vlog_force("[VIDEO] STOP: cleanup complete");
+                    return is_shutdown;
                 },
                 _ => {},
             }
@@ -2020,6 +2034,8 @@ fn play_stream() -> bool {
                                 ME_LEAKED.store(true, Ordering::Release);
                             }
                             VIDEO_STATE.store(VSTATE_ME_LEAKED, Ordering::Relaxed);
+                            // ME is leaked — no cleanup needed, mark ready.
+                            DECODER_READY.store(true, Ordering::Release);
                             return drain_stream_only();
                         }
                     }
@@ -2066,6 +2082,12 @@ fn play_stream() -> bool {
     ));
     VIDEO_PLAYING.store(false, Ordering::Relaxed);
     send_audio_cmd(AudioCmd::VideoAudioStop);
+    // Drop decoders explicitly, then give ME time to clean up.
+    drop(nal_dec);
+    drop(psmf_dec);
+    unsafe { psp::sys::sceKernelDelayThread(50_000); }
+    DECODER_READY.store(true, Ordering::Release);
+    vlog("[VIDEO] decoder cleanup done");
     false
 }
 
