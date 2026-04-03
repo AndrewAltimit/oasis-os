@@ -1901,13 +1901,34 @@ fn play_stream() -> bool {
                         "[VIDEO] STOP: proc={frames_processed} \
                          dec={decode_count} err={error_count} nopic={no_pic_count}"
                     ));
-                    // Drop decoder explicitly with logging at each step.
+                    // Wait for I/O thread to fully stop before dropping
+                    // the decoder. The I/O thread may be blocked in a
+                    // network read; give it up to 2 seconds.
+                    vlog_force("[VIDEO] STOP: waiting for I/O thread...");
+                    for i in 0..200u32 {
+                        if crate::threading::is_download_stopped() {
+                            break;
+                        }
+                        if i % 50 == 49 {
+                            vlog_force(&format!(
+                                "[VIDEO] STOP: still waiting for I/O ({}ms)",
+                                (i + 1) * 10
+                            ));
+                        }
+                        unsafe { psp::sys::sceKernelDelayThread(10_000); }
+                    }
+                    if !crate::threading::is_download_stopped() {
+                        vlog_force("[VIDEO] STOP: I/O timeout, proceeding");
+                    } else {
+                        vlog_force("[VIDEO] STOP: I/O stopped");
+                    }
+                    // Drop decoder explicitly now that I/O is quiesced.
                     vlog_force("[VIDEO] STOP: dropping nal_dec...");
                     drop(nal_dec.take());
                     vlog_force("[VIDEO] STOP: nal_dec dropped OK");
                     drop(psmf_dec.take());
-                    vlog_force("[VIDEO] STOP: cooldown 200ms...");
-                    unsafe { psp::sys::sceKernelDelayThread(200_000); }
+                    // Brief ME cooldown after sceMpegDelete/Finish.
+                    unsafe { psp::sys::sceKernelDelayThread(100_000); }
                     DECODER_READY.store(true, Ordering::Release);
                     vlog_force("[VIDEO] STOP: cleanup complete");
                     return is_shutdown;

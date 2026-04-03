@@ -63,9 +63,19 @@ static RADIO_META_QUEUE: SpscQueue<String, 4> = SpscQueue::new();
 /// Checked by I/O thread during moov buffering and streaming to abort early.
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// Set by the I/O thread when it has fully exited handle_video_download()
+/// and cleaned up all HTTP/TLS resources. The video thread waits for this
+/// before dropping the decoder to avoid race conditions.
+static DOWNLOAD_STOPPED: AtomicBool = AtomicBool::new(true);
+
 /// Request cancellation of the current video download.
 pub fn cancel_video_download() {
     DOWNLOAD_CANCEL.store(true, Ordering::Release);
+}
+
+/// Check if the I/O download thread has fully stopped.
+pub fn is_download_stopped() -> bool {
+    DOWNLOAD_STOPPED.load(Ordering::Acquire)
 }
 
 // ---------------------------------------------------------------------------
