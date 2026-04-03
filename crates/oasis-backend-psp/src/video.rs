@@ -1753,6 +1753,10 @@ fn play_stream() -> bool {
 
     // We need the first keyframe to extract SPS and get video dimensions
     // before initializing the decoder. Wait for it.
+    // Drain any stale frames from the previous stream (the I/O thread
+    // may have pushed frames between drain_stream_only exiting and
+    // this play_stream starting).
+    while VIDEO_STREAM_QUEUE.pop().is_some() {}
     vlog("[VIDEO] play_stream: waiting for first keyframe...");
     let mut first_frame: Option<StreamFrame> = None;
 
@@ -1770,10 +1774,17 @@ fn play_stream() -> bool {
 
         if let Some(frame) = VIDEO_STREAM_QUEUE.pop() {
             if frame.is_keyframe {
+                vlog_force(&format!(
+                    "[VIDEO] GOT KEYFRAME: sz={} ts={:.2}",
+                    frame.data.len(), frame.timestamp_secs,
+                ));
                 first_frame = Some(frame);
                 break;
             }
             // Skip non-keyframes before decoder init.
+            vlog_force(&format!(
+                "[VIDEO] skip non-kf: sz={}", frame.data.len(),
+            ));
         }
 
         // Wait for I/O thread to signal a new frame (10ms timeout).
