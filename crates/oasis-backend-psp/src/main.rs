@@ -365,10 +365,8 @@ fn psp_main() {
             {
                 latest = Some(newer);
             }
-            // Upload every 2nd frame. Cached copy takes ~44ms per upload;
-            // skipping alternate frames gives audio uninterrupted CPU time.
-            let do_upload = latest.is_some()
-                && (tv.preview_tex.is_none() || viz_frame % 2 == 0);
+            // Upload every frame — direct CSC is fast enough (~15ms).
+            let do_upload = latest.is_some();
             if let Some(frame) = latest {
                 if do_upload {
                     let t0 = unsafe {
