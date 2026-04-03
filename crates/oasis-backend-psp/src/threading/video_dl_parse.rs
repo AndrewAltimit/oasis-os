@@ -1,8 +1,9 @@
 //! MP4 parsing and stream demux helpers for video downloads: moov atom
 //! detection, sample table traversal, and interleaved sample extraction.
 
-use super::{AUDIO_QUEUE, AudioCmd};
+use super::{AUDIO_QUEUE, AudioCmd, DOWNLOAD_CANCEL};
 use crate::video::{StreamFrame, try_push_stream_frame};
+use core::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
 // MP4 box parsing
@@ -157,6 +158,10 @@ pub(super) fn process_stream_chunk(
             *http_pos += take as u64;
 
             if video_sample_data.len() == *sample_size as usize {
+                // Bail early if cancelled (don't push stale frames).
+                if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
+                    return;
+                }
                 // Convert AVCC→Annex B and push to video thread.
                 push_video_sample(video_sample_data, *v_idx, video_track);
                 video_sample_data.clear();
@@ -173,6 +178,10 @@ pub(super) fn process_stream_chunk(
             *http_pos += take as u64;
 
             if sample_data.len() == *sample_size as usize {
+                // Bail early if cancelled.
+                if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
+                    return;
+                }
                 let data = core::mem::take(sample_data);
                 // Blocking push with backpressure: retry until the audio
                 // queue has space, sleeping 8ms between attempts. This
@@ -220,6 +229,14 @@ fn push_video_sample(
 
     let is_keyframe = vt.sample_is_keyframe(v_idx);
     let timestamp_secs = vt.sample_timestamp(v_idx);
+
+    if v_idx < 5 || is_keyframe {
+        super::io_log_verbose(&format!(
+            "[IO-PUSH] v={v_idx} kf={is_keyframe} sz={} playing={}",
+            raw_data.len(),
+            crate::video::is_video_playing(),
+        ));
+    }
 
     let prefix_size = vt.avcc.as_ref()
         .map_or(4, |avcc| avcc.nal_length_size as u8);

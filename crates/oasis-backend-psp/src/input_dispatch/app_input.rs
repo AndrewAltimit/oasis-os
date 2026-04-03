@@ -568,11 +568,12 @@ pub(crate) fn dispatch_app_input(
         },
         InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::TvGuide => {
             if tv.tuned.is_some() || tv.downloading {
+                // Signal cancellation — I/O and video threads will
+                // clean up asynchronously. Don't free the texture here;
+                // the main loop frees it when is_video_playing() goes false.
                 oasis_backend_psp::threading::cancel_video_download();
                 oasis_backend_psp::video::send_video_cmd(oasis_backend_psp::video::VideoCmd::Stop);
                 audio.send(AudioCmd::VideoAudioStop);
-                backend.free_video_texture();
-                tv.preview_tex = None;
                 tv.tuned = None;
                 tv.downloading = false;
                 tv.now_playing.clear();

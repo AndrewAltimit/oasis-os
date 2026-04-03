@@ -325,6 +325,12 @@ pub(super) fn dispatch_tv_confirm(
     if tv.tuned.is_some() || tv.downloading {
         return;
     }
+    // Warn if previous download is still shutting down, but don't block.
+    // The DOWNLOAD_CANCEL flag will be reset below, and the old I/O thread
+    // download will exit at its next cancel check.
+    if !oasis_backend_psp::threading::is_download_stopped() {
+        dbg_log("[TV] note: previous download still stopping");
+    }
     dbg_log(&format!(
         "[TV] X pressed, tuning ch {} (catalogs={})",
         tv.selected,
@@ -357,6 +363,9 @@ pub(super) fn dispatch_tv_confirm(
                 }
                 let url = oasis_core::apps::tv_guide::ChannelCatalog::download_url(ep);
                 dbg_log(&format!("[TV] starting download: {url}"));
+                // Note: DOWNLOAD_CANCEL is reset at the START of
+                // handle_video_download (not here) to avoid
+                // clearing a cancel that the old download hasn't seen.
                 tv.now_playing = ep.title.clone();
                 tv.downloading = true;
                 tv.download_progress = 0.0;

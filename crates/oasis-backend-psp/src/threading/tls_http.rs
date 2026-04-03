@@ -245,10 +245,10 @@ impl TlsHttpReader {
                 4,
             );
             // Set send/receive timeouts for the TLS stream.
-            // 10s is short enough to detect CDN connection drops quickly
-            // but long enough for slow TLS reads on PSP WiFi.
+            // 2s keeps cancel responsive (DOWNLOAD_CANCEL checked after
+            // each read) while accommodating PSP WiFi latency.
             let timeout = Timeval {
-                tv_sec: 10,
+                tv_sec: 2,
                 tv_usec: 0,
             };
             let timeout_ptr = &timeout as *const Timeval as *const core::ffi::c_void;

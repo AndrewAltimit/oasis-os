@@ -311,7 +311,10 @@ impl PspBackend {
     /// Update the persistent video texture with new RGBA frame data.
     ///
     /// Skips allocation, zeroing, and texture registry lookup — only copies
-    /// pixel rows into the existing buffer via DMA (or CPU fallback).
+    /// pixel rows into the existing buffer + D-cache flush.
+    /// Alpha fixup is NOT performed here; the GU blit uses
+    /// `TextureColorComponent::Rgb` to ignore the alpha channel,
+    /// saving ~122K word operations per frame.
     /// Returns the TextureId on success.
     pub fn update_video_texture(
         &mut self,
@@ -338,37 +341,24 @@ impl PspBackend {
         let total = dst_stride * height as usize;
 
         // When source stride matches texture stride (both 512px from CSC),
-        // do a single bulk copy + alpha fixup. No row-by-row needed.
+        // do a single bulk copy. No row-by-row needed.
         if src_stride == dst_stride && rgba_data.len() >= total {
             unsafe {
                 ptr::copy_nonoverlapping(
                     rgba_data.as_ptr(), data, total,
                 );
-                // Alpha fixup on entire buffer at once.
-                let words = data as *mut u32;
-                let n = total / 4;
-                for i in 0..n {
-                    *words.add(i) |= 0xFF00_0000;
-                }
                 psp::cache::dcache_writeback_range(
                     data as *const core::ffi::c_void,
                     total as u32,
                 );
             }
         } else {
-            // Fallback: row-by-row copy with alpha fixup.
+            // Fallback: row-by-row copy (no alpha fixup).
             unsafe {
                 for row in 0..height as usize {
                     let src = rgba_data.as_ptr().add(row * src_stride);
                     let dst = data.add(row * dst_stride);
                     ptr::copy_nonoverlapping(src, dst, src_stride);
-                    let words = dst as *mut u32;
-                    // Alpha fixup covers full dst_stride so GU doesn't
-                    // sample transparent padding pixels at the right edge.
-                    let n = dst_stride / 4;
-                    for i in 0..n {
-                        *words.add(i) |= 0xFF00_0000;
-                    }
                 }
                 psp::cache::dcache_writeback_range(
                     data as *const core::ffi::c_void,
@@ -391,6 +381,14 @@ impl PspBackend {
         self.update_video_texture(width, height, rgba_data)
     }
 
+    /// Set the actual video content dimensions (may differ from texture
+    /// stride). This controls UV mapping in blit so only the content
+    /// region is sampled, not the stride padding.
+    pub fn set_video_content_size(&mut self, w: u32, h: u32) {
+        self.video_content_w = w;
+        self.video_content_h = h;
+    }
+
     /// Free the persistent video texture (call when playback stops).
     pub fn free_video_texture(&mut self) {
         if let Some(id) = self.video_tex.take() {
@@ -398,5 +396,7 @@ impl PspBackend {
         }
         self.video_tex_w = 0;
         self.video_tex_h = 0;
+        self.video_content_w = 0;
+        self.video_content_h = 0;
     }
 }

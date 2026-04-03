@@ -365,12 +365,8 @@ fn psp_main() {
             {
                 latest = Some(newer);
             }
-            // Frameskip: only upload texture every 3rd frame.
-            // The ~81ms texture upload starves the audio thread, causing
-            // stutters. Skipping 2 out of 3 uploads gives audio 162ms
-            // of uninterrupted CPU time between uploads (~10fps video).
-            let do_upload = latest.is_some()
-                && (tv.preview_tex.is_none() || viz_frame % 3 == 0);
+            // Upload every frame — direct CSC is fast enough (~15ms).
+            let do_upload = latest.is_some();
             if let Some(frame) = latest {
                 if do_upload {
                     let t0 = unsafe {
@@ -383,6 +379,10 @@ fn psp_main() {
                     // stride (both 512px). This eliminates row-by-row copy.
                     tv.preview_tex = backend.update_video_texture(
                         frame.stride, frame.height, pixels,
+                    );
+                    // Set actual content dimensions for correct UV mapping.
+                    backend.set_video_content_size(
+                        frame.width, frame.height,
                     );
                     let dt = (unsafe {
                         psp::sys::sceKernelGetSystemTimeWide()

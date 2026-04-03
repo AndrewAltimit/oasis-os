@@ -299,11 +299,23 @@ impl PspBackend {
         let Some(Some(texture)) = self.textures.get(idx) else {
             return;
         };
-        let tex_w = texture.width as i16;
-        let tex_h = texture.height as i16;
         let buf_w = texture.buf_w;
         let buf_h = texture.buf_h;
         let data_ptr = texture.data;
+
+        // For video textures, use actual content dimensions for UV so
+        // only video pixels are sampled (not stride padding).
+        let is_video = self.video_tex == Some(tex);
+        let tex_w = if is_video && self.video_content_w > 0 {
+            self.video_content_w as i16
+        } else {
+            texture.width as i16
+        };
+        let tex_h = if is_video && self.video_content_h > 0 {
+            self.video_content_h as i16
+        } else {
+            texture.height as i16
+        };
 
         // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
         // draws a Sprites primitive. data_ptr validity is ensured by
@@ -320,7 +332,13 @@ impl PspBackend {
                 buf_w as i32,
                 uncached_ptr,
             );
-            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+            // Video textures: use Rgb to ignore alpha (CSC outputs 0x00).
+            let tcc = if is_video {
+                TextureColorComponent::Rgb
+            } else {
+                TextureColorComponent::Rgba
+            };
+            sys::sceGuTexFunc(TextureEffect::Modulate, tcc);
 
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
                 as *mut TexturedColorVertex;
@@ -412,7 +430,16 @@ impl PspBackend {
                 buf_w as i32,
                 uncached_ptr,
             );
-            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+            // Video textures skip alpha fixup — CSC outputs alpha=0x00.
+            // Use Rgb color component so GU ignores texture alpha and
+            // uses vertex alpha (0xFF) instead.
+            let is_video = self.video_tex == Some(tex);
+            let tcc = if is_video {
+                TextureColorComponent::Rgb
+            } else {
+                TextureColorComponent::Rgba
+            };
+            sys::sceGuTexFunc(TextureEffect::Modulate, tcc);
             sys::sceGuTexFilter(TextureFilter::Linear, TextureFilter::Linear);
 
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)

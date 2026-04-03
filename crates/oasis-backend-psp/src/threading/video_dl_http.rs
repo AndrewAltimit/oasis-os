@@ -125,8 +125,8 @@ pub(super) unsafe fn http_open_with_redirect(
 
         // SAFETY: Setting timeouts on valid request ID.
         unsafe {
-            sys::sceHttpSetConnectTimeOut(req_id, 30_000_000);
-            sys::sceHttpSetRecvTimeOut(req_id, 30_000_000);
+            sys::sceHttpSetConnectTimeOut(req_id, 5_000_000);
+            sys::sceHttpSetRecvTimeOut(req_id, 2_000_000);
         }
 
         // SAFETY: Sending HTTP GET request with no body.
