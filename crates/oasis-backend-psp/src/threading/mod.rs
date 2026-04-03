@@ -73,12 +73,6 @@ pub fn cancel_video_download() {
     DOWNLOAD_CANCEL.store(true, Ordering::Release);
 }
 
-/// Reset the cancellation flag before starting a new download.
-/// Called from the main thread in dispatch_tv_confirm.
-pub fn reset_download_cancel() {
-    DOWNLOAD_CANCEL.store(false, Ordering::Release);
-}
-
 /// Check if the I/O download thread has fully stopped.
 pub fn is_download_stopped() -> bool {
     DOWNLOAD_STOPPED.load(Ordering::Acquire)

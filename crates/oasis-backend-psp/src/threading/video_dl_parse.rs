@@ -231,7 +231,7 @@ fn push_video_sample(
     let timestamp_secs = vt.sample_timestamp(v_idx);
 
     if v_idx < 5 || is_keyframe {
-        super::io_log(&format!(
+        super::io_log_verbose(&format!(
             "[IO-PUSH] v={v_idx} kf={is_keyframe} sz={} playing={}",
             raw_data.len(),
             crate::video::is_video_playing(),
