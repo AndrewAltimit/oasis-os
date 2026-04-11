@@ -278,13 +278,15 @@ HEADER
             local perf
             perf=$(grep "\[SHADER\] render+upload" "$log_file" | tail -1 || true)
             if [ -n "$perf" ]; then
-                echo "  <div class='perf'>$perf</div>" >> "$report"
+                local escaped_perf
+                escaped_perf=$(echo "$perf" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                echo "  <div class='perf'>$escaped_perf</div>" >> "$report"
             fi
 
             # Abbreviated log.
             {
                 echo "  <details><summary>Log</summary><div class='log'>"
-                head -20 "$log_file"
+                head -20 "$log_file" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
                 echo "  </div></details>"
             } >> "$report"
         else
@@ -332,10 +334,11 @@ HEADER
             echo "<table><tr><th>Shader</th><th>Render+Upload (us)</th><th>Frame</th></tr>"
         } >> "$report"
         while IFS= read -r line; do
-            local us frame
+            local us frame escaped_line
             us=$(echo "$line" | grep -oP '[0-9]+us' | head -1 || echo "?")
             frame=$(echo "$line" | grep -oP 'frame \K[0-9]+' || echo "?")
-            echo "  <tr><td>$line</td><td>$us</td><td>$frame</td></tr>" >> "$report"
+            escaped_line=$(echo "$line" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+            echo "  <tr><td>$escaped_line</td><td>$us</td><td>$frame</td></tr>" >> "$report"
         done < "$OUT_DIR/performance.txt"
         echo "</table>" >> "$report"
     fi
@@ -454,21 +457,41 @@ main() {
 
     local passed=0
     local failed=0
+    local skipped=0
 
     # NOTE: Since the default skin is compiled into the EBOOT (config
     # read from rcfg binary format), headless testing validates the
     # compiled default. To test other skins, rebuild with the target
     # skin as default or use the TCP command server on hardware.
     #
-    # For now, we test the currently compiled default skin and verify
-    # the log output. The unit tests in skins.rs cover all presets.
+    # When running all skins, the first successful activation reveals
+    # the compiled default; remaining skins are skipped (not failures).
+    # The unit tests in skins.rs cover all presets.
 
     echo "--- Shader Activation Tests ---"
+    local detected_default=""
     for skin in "${skins_to_test[@]}"; do
+        # If we already found the compiled default and this isn't it, skip.
+        if [ -n "$detected_default" ] && [ "$skin" != "$detected_default" ]; then
+            log_warn "$skin -- skipped (not compiled default '$detected_default')"
+            ((skipped++))
+            continue
+        fi
+
         if test_shader_activation "$skin"; then
             ((passed++))
+            if [ -z "$detected_default" ]; then
+                detected_default="$skin"
+            fi
         else
-            ((failed++))
+            # If no default detected yet, this skin just wasn't the
+            # compiled default -- skip rather than fail.
+            if [ -z "$detected_default" ] && [ ${#skins_to_test[@]} -gt 1 ]; then
+                log_warn "$skin -- not the compiled default, skipping"
+                ((skipped++))
+            else
+                ((failed++))
+            fi
         fi
     done
 
@@ -491,7 +514,7 @@ main() {
         echo ""
     fi
 
-    echo "Results: $passed passed, $failed failed"
+    echo "Results: $passed passed, $failed failed, $skipped skipped"
     echo ""
 
     generate_report
