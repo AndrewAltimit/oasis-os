@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{TextDecorationLine, TextDecorationStyle};
+use crate::css::values::TextDecorationStyle;
 use crate::html::dom::NodeId;
 use crate::layout::box_model::LayoutBox;
 use oasis_types::backend::SdiBackend;
@@ -142,66 +142,74 @@ pub(super) fn paint_text(
     }
     let text_width = text_w.max(0.0) as u32;
 
-    // Text decorations: underline, line-through, overline.
-    if style.text_decoration.line != TextDecorationLine::None {
+    // Text decorations: underline, line-through, overline (bitflags — multiple can be active).
+    if !style.text_decoration.line.is_none() {
         let deco_color = style
             .text_decoration
             .color
             .map(|c| apply_filters_and_opacity(c, style.opacity, &style.filters))
             .unwrap_or(color);
 
-        let deco_y = match style.text_decoration.line {
-            TextDecorationLine::Underline => {
-                sy + (style.font_size * 0.85) as i32 + style.text_underline_offset as i32
-            },
-            TextDecorationLine::LineThrough => sy + (style.font_size * 0.4) as i32,
-            TextDecorationLine::Overline => sy,
-            TextDecorationLine::None => unreachable!(),
-        };
+        // Draw each active decoration line.
+        let positions: &[(bool, i32)] = &[
+            (
+                style.text_decoration.line.has_underline(),
+                sy + (style.font_size * 0.85) as i32 + style.text_underline_offset as i32,
+            ),
+            (
+                style.text_decoration.line.has_line_through(),
+                sy + (style.font_size * 0.4) as i32,
+            ),
+            (style.text_decoration.line.has_overline(), sy),
+        ];
 
-        match style.text_decoration.style {
-            TextDecorationStyle::Solid => {
-                backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
-            },
-            TextDecorationStyle::Double => {
-                backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
-                backend.fill_rect(sx, deco_y + 2, text_width, 1, deco_color)?;
-            },
-            TextDecorationStyle::Dashed => {
-                let dash_len = 4u32;
-                let mut pos = 0u32;
-                let mut draw = true;
-                while pos < text_width {
-                    let seg = dash_len.min(text_width - pos);
-                    if draw {
-                        backend.fill_rect(sx + pos as i32, deco_y, seg, 1, deco_color)?;
+        for &(active, deco_y) in positions {
+            if !active {
+                continue;
+            }
+            match style.text_decoration.style {
+                TextDecorationStyle::Solid => {
+                    backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
+                },
+                TextDecorationStyle::Double => {
+                    backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
+                    backend.fill_rect(sx, deco_y + 2, text_width, 1, deco_color)?;
+                },
+                TextDecorationStyle::Dashed => {
+                    let dash_len = 4u32;
+                    let mut pos = 0u32;
+                    let mut draw = true;
+                    while pos < text_width {
+                        let seg = dash_len.min(text_width - pos);
+                        if draw {
+                            backend.fill_rect(sx + pos as i32, deco_y, seg, 1, deco_color)?;
+                        }
+                        pos += seg;
+                        draw = !draw;
                     }
-                    pos += seg;
-                    draw = !draw;
-                }
-            },
-            TextDecorationStyle::Dotted => {
-                let mut pos = 0u32;
-                while pos < text_width {
-                    backend.fill_rect(sx + pos as i32, deco_y, 1, 1, deco_color)?;
-                    pos += 2;
-                }
-            },
-            TextDecorationStyle::Wavy => {
-                // Approximate wavy with alternating 1px up/down segments.
-                let mut pos = 0u32;
-                while pos < text_width {
-                    let offset = if (pos / 2).is_multiple_of(2) { 0 } else { 1 };
-                    backend.fill_rect(
-                        sx + pos as i32,
-                        deco_y + offset,
-                        1.min(text_width - pos),
-                        1,
-                        deco_color,
-                    )?;
-                    pos += 1;
-                }
-            },
+                },
+                TextDecorationStyle::Dotted => {
+                    let mut pos = 0u32;
+                    while pos < text_width {
+                        backend.fill_rect(sx + pos as i32, deco_y, 1, 1, deco_color)?;
+                        pos += 2;
+                    }
+                },
+                TextDecorationStyle::Wavy => {
+                    let mut pos = 0u32;
+                    while pos < text_width {
+                        let offset = if (pos / 2).is_multiple_of(2) { 0 } else { 1 };
+                        backend.fill_rect(
+                            sx + pos as i32,
+                            deco_y + offset,
+                            1.min(text_width - pos),
+                            1,
+                            deco_color,
+                        )?;
+                        pos += 1;
+                    }
+                },
+            }
         }
     }
 

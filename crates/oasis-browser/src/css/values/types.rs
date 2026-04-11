@@ -192,13 +192,37 @@ pub enum TextAlign {
     Justify,
 }
 
-/// CSS `text-decoration-line` property.
+/// CSS `text-decoration-line` as bitflags (supports `underline line-through`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextDecorationLine {
-    None,
-    Underline,
-    LineThrough,
-    Overline,
+pub struct TextDecorationLine(pub u8);
+
+impl TextDecorationLine {
+    pub const NONE: Self = Self(0);
+    pub const UNDERLINE: Self = Self(1);
+    pub const LINE_THROUGH: Self = Self(2);
+    pub const OVERLINE: Self = Self(4);
+
+    pub fn has_underline(self) -> bool {
+        self.0 & Self::UNDERLINE.0 != 0
+    }
+
+    pub fn has_line_through(self) -> bool {
+        self.0 & Self::LINE_THROUGH.0 != 0
+    }
+
+    pub fn has_overline(self) -> bool {
+        self.0 & Self::OVERLINE.0 != 0
+    }
+
+    pub fn is_none(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOrAssign for TextDecorationLine {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
 }
 
 /// CSS `text-decoration-style` property.
@@ -221,7 +245,7 @@ pub struct TextDecoration {
 
 impl TextDecoration {
     pub const NONE: Self = Self {
-        line: TextDecorationLine::None,
+        line: TextDecorationLine::NONE,
         style: TextDecorationStyle::Solid,
         color: None,
     };

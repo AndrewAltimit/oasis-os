@@ -1135,28 +1135,34 @@ fn record_text(
         node_id: ctx.current_node,
     });
 
-    if style.text_decoration.line != crate::css::values::TextDecorationLine::None {
+    if !style.text_decoration.line.is_none() {
         let deco_color = style.text_decoration.color.map_or(color, |c| {
             super::apply_filters_and_opacity(c, 1.0, &style.filters)
         });
-        let deco_y = match style.text_decoration.line {
-            crate::css::values::TextDecorationLine::Underline => {
-                sy + (style.font_size * 0.85) as i32
-            },
-            crate::css::values::TextDecorationLine::LineThrough => {
-                sy + (style.font_size * 0.4) as i32
-            },
-            crate::css::values::TextDecorationLine::Overline => sy,
-            crate::css::values::TextDecorationLine::None => unreachable!(),
-        };
-        dl.push(DisplayItem::FillRect {
-            x: sx,
-            y: deco_y,
-            w: text_width,
-            h: 1,
-            color: deco_color,
-            node_id: ctx.current_node,
-        });
+        let positions: &[(bool, i32)] = &[
+            (
+                style.text_decoration.line.has_underline(),
+                sy + (style.font_size * 0.85) as i32 + style.text_underline_offset as i32,
+            ),
+            (
+                style.text_decoration.line.has_line_through(),
+                sy + (style.font_size * 0.4) as i32,
+            ),
+            (style.text_decoration.line.has_overline(), sy),
+        ];
+        for &(active, deco_y) in positions {
+            if !active {
+                continue;
+            }
+            dl.push(DisplayItem::FillRect {
+                x: sx,
+                y: deco_y,
+                w: text_width,
+                h: 1,
+                color: deco_color,
+                node_id: ctx.current_node,
+            });
+        }
     }
 }
 

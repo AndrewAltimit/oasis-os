@@ -425,7 +425,7 @@ fn link_styling_color_and_underline() {
     // UA stylesheet should give links an underline text-decoration.
     assert_eq!(
         a_style.text_decoration.line,
-        TextDecorationLine::Underline,
+        TextDecorationLine::UNDERLINE,
         "links should have underline decoration",
     );
 

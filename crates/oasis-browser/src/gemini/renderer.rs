@@ -153,7 +153,7 @@ fn render_gemini_line(
             style.display = Display::Block;
             style.color = theme.link_color;
             style.font_size = theme.font_size;
-            style.text_decoration.line = TextDecorationLine::Underline;
+            style.text_decoration.line = TextDecorationLine::UNDERLINE;
             style.margin_bottom = line_height * 0.3;
 
             let height = line_height;
@@ -167,7 +167,7 @@ fn render_gemini_line(
             let mut text_style = ComputedStyle::default();
             text_style.color = theme.link_color;
             text_style.font_size = theme.font_size;
-            text_style.text_decoration.line = TextDecorationLine::Underline;
+            text_style.text_decoration.line = TextDecorationLine::UNDERLINE;
             let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
             text_box.text = Some(text.to_string());
             text_box.dimensions.content.x = 0.0;

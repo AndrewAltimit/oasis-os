@@ -406,26 +406,28 @@ impl ComputedStyle {
             "text-decoration" => {
                 if let Some(kw) = as_keyword(value) {
                     self.text_decoration.line = match kw {
-                        "none" => TextDecorationLine::None,
-                        "underline" => TextDecorationLine::Underline,
-                        "line-through" => TextDecorationLine::LineThrough,
-                        "overline" => TextDecorationLine::Overline,
+                        "none" => TextDecorationLine::NONE,
+                        "underline" => TextDecorationLine::UNDERLINE,
+                        "line-through" => TextDecorationLine::LINE_THROUGH,
+                        "overline" => TextDecorationLine::OVERLINE,
                         _ => return,
                     };
                 } else if let CssValue::Multiple(vs) = value {
-                    // Multi-value shorthand: e.g. "underline wavy red"
+                    // Multi-value shorthand: e.g. "underline line-through wavy red"
+                    // Reset line first, then accumulate with |=.
+                    self.text_decoration.line = TextDecorationLine::NONE;
                     for v in vs {
                         if let Some(kw) = as_keyword(v) {
                             match kw {
-                                "none" => self.text_decoration.line = TextDecorationLine::None,
+                                "none" => self.text_decoration.line = TextDecorationLine::NONE,
                                 "underline" => {
-                                    self.text_decoration.line = TextDecorationLine::Underline;
+                                    self.text_decoration.line |= TextDecorationLine::UNDERLINE;
                                 },
                                 "line-through" => {
-                                    self.text_decoration.line = TextDecorationLine::LineThrough;
+                                    self.text_decoration.line |= TextDecorationLine::LINE_THROUGH;
                                 },
                                 "overline" => {
-                                    self.text_decoration.line = TextDecorationLine::Overline;
+                                    self.text_decoration.line |= TextDecorationLine::OVERLINE;
                                 },
                                 "solid" => {
                                     self.text_decoration.style = TextDecorationStyle::Solid;
@@ -457,10 +459,10 @@ impl ComputedStyle {
             "text-decoration-line" => {
                 if let Some(kw) = as_keyword(value) {
                     self.text_decoration.line = match kw {
-                        "none" => TextDecorationLine::None,
-                        "underline" => TextDecorationLine::Underline,
-                        "line-through" => TextDecorationLine::LineThrough,
-                        "overline" => TextDecorationLine::Overline,
+                        "none" => TextDecorationLine::NONE,
+                        "underline" => TextDecorationLine::UNDERLINE,
+                        "line-through" => TextDecorationLine::LINE_THROUGH,
+                        "overline" => TextDecorationLine::OVERLINE,
                         _ => return,
                     };
                 }
@@ -623,6 +625,8 @@ impl ComputedStyle {
                         "auto" => Overflow::Auto,
                         _ => return,
                     };
+                    // Promote to main overflow so scroll container detection works.
+                    self.overflow = Self::more_restrictive(self.overflow_x, self.overflow_y);
                 }
             },
             "overflow-y" => {
@@ -634,6 +638,7 @@ impl ComputedStyle {
                         "auto" => Overflow::Auto,
                         _ => return,
                     };
+                    self.overflow = Self::more_restrictive(self.overflow_x, self.overflow_y);
                 }
             },
 
@@ -1855,6 +1860,23 @@ impl ComputedStyle {
             x_is_px: bp.x_is_px,
             y_is_px: bp.y_is_px,
         }
+    }
+
+    /// Return the more restrictive of two overflow values.
+    ///
+    /// Used to promote `self.overflow` when `overflow-x`/`overflow-y` are set
+    /// independently, so scroll container detection (which checks `self.overflow`)
+    /// still works.
+    fn more_restrictive(a: Overflow, b: Overflow) -> Overflow {
+        fn rank(o: Overflow) -> u8 {
+            match o {
+                Overflow::Visible => 0,
+                Overflow::Auto => 1,
+                Overflow::Scroll => 2,
+                Overflow::Hidden => 3,
+            }
+        }
+        if rank(a) >= rank(b) { a } else { b }
     }
 }
 
