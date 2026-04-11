@@ -84,18 +84,14 @@ pub fn update_status(kiosk: u8, free_kb: i32, max_blk_kb: i32, frame: i32) {
 /// Check for a pending skin change request. Returns the skin key if one
 /// is pending. Clears the pending request atomically under the same lock.
 pub fn take_pending_skin() -> Option<String> {
-    if let Ok(mut guard) = PENDING_SKIN.lock() {
-        guard.take()
-    } else {
-        None
-    }
+    let mut guard = PENDING_SKIN.lock().unwrap_or_else(|e| e.into_inner());
+    guard.take()
 }
 
 /// Request a skin change from the TCP server thread.
 fn request_skin_change(key: &str) {
-    if let Ok(mut guard) = PENDING_SKIN.lock() {
-        *guard = Some(key.to_string());
-    }
+    let mut guard = PENDING_SKIN.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(key.to_string());
 }
 
 // ---------------------------------------------------------------------------
