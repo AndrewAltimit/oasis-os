@@ -5,10 +5,15 @@
 //! strings, no `SkinTheme` struct.  Total overhead is ~300 bytes per preset
 //! (9 × Color × 4 bytes + enum discriminant).
 
+use std::collections::HashMap;
+
 use oasis_backend_psp::Color;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::skin::SkinFeatures;
-use oasis_core::vector::background::LayerKind;
+use oasis_core::vector::background::{
+    BackgroundLayer, LayerAnimation, LayerKind, LayerPosition,
+};
+use oasis_shader::ShaderParams;
 
 use crate::theme;
 
@@ -187,6 +192,89 @@ impl PspSkinPreset {
         }
     }
 
+    /// Shader configuration for this skin, if any.
+    ///
+    /// Returns `(shader_name, ShaderParams)` matching the desktop TOML skins.
+    pub(crate) fn shader_config(self) -> Option<(&'static str, ShaderParams)> {
+        match self {
+            Self::Balatro => Some((
+                "balatro",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0x00, 0xF0, 0xFF),
+                        hex_to_f4(0x00, 0x6B, 0xB4),
+                        hex_to_f4(0x16, 0x23, 0x25),
+                    ],
+                    floats: HashMap::from([
+                        ("speed".into(), 1.0),
+                        ("contrast".into(), 3.5),
+                        ("spin_speed".into(), 1.0),
+                        ("spin_amount".into(), 0.25),
+                        ("pixel_filter".into(), 745.0),
+                        ("lighting".into(), 0.4),
+                        ("spin_ease".into(), 1.0),
+                    ]),
+                },
+            )),
+            Self::RetroCga => Some((
+                "voronoi",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0x55, 0xFF, 0x55),
+                        hex_to_f4(0xFF, 0x55, 0xFF),
+                    ],
+                    floats: HashMap::from([
+                        ("speed".into(), 0.5),
+                        ("size".into(), 20.0),
+                    ]),
+                },
+            )),
+            Self::Solarized => Some((
+                "ocean_waves",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0x00, 0x2B, 0x36),
+                        hex_to_f4(0x00, 0xE0, 0xE0),
+                        hex_to_f4(0x58, 0x6E, 0x75),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.6)]),
+                },
+            )),
+            Self::Terminal => Some((
+                "matrix_rain",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0x00, 0xFF, 0x00),
+                        hex_to_f4(0x00, 0x02, 0x00),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.8)]),
+                },
+            )),
+            Self::Altimit => Some((
+                "starfield",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0x00, 0xCC, 0x88),
+                        hex_to_f4(0x08, 0x08, 0x16),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.6)]),
+                },
+            )),
+            Self::Tactical => Some((
+                "plasma",
+                ShaderParams {
+                    colors: vec![
+                        hex_to_f4(0xCC, 0x88, 0x00),
+                        hex_to_f4(0x66, 0x33, 0x00),
+                        hex_to_f4(0x33, 0x1A, 0x00),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.4)]),
+                },
+            )),
+            _ => None,
+        }
+    }
+
     /// Build a full [`ActiveTheme`] from this preset with PSP-specific
     /// geometry overrides applied.
     pub(crate) fn to_active_theme(self) -> ActiveTheme {
@@ -208,6 +296,20 @@ impl PspSkinPreset {
             oasis_backend_psp::SCREEN_WIDTH,
             oasis_backend_psp::SCREEN_HEIGHT,
         );
+
+        // Inject shader background layer if this skin defines one.
+        if let Some((name, params)) = self.shader_config() {
+            t.background_layers.push(BackgroundLayer {
+                kind: LayerKind::Shader {
+                    name: name.to_string(),
+                    params,
+                },
+                color: Color::WHITE,
+                position: LayerPosition::default(),
+                animation: LayerAnimation::default(),
+                enabled: true,
+            });
+        }
 
         apply_psp_overrides(&mut t);
         t
@@ -256,13 +358,13 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
 
     // Background layer guardrails for PSP performance.
     // Filter out expensive layer types that strain the PSP GE.
+    // Shader layers are allowed — rendered via CPU software renderer.
     t.background_layers.retain(|layer| {
         !matches!(
             layer.kind,
             LayerKind::FloatingPolygons { .. }
                 | LayerKind::EqBars { .. }
                 | LayerKind::Waves { .. }
-                | LayerKind::Shader { .. }
         )
     });
     // Cap at 4 layers max on PSP hardware.
@@ -271,6 +373,11 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
     t.background_max_layers = 4;
     t.background_complexity_budget = t.background_complexity_budget.min(100);
     t.background_reduced_motion = true;
+}
+
+/// Convert RGB hex values to `[f32; 4]` RGBA (alpha = 1.0).
+fn hex_to_f4(r: u8, g: u8, b: u8) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
 
 #[cfg(test)]

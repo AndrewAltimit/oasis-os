@@ -858,6 +858,7 @@ dependencies = [
  "libm",
  "oasis-browser",
  "oasis-core",
+ "oasis-shader",
  "oasis-video",
  "psp",
  "rand_core",
@@ -942,6 +943,14 @@ dependencies = [
  "oasis-types",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "oasis-shader"
+version = "1.3.0"
+dependencies = [
+ "log",
+ "oasis-types",
 ]
 
 [[package]]

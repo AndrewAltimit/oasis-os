@@ -141,6 +141,23 @@ fn psp_main() {
         .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
 
+    // Software shader renderer for animated wallpapers (same 64x64 texture).
+    // Renders shader math on CPU at reduced resolution (~22x22 internally),
+    // then uploads to the wallpaper texture for GE-scaled fullscreen blit.
+    use oasis_shader::software::SoftwareShaderRenderer;
+    let mut shader_renderer =
+        SoftwareShaderRenderer::new(WALLPAPER_TEX_W, WALLPAPER_TEX_H);
+    let shader_layer = oasis_core::vector_overlay::get_shader_layer(&active_theme);
+    let mut shader_active = shader_layer.is_some();
+    if let Some(ref info) = shader_layer {
+        dbg_log(&format!("[SHADER] active: {} ({}x{})",
+            info.name, WALLPAPER_TEX_W, WALLPAPER_TEX_H));
+    } else {
+        dbg_log("[SHADER] none (using static gradient)");
+    }
+    // Track current skin key to detect skin changes and regenerate wallpaper.
+    let mut last_skin_key: &str = current_preset.key();
+
     // Load cursor texture.
     let cursor_data = oasis_backend_psp::generate_cursor_pixels();
     let cursor_tex = backend
@@ -482,6 +499,38 @@ fn psp_main() {
             bottom_bar.tick_animation(&active_theme);
 
             backend.clear_inner(Color::BLACK);
+
+            // Detect skin change: update shader state and regenerate
+            // static wallpaper if switching away from a shader skin.
+            let cur_key = current_preset.key();
+            if cur_key != last_skin_key {
+                last_skin_key = cur_key;
+                let new_shader =
+                    oasis_core::vector_overlay::get_shader_layer(&active_theme);
+                shader_active = new_shader.is_some();
+                if !shader_active {
+                    // Switched to non-shader skin: restore static gradient.
+                    let grad = oasis_backend_psp::generate_gradient(
+                        WALLPAPER_TEX_W, WALLPAPER_TEX_H,
+                    );
+                    backend.update_texture_data(wallpaper_tex, &grad);
+                }
+            }
+
+            // Shader wallpaper: render animated shader to the wallpaper
+            // texture every other frame (30fps shader, 60fps UI).
+            if shader_active && viz_frame % 2 == 0 {
+                if let Some(info) =
+                    oasis_core::vector_overlay::get_shader_layer(&active_theme)
+                {
+                    let time = viz_frame as f32 / 60.0;
+                    let pixels = shader_renderer.render_shader(
+                        &info.name, time, &info.params,
+                    );
+                    backend.update_texture_data(wallpaper_tex, pixels);
+                }
+            }
+
             // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
             backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
         }
