@@ -464,7 +464,9 @@ fn psp_main() {
                     "skin",
                     psp::config::ConfigValue::Str(preset.key().to_string()),
                 );
-                let _ = config.save(CONFIG_PATH);
+                if let Err(e) = config.save(CONFIG_PATH) {
+                    dbg_log(&format!("[SKIN] config save failed: {:?}", e));
+                }
                 dbg_log(&format!("[SKIN] changed to '{}' via TCP", preset.name()));
             }
         }

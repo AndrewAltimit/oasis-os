@@ -372,7 +372,7 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
                 | LayerKind::Waves { .. }
         )
     });
-    // Cap at 4 layers max on PSP hardware.
+    // Cap at 4 base layers max on PSP hardware (shader layer appended separately).
     t.background_layers.truncate(4);
     // Tighter complexity budget for 333MHz MIPS.
     t.background_max_layers = 4;
