@@ -523,11 +523,25 @@ fn psp_main() {
                 if let Some(info) =
                     oasis_core::vector_overlay::get_shader_layer(&active_theme)
                 {
+                    // SAFETY: scalar FFI returning microsecond timestamp.
+                    let t0 = unsafe {
+                        psp::sys::sceKernelGetSystemTimeLow()
+                    };
                     let time = viz_frame as f32 / 60.0;
                     let pixels = shader_renderer.render_shader(
                         &info.name, time, &info.params,
                     );
                     backend.update_texture_data(wallpaper_tex, pixels);
+                    // Log shader render time periodically (~every 10s).
+                    if viz_frame % 600 == 0 {
+                        let elapsed = unsafe {
+                            psp::sys::sceKernelGetSystemTimeLow()
+                        }.wrapping_sub(t0);
+                        dbg_log(&format!(
+                            "[SHADER] render+upload: {}us (frame {})",
+                            elapsed, viz_frame,
+                        ));
+                    }
                 }
             }
 
