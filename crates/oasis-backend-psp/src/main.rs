@@ -538,12 +538,15 @@ fn psp_main() {
 
             // Shader wallpaper: render animated shader to a 32x32 texture
             // every other frame (30fps shader, 60fps UI), then blit fullscreen.
-            // Non-shader skins use the static 64x64 gradient wallpaper.
+            // Non-shader skins use the static gradient wallpaper.
             if shader_active && viz_frame % 2 == 0 {
                 if let Some(ref info) = cached_shader {
+                    let log_this_frame = viz_frame % 600 == 0;
                     // SAFETY: scalar FFI returning microsecond timestamp.
-                    let t0 = unsafe {
-                        psp::sys::sceKernelGetSystemTimeLow()
+                    let t0 = if log_this_frame {
+                        unsafe { psp::sys::sceKernelGetSystemTimeLow() }
+                    } else {
+                        0
                     };
                     let time = viz_frame as f32 / 60.0;
                     let pixels = shader_renderer.render_shader(
@@ -551,7 +554,7 @@ fn psp_main() {
                     );
                     backend.update_texture_data(shader_tex, pixels);
                     // Log shader render time periodically (~every 10s).
-                    if viz_frame % 600 == 0 {
+                    if log_this_frame {
                         let elapsed = unsafe {
                             psp::sys::sceKernelGetSystemTimeLow()
                         }.wrapping_sub(t0);

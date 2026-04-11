@@ -300,7 +300,10 @@ impl PspSkinPreset {
             oasis_backend_psp::SCREEN_HEIGHT,
         );
 
-        // Inject shader background layer if this skin defines one.
+        apply_psp_overrides(&mut t);
+
+        // Inject shader background layer *after* PSP overrides (which
+        // truncate to 4 layers) so the shader is never silently dropped.
         if let Some((name, params)) = self.shader_config() {
             t.background_layers.push(BackgroundLayer {
                 kind: LayerKind::Shader {
@@ -314,7 +317,6 @@ impl PspSkinPreset {
             });
         }
 
-        apply_psp_overrides(&mut t);
         t
     }
 
