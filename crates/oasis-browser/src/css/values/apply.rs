@@ -419,7 +419,12 @@ impl ComputedStyle {
                     for v in vs {
                         if let Some(kw) = as_keyword(v) {
                             match kw {
-                                "none" => self.text_decoration.line = TextDecorationLine::NONE,
+                                "none" => {
+                                    // CSS spec: `none` is exclusive — clears all
+                                    // line decorations and ignores further keywords.
+                                    self.text_decoration.line = TextDecorationLine::NONE;
+                                    break;
+                                },
                                 "underline" => {
                                     self.text_decoration.line |= TextDecorationLine::UNDERLINE;
                                 },

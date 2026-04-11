@@ -135,9 +135,18 @@ fn paint_background_image(
                     (tex_h as f32 * iw as f32 / tex_w as f32) as u32
                 },
             };
-            (iw.max(1), ih.max(1))
+            // If either dimension resolves to zero, the image is invisible.
+            if iw == 0 || ih == 0 {
+                return Ok(());
+            }
+            (iw, ih)
         },
     };
+
+    // Guard against zero-size images (e.g. Cover/Contain with a zero container).
+    if img_w == 0 || img_h == 0 {
+        return Ok(());
+    }
 
     // Compute the position of the image within the container.
     let pos_x = if position.x_is_px {
