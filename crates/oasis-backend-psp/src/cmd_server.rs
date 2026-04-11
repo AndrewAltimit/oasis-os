@@ -24,6 +24,8 @@
 //!                        rtrigger)
 //!   hold <button> <ms> → inject button press, wait ms, then release
 //!   cursor <x> <y>    → move cursor to absolute position
+//!   skins             → list available skin presets
+//!   skin <name>        → switch skin (applied next frame)
 //!   deploy <size> [crc] → receive EBOOT binary with optional CRC32
 //!   upload <size> <path> → write file to ms0:
 
@@ -52,7 +54,13 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v26-zero-copy";
+const BUILD_ID: &str = "v27-shader-wallpapers";
+
+/// Pending skin change request from TCP server.
+/// Written by server thread, read + cleared by main loop.
+/// 0 = no pending key. Non-zero length stored in PENDING_SKIN_LEN.
+static PENDING_SKIN_BUF: std::sync::Mutex<[u8; 32]> = std::sync::Mutex::new([0u8; 32]);
+static PENDING_SKIN_LEN: AtomicU8 = AtomicU8::new(0);
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
@@ -72,6 +80,35 @@ pub fn update_status(kiosk: u8, free_kb: i32, max_blk_kb: i32, frame: i32) {
     FREE_MEM_KB.store(free_kb, Ordering::Relaxed);
     MAX_BLK_KB.store(max_blk_kb, Ordering::Relaxed);
     FRAME_COUNT.store(frame, Ordering::Relaxed);
+}
+
+/// Check for a pending skin change request. Returns the skin key if one
+/// is pending. Clears the pending flag on read.
+pub fn take_pending_skin() -> Option<String> {
+    let len = PENDING_SKIN_LEN.swap(0, Ordering::Relaxed);
+    if len > 0 {
+        if let Ok(buf) = PENDING_SKIN_BUF.lock() {
+            let key = core::str::from_utf8(&buf[..len as usize])
+                .unwrap_or("")
+                .to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+    }
+    None
+}
+
+/// Request a skin change from the TCP server thread.
+fn request_skin_change(key: &str) {
+    let bytes = key.as_bytes();
+    if bytes.len() > 31 {
+        return;
+    }
+    if let Ok(mut buf) = PENDING_SKIN_BUF.lock() {
+        buf[..bytes.len()].copy_from_slice(bytes);
+        PENDING_SKIN_LEN.store(bytes.len() as u8, Ordering::Relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +408,32 @@ fn handle_client(cfd: i32) {
             receive_deploy(cfd, size, leftover, expected_crc);
         } else {
             send_response(cfd, b"err: bad size\n");
+        }
+    } else if cmd == b"skins" {
+        send_response(
+            cfd,
+            b"psix classic balatro retro-cga solarized highcontrast terminal altimit tactical\n",
+        );
+    } else if cmd.starts_with(b"skin ") {
+        let key = core::str::from_utf8(&cmd[5..]).unwrap_or("").trim();
+        let known = [
+            "psix", "classic", "balatro", "retro-cga", "solarized",
+            "highcontrast", "terminal", "altimit", "tactical",
+        ];
+        if known.contains(&key) {
+            request_skin_change(key);
+            send_response(cfd, format!("ok: skin={}\n", key).as_bytes());
+            log_msg(&format!("[CMD] skin -> {}", key));
+        } else {
+            send_response(
+                cfd,
+                format!(
+                    "err: unknown skin '{}'. use: {}\n",
+                    key,
+                    known.join(", "),
+                )
+                .as_bytes(),
+            );
         }
     } else {
         send_response(cfd, b"err: unknown command\n");

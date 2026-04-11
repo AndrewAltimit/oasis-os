@@ -18,6 +18,8 @@ Usage:
     python3 scripts/psp_remote.py cursor <x> <y>
     python3 scripts/psp_remote.py cycle <eboot>
     python3 scripts/psp_remote.py build-cycle
+    python3 scripts/psp_remote.py skins
+    python3 scripts/psp_remote.py skin <name>
     python3 scripts/psp_remote.py upload <local> <remote>
     python3 scripts/psp_remote.py sequence <file.yaml>
 
