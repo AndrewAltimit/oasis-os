@@ -153,10 +153,7 @@ pub(super) fn resolve_border_style(value: &CssValue) -> Option<BorderStyle> {
 ///
 /// `bolder`/`lighter` need the inherited weight and are handled in
 /// `apply_declaration` directly; this function returns `None` for them.
-pub(super) fn resolve_font_weight(
-    value: &CssValue,
-    inherited: FontWeight,
-) -> FontWeight {
+pub(super) fn resolve_font_weight(value: &CssValue, inherited: FontWeight) -> FontWeight {
     match value {
         CssValue::Number(n) => FontWeight((*n as u16).clamp(1, 1000)),
         CssValue::Keyword(kw) => match kw.as_str() {
