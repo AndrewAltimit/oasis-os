@@ -225,7 +225,10 @@ impl PspSkinPreset {
                     ],
                     floats: HashMap::from([
                         ("speed".into(), 0.5),
-                        ("size".into(), 20.0),
+                        // Size=6: ~6 cells across 11 internal pixels (RENDER_SCALE=3
+                        // at 32x32). Larger cells look better at low res and reduce
+                        // the number of unique voronoi_pt evaluations.
+                        ("size".into(), 6.0),
                     ]),
                 },
             )),

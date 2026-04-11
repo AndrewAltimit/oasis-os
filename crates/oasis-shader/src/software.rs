@@ -204,7 +204,7 @@ impl SoftwareShaderRenderer {
                 let idx = uvx.floor();
                 let idy = uvy.floor();
 
-                let mut mindist: f32 = 1e9;
+                let mut mindist2: f32 = 1e9;
                 let mut vorv_x: f32 = 0.0;
                 let mut vorv_y: f32 = 0.0;
 
@@ -217,9 +217,9 @@ impl SoftwareShaderRenderer {
                         let (px, py) = voronoi_pt(t, nid_x, nid_y);
                         let dx = gvx + px - fi;
                         let dy = gvy + py - fj;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist < mindist {
-                            mindist = dist;
+                        let dist2 = dx * dx + dy * dy;
+                        if dist2 < mindist2 {
+                            mindist2 = dist2;
                             vorv_x = (idx + px + fi) / size - off_x;
                             vorv_y = (idy + py + fj) / size - off_y;
                         }
@@ -726,13 +726,12 @@ fn cell_bright(time: f32, x: f32, y: f32) -> f32 {
 }
 
 /// Voronoi `ran` helper — pseudo-random 2D → 2D.
+///
+/// Uses a single-sin hash per component (same pattern as `hash2`) instead
+/// of the original cos/tan chain, which is ~3× cheaper on software CPUs.
 fn voronoi_ran(x: f32, y: f32) -> (f32, f32) {
-    let ax = x * (x * 127.1 + y * 311.7);
-    let ay = y * (x * 227.1 + y * 521.7);
-    let fx =
-        1.0 - fract((ax.cos() * 123.6).tan() * 3533.3) * fract((ax.cos() * 123.6).tan() * 3533.3);
-    let fy =
-        1.0 - fract((ay.cos() * 123.6).tan() * 3533.3) * fract((ay.cos() * 123.6).tan() * 3533.3);
+    let fx = fract((x * 127.1 + y * 311.7).sin() * 43758.547);
+    let fy = fract((x * 269.5 + y * 183.3).sin() * 43758.547);
     (fx, fy)
 }
 
@@ -931,7 +930,7 @@ mod tests {
                 "voronoi",
                 ShaderParams {
                     colors: vec![hex(0x55, 0xFF, 0x55), hex(0xFF, 0x55, 0xFF)],
-                    floats: HashMap::from([("speed".into(), 0.5), ("size".into(), 20.0)]),
+                    floats: HashMap::from([("speed".into(), 0.5), ("size".into(), 6.0)]),
                 },
             ),
             (
