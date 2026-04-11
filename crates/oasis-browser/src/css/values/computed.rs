@@ -7,11 +7,12 @@ use oasis_types::backend::Color;
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BackgroundPosition,
     BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxShadow,
-    BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
+    BoxSizing, Clear, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
     FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
-    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
-    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin,
-    Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position,
+    ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
+    TextTransform, TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -93,6 +94,8 @@ pub struct ComputedStyle {
 
     // -- Overflow ---------------------------------------------------
     pub overflow: Overflow,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
 
     // -- Positioning ------------------------------------------------
     pub position: Position,
@@ -108,6 +111,18 @@ pub struct ComputedStyle {
 
     // -- Replaced element sizing ----------------------------------------
     pub object_fit: ObjectFit,
+    pub object_position: ObjectPosition,
+
+    // -- Interaction ---------------------------------------------------
+    pub cursor: Cursor,
+    pub pointer_events: PointerEvents,
+    pub user_select: UserSelect,
+
+    // -- Aspect ratio --------------------------------------------------
+    pub aspect_ratio: Option<f32>,
+
+    // -- Text underline offset -----------------------------------------
+    pub text_underline_offset: f32,
 
     // -- Visual effects -----------------------------------------------
     pub border_radius: BorderRadius,
@@ -299,6 +314,8 @@ impl Default for ComputedStyle {
 
             // Overflow
             overflow: Overflow::Visible,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
 
             // Positioning
             position: Position::Static,
@@ -311,6 +328,18 @@ impl Default for ComputedStyle {
 
             // Replaced element sizing
             object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+
+            // Interaction
+            cursor: Cursor::Auto,
+            pointer_events: PointerEvents::Auto,
+            user_select: UserSelect::Auto,
+
+            // Aspect ratio
+            aspect_ratio: None,
+
+            // Text underline offset
+            text_underline_offset: 0.0,
 
             // Visual effects
             border_radius: BorderRadius::ZERO,
@@ -535,6 +564,43 @@ impl ComputedStyle {
             "right" => dim_to_css(self.right),
             "bottom" => dim_to_css(self.bottom),
             "left" => dim_to_css(self.left),
+            "cursor" => match self.cursor {
+                Cursor::Auto => "auto",
+                Cursor::Default => "default",
+                Cursor::Pointer => "pointer",
+                Cursor::Text => "text",
+                Cursor::Move => "move",
+                Cursor::NotAllowed => "not-allowed",
+                Cursor::Crosshair => "crosshair",
+                Cursor::Wait => "wait",
+                Cursor::Help => "help",
+                Cursor::Grab => "grab",
+                Cursor::Grabbing => "grabbing",
+                Cursor::None => "none",
+                _ => "auto",
+            }
+            .into(),
+            "pointer-events" => match self.pointer_events {
+                PointerEvents::Auto => "auto",
+                PointerEvents::None => "none",
+            }
+            .into(),
+            "user-select" => match self.user_select {
+                UserSelect::Auto => "auto",
+                UserSelect::None => "none",
+                UserSelect::Text => "text",
+                UserSelect::All => "all",
+            }
+            .into(),
+            "aspect-ratio" => match self.aspect_ratio {
+                Some(r) => format!("{r}"),
+                None => "auto".into(),
+            },
+            "direction" => match self.direction {
+                TextDirection::Ltr | TextDirection::Auto => "ltr",
+                TextDirection::Rtl => "rtl",
+            }
+            .into(),
             _ => String::new(),
         }
     }
@@ -570,6 +636,10 @@ impl ComputedStyle {
             // Inherited table properties.
             border_collapse: parent.border_collapse,
             border_spacing: parent.border_spacing,
+            // Inherited interaction properties.
+            cursor: parent.cursor,
+            pointer_events: parent.pointer_events,
+            user_select: parent.user_select,
             // CSS custom properties always inherit.
             custom_properties: parent.custom_properties.clone(),
             // Non-inherited properties keep CSS initial values.

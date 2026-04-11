@@ -10,11 +10,12 @@ use super::resolve::{
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
     AnimationPlayState, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
-    BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, Display, FlexDirection, FlexWrap,
-    Float, FontFamily, FontStyle, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
-    Overflow, OverflowWrap, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
-    TextOverflow, TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility,
-    WhiteSpace, WordBreak,
+    BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, Cursor, Display, FlexDirection,
+    FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition, ListStyleType,
+    ObjectFit, ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, TextAlign,
+    TextDecorationLine, TextDecorationStyle, TextDirection, TextOverflow, TextShadow,
+    TextTransform, TimingFunction, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -398,7 +399,58 @@ impl ComputedStyle {
                     };
                 }
             },
-            "text-decoration" | "text-decoration-line" => {
+            "text-decoration" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_decoration.line = match kw {
+                        "none" => TextDecorationLine::None,
+                        "underline" => TextDecorationLine::Underline,
+                        "line-through" => TextDecorationLine::LineThrough,
+                        "overline" => TextDecorationLine::Overline,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Multi-value shorthand: e.g. "underline wavy red"
+                    for v in vs {
+                        if let Some(kw) = as_keyword(v) {
+                            match kw {
+                                "none" => self.text_decoration.line = TextDecorationLine::None,
+                                "underline" => {
+                                    self.text_decoration.line = TextDecorationLine::Underline;
+                                },
+                                "line-through" => {
+                                    self.text_decoration.line = TextDecorationLine::LineThrough;
+                                },
+                                "overline" => {
+                                    self.text_decoration.line = TextDecorationLine::Overline;
+                                },
+                                "solid" => {
+                                    self.text_decoration.style = TextDecorationStyle::Solid;
+                                },
+                                "dashed" => {
+                                    self.text_decoration.style = TextDecorationStyle::Dashed;
+                                },
+                                "dotted" => {
+                                    self.text_decoration.style = TextDecorationStyle::Dotted;
+                                },
+                                "double" => {
+                                    self.text_decoration.style = TextDecorationStyle::Double;
+                                },
+                                "wavy" => {
+                                    self.text_decoration.style = TextDecorationStyle::Wavy;
+                                },
+                                _ => {
+                                    if let Some(c) = resolve_color(v) {
+                                        self.text_decoration.color = Some(c);
+                                    }
+                                },
+                            }
+                        } else if let Some(c) = resolve_color(v) {
+                            self.text_decoration.color = Some(c);
+                        }
+                    }
+                }
+            },
+            "text-decoration-line" => {
                 if let Some(kw) = as_keyword(value) {
                     self.text_decoration.line = match kw {
                         "none" => TextDecorationLine::None,
@@ -546,7 +598,32 @@ impl ComputedStyle {
             // -- Overflow -----------------------------------------------
             "overflow" => {
                 if let Some(kw) = as_keyword(value) {
-                    self.overflow = match kw {
+                    let v = match kw {
+                        "visible" => Overflow::Visible,
+                        "hidden" => Overflow::Hidden,
+                        "scroll" => Overflow::Scroll,
+                        "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                    self.overflow = v;
+                    self.overflow_x = v;
+                    self.overflow_y = v;
+                }
+            },
+            "overflow-x" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_x = match kw {
+                        "visible" => Overflow::Visible,
+                        "hidden" => Overflow::Hidden,
+                        "scroll" => Overflow::Scroll,
+                        "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                }
+            },
+            "overflow-y" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_y = match kw {
                         "visible" => Overflow::Visible,
                         "hidden" => Overflow::Hidden,
                         "scroll" => Overflow::Scroll,
@@ -568,6 +645,10 @@ impl ComputedStyle {
                         _ => return,
                     };
                 }
+            },
+
+            "object-position" => {
+                self.object_position = Self::resolve_obj_position(value, parent_font_size);
             },
 
             // -- Positioning --------------------------------------------
@@ -921,6 +1002,154 @@ impl ComputedStyle {
                     self.text_overflow = match kw {
                         "ellipsis" => TextOverflow::Ellipsis,
                         _ => TextOverflow::Clip,
+                    };
+                }
+            },
+
+            // -- Cursor -------------------------------------------------
+            "cursor" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.cursor = match kw {
+                        "auto" => Cursor::Auto,
+                        "default" => Cursor::Default,
+                        "pointer" => Cursor::Pointer,
+                        "text" => Cursor::Text,
+                        "move" => Cursor::Move,
+                        "not-allowed" => Cursor::NotAllowed,
+                        "crosshair" => Cursor::Crosshair,
+                        "wait" => Cursor::Wait,
+                        "help" => Cursor::Help,
+                        "grab" => Cursor::Grab,
+                        "grabbing" => Cursor::Grabbing,
+                        "col-resize" => Cursor::ColResize,
+                        "row-resize" => Cursor::RowResize,
+                        "n-resize" => Cursor::NResize,
+                        "e-resize" => Cursor::EResize,
+                        "s-resize" => Cursor::SResize,
+                        "w-resize" => Cursor::WResize,
+                        "ne-resize" => Cursor::NeResize,
+                        "nw-resize" => Cursor::NwResize,
+                        "se-resize" => Cursor::SeResize,
+                        "sw-resize" => Cursor::SwResize,
+                        "ew-resize" => Cursor::EwResize,
+                        "ns-resize" => Cursor::NsResize,
+                        "nesw-resize" => Cursor::NeswResize,
+                        "nwse-resize" => Cursor::NwseResize,
+                        "zoom-in" => Cursor::ZoomIn,
+                        "zoom-out" => Cursor::ZoomOut,
+                        "none" => Cursor::None,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Pointer events -----------------------------------------
+            "pointer-events" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.pointer_events = match kw {
+                        "auto" => PointerEvents::Auto,
+                        "none" => PointerEvents::None,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- User select --------------------------------------------
+            "user-select" | "-webkit-user-select" | "-moz-user-select" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.user_select = match kw {
+                        "auto" => UserSelect::Auto,
+                        "none" => UserSelect::None,
+                        "text" => UserSelect::Text,
+                        "all" => UserSelect::All,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Aspect ratio -------------------------------------------
+            "aspect-ratio" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "auto" {
+                        self.aspect_ratio = None;
+                    }
+                } else if let CssValue::Number(n) = value {
+                    if *n > 0.0 {
+                        self.aspect_ratio = Some(*n);
+                    }
+                } else if let CssValue::Multiple(vs) = value {
+                    // Parse "width / height" form.
+                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                        (vs.first(), vs.last())
+                        && *h > 0.0
+                    {
+                        self.aspect_ratio = Some(*w / *h);
+                    }
+                }
+            },
+
+            // -- Text underline offset ----------------------------------
+            "text-underline-offset" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.text_underline_offset = 0.0;
+                } else {
+                    self.text_underline_offset = resolve_length(value, parent_font_size);
+                }
+            },
+
+            // -- Direction (RTL/LTR) ------------------------------------
+            "direction" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.direction = match kw {
+                        "ltr" => TextDirection::Ltr,
+                        "rtl" => TextDirection::Rtl,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Place shorthands (grid/flex) ----------------------------
+            "place-items" => {
+                if let Some(kw) = as_keyword(value) {
+                    let ai = match kw {
+                        "start" | "flex-start" => AlignItems::FlexStart,
+                        "end" | "flex-end" => AlignItems::FlexEnd,
+                        "center" => AlignItems::Center,
+                        "stretch" => AlignItems::Stretch,
+                        "baseline" => AlignItems::Baseline,
+                        _ => return,
+                    };
+                    self.align_items = ai;
+                    // justify-items maps to justify-content for our model.
+                    self.justify_content = match kw {
+                        "start" | "flex-start" => JustifyContent::FlexStart,
+                        "end" | "flex-end" => JustifyContent::FlexEnd,
+                        "center" => JustifyContent::Center,
+                        _ => self.justify_content,
+                    };
+                }
+            },
+            "place-content" => {
+                if let Some(kw) = as_keyword(value) {
+                    let ac = match kw {
+                        "start" | "flex-start" => AlignContent::FlexStart,
+                        "end" | "flex-end" => AlignContent::FlexEnd,
+                        "center" => AlignContent::Center,
+                        "stretch" => AlignContent::Stretch,
+                        "space-between" => AlignContent::SpaceBetween,
+                        "space-around" => AlignContent::SpaceAround,
+                        "space-evenly" => AlignContent::SpaceEvenly,
+                        _ => return,
+                    };
+                    self.align_content = ac;
+                    self.justify_content = match kw {
+                        "start" | "flex-start" => JustifyContent::FlexStart,
+                        "end" | "flex-end" => JustifyContent::FlexEnd,
+                        "center" => JustifyContent::Center,
+                        "space-between" => JustifyContent::SpaceBetween,
+                        "space-around" => JustifyContent::SpaceAround,
+                        "space-evenly" => JustifyContent::SpaceEvenly,
+                        _ => self.justify_content,
                     };
                 }
             },
@@ -1408,6 +1637,15 @@ impl ComputedStyle {
             "border-top-right-radius" => self.border_radius.top_right = 0.0,
             "border-bottom-right-radius" => self.border_radius.bottom_right = 0.0,
             "border-bottom-left-radius" => self.border_radius.bottom_left = 0.0,
+            "overflow-x" => self.overflow_x = Overflow::Visible,
+            "overflow-y" => self.overflow_y = Overflow::Visible,
+            "cursor" => self.cursor = Cursor::Auto,
+            "pointer-events" => self.pointer_events = PointerEvents::Auto,
+            "user-select" => self.user_select = UserSelect::Auto,
+            "aspect-ratio" => self.aspect_ratio = None,
+            "text-underline-offset" => self.text_underline_offset = 0.0,
+            "direction" => self.direction = TextDirection::Ltr,
+            "object-position" => self.object_position = ObjectPosition::default(),
             _ => {},
         }
     }
@@ -1487,6 +1725,17 @@ impl ComputedStyle {
                     y_is_px: false,
                 }
             },
+        }
+    }
+
+    /// Resolve an `object-position` value (same logic as background-position).
+    fn resolve_obj_position(value: &CssValue, parent_font_size: f32) -> ObjectPosition {
+        let bp = Self::resolve_bg_position(value, parent_font_size);
+        ObjectPosition {
+            x: bp.x,
+            y: bp.y,
+            x_is_px: bp.x_is_px,
+            y_is_px: bp.y_is_px,
         }
     }
 }

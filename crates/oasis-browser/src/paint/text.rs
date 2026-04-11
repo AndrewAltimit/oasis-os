@@ -151,7 +151,9 @@ pub(super) fn paint_text(
             .unwrap_or(color);
 
         let deco_y = match style.text_decoration.line {
-            TextDecorationLine::Underline => sy + (style.font_size * 0.85) as i32,
+            TextDecorationLine::Underline => {
+                sy + (style.font_size * 0.85) as i32 + style.text_underline_offset as i32
+            },
             TextDecorationLine::LineThrough => sy + (style.font_size * 0.4) as i32,
             TextDecorationLine::Overline => sy,
             TextDecorationLine::None => unreachable!(),

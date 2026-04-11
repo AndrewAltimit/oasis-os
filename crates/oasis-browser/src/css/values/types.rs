@@ -617,5 +617,79 @@ pub struct Animation {
     pub play_state: AnimationPlayState,
 }
 
+/// CSS `cursor` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cursor {
+    Auto,
+    Default,
+    Pointer,
+    Text,
+    Move,
+    NotAllowed,
+    Crosshair,
+    Wait,
+    Help,
+    Grab,
+    Grabbing,
+    ColResize,
+    RowResize,
+    NResize,
+    EResize,
+    SResize,
+    WResize,
+    NeResize,
+    NwResize,
+    SeResize,
+    SwResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+    None,
+}
+
+/// CSS `pointer-events` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+}
+
+/// CSS `user-select` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSelect {
+    Auto,
+    None,
+    Text,
+    All,
+}
+
+/// CSS `object-position` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectPosition {
+    /// Horizontal position as fraction (0.0 = left, 0.5 = center, 1.0 = right)
+    /// or pixel value when `x_is_px` is true.
+    pub x: f32,
+    /// Vertical position as fraction (0.0 = top, 0.5 = center, 1.0 = bottom)
+    /// or pixel value when `y_is_px` is true.
+    pub y: f32,
+    pub x_is_px: bool,
+    pub y_is_px: bool,
+}
+
+impl Default for ObjectPosition {
+    fn default() -> Self {
+        // CSS default: 50% 50% (centered)
+        Self {
+            x: 0.5,
+            y: 0.5,
+            x_is_px: false,
+            y_is_px: false,
+        }
+    }
+}
+
 /// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.
 pub use oasis_types::text_direction::TextDirection;

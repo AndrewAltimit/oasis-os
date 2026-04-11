@@ -609,6 +609,16 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "column-count",
     "column-width",
     "columns",
+    "overflow-x",
+    "overflow-y",
+    "cursor",
+    "pointer-events",
+    "user-select",
+    "aspect-ratio",
+    "text-underline-offset",
+    "object-position",
+    "place-items",
+    "place-content",
 ];
 
 /// Evaluate an `@supports` condition string.
