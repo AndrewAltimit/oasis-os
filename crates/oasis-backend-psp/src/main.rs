@@ -155,9 +155,10 @@ fn psp_main() {
     let shader_tex = backend
         .load_texture_inner(SHADER_W, SHADER_H, &shader_init)
         .unwrap_or(TextureId(0));
-    let shader_layer = oasis_core::vector_overlay::get_shader_layer(&active_theme);
-    let mut shader_active = shader_layer.is_some();
-    if let Some(ref info) = shader_layer {
+    // Cache the shader layer info to avoid traversing background_layers each frame.
+    let mut cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
+    let mut shader_active = cached_shader.is_some();
+    if let Some(ref info) = cached_shader {
         dbg_log(&format!("[SHADER] active: {} ({}x{})",
             info.name, SHADER_W, SHADER_H));
     } else {
@@ -526,22 +527,20 @@ fn psp_main() {
 
             backend.clear_inner(Color::BLACK);
 
-            // Detect skin change: update shader state.
+            // Detect skin change: update cached shader info.
             let cur_key = current_preset.key();
             if cur_key != last_skin_key {
                 last_skin_key = cur_key;
-                let new_shader =
+                cached_shader =
                     oasis_core::vector_overlay::get_shader_layer(&active_theme);
-                shader_active = new_shader.is_some();
+                shader_active = cached_shader.is_some();
             }
 
             // Shader wallpaper: render animated shader to a 32x32 texture
             // every other frame (30fps shader, 60fps UI), then blit fullscreen.
             // Non-shader skins use the static 64x64 gradient wallpaper.
             if shader_active && viz_frame % 2 == 0 {
-                if let Some(info) =
-                    oasis_core::vector_overlay::get_shader_layer(&active_theme)
-                {
+                if let Some(ref info) = cached_shader {
                     // SAFETY: scalar FFI returning microsecond timestamp.
                     let t0 = unsafe {
                         psp::sys::sceKernelGetSystemTimeLow()
