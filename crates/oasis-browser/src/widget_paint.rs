@@ -919,7 +919,7 @@ fn apply_transition_value(style: &mut ComputedStyle, property: &str, value: f32)
         "border-right-width" => style.border_right_width = value,
         "border-bottom-width" => style.border_bottom_width = value,
         "border-left-width" => style.border_left_width = value,
-        "border-radius" => style.border_radius = value,
+        "border-radius" => style.border_radius = crate::css::values::BorderRadius::uniform(value),
         "border-spacing" => style.border_spacing = value,
         "outline-width" => style.outline_width = value,
         "outline-offset" => style.outline_offset = value,

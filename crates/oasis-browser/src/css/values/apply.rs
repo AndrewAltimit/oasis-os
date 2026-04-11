@@ -9,9 +9,10 @@ use super::resolve::{
 };
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxSizing, Clear, Display,
-    FlexDirection, FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition,
-    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, TextAlign, TextDecoration,
+    AnimationPlayState, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, Display, FlexDirection, FlexWrap,
+    Float, FontFamily, FontStyle, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
+    Overflow, OverflowWrap, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextOverflow, TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility,
     WhiteSpace, WordBreak,
 };
@@ -397,13 +398,30 @@ impl ComputedStyle {
                     };
                 }
             },
-            "text-decoration" => {
+            "text-decoration" | "text-decoration-line" => {
                 if let Some(kw) = as_keyword(value) {
-                    self.text_decoration = match kw {
-                        "none" => TextDecoration::None,
-                        "underline" => TextDecoration::Underline,
-                        "line-through" => TextDecoration::LineThrough,
-                        "overline" => TextDecoration::Overline,
+                    self.text_decoration.line = match kw {
+                        "none" => TextDecorationLine::None,
+                        "underline" => TextDecorationLine::Underline,
+                        "line-through" => TextDecorationLine::LineThrough,
+                        "overline" => TextDecorationLine::Overline,
+                        _ => return,
+                    };
+                }
+            },
+            "text-decoration-color" => {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
+                    self.text_decoration.color = Some(c);
+                }
+            },
+            "text-decoration-style" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_decoration.style = match kw {
+                        "solid" => TextDecorationStyle::Solid,
+                        "dashed" => TextDecorationStyle::Dashed,
+                        "dotted" => TextDecorationStyle::Dotted,
+                        "double" => TextDecorationStyle::Double,
+                        "wavy" => TextDecorationStyle::Wavy,
                         _ => return,
                     };
                 }
@@ -732,7 +750,20 @@ impl ComputedStyle {
 
             // -- Visual effects -----------------------------------------
             "border-radius" => {
-                self.border_radius = resolve_length(value, parent_font_size);
+                let r = resolve_length(value, parent_font_size);
+                self.border_radius = BorderRadius::uniform(r);
+            },
+            "border-top-left-radius" => {
+                self.border_radius.top_left = resolve_length(value, parent_font_size);
+            },
+            "border-top-right-radius" => {
+                self.border_radius.top_right = resolve_length(value, parent_font_size);
+            },
+            "border-bottom-right-radius" => {
+                self.border_radius.bottom_right = resolve_length(value, parent_font_size);
+            },
+            "border-bottom-left-radius" => {
+                self.border_radius.bottom_left = resolve_length(value, parent_font_size);
             },
             "opacity" => {
                 if let CssValue::Number(n) = value {
@@ -827,6 +858,43 @@ impl ComputedStyle {
                     self.background_image = BackgroundImage::Gradient(grad.clone());
                 } else if let CssValue::RadialGradient(ref grad) = *value {
                     self.background_image = BackgroundImage::RadialGradient(grad.clone());
+                }
+            },
+
+            // -- Background size/position/repeat ---------------------------
+            "background-size" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.background_size = match kw {
+                        "cover" => BackgroundSize::Cover,
+                        "contain" => BackgroundSize::Contain,
+                        "auto" => BackgroundSize::Auto,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Two-value form: width height
+                    let w = Self::resolve_bg_size_component(&vs[0], parent_font_size);
+                    let h = vs
+                        .get(1)
+                        .map(|v| Self::resolve_bg_size_component(v, parent_font_size))
+                        .unwrap_or(None);
+                    self.background_size = BackgroundSize::Explicit(w, h);
+                } else {
+                    let w = Self::resolve_bg_size_component(value, parent_font_size);
+                    self.background_size = BackgroundSize::Explicit(w, None);
+                }
+            },
+            "background-position" => {
+                self.background_position = Self::resolve_bg_position(value, parent_font_size);
+            },
+            "background-repeat" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.background_repeat = match kw {
+                        "repeat" => BackgroundRepeat::Repeat,
+                        "no-repeat" => BackgroundRepeat::NoRepeat,
+                        "repeat-x" => BackgroundRepeat::RepeatX,
+                        "repeat-y" => BackgroundRepeat::RepeatY,
+                        _ => return,
+                    };
                 }
             },
 
@@ -1331,7 +1399,94 @@ impl ComputedStyle {
             "grid-auto-columns" => self.grid_auto_columns = Vec::new(),
             "table-layout" => self.table_layout_fixed = false,
             "animation" => self.animations = Vec::new(),
+            "background-size" => self.background_size = BackgroundSize::Auto,
+            "background-position" => self.background_position = BackgroundPosition::default(),
+            "background-repeat" => self.background_repeat = BackgroundRepeat::Repeat,
+            "text-decoration-color" => self.text_decoration.color = None,
+            "text-decoration-style" => self.text_decoration.style = TextDecorationStyle::Solid,
+            "border-top-left-radius" => self.border_radius.top_left = 0.0,
+            "border-top-right-radius" => self.border_radius.top_right = 0.0,
+            "border-bottom-right-radius" => self.border_radius.bottom_right = 0.0,
+            "border-bottom-left-radius" => self.border_radius.bottom_left = 0.0,
             _ => {},
+        }
+    }
+
+    /// Resolve a single background-size component (width or height).
+    fn resolve_bg_size_component(value: &CssValue, parent_font_size: f32) -> Option<f32> {
+        match value {
+            CssValue::Keyword(kw) if kw == "auto" => None,
+            CssValue::Percentage(p) => Some(-*p), // negative = percentage
+            _ => Some(resolve_length(value, parent_font_size)),
+        }
+    }
+
+    /// Resolve a background-position value.
+    fn resolve_bg_position(value: &CssValue, parent_font_size: f32) -> BackgroundPosition {
+        fn keyword_to_frac(kw: &str) -> Option<(f32, bool)> {
+            match kw {
+                "left" | "top" => Some((0.0, false)),
+                "center" => Some((0.5, false)),
+                "right" | "bottom" => Some((1.0, false)),
+                _ => None,
+            }
+        }
+
+        match value {
+            CssValue::Keyword(kw) => {
+                if let Some((frac, _)) = keyword_to_frac(kw) {
+                    // Single keyword: horizontal position, vertical defaults to center.
+                    match kw.as_str() {
+                        "top" | "bottom" => BackgroundPosition {
+                            x: 0.5,
+                            y: frac,
+                            x_is_px: false,
+                            y_is_px: false,
+                        },
+                        _ => BackgroundPosition {
+                            x: frac,
+                            y: 0.5,
+                            x_is_px: false,
+                            y_is_px: false,
+                        },
+                    }
+                } else {
+                    BackgroundPosition::default()
+                }
+            },
+            CssValue::Percentage(p) => BackgroundPosition {
+                x: *p / 100.0,
+                y: 0.5,
+                x_is_px: false,
+                y_is_px: false,
+            },
+            CssValue::Multiple(vs) if vs.len() >= 2 => {
+                let (x, x_is_px) = match &vs[0] {
+                    CssValue::Keyword(kw) => keyword_to_frac(kw).unwrap_or((0.0, false)),
+                    CssValue::Percentage(p) => (*p / 100.0, false),
+                    other => (resolve_length(other, parent_font_size), true),
+                };
+                let (y, y_is_px) = match &vs[1] {
+                    CssValue::Keyword(kw) => keyword_to_frac(kw).unwrap_or((0.0, false)),
+                    CssValue::Percentage(p) => (*p / 100.0, false),
+                    other => (resolve_length(other, parent_font_size), true),
+                };
+                BackgroundPosition {
+                    x,
+                    y,
+                    x_is_px,
+                    y_is_px,
+                }
+            },
+            other => {
+                let px = resolve_length(other, parent_font_size);
+                BackgroundPosition {
+                    x: px,
+                    y: 0.5,
+                    x_is_px: true,
+                    y_is_px: false,
+                }
+            },
         }
     }
 }
@@ -1827,7 +1982,7 @@ mod tests {
     fn apply_font_weight_bold_keyword() {
         let mut s = ComputedStyle::default();
         s.apply_declaration("font-weight", &CssValue::Keyword("bold".into()), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Bold);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
     }
 
     #[test]
@@ -1835,15 +1990,26 @@ mod tests {
         // The CSS parser normalises "bold" to Number(700.0).
         let mut s = ComputedStyle::default();
         s.apply_declaration("font-weight", &CssValue::Number(700.0), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Bold);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
     }
 
     #[test]
     fn apply_font_weight_normal_number() {
         let mut s = ComputedStyle::default();
-        s.font_weight = FontWeight::Bold;
+        s.font_weight = FontWeight::BOLD;
         s.apply_declaration("font-weight", &CssValue::Number(400.0), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Normal);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+    }
+
+    #[test]
+    fn apply_font_weight_numeric() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("font-weight", &CssValue::Number(300.0), 16.0);
+        assert_eq!(s.font_weight, FontWeight(300));
+        assert!(!s.font_weight.is_bold());
+        s.apply_declaration("font-weight", &CssValue::Number(600.0), 16.0);
+        assert_eq!(s.font_weight, FontWeight(600));
+        assert!(s.font_weight.is_bold());
     }
 
     #[test]

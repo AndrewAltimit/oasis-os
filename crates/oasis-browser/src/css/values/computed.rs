@@ -5,9 +5,10 @@ use rustc_hash::FxHashMap;
 use oasis_types::backend::Color;
 
 use super::types::{
-    AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BorderCollapse, BorderStyle,
-    BoxShadow, BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap,
-    Float, FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
+    AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BackgroundPosition,
+    BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxShadow,
+    BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
+    FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
     ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
     TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin,
     Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
@@ -109,7 +110,7 @@ pub struct ComputedStyle {
     pub object_fit: ObjectFit,
 
     // -- Visual effects -----------------------------------------------
-    pub border_radius: f32,
+    pub border_radius: BorderRadius,
     pub box_shadow: Vec<BoxShadow>,
     pub text_shadow: Option<TextShadow>,
     pub opacity: f32,
@@ -133,6 +134,9 @@ pub struct ComputedStyle {
 
     // -- Background image -----------------------------------------------
     pub background_image: BackgroundImage,
+    pub background_size: BackgroundSize,
+    pub background_position: BackgroundPosition,
+    pub background_repeat: BackgroundRepeat,
 
     // -- Generated content (::before/::after) ---------------------------
     pub content: Option<String>,
@@ -264,12 +268,12 @@ impl Default for ComputedStyle {
             // Text
             color: Color::BLACK,
             font_size: base_font_size,
-            font_weight: FontWeight::Normal,
+            font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
             font_family: FontFamily::SansSerif,
             text_align: TextAlign::Left,
             direction: TextDirection::Ltr,
-            text_decoration: TextDecoration::None,
+            text_decoration: TextDecoration::NONE,
             text_indent: 0.0,
             text_transform: TextTransform::None,
             line_height: base_font_size * 1.5,
@@ -309,7 +313,7 @@ impl Default for ComputedStyle {
             object_fit: ObjectFit::Fill,
 
             // Visual effects
-            border_radius: 0.0,
+            border_radius: BorderRadius::ZERO,
             box_shadow: Vec::new(),
             text_shadow: None,
             opacity: 1.0,
@@ -333,6 +337,9 @@ impl Default for ComputedStyle {
 
             // Background image
             background_image: BackgroundImage::None,
+            background_size: BackgroundSize::Auto,
+            background_position: BackgroundPosition::default(),
+            background_repeat: BackgroundRepeat::Repeat,
 
             // Generated content
             content: None,
@@ -463,10 +470,7 @@ impl ComputedStyle {
             }
             .into(),
             "font-size" => format!("{}px", self.font_size),
-            "font-weight" => match self.font_weight {
-                FontWeight::Normal => "400".into(),
-                FontWeight::Bold => "700".into(),
-            },
+            "font-weight" => format!("{}", self.font_weight.0),
             "line-height" => format!("{}px", self.line_height),
             "width" => dim_to_css(self.width),
             "height" => dim_to_css(self.height),
@@ -504,7 +508,19 @@ impl ComputedStyle {
                 TextAlign::Justify => "justify",
             }
             .into(),
-            "border-radius" => format!("{}px", self.border_radius),
+            "border-radius" => {
+                if self.border_radius.is_uniform() {
+                    format!("{}px", self.border_radius.top_left)
+                } else {
+                    format!(
+                        "{}px {}px {}px {}px",
+                        self.border_radius.top_left,
+                        self.border_radius.top_right,
+                        self.border_radius.bottom_right,
+                        self.border_radius.bottom_left,
+                    )
+                }
+            },
             "float" => match self.float {
                 Float::None => "none",
                 Float::Left => "left",
@@ -573,7 +589,7 @@ mod tests {
         assert_eq!(s.visibility, Visibility::Visible);
         assert_eq!(s.color, Color::BLACK);
         assert!((s.font_size - ROOT_FONT_SIZE).abs() < f32::EPSILON);
-        assert_eq!(s.font_weight, FontWeight::Normal);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
         assert_eq!(s.font_style, FontStyle::Normal);
         assert_eq!(s.font_family, FontFamily::SansSerif);
         assert!((s.line_height - ROOT_FONT_SIZE * 1.5).abs() < 0.01);
@@ -584,7 +600,7 @@ mod tests {
         assert_eq!(s.float, Float::None);
         assert_eq!(s.overflow, Overflow::Visible);
         assert_eq!(s.text_align, TextAlign::Left);
-        assert_eq!(s.text_decoration, TextDecoration::None);
+        assert_eq!(s.text_decoration, TextDecoration::NONE);
         assert_eq!(s.white_space, WhiteSpace::Normal);
         assert_eq!(s.list_style_type, ListStyleType::Disc);
         assert_eq!(s.border_collapse, BorderCollapse::Separate);
@@ -595,7 +611,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(255, 0, 0);
         parent.font_size = 20.0;
-        parent.font_weight = FontWeight::Bold;
+        parent.font_weight = FontWeight::BOLD;
         parent.text_align = TextAlign::Center;
         parent.visibility = Visibility::Hidden;
         parent.list_style_type = ListStyleType::Square;
@@ -605,7 +621,7 @@ mod tests {
         // Inherited.
         assert_eq!(child.color, Color::rgb(255, 0, 0));
         assert!((child.font_size - 20.0).abs() < f32::EPSILON);
-        assert_eq!(child.font_weight, FontWeight::Bold);
+        assert_eq!(child.font_weight, FontWeight::BOLD);
         assert_eq!(child.text_align, TextAlign::Center);
         assert_eq!(child.visibility, Visibility::Hidden);
         assert_eq!(child.list_style_type, ListStyleType::Square);

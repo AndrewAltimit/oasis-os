@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use oasis_browser::internals::{
     BoxType, CascadeContext, ComputedStyle, Display, LayoutBox, NodeKind, Stylesheet, TagName,
-    TextDecoration, TextMeasurer, Tokenizer, TreeBuilder, build_layout_tree, default_stylesheet,
-    style_tree,
+    TextDecorationLine, TextMeasurer, Tokenizer, TreeBuilder, build_layout_tree,
+    default_stylesheet, style_tree,
 };
 
 // -------------------------------------------------------------------
@@ -424,8 +424,8 @@ fn link_styling_color_and_underline() {
 
     // UA stylesheet should give links an underline text-decoration.
     assert_eq!(
-        a_style.text_decoration,
-        TextDecoration::Underline,
+        a_style.text_decoration.line,
+        TextDecorationLine::Underline,
         "links should have underline decoration",
     );
 

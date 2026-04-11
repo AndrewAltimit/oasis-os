@@ -1,8 +1,8 @@
 //! Background painting: solid color, gradient, and background image.
 
-use crate::css::values::BackgroundImage;
+use crate::css::values::{BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize};
 use crate::layout::box_model::LayoutBox;
-use oasis_types::backend::{Color, SdiBackend};
+use oasis_types::backend::{Color, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
 use super::{PaintContext, apply_filters_and_opacity, apply_opacity};
@@ -27,7 +27,7 @@ pub(super) fn paint_background(
         &layout_box.style.filters,
     );
     if bg.a > 0 {
-        if !ctx.transform.is_translation_only() && layout_box.style.border_radius == 0.0 {
+        if !ctx.transform.is_translation_only() && layout_box.style.border_radius.is_zero() {
             // Non-trivial transform: render as transformed quadrilateral.
             let quad = ctx.transform.transform_rect_to_quad(
                 padding.x - ctx.scroll_x + offset_x as f32,
@@ -36,8 +36,9 @@ pub(super) fn paint_background(
                 padding.height,
             );
             backend.fill_polygon(&quad, bg)?;
-        } else if layout_box.style.border_radius > 0.0 {
-            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        } else if !layout_box.style.border_radius.is_zero() {
+            let r = layout_box.style.border_radius.max_radius() as u16;
+            backend.fill_rounded_rect(x, y, w, h, r, bg)?;
         } else {
             backend.fill_rect(x, y, w, h, bg)?;
         }
@@ -55,7 +56,152 @@ pub(super) fn paint_background(
 
     // Paint background image (if texture has been resolved).
     if let Some(tex) = layout_box.background_texture {
-        backend.blit(tex, x, y, w, h)?;
+        let tex_size = layout_box.background_texture_size.unwrap_or((w, h));
+        paint_background_image(
+            backend,
+            tex,
+            x,
+            y,
+            w,
+            h,
+            tex_size,
+            &layout_box.style.background_size,
+            &layout_box.style.background_position,
+            layout_box.style.background_repeat,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Paint a background image with size, position, and repeat properties.
+#[allow(clippy::too_many_arguments)]
+fn paint_background_image(
+    backend: &mut dyn SdiBackend,
+    tex: TextureId,
+    container_x: i32,
+    container_y: i32,
+    container_w: u32,
+    container_h: u32,
+    intrinsic_size: (u32, u32),
+    size: &BackgroundSize,
+    position: &BackgroundPosition,
+    repeat: BackgroundRepeat,
+) -> Result<()> {
+    let (tex_w, tex_h) = intrinsic_size;
+
+    if tex_w == 0 || tex_h == 0 {
+        return Ok(());
+    }
+
+    // Compute the rendered image dimensions based on background-size.
+    let (img_w, img_h) = match size {
+        BackgroundSize::Auto => (tex_w, tex_h),
+        BackgroundSize::Cover => {
+            let scale_x = container_w as f32 / tex_w as f32;
+            let scale_y = container_h as f32 / tex_h as f32;
+            let scale = scale_x.max(scale_y);
+            ((tex_w as f32 * scale) as u32, (tex_h as f32 * scale) as u32)
+        },
+        BackgroundSize::Contain => {
+            let scale_x = container_w as f32 / tex_w as f32;
+            let scale_y = container_h as f32 / tex_h as f32;
+            let scale = scale_x.min(scale_y);
+            ((tex_w as f32 * scale) as u32, (tex_h as f32 * scale) as u32)
+        },
+        BackgroundSize::Explicit(w, h) => {
+            let iw = match w {
+                Some(v) if *v < 0.0 => (container_w as f32 * (-*v / 100.0)) as u32,
+                Some(v) => *v as u32,
+                None => {
+                    // Auto: maintain aspect ratio from the other dimension.
+                    if let Some(hv) = h {
+                        let hpx = if *hv < 0.0 {
+                            container_h as f32 * (-*hv / 100.0)
+                        } else {
+                            *hv
+                        };
+                        (tex_w as f32 * hpx / tex_h as f32) as u32
+                    } else {
+                        tex_w
+                    }
+                },
+            };
+            let ih = match h {
+                Some(v) if *v < 0.0 => (container_h as f32 * (-*v / 100.0)) as u32,
+                Some(v) => *v as u32,
+                None => {
+                    // Auto: maintain aspect ratio.
+                    (tex_h as f32 * iw as f32 / tex_w as f32) as u32
+                },
+            };
+            (iw.max(1), ih.max(1))
+        },
+    };
+
+    // Compute the position of the image within the container.
+    let pos_x = if position.x_is_px {
+        position.x as i32
+    } else {
+        ((container_w as f32 - img_w as f32) * position.x) as i32
+    };
+    let pos_y = if position.y_is_px {
+        position.y as i32
+    } else {
+        ((container_h as f32 - img_h as f32) * position.y) as i32
+    };
+
+    // Determine repeat behavior.
+    let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
+    let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
+
+    if !repeat_x && !repeat_y {
+        // Single image at the computed position.
+        backend.blit(tex, container_x + pos_x, container_y + pos_y, img_w, img_h)?;
+    } else {
+        // Tile the image. Compute the starting offset so tiles cover the container.
+        let start_x = if repeat_x {
+            let offset = pos_x % img_w as i32;
+            if offset > 0 {
+                offset - img_w as i32
+            } else {
+                offset
+            }
+        } else {
+            pos_x
+        };
+        let start_y = if repeat_y {
+            let offset = pos_y % img_h as i32;
+            if offset > 0 {
+                offset - img_h as i32
+            } else {
+                offset
+            }
+        } else {
+            pos_y
+        };
+
+        let mut ty = start_y;
+        loop {
+            if ty >= container_h as i32 {
+                break;
+            }
+            let mut tx = start_x;
+            loop {
+                if tx >= container_w as i32 {
+                    break;
+                }
+                backend.blit(tex, container_x + tx, container_y + ty, img_w, img_h)?;
+                if !repeat_x {
+                    break;
+                }
+                tx += img_w as i32;
+            }
+            if !repeat_y {
+                break;
+            }
+            ty += img_h as i32;
+        }
     }
 
     Ok(())

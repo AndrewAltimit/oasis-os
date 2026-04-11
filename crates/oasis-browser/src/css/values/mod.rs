@@ -15,11 +15,12 @@ pub use computed::ComputedStyle;
 #[allow(unused_imports)]
 pub use types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
-    Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle,
-    FontWeight, GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
+    AnimationPlayState, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, Dimension, Display,
+    FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
+    GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
     ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE,
-    RadialGradient, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
-    TextTransform, TimingFunction, TransformFunction, TransformOrigin, Transition, VerticalAlign,
-    Visibility, WhiteSpace, WordBreak,
+    RadialGradient, TextAlign, TextDecoration, TextDecorationLine, TextDecorationStyle,
+    TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFunction,
+    TransformOrigin, Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };

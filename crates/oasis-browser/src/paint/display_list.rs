@@ -1409,9 +1409,52 @@ fn replay_border_edge(
                 backend.fill_rect(x + (line + gap) as i32, y, line, h, color)?;
             }
         },
+        BorderStyle::Groove | BorderStyle::Ridge => {
+            // 3D effect with two halves.
+            let (outer, inner) = if style == BorderStyle::Groove {
+                (darken_color(color), lighten_color(color))
+            } else {
+                (lighten_color(color), darken_color(color))
+            };
+            let thickness = if horizontal { h } else { w };
+            let half = thickness / 2;
+            let other = thickness - half;
+            if horizontal {
+                backend.fill_rect(x, y, w, half.max(1), outer)?;
+                backend.fill_rect(x, y + half as i32, w, other.max(1), inner)?;
+            } else {
+                backend.fill_rect(x, y, half.max(1), h, outer)?;
+                backend.fill_rect(x + half as i32, y, other.max(1), h, inner)?;
+            }
+        },
+        BorderStyle::Inset | BorderStyle::Outset => {
+            let shade = match (style, horizontal) {
+                (BorderStyle::Inset, true) | (BorderStyle::Outset, false) => darken_color(color),
+                _ => lighten_color(color),
+            };
+            backend.fill_rect(x, y, w, h, shade)?;
+        },
         BorderStyle::None => {},
     }
     Ok(())
+}
+
+fn darken_color(c: Color) -> Color {
+    Color::rgba(
+        (c.r as f32 * 0.6) as u8,
+        (c.g as f32 * 0.6) as u8,
+        (c.b as f32 * 0.6) as u8,
+        c.a,
+    )
+}
+
+fn lighten_color(c: Color) -> Color {
+    Color::rgba(
+        (c.r as f32 + (255.0 - c.r as f32) * 0.4) as u8,
+        (c.g as f32 + (255.0 - c.g as f32) * 0.4) as u8,
+        (c.b as f32 + (255.0 - c.b as f32) * 0.4) as u8,
+        c.a,
+    )
 }
 
 // ---------------------------------------------------------------------------

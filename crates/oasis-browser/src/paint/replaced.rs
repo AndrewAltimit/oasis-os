@@ -100,8 +100,15 @@ pub(super) fn paint_replaced(
             } else {
                 Color::rgb(255, 255, 255)
             };
-            if style.border_radius > 0.0 {
-                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            if !style.border_radius.is_zero() {
+                backend.fill_rounded_rect(
+                    x,
+                    y,
+                    w,
+                    h,
+                    style.border_radius.max_radius() as u16,
+                    bg,
+                )?;
             } else {
                 backend.fill_rect(x, y, w, h, bg)?;
             }
@@ -324,8 +331,15 @@ pub(super) fn paint_replaced(
             } else {
                 Color::rgb(239, 239, 239)
             };
-            if style.border_radius > 0.0 {
-                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            if !style.border_radius.is_zero() {
+                backend.fill_rounded_rect(
+                    x,
+                    y,
+                    w,
+                    h,
+                    style.border_radius.max_radius() as u16,
+                    bg,
+                )?;
             } else {
                 backend.fill_rect(x, y, w, h, bg)?;
             }

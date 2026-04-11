@@ -20,7 +20,7 @@ pub(super) fn paint_box_shadow(
     }
 
     let border = layout_box.dimensions.border_box();
-    let radius = layout_box.style.border_radius;
+    let radius = layout_box.style.border_radius.max_radius();
 
     // Paint shadows in reverse order (last declared = bottommost).
     for shadow in layout_box.style.box_shadow.iter().rev() {

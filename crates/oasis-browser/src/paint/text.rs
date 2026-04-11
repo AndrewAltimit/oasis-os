@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::TextDecoration;
+use crate::css::values::{TextDecorationLine, TextDecorationStyle};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::LayoutBox;
 use oasis_types::backend::SdiBackend;
@@ -26,8 +26,9 @@ pub(super) fn paint_inline_content(
         let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
         let w = pb.width as u32;
         let h = pb.height as u32;
-        if layout_box.style.border_radius > 0.0 {
-            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        if !layout_box.style.border_radius.is_zero() {
+            let r = layout_box.style.border_radius.max_radius() as u16;
+            backend.fill_rounded_rect(x, y, w, h, r, bg)?;
         } else {
             backend.fill_rect(x, y, w, h, bg)?;
         }
@@ -73,7 +74,7 @@ pub(super) fn paint_text(
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
     let color = apply_filters_and_opacity(style.color, style.opacity, &style.filters);
-    let bold = style.font_weight == crate::css::values::FontWeight::Bold;
+    let bold = style.font_weight.is_bold();
     let italic = style.font_style == crate::css::values::FontStyle::Italic;
     let font_size = style.font_size as u16;
 
@@ -141,21 +142,65 @@ pub(super) fn paint_text(
     }
     let text_width = text_w.max(0.0) as u32;
 
-    // Underline decoration: just below baseline (~85% of font-size).
-    if style.text_decoration == TextDecoration::Underline {
-        let underline_y = sy + (style.font_size * 0.85) as i32;
-        backend.fill_rect(sx, underline_y, text_width, 1, color)?;
-    }
+    // Text decorations: underline, line-through, overline.
+    if style.text_decoration.line != TextDecorationLine::None {
+        let deco_color = style
+            .text_decoration
+            .color
+            .map(|c| apply_filters_and_opacity(c, style.opacity, &style.filters))
+            .unwrap_or(color);
 
-    // Line-through decoration: at x-height (~40% of font-size).
-    if style.text_decoration == TextDecoration::LineThrough {
-        let strike_y = sy + (style.font_size * 0.4) as i32;
-        backend.fill_rect(sx, strike_y, text_width, 1, color)?;
-    }
+        let deco_y = match style.text_decoration.line {
+            TextDecorationLine::Underline => sy + (style.font_size * 0.85) as i32,
+            TextDecorationLine::LineThrough => sy + (style.font_size * 0.4) as i32,
+            TextDecorationLine::Overline => sy,
+            TextDecorationLine::None => unreachable!(),
+        };
 
-    // Overline decoration
-    if style.text_decoration == TextDecoration::Overline {
-        backend.fill_rect(sx, sy, text_width, 1, color)?;
+        match style.text_decoration.style {
+            TextDecorationStyle::Solid => {
+                backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
+            },
+            TextDecorationStyle::Double => {
+                backend.fill_rect(sx, deco_y, text_width, 1, deco_color)?;
+                backend.fill_rect(sx, deco_y + 2, text_width, 1, deco_color)?;
+            },
+            TextDecorationStyle::Dashed => {
+                let dash_len = 4u32;
+                let mut pos = 0u32;
+                let mut draw = true;
+                while pos < text_width {
+                    let seg = dash_len.min(text_width - pos);
+                    if draw {
+                        backend.fill_rect(sx + pos as i32, deco_y, seg, 1, deco_color)?;
+                    }
+                    pos += seg;
+                    draw = !draw;
+                }
+            },
+            TextDecorationStyle::Dotted => {
+                let mut pos = 0u32;
+                while pos < text_width {
+                    backend.fill_rect(sx + pos as i32, deco_y, 1, 1, deco_color)?;
+                    pos += 2;
+                }
+            },
+            TextDecorationStyle::Wavy => {
+                // Approximate wavy with alternating 1px up/down segments.
+                let mut pos = 0u32;
+                while pos < text_width {
+                    let offset = if (pos / 2).is_multiple_of(2) { 0 } else { 1 };
+                    backend.fill_rect(
+                        sx + pos as i32,
+                        deco_y + offset,
+                        1.min(text_width - pos),
+                        1,
+                        deco_color,
+                    )?;
+                    pos += 1;
+                }
+            },
+        }
     }
 
     Ok(())
