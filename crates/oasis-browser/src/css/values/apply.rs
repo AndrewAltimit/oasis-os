@@ -9,13 +9,13 @@ use super::resolve::{
 };
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
-    BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, Cursor, Display, FlexDirection,
-    FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition, ListStyleType,
-    ObjectFit, ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, TextAlign,
-    TextDecorationLine, TextDecorationStyle, TextDirection, TextOverflow, TextShadow,
-    TextTransform, TimingFunction, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    AnimationPlayState, Appearance, BackgroundImage, BackgroundPosition, BackgroundRepeat,
+    BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, ColorScheme,
+    Cursor, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, Isolation,
+    JustifyContent, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow,
+    OverflowWrap, PointerEvents, Position, Resize, TextAlign, TextDecorationLine,
+    TextDecorationStyle, TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TouchAction, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -72,8 +72,12 @@ impl ComputedStyle {
                         "table-row" => Display::TableRow,
                         "table-cell" => Display::TableCell,
                         "flex" => Display::Flex,
+                        "inline-flex" => Display::InlineFlex,
                         "grid" => Display::Grid,
+                        "inline-grid" => Display::InlineGrid,
                         "none" => Display::None,
+                        // -webkit-box is used with -webkit-line-clamp
+                        "-webkit-box" => Display::Block,
                         _ => return,
                     };
                 }
@@ -1154,6 +1158,109 @@ impl ComputedStyle {
                 }
             },
 
+            // -- Appearance ------------------------------------------------
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.appearance = match kw {
+                        "none" => Appearance::None,
+                        "auto" => Appearance::Auto,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Line clamp -----------------------------------------------
+            "-webkit-line-clamp" | "line-clamp" => {
+                if let CssValue::Number(n) = value {
+                    self.line_clamp = *n as u32;
+                } else if let Some("none") = as_keyword(value) {
+                    self.line_clamp = 0;
+                }
+            },
+            // Also recognize -webkit-box-orient for line-clamp compatibility
+            "-webkit-box-orient" => {
+                // Accepted but no separate field needed — line_clamp is sufficient.
+            },
+
+            // -- Accent color ---------------------------------------------
+            "accent-color" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.accent_color = None;
+                } else if let Some(c) = resolve_color(value) {
+                    self.accent_color = Some(c);
+                }
+            },
+
+            // -- Caret color ----------------------------------------------
+            "caret-color" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.caret_color = None;
+                } else if let Some(c) = resolve_color_or_current(value, self.color) {
+                    self.caret_color = Some(c);
+                }
+            },
+
+            // -- Color scheme ---------------------------------------------
+            "color-scheme" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.color_scheme = match kw {
+                        "normal" => ColorScheme::Normal,
+                        "light" => ColorScheme::Light,
+                        "dark" => ColorScheme::Dark,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // "light dark" form
+                    let has_light = vs.iter().any(|v| as_keyword(v) == Some("light"));
+                    let has_dark = vs.iter().any(|v| as_keyword(v) == Some("dark"));
+                    if has_light && has_dark {
+                        self.color_scheme = ColorScheme::LightDark;
+                    } else if has_dark {
+                        self.color_scheme = ColorScheme::Dark;
+                    } else if has_light {
+                        self.color_scheme = ColorScheme::Light;
+                    }
+                }
+            },
+
+            // -- Isolation ------------------------------------------------
+            "isolation" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.isolation = match kw {
+                        "auto" => Isolation::Auto,
+                        "isolate" => Isolation::Isolate,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Resize ---------------------------------------------------
+            "resize" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.resize = match kw {
+                        "none" => Resize::None,
+                        "both" => Resize::Both,
+                        "horizontal" => Resize::Horizontal,
+                        "vertical" => Resize::Vertical,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Touch action ---------------------------------------------
+            "touch-action" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.touch_action = match kw {
+                        "auto" => TouchAction::Auto,
+                        "none" => TouchAction::None,
+                        "manipulation" => TouchAction::Manipulation,
+                        "pan-x" => TouchAction::PanX,
+                        "pan-y" => TouchAction::PanY,
+                        _ => return,
+                    };
+                }
+            },
+
             // -- Generated content --------------------------------------
             "content" => match value {
                 CssValue::String(s) => {
@@ -1646,6 +1753,16 @@ impl ComputedStyle {
             "text-underline-offset" => self.text_underline_offset = 0.0,
             "direction" => self.direction = TextDirection::Ltr,
             "object-position" => self.object_position = ObjectPosition::default(),
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                self.appearance = Appearance::Auto;
+            },
+            "-webkit-line-clamp" | "line-clamp" => self.line_clamp = 0,
+            "accent-color" => self.accent_color = None,
+            "caret-color" => self.caret_color = None,
+            "color-scheme" => self.color_scheme = ColorScheme::Normal,
+            "isolation" => self.isolation = Isolation::Auto,
+            "resize" => self.resize = Resize::None,
+            "touch-action" => self.touch_action = TouchAction::Auto,
             _ => {},
         }
     }

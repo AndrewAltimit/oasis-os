@@ -284,8 +284,8 @@ fn box_type_for_element(_elem: &ElementData, style: &ComputedStyle) -> BoxType {
         Display::Block => BoxType::Block,
         Display::Inline => BoxType::Inline,
         Display::InlineBlock => BoxType::InlineBlock,
-        Display::Flex => BoxType::Flex,
-        Display::Grid => BoxType::Grid,
+        Display::Flex | Display::InlineFlex => BoxType::Flex,
+        Display::Grid | Display::InlineGrid => BoxType::Grid,
         Display::ListItem => {
             let marker = resolve_list_marker(style);
             BoxType::ListItem { marker }

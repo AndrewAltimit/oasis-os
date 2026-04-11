@@ -619,6 +619,19 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "object-position",
     "place-items",
     "place-content",
+    "appearance",
+    "-webkit-appearance",
+    "-moz-appearance",
+    "-webkit-line-clamp",
+    "line-clamp",
+    "-webkit-box-orient",
+    "accent-color",
+    "caret-color",
+    "color-scheme",
+    "isolation",
+    "resize",
+    "touch-action",
+    "grid-template",
 ];
 
 /// Evaluate an `@supports` condition string.

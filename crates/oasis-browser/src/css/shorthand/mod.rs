@@ -196,10 +196,70 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                 // We only support a single overflow property, so just pass through.
                 out.push(decl);
             },
+            "grid-template" => {
+                out.extend(expand_grid_template(&decl.value, decl.important));
+            },
             _ => out.push(decl),
         }
     }
     out
+}
+
+/// Expand the `grid-template` shorthand.
+///
+/// Handles the simple form `grid-template: <rows> / <columns>` by splitting
+/// on `/` and emitting `grid-template-rows` and `grid-template-columns`.
+/// The full form with named areas is passed through as `grid-template-rows`.
+fn expand_grid_template(value: &CssValue, important: bool) -> Vec<Declaration> {
+    // Check for the "rows / columns" form in a keyword or string value.
+    let raw = match value {
+        CssValue::Keyword(s) | CssValue::String(s) => Some(s.as_str()),
+        _ => None,
+    };
+
+    if let Some(raw) = raw {
+        if raw == "none" {
+            return vec![
+                Declaration {
+                    property: "grid-template-rows".into(),
+                    value: CssValue::Keyword("none".into()),
+                    important,
+                    property_id: PropertyId::Other,
+                },
+                Declaration {
+                    property: "grid-template-columns".into(),
+                    value: CssValue::Keyword("none".into()),
+                    important,
+                    property_id: PropertyId::Other,
+                },
+            ];
+        }
+
+        if let Some((rows_str, cols_str)) = raw.split_once('/') {
+            return vec![
+                Declaration {
+                    property: "grid-template-rows".into(),
+                    value: CssValue::Keyword(rows_str.trim().into()),
+                    important,
+                    property_id: PropertyId::Other,
+                },
+                Declaration {
+                    property: "grid-template-columns".into(),
+                    value: CssValue::Keyword(cols_str.trim().into()),
+                    important,
+                    property_id: PropertyId::Other,
+                },
+            ];
+        }
+    }
+
+    // Fallback: pass through as grid-template-rows.
+    vec![Declaration {
+        property: "grid-template-rows".into(),
+        value: value.clone(),
+        important,
+        property_id: PropertyId::Other,
+    }]
 }
 
 #[cfg(test)]

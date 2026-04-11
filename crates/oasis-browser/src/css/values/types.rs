@@ -18,7 +18,9 @@ pub enum Display {
     Inline,
     InlineBlock,
     Flex,
+    InlineFlex,
     Grid,
+    InlineGrid,
     ListItem,
     Table,
     TableRow,
@@ -689,6 +691,48 @@ impl Default for ObjectPosition {
             y_is_px: false,
         }
     }
+}
+
+/// CSS `appearance` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Auto,
+    None,
+}
+
+/// CSS `color-scheme` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Normal,
+    Light,
+    Dark,
+    LightDark,
+}
+
+/// CSS `isolation` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    Auto,
+    Isolate,
+}
+
+/// CSS `resize` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resize {
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+}
+
+/// CSS `touch-action` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchAction {
+    Auto,
+    None,
+    Manipulation,
+    PanX,
+    PanY,
 }
 
 /// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.

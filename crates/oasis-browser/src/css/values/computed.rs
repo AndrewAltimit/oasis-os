@@ -5,14 +5,14 @@ use rustc_hash::FxHashMap;
 use oasis_types::backend::Color;
 
 use super::types::{
-    AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BackgroundPosition,
-    BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxShadow,
-    BoxSizing, Clear, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
-    FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
-    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position,
-    ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
-    TextTransform, TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackgroundImage,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius,
+    BorderStyle, BoxShadow, BoxSizing, Clear, ColorScheme, Cursor, Dimension, Display,
+    FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
+    GridTrackSize, Isolation, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
+    ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
+    TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TouchAction,
+    TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -237,6 +237,29 @@ pub struct ComputedStyle {
     // -- Animations ---------------------------------------------------
     pub animations: Vec<Animation>,
 
+    // -- Appearance ----------------------------------------------------
+    pub appearance: Appearance,
+
+    // -- Line clamp ----------------------------------------------------
+    /// Number of lines to clamp to, or 0 for no clamping.
+    pub line_clamp: u32,
+
+    // -- Accent / caret colors -----------------------------------------
+    pub accent_color: Option<Color>,
+    pub caret_color: Option<Color>,
+
+    // -- Color scheme --------------------------------------------------
+    pub color_scheme: ColorScheme,
+
+    // -- Isolation -----------------------------------------------------
+    pub isolation: Isolation,
+
+    // -- Resize --------------------------------------------------------
+    pub resize: Resize,
+
+    // -- Touch action --------------------------------------------------
+    pub touch_action: TouchAction,
+
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
 }
@@ -440,6 +463,15 @@ impl Default for ComputedStyle {
 
             animations: Vec::new(),
 
+            appearance: Appearance::Auto,
+            line_clamp: 0,
+            accent_color: None,
+            caret_color: None,
+            color_scheme: ColorScheme::Normal,
+            isolation: Isolation::Auto,
+            resize: Resize::None,
+            touch_action: TouchAction::Auto,
+
             custom_properties: FxHashMap::default(),
         }
     }
@@ -477,7 +509,9 @@ impl ComputedStyle {
                 Display::Inline => "inline",
                 Display::InlineBlock => "inline-block",
                 Display::Flex => "flex",
+                Display::InlineFlex => "inline-flex",
                 Display::Grid => "grid",
+                Display::InlineGrid => "inline-grid",
                 Display::ListItem => "list-item",
                 Display::Table => "table",
                 Display::TableRow => "table-row",
