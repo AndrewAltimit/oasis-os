@@ -46,6 +46,7 @@ psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] 
 oasis-core = { path = "../oasis-core", default-features = false }
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
+oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }
 libm = "0.2"
 
 # TLS for HTTPS/Gemini (pure Rust, no C/asm, works on mipsel-sony-psp)

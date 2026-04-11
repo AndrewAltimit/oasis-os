@@ -141,6 +141,32 @@ fn psp_main() {
         .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
 
+    // Software shader renderer for animated wallpapers.
+    // Renders at 32x32 output (internally ~11x11 via RENDER_SCALE=3) to keep
+    // expensive shaders (voronoi: 277ms at 64x64) within budget on 333MHz MIPS.
+    // The 32x32 output is uploaded to the 64x64 wallpaper texture's top-left
+    // quadrant; GE bilinear scaling to 480x272 hides the lower resolution.
+    use oasis_shader::software::SoftwareShaderRenderer;
+    const SHADER_W: u32 = 32;
+    const SHADER_H: u32 = 32;
+    let mut shader_renderer = SoftwareShaderRenderer::new(SHADER_W, SHADER_H);
+    // Pre-allocate a 32x32 shader texture for blitting.
+    let shader_init = vec![0u8; (SHADER_W * SHADER_H * 4) as usize];
+    let shader_tex = backend
+        .load_texture_inner(SHADER_W, SHADER_H, &shader_init)
+        .unwrap_or(TextureId(0));
+    // Cache the shader layer info to avoid traversing background_layers each frame.
+    let mut cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
+    let mut shader_active = cached_shader.is_some();
+    if let Some(ref info) = cached_shader {
+        dbg_log(&format!("[SHADER] active: {} ({}x{})",
+            info.name, SHADER_W, SHADER_H));
+    } else {
+        dbg_log("[SHADER] none (using static gradient)");
+    }
+    // Track current skin key to detect skin changes and regenerate wallpaper.
+    let mut last_skin_key: &str = current_preset.key();
+
     // Load cursor texture.
     let cursor_data = oasis_backend_psp::generate_cursor_pixels();
     let cursor_tex = backend
@@ -425,6 +451,26 @@ fn psp_main() {
             }
         }
 
+        // -- Poll remote skin change requests --
+        if let Some(key) = oasis_backend_psp::cmd_server::take_pending_skin() {
+            let preset = skins::PspSkinPreset::from_key(&key);
+            if preset != current_preset {
+                current_preset = preset;
+                active_theme = preset.to_active_theme();
+                dashboard_state.config = oasis_core::dashboard::DashboardConfig::from_features(
+                    &skin_features, &active_theme,
+                );
+                config.set(
+                    "skin",
+                    psp::config::ConfigValue::Str(preset.key().to_string()),
+                );
+                if let Err(e) = config.save(CONFIG_PATH) {
+                    dbg_log(&format!("[SKIN] config save failed: {:?}", e));
+                }
+                dbg_log(&format!("[SKIN] changed to '{}' via TCP", preset.name()));
+            }
+        }
+
         // -- Render --
         // Skip clear + wallpaper when video covers the entire screen.
         let video_fullscreen = kiosk_app == KioskApp::TvGuide
@@ -482,8 +528,53 @@ fn psp_main() {
             bottom_bar.tick_animation(&active_theme);
 
             backend.clear_inner(Color::BLACK);
-            // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
-            backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+            // Detect skin change: update cached shader info.
+            let cur_key = current_preset.key();
+            if cur_key != last_skin_key {
+                last_skin_key = cur_key;
+                cached_shader =
+                    oasis_core::vector_overlay::get_shader_layer(&active_theme);
+                shader_active = cached_shader.is_some();
+            }
+
+            // Shader wallpaper: render animated shader to a 32x32 texture
+            // every other frame (30fps shader, 60fps UI), then blit fullscreen.
+            // Non-shader skins use the static gradient wallpaper.
+            if shader_active && viz_frame % 2 == 0 {
+                if let Some(ref info) = cached_shader {
+                    let log_this_frame = viz_frame % 600 == 0;
+                    // SAFETY: scalar FFI returning microsecond timestamp.
+                    let t0 = if log_this_frame {
+                        unsafe { psp::sys::sceKernelGetSystemTimeLow() }
+                    } else {
+                        0
+                    };
+                    let time = viz_frame as f32 / 60.0;
+                    let pixels = shader_renderer.render_shader(
+                        &info.name, time, &info.params,
+                    );
+                    backend.update_texture_data(shader_tex, pixels);
+                    // Log shader render time periodically (~every 10s).
+                    if log_this_frame {
+                        let elapsed = unsafe {
+                            psp::sys::sceKernelGetSystemTimeLow()
+                        }.wrapping_sub(t0);
+                        dbg_log(&format!(
+                            "[SHADER] render+upload: {}us (frame {})",
+                            elapsed, viz_frame,
+                        ));
+                    }
+                }
+            }
+
+            if shader_active {
+                // Shader: 32x32 texture scaled to fullscreen by GE (bilinear).
+                backend.blit_scaled(shader_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            } else {
+                // Static gradient: 64x64 texture scaled to fullscreen.
+                backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            }
         }
         let status = cached_status;
         let fps = frame_timer.fps();

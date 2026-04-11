@@ -206,6 +206,52 @@ impl PspBackend {
         Some(TextureId(id as u64))
     }
 
+    /// Update an existing texture's pixel data in-place.
+    ///
+    /// Copies new RGBA data into the texture's existing buffer and flushes
+    /// the D-cache so the GU sees the updated pixels. Dimensions must match
+    /// the original texture — no reallocation is performed.
+    pub fn update_texture_data(&mut self, tex: TextureId, rgba_data: &[u8]) {
+        let idx = tex.0 as usize;
+        let Some(Some(texture)) = self.textures.get(idx) else {
+            return;
+        };
+        let width = texture.width;
+        let height = texture.height;
+        let buf_w = texture.buf_w;
+        let data = texture.data;
+        let src_stride = (width * 4) as usize;
+        let dst_stride = (buf_w * 4) as usize;
+
+        if rgba_data.len() < (width * height * 4) as usize {
+            return;
+        }
+
+        // SAFETY: texture.data was allocated in load_texture_inner with
+        // buf_w * buf_h * 4 bytes. Source data length is checked above.
+        unsafe {
+            if src_stride == dst_stride {
+                let total = src_stride * height as usize;
+                ptr::copy_nonoverlapping(rgba_data.as_ptr(), data, total);
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
+                );
+            } else {
+                for row in 0..height as usize {
+                    let src = rgba_data.as_ptr().add(row * src_stride);
+                    let dst = data.add(row * dst_stride);
+                    ptr::copy_nonoverlapping(src, dst, src_stride);
+                }
+                let total = dst_stride * height as usize;
+                psp::cache::dcache_writeback_range(
+                    data as *const core::ffi::c_void,
+                    total as u32,
+                );
+            }
+        }
+    }
+
     /// Destroy a loaded texture, freeing its memory.
     ///
     /// Textures in volatile memory are not individually freed (the bump

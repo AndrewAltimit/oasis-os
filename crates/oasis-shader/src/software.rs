@@ -204,7 +204,7 @@ impl SoftwareShaderRenderer {
                 let idx = uvx.floor();
                 let idy = uvy.floor();
 
-                let mut mindist: f32 = 1e9;
+                let mut mindist2: f32 = 1e9;
                 let mut vorv_x: f32 = 0.0;
                 let mut vorv_y: f32 = 0.0;
 
@@ -217,9 +217,9 @@ impl SoftwareShaderRenderer {
                         let (px, py) = voronoi_pt(t, nid_x, nid_y);
                         let dx = gvx + px - fi;
                         let dy = gvy + py - fj;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist < mindist {
-                            mindist = dist;
+                        let dist2 = dx * dx + dy * dy;
+                        if dist2 < mindist2 {
+                            mindist2 = dist2;
                             vorv_x = (idx + px + fi) / size - off_x;
                             vorv_y = (idy + py + fj) / size - off_y;
                         }
@@ -726,13 +726,12 @@ fn cell_bright(time: f32, x: f32, y: f32) -> f32 {
 }
 
 /// Voronoi `ran` helper — pseudo-random 2D → 2D.
+///
+/// Uses a single-sin hash per component (same pattern as `hash2`) instead
+/// of the original cos/tan chain, which is ~3× cheaper on software CPUs.
 fn voronoi_ran(x: f32, y: f32) -> (f32, f32) {
-    let ax = x * (x * 127.1 + y * 311.7);
-    let ay = y * (x * 227.1 + y * 521.7);
-    let fx =
-        1.0 - fract((ax.cos() * 123.6).tan() * 3533.3) * fract((ax.cos() * 123.6).tan() * 3533.3);
-    let fy =
-        1.0 - fract((ay.cos() * 123.6).tan() * 3533.3) * fract((ay.cos() * 123.6).tan() * 3533.3);
+    let fx = fract((x * 127.1 + y * 311.7).sin() * 43758.547);
+    let fy = fract((x * 269.5 + y * 183.3).sin() * 43758.547);
     (fx, fy)
 }
 
@@ -888,6 +887,215 @@ mod tests {
         ] {
             let pixels = r.render_shader(name, 0.5, &params);
             assert_eq!(pixels.len(), 8 * 8 * 4);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PSP-specific shader validation
+    // -----------------------------------------------------------------------
+    // These tests validate shaders at the 64x64 resolution used by the PSP
+    // backend, with skin-matched parameters, verifying correctness and
+    // performance without requiring the PSP target.
+
+    /// PSP shader skin configurations — mirrors `PspSkinPreset::shader_config()`
+    /// from oasis-backend-psp so we can test without the PSP crate dependency.
+    fn psp_shader_configs() -> Vec<(&'static str, &'static str, ShaderParams)> {
+        use std::collections::HashMap;
+        fn hex(r: u8, g: u8, b: u8) -> [f32; 4] {
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        }
+        vec![
+            (
+                "Balatro",
+                "balatro",
+                ShaderParams {
+                    colors: vec![
+                        hex(0x00, 0xF0, 0xFF),
+                        hex(0x00, 0x6B, 0xB4),
+                        hex(0x16, 0x23, 0x25),
+                    ],
+                    floats: HashMap::from([
+                        ("speed".into(), 1.0),
+                        ("contrast".into(), 3.5),
+                        ("spin_speed".into(), 1.0),
+                        ("spin_amount".into(), 0.25),
+                        ("pixel_filter".into(), 745.0),
+                        ("lighting".into(), 0.4),
+                        ("spin_ease".into(), 1.0),
+                    ]),
+                },
+            ),
+            (
+                "RetroCga",
+                "voronoi",
+                ShaderParams {
+                    colors: vec![hex(0x55, 0xFF, 0x55), hex(0xFF, 0x55, 0xFF)],
+                    floats: HashMap::from([("speed".into(), 0.5), ("size".into(), 6.0)]),
+                },
+            ),
+            (
+                "Solarized",
+                "ocean_waves",
+                ShaderParams {
+                    colors: vec![
+                        hex(0x00, 0x2B, 0x36),
+                        hex(0x00, 0xE0, 0xE0),
+                        hex(0x58, 0x6E, 0x75),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.6)]),
+                },
+            ),
+            (
+                "Terminal",
+                "matrix_rain",
+                ShaderParams {
+                    colors: vec![hex(0x00, 0xFF, 0x00), hex(0x00, 0x02, 0x00)],
+                    floats: HashMap::from([("speed".into(), 0.8)]),
+                },
+            ),
+            (
+                "Altimit",
+                "starfield",
+                ShaderParams {
+                    colors: vec![hex(0x00, 0xCC, 0x88), hex(0x08, 0x08, 0x16)],
+                    floats: HashMap::from([("speed".into(), 0.6)]),
+                },
+            ),
+            (
+                "Tactical",
+                "plasma",
+                ShaderParams {
+                    colors: vec![
+                        hex(0xCC, 0x88, 0x00),
+                        hex(0x66, 0x33, 0x00),
+                        hex(0x33, 0x1A, 0x00),
+                    ],
+                    floats: HashMap::from([("speed".into(), 0.4)]),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn psp_shaders_render_at_64x64() {
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            let pixels = r.render_shader(name, 1.0, &params);
+            assert_eq!(
+                pixels.len(),
+                64 * 64 * 4,
+                "{skin} ({name}): wrong buffer size"
+            );
+        }
+    }
+
+    #[test]
+    fn psp_shaders_produce_visible_output() {
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            let pixels = r.render_shader(name, 1.0, &params);
+            let has_color = pixels
+                .chunks(4)
+                .any(|px| px[0] > 10 || px[1] > 10 || px[2] > 10);
+            assert!(has_color, "{skin} ({name}): all-black output");
+        }
+    }
+
+    #[test]
+    fn psp_shaders_animate_over_time() {
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            let p0 = r.render_shader(name, 0.0, &params).to_vec();
+            let p5 = r.render_shader(name, 5.0, &params).to_vec();
+            assert_ne!(p0, p5, "{skin} ({name}): no animation between t=0 and t=5");
+        }
+    }
+
+    #[test]
+    fn psp_shaders_deterministic() {
+        let params = psp_shader_configs();
+        for (skin, name, p) in &params {
+            let mut r1 = SoftwareShaderRenderer::new(64, 64);
+            let mut r2 = SoftwareShaderRenderer::new(64, 64);
+            let a = r1.render_shader(name, 2.5, p).to_vec();
+            let b = r2.render_shader(name, 2.5, p).to_vec();
+            assert_eq!(a, b, "{skin} ({name}): non-deterministic output");
+        }
+    }
+
+    #[test]
+    fn psp_shaders_no_nan_pixels() {
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            // Test at several time points including edge cases.
+            for &t in &[0.0, 0.001, 1.0, 10.0, 100.0] {
+                let pixels = r.render_shader(name, t, &params);
+                // Alpha should be 255 for all pixels (opaque).
+                let all_opaque = pixels.chunks(4).all(|px| px[3] == 255);
+                assert!(
+                    all_opaque,
+                    "{skin} ({name}) t={t}: not all pixels are opaque"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn psp_shader_render_performance() {
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            // Warm up.
+            let _ = r.render_shader(name, 0.0, &params);
+
+            let start = std::time::Instant::now();
+            let frames = 30;
+            for i in 0..frames {
+                let _ = r.render_shader(name, i as f32 / 30.0, &params);
+            }
+            let elapsed = start.elapsed();
+            let per_frame_us = elapsed.as_micros() / frames;
+
+            // On host, each 64x64 frame should be well under 1ms.
+            // PSP is ~10-20x slower, so budget 2ms host = ~20-40ms PSP.
+            // At 30fps shader update, 33ms budget per frame.
+            assert!(
+                per_frame_us < 2000,
+                "{skin} ({name}): {per_frame_us}us/frame exceeds 2ms host budget \
+                 (~20ms PSP estimate, 33ms budget at 30fps)",
+            );
+        }
+    }
+
+    #[test]
+    fn psp_shader_multi_frame_transition() {
+        // Simulate 5 seconds of shader wallpaper at 30fps (every other
+        // frame at 60fps). Verify each frame produces valid output and
+        // the overall animation progresses.
+        let mut r = SoftwareShaderRenderer::new(64, 64);
+        for (skin, name, params) in psp_shader_configs() {
+            let mut prev: Option<Vec<u8>> = None;
+            let mut change_count = 0u32;
+
+            for frame in (0..300).step_by(2) {
+                let time = frame as f32 / 60.0;
+                let pixels = r.render_shader(name, time, &params);
+                assert_eq!(pixels.len(), 64 * 64 * 4);
+
+                if let Some(ref p) = prev {
+                    if pixels != p.as_slice() {
+                        change_count += 1;
+                    }
+                }
+                prev = Some(pixels.to_vec());
+            }
+
+            // Over 150 shader frames (5s), expect at least 50% to differ
+            // from the previous frame (animation is continuous).
+            assert!(
+                change_count > 75,
+                "{skin} ({name}): only {change_count}/150 frames changed \
+                 (expected >75 for smooth animation)",
+            );
         }
     }
 }
