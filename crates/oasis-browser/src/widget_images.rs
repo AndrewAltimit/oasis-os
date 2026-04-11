@@ -704,6 +704,7 @@ impl BrowserWidget {
         self.image_atlas.upload_dirty(backend);
 
         // Walk layout tree and assign textures.
+        self.refresh_image_info();
         if let Some(layout) = &mut self.layout_root {
             Self::assign_textures_recursive(
                 layout,
@@ -712,6 +713,7 @@ impl BrowserWidget {
                 &self.image_textures,
                 &self.image_atlas,
                 self.window_w,
+                &self.cached_image_info,
             );
         }
     }
@@ -728,6 +730,7 @@ impl BrowserWidget {
         textures: &HashMap<String, TextureId>,
         atlas: &crate::image_atlas::ImageAtlas,
         viewport_w: u32,
+        image_info: &HashMap<String, (u32, u32)>,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
@@ -762,11 +765,16 @@ impl BrowserWidget {
             let resolved = Self::resolve_src(base_url, url);
             if let Some(&tex) = textures.get(&resolved) {
                 layout_box.background_texture = Some(tex);
+                if let Some(&dims) = image_info.get(&resolved) {
+                    layout_box.background_texture_size = Some(dims);
+                }
             }
         }
 
         for child in &mut layout_box.children {
-            Self::assign_textures_recursive(child, doc, base_url, textures, atlas, viewport_w);
+            Self::assign_textures_recursive(
+                child, doc, base_url, textures, atlas, viewport_w, image_info,
+            );
         }
     }
 

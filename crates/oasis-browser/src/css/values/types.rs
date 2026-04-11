@@ -138,6 +138,28 @@ impl FontWeight {
     pub fn is_bold(self) -> bool {
         self.0 >= 600
     }
+
+    /// CSS Fonts Level 4 §4.5: relative `bolder` stepping.
+    pub fn bolder(self) -> Self {
+        if self.0 < 350 {
+            Self(400)
+        } else if self.0 < 550 {
+            Self(700)
+        } else {
+            Self(900)
+        }
+    }
+
+    /// CSS Fonts Level 4 §4.5: relative `lighter` stepping.
+    pub fn lighter(self) -> Self {
+        if self.0 < 550 {
+            Self(100)
+        } else if self.0 < 750 {
+            Self(400)
+        } else {
+            Self(700)
+        }
+    }
 }
 
 impl Default for FontWeight {

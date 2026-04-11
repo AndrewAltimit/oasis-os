@@ -369,7 +369,7 @@ impl ComputedStyle {
                 self.line_height = self.font_size * 1.5;
             },
             "font-weight" => {
-                self.font_weight = resolve_font_weight(value);
+                self.font_weight = resolve_font_weight(value, self.font_weight);
             },
             "font-style" => {
                 if let Some(kw) = as_keyword(value) {
@@ -1085,6 +1085,7 @@ impl ComputedStyle {
                     // Parse "width / height" form.
                     if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
                         (vs.first(), vs.last())
+                        && *w > 0.0
                         && *h > 0.0
                     {
                         self.aspect_ratio = Some(*w / *h);

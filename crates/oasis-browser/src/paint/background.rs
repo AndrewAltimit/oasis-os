@@ -111,12 +111,14 @@ fn paint_background_image(
         },
         BackgroundSize::Explicit(w, h) => {
             let iw = match w {
-                Some(v) if *v < 0.0 => (container_w as f32 * (-*v / 100.0)) as u32,
+                Some(v) if v.is_sign_negative() => {
+                    (container_w as f32 * (-*v / 100.0)) as u32
+                },
                 Some(v) => *v as u32,
                 None => {
                     // Auto: maintain aspect ratio from the other dimension.
                     if let Some(hv) = h {
-                        let hpx = if *hv < 0.0 {
+                        let hpx = if hv.is_sign_negative() {
                             container_h as f32 * (-*hv / 100.0)
                         } else {
                             *hv
@@ -128,7 +130,9 @@ fn paint_background_image(
                 },
             };
             let ih = match h {
-                Some(v) if *v < 0.0 => (container_h as f32 * (-*v / 100.0)) as u32,
+                Some(v) if v.is_sign_negative() => {
+                    (container_h as f32 * (-*v / 100.0)) as u32
+                },
                 Some(v) => *v as u32,
                 None => {
                     // Auto: maintain aspect ratio.
