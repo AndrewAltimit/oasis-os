@@ -825,11 +825,14 @@ pub trait SdiBatch: SdiCore {
 /// properties need the same primitive: render-to-texture +
 /// composite-back.
 ///
-/// All methods default to returning `OasisError::Backend("...not
-/// supported")` except [`destroy_render_target`](Self::destroy_render_target)
-/// which defaults to `Ok(())` for opt-out backends.  The browser probes
-/// support via [`SdiRenderTarget::supports_render_targets`] and falls
-/// back to a no-op (drawing without the effect) when unsupported.
+/// All `Result`-returning methods default to `Err(OasisError::Backend("...not
+/// supported"))` except [`destroy_render_target`](Self::destroy_render_target)
+/// which defaults to `Ok(())` for opt-out backends.  Capability probes
+/// ([`supports_render_targets`](Self::supports_render_targets),
+/// [`supports_render_target_readback`](Self::supports_render_target_readback))
+/// return `bool` and default to `false`.  The browser checks support
+/// before use and falls back to a no-op (drawing without the effect)
+/// when unsupported.
 ///
 /// # Bind stack
 ///
