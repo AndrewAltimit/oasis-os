@@ -79,6 +79,11 @@ impl RenderTargetPool {
         width: u32,
         height: u32,
     ) -> Result<RenderTargetId> {
+        if width == 0 || height == 0 {
+            return Err(OasisError::Backend(
+                "zero-dimension render target".into(),
+            ));
+        }
         let key = (width, height);
         let id = if let Some(bucket) = self.free.get_mut(&key)
             && let Some(entry) = bucket.pop()
@@ -294,5 +299,15 @@ mod tests {
             pool.end_frame(&mut backend).unwrap();
         }
         assert_eq!(backend.live_render_target_count(), 1);
+    }
+
+    #[test]
+    fn zero_dimension_rejected() {
+        let mut backend = RecordingBackend::new(480, 272);
+        let mut pool = RenderTargetPool::new();
+        assert!(pool.acquire(&mut backend, 0, 100).is_err());
+        assert!(pool.acquire(&mut backend, 100, 0).is_err());
+        assert!(pool.acquire(&mut backend, 0, 0).is_err());
+        assert_eq!(backend.live_render_target_count(), 0);
     }
 }
