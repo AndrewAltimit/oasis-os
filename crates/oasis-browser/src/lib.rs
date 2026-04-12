@@ -5,6 +5,9 @@
 //! resource loading, reader mode, and Gemini protocol support into the
 //! [`BrowserWidget`] -- the top-level component that the window manager
 //! drives.
+//!
+//! See `docs/` (in the crate root) for architecture, CSS coverage, and
+//! contributor guides. Start with `docs/README.md`.
 
 pub mod config;
 pub(crate) mod css;

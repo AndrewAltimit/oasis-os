@@ -9,13 +9,16 @@ use super::resolve::{
 };
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, Appearance, BackgroundImage, BackgroundPosition, BackgroundRepeat,
-    BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, ColorScheme,
-    Cursor, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, Isolation,
-    JustifyContent, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow,
-    OverflowWrap, PointerEvents, Position, Resize, TextAlign, TextDecorationLine,
-    TextDecorationStyle, TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction,
-    TouchAction, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    AnimationPlayState, Appearance, BackfaceVisibility, BackgroundBox, BackgroundImage,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderCollapse, BorderRadius,
+    BorderStyle, BoxSizing, Clear, ColorScheme, ContentVisibility, Cursor, Display, FlexDirection,
+    FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, Hyphens,
+    ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition, ListStyleType,
+    ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, Position,
+    Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast,
+    TextDecorationLine, TextDecorationStyle, TextDirection, TextJustify, TextOverflow,
+    TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TimingFunction, TouchAction,
+    TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -1577,6 +1580,277 @@ impl ComputedStyle {
                 }
             },
 
+            // -- Scrolling / snapping ----------------------------------
+            "scroll-behavior" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.scroll_behavior = match kw {
+                        "smooth" => ScrollBehavior::Smooth,
+                        _ => ScrollBehavior::Auto,
+                    };
+                }
+            },
+            "scroll-snap-type" => {
+                self.scroll_snap_type = string_or_keyword(value);
+            },
+            "scroll-snap-align" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.scroll_snap_align = match kw {
+                        "start" => ScrollSnapAlign::Start,
+                        "end" => ScrollSnapAlign::End,
+                        "center" => ScrollSnapAlign::Center,
+                        _ => ScrollSnapAlign::None,
+                    };
+                }
+            },
+            "scroll-snap-stop" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.scroll_snap_stop = match kw {
+                        "always" => ScrollSnapStop::Always,
+                        _ => ScrollSnapStop::Normal,
+                    };
+                }
+            },
+            "overscroll-behavior" => {
+                if let Some(b) = parse_overscroll(value) {
+                    self.overscroll_behavior_x = b;
+                    self.overscroll_behavior_y = b;
+                }
+            },
+            "overscroll-behavior-x" => {
+                if let Some(b) = parse_overscroll(value) {
+                    self.overscroll_behavior_x = b;
+                }
+            },
+            "overscroll-behavior-y" => {
+                if let Some(b) = parse_overscroll(value) {
+                    self.overscroll_behavior_y = b;
+                }
+            },
+
+            // -- Compositing ------------------------------------------
+            "mix-blend-mode" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(m) = parse_blend_mode(kw)
+                {
+                    self.mix_blend_mode = m;
+                }
+            },
+            "background-blend-mode" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(m) = parse_blend_mode(kw)
+                {
+                    self.background_blend_mode = m;
+                }
+            },
+            "backdrop-filter" | "-webkit-backdrop-filter" => {
+                if as_keyword(value) == Some("none") {
+                    self.backdrop_filters.clear();
+                } else {
+                    self.backdrop_filters = parse_filter(value);
+                }
+            },
+            "background-clip" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(b) = parse_background_box(kw)
+                {
+                    self.background_clip = b;
+                }
+            },
+            "background-origin" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(b) = parse_background_box(kw)
+                    && b != BackgroundBox::Text
+                {
+                    self.background_origin = b;
+                }
+            },
+            "image-rendering" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.image_rendering = match kw {
+                        "crisp-edges" | "-webkit-optimize-contrast" => ImageRendering::CrispEdges,
+                        "pixelated" => ImageRendering::Pixelated,
+                        _ => ImageRendering::Auto,
+                    };
+                }
+            },
+            "content-visibility" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.content_visibility = match kw {
+                        "auto" => ContentVisibility::Auto,
+                        "hidden" => ContentVisibility::Hidden,
+                        _ => ContentVisibility::Visible,
+                    };
+                }
+            },
+
+            // -- Font extensions --------------------------------------
+            "font-variant" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.font_variant = match kw {
+                        "small-caps" => FontVariant::SmallCaps,
+                        _ => FontVariant::Normal,
+                    };
+                }
+            },
+            "font-stretch" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.font_stretch = match kw {
+                        "ultra-condensed" => FontStretch::UltraCondensed,
+                        "extra-condensed" => FontStretch::ExtraCondensed,
+                        "condensed" => FontStretch::Condensed,
+                        "semi-condensed" => FontStretch::SemiCondensed,
+                        "semi-expanded" => FontStretch::SemiExpanded,
+                        "expanded" => FontStretch::Expanded,
+                        "extra-expanded" => FontStretch::ExtraExpanded,
+                        "ultra-expanded" => FontStretch::UltraExpanded,
+                        _ => FontStretch::Normal,
+                    };
+                }
+            },
+            "font-kerning" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.font_kerning = match kw {
+                        "none" => FontKerning::None,
+                        "normal" => FontKerning::Normal,
+                        _ => FontKerning::Auto,
+                    };
+                }
+            },
+            "font-feature-settings" => {
+                self.font_feature_settings = string_or_keyword(value);
+            },
+
+            // -- Text extensions --------------------------------------
+            "hyphens" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.hyphens = match kw {
+                        "none" => Hyphens::None,
+                        "auto" => Hyphens::Auto,
+                        _ => Hyphens::Manual,
+                    };
+                }
+            },
+            "text-align-last" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_align_last = match kw {
+                        "left" => TextAlignLast::Left,
+                        "right" => TextAlignLast::Right,
+                        "center" => TextAlignLast::Center,
+                        "justify" => TextAlignLast::Justify,
+                        "start" => TextAlignLast::Start,
+                        "end" => TextAlignLast::End,
+                        _ => TextAlignLast::Auto,
+                    };
+                }
+            },
+            "text-justify" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_justify = match kw {
+                        "inter-word" => TextJustify::InterWord,
+                        "inter-character" | "distribute" => TextJustify::InterCharacter,
+                        "none" => TextJustify::None,
+                        _ => TextJustify::Auto,
+                    };
+                }
+            },
+            "text-underline-position" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_underline_position = match kw {
+                        "under" => TextUnderlinePosition::Under,
+                        "left" => TextUnderlinePosition::Left,
+                        "right" => TextUnderlinePosition::Right,
+                        _ => TextUnderlinePosition::Auto,
+                    };
+                }
+            },
+            "text-decoration-thickness" => {
+                if as_keyword(value) == Some("auto") || as_keyword(value) == Some("from-font") {
+                    self.text_decoration_thickness = None;
+                } else if matches!(
+                    value,
+                    CssValue::Length(..) | CssValue::Number(_) | CssValue::Calc(_)
+                ) {
+                    self.text_decoration_thickness = Some(resolve_length(value, parent_font_size));
+                }
+            },
+            "text-rendering" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_rendering = match kw {
+                        "optimizespeed" | "optimize-speed" => TextRendering::OptimizeSpeed,
+                        "optimizelegibility" | "optimize-legibility" => {
+                            TextRendering::OptimizeLegibility
+                        },
+                        "geometricprecision" | "geometric-precision" => {
+                            TextRendering::GeometricPrecision
+                        },
+                        _ => TextRendering::Auto,
+                    };
+                }
+            },
+
+            // -- 3D / clipping ----------------------------------------
+            "clip-path" | "-webkit-clip-path" => {
+                if as_keyword(value) == Some("none") {
+                    self.clip_path = None;
+                } else {
+                    self.clip_path = string_or_keyword(value);
+                }
+            },
+            "perspective" => {
+                if as_keyword(value) == Some("none") {
+                    self.perspective = None;
+                } else if matches!(
+                    value,
+                    CssValue::Length(..) | CssValue::Number(_) | CssValue::Calc(_)
+                ) {
+                    self.perspective = Some(resolve_length(value, parent_font_size));
+                }
+            },
+            "perspective-origin" => {
+                self.perspective_origin = string_or_keyword(value);
+            },
+            "backface-visibility" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.backface_visibility = match kw {
+                        "hidden" => BackfaceVisibility::Hidden,
+                        _ => BackfaceVisibility::Visible,
+                    };
+                }
+            },
+            "transform-style" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.transform_style = match kw {
+                        "preserve-3d" => TransformStyle::Preserve3d,
+                        _ => TransformStyle::Flat,
+                    };
+                }
+            },
+
+            // -- Grid alignment extensions ----------------------------
+            "justify-self" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(j) = parse_justify_self(kw)
+                {
+                    self.justify_self = j;
+                }
+            },
+            "justify-items" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(j) = parse_justify_self(kw)
+                {
+                    self.justify_items = j;
+                }
+            },
+
+            // -- Inset shorthand --------------------------------------
+            "inset" => {
+                let dim = resolve_dimension(value, parent_font_size);
+                self.top = dim;
+                self.right = dim;
+                self.bottom = dim;
+                self.left = dim;
+            },
+
             // Unknown properties are silently ignored (per CSS spec).
             _ => {},
         }
@@ -1943,6 +2217,68 @@ fn parse_iteration_count(s: &str) -> f32 {
     } else {
         s.parse::<f32>().unwrap_or(1.0)
     }
+}
+
+fn string_or_keyword(value: &CssValue) -> Option<String> {
+    match value {
+        CssValue::String(s) => Some(s.clone()),
+        CssValue::Keyword(k) => Some(k.clone()),
+        _ => None,
+    }
+}
+
+fn parse_overscroll(value: &CssValue) -> Option<OverscrollBehavior> {
+    match as_keyword(value)? {
+        "contain" => Some(OverscrollBehavior::Contain),
+        "none" => Some(OverscrollBehavior::None),
+        "auto" => Some(OverscrollBehavior::Auto),
+        _ => None,
+    }
+}
+
+fn parse_blend_mode(s: &str) -> Option<BlendMode> {
+    Some(match s {
+        "normal" => BlendMode::Normal,
+        "multiply" => BlendMode::Multiply,
+        "screen" => BlendMode::Screen,
+        "overlay" => BlendMode::Overlay,
+        "darken" => BlendMode::Darken,
+        "lighten" => BlendMode::Lighten,
+        "color-dodge" => BlendMode::ColorDodge,
+        "color-burn" => BlendMode::ColorBurn,
+        "hard-light" => BlendMode::HardLight,
+        "soft-light" => BlendMode::SoftLight,
+        "difference" => BlendMode::Difference,
+        "exclusion" => BlendMode::Exclusion,
+        "hue" => BlendMode::Hue,
+        "saturation" => BlendMode::Saturation,
+        "color" => BlendMode::Color,
+        "luminosity" => BlendMode::Luminosity,
+        _ => return None,
+    })
+}
+
+fn parse_background_box(s: &str) -> Option<BackgroundBox> {
+    Some(match s {
+        "border-box" => BackgroundBox::BorderBox,
+        "padding-box" => BackgroundBox::PaddingBox,
+        "content-box" => BackgroundBox::ContentBox,
+        "text" => BackgroundBox::Text,
+        _ => return None,
+    })
+}
+
+fn parse_justify_self(s: &str) -> Option<JustifySelf> {
+    Some(match s {
+        "auto" => JustifySelf::Auto,
+        "start" => JustifySelf::Start,
+        "end" => JustifySelf::End,
+        "center" => JustifySelf::Center,
+        "stretch" => JustifySelf::Stretch,
+        "flex-start" => JustifySelf::FlexStart,
+        "flex-end" => JustifySelf::FlexEnd,
+        _ => return None,
+    })
 }
 
 /// Parse a CSS `animation-direction` keyword.
@@ -2722,5 +3058,163 @@ mod tests {
     fn parse_time_milliseconds() {
         assert!((parse_time("200ms").unwrap() - 200.0).abs() < 0.1);
         assert!((parse_time("50ms").unwrap() - 50.0).abs() < 0.1);
+    }
+
+    // -- Extended property coverage tests --------------------------------
+
+    #[test]
+    fn parse_scroll_behavior_smooth() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("scroll-behavior", &CssValue::Keyword("smooth".into()), 16.0);
+        assert_eq!(s.scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn parse_mix_blend_mode() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "mix-blend-mode",
+            &CssValue::Keyword("multiply".into()),
+            16.0,
+        );
+        assert_eq!(s.mix_blend_mode, BlendMode::Multiply);
+    }
+
+    #[test]
+    fn parse_background_clip_text() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("background-clip", &CssValue::Keyword("text".into()), 16.0);
+        assert_eq!(s.background_clip, BackgroundBox::Text);
+    }
+
+    #[test]
+    fn parse_image_rendering_pixelated() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "image-rendering",
+            &CssValue::Keyword("pixelated".into()),
+            16.0,
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Pixelated);
+    }
+
+    #[test]
+    fn parse_font_stretch_condensed() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("font-stretch", &CssValue::Keyword("condensed".into()), 16.0);
+        assert_eq!(s.font_stretch, FontStretch::Condensed);
+    }
+
+    #[test]
+    fn parse_hyphens_auto() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("hyphens", &CssValue::Keyword("auto".into()), 16.0);
+        assert_eq!(s.hyphens, Hyphens::Auto);
+    }
+
+    #[test]
+    fn parse_text_align_last() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("text-align-last", &CssValue::Keyword("center".into()), 16.0);
+        assert_eq!(s.text_align_last, TextAlignLast::Center);
+    }
+
+    #[test]
+    fn parse_text_decoration_thickness_px() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "text-decoration-thickness",
+            &CssValue::Length(2.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.text_decoration_thickness, Some(2.0));
+    }
+
+    #[test]
+    fn parse_text_decoration_thickness_auto() {
+        let mut s = ComputedStyle::default();
+        s.text_decoration_thickness = Some(3.0);
+        s.apply_declaration(
+            "text-decoration-thickness",
+            &CssValue::Keyword("auto".into()),
+            16.0,
+        );
+        assert_eq!(s.text_decoration_thickness, None);
+    }
+
+    #[test]
+    fn parse_perspective_length() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "perspective",
+            &CssValue::Length(500.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.perspective, Some(500.0));
+    }
+
+    #[test]
+    fn parse_backface_visibility_hidden() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "backface-visibility",
+            &CssValue::Keyword("hidden".into()),
+            16.0,
+        );
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_transform_style_preserve_3d() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform-style",
+            &CssValue::Keyword("preserve-3d".into()),
+            16.0,
+        );
+        assert_eq!(s.transform_style, TransformStyle::Preserve3d);
+    }
+
+    #[test]
+    fn parse_overscroll_behavior_shorthand_sets_both_axes() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "overscroll-behavior",
+            &CssValue::Keyword("contain".into()),
+            16.0,
+        );
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Contain);
+    }
+
+    #[test]
+    fn parse_content_visibility_auto() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "content-visibility",
+            &CssValue::Keyword("auto".into()),
+            16.0,
+        );
+        assert_eq!(s.content_visibility, ContentVisibility::Auto);
+    }
+
+    #[test]
+    fn parse_justify_self_center() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("justify-self", &CssValue::Keyword("center".into()), 16.0);
+        assert_eq!(s.justify_self, JustifySelf::Center);
+    }
+
+    #[test]
+    fn parse_inset_shorthand_sets_all_four_sides() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("inset", &CssValue::Length(10.0, LengthUnit::Px), 16.0);
+        assert_eq!(s.top, Dimension::Px(10.0));
+        assert_eq!(s.right, Dimension::Px(10.0));
+        assert_eq!(s.bottom, Dimension::Px(10.0));
+        assert_eq!(s.left, Dimension::Px(10.0));
     }
 }
