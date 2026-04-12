@@ -2460,7 +2460,6 @@ mod tests {
         backend.bind_render_target(id)?;
         backend.fill_rect(0, 0, 16, 16, Color::WHITE)?;
         backend.unbind_render_target()?;
-        backend.set_blend_mode(BlendMode::Multiply)?;
         backend.composite_render_target(id, 0, 0, 16, 16, BlendMode::Multiply, 0.75)?;
         backend.destroy_render_target(id)?;
         Ok(())
