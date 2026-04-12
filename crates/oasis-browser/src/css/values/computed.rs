@@ -5,14 +5,18 @@ use rustc_hash::FxHashMap;
 use oasis_types::backend::Color;
 
 use super::types::{
-    AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackgroundImage,
-    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius,
-    BorderStyle, BoxShadow, BoxSizing, Clear, ColorScheme, Cursor, Dimension, Display,
-    FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
-    GridTrackSize, Isolation, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
-    TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TouchAction,
-    TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackfaceVisibility, BackgroundBox,
+    BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode,
+    BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ColorScheme,
+    ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
+    FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight, GridTrackSize,
+    Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
+    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
+    PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign,
+    ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection, TextJustify,
+    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TouchAction,
+    TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -260,6 +264,53 @@ pub struct ComputedStyle {
     // -- Touch action --------------------------------------------------
     pub touch_action: TouchAction,
 
+    // -- Scroll/snap/overscroll ----------------------------------------
+    pub scroll_behavior: ScrollBehavior,
+    pub scroll_snap_align: ScrollSnapAlign,
+    pub scroll_snap_stop: ScrollSnapStop,
+    /// Raw `scroll-snap-type` value (e.g. "x mandatory"). Stored opaque.
+    pub scroll_snap_type: Option<String>,
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
+
+    // -- Compositing ---------------------------------------------------
+    pub mix_blend_mode: BlendMode,
+    pub background_blend_mode: BlendMode,
+    pub backdrop_filters: Vec<FilterFunction>,
+    pub background_clip: BackgroundBox,
+    pub background_origin: BackgroundBox,
+    pub image_rendering: ImageRendering,
+    pub content_visibility: ContentVisibility,
+
+    // -- Font extensions -----------------------------------------------
+    pub font_variant: FontVariant,
+    pub font_stretch: FontStretch,
+    pub font_kerning: FontKerning,
+    /// Raw `font-feature-settings` (e.g. `"liga" on, "kern" off`). Stored opaque.
+    pub font_feature_settings: Option<String>,
+
+    // -- Text extensions -----------------------------------------------
+    pub hyphens: Hyphens,
+    pub text_align_last: TextAlignLast,
+    pub text_justify: TextJustify,
+    pub text_underline_position: TextUnderlinePosition,
+    /// `text-decoration-thickness`. `None` = `auto`.
+    pub text_decoration_thickness: Option<f32>,
+    pub text_rendering: TextRendering,
+
+    // -- 3D / clipping -------------------------------------------------
+    /// Raw `clip-path` value (e.g. `circle(50%)`). Stored opaque.
+    pub clip_path: Option<String>,
+    pub perspective: Option<f32>,
+    /// Raw `perspective-origin` value (e.g. `center`, `50% 50%`).
+    pub perspective_origin: Option<String>,
+    pub backface_visibility: BackfaceVisibility,
+    pub transform_style: TransformStyle,
+
+    // -- Grid alignment extensions -------------------------------------
+    pub justify_self: JustifySelf,
+    pub justify_items: JustifySelf,
+
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
 }
@@ -472,6 +523,42 @@ impl Default for ComputedStyle {
             resize: Resize::None,
             touch_action: TouchAction::Auto,
 
+            scroll_behavior: ScrollBehavior::Auto,
+            scroll_snap_align: ScrollSnapAlign::None,
+            scroll_snap_stop: ScrollSnapStop::Normal,
+            scroll_snap_type: None,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
+
+            mix_blend_mode: BlendMode::Normal,
+            background_blend_mode: BlendMode::Normal,
+            backdrop_filters: Vec::new(),
+            background_clip: BackgroundBox::BorderBox,
+            background_origin: BackgroundBox::PaddingBox,
+            image_rendering: ImageRendering::Auto,
+            content_visibility: ContentVisibility::Visible,
+
+            font_variant: FontVariant::Normal,
+            font_stretch: FontStretch::Normal,
+            font_kerning: FontKerning::Auto,
+            font_feature_settings: None,
+
+            hyphens: Hyphens::Manual,
+            text_align_last: TextAlignLast::Auto,
+            text_justify: TextJustify::Auto,
+            text_underline_position: TextUnderlinePosition::Auto,
+            text_decoration_thickness: None,
+            text_rendering: TextRendering::Auto,
+
+            clip_path: None,
+            perspective: None,
+            perspective_origin: None,
+            backface_visibility: BackfaceVisibility::Visible,
+            transform_style: TransformStyle::Flat,
+
+            justify_self: JustifySelf::Auto,
+            justify_items: JustifySelf::Stretch,
+
             custom_properties: FxHashMap::default(),
         }
     }
@@ -674,6 +761,19 @@ impl ComputedStyle {
             cursor: parent.cursor,
             pointer_events: parent.pointer_events,
             user_select: parent.user_select,
+            // Inherited font extensions.
+            font_variant: parent.font_variant,
+            font_stretch: parent.font_stretch,
+            font_kerning: parent.font_kerning,
+            font_feature_settings: parent.font_feature_settings.clone(),
+            // Inherited text extensions.
+            hyphens: parent.hyphens,
+            text_align_last: parent.text_align_last,
+            text_justify: parent.text_justify,
+            text_underline_position: parent.text_underline_position,
+            text_decoration_thickness: parent.text_decoration_thickness,
+            text_rendering: parent.text_rendering,
+            image_rendering: parent.image_rendering,
             // CSS custom properties always inherit.
             custom_properties: parent.custom_properties.clone(),
             // Non-inherited properties keep CSS initial values.

@@ -783,3 +783,187 @@ pub enum TouchAction {
 
 /// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.
 pub use oasis_types::text_direction::TextDirection;
+
+// -----------------------------------------------------------------------
+// Extended property types (CSS coverage expansion)
+// -----------------------------------------------------------------------
+
+/// CSS `scroll-behavior` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    Auto,
+    Smooth,
+}
+
+/// CSS `mix-blend-mode` / `background-blend-mode` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+/// CSS `background-clip` / `background-origin` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundBox {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    /// `background-clip: text` only — clips to text glyphs.
+    Text,
+}
+
+/// CSS `image-rendering` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageRendering {
+    Auto,
+    CrispEdges,
+    Pixelated,
+}
+
+/// CSS `font-variant` (subset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontVariant {
+    Normal,
+    SmallCaps,
+}
+
+/// CSS `font-stretch` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontStretch {
+    UltraCondensed,
+    ExtraCondensed,
+    Condensed,
+    SemiCondensed,
+    Normal,
+    SemiExpanded,
+    Expanded,
+    ExtraExpanded,
+    UltraExpanded,
+}
+
+/// CSS `font-kerning` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontKerning {
+    Auto,
+    Normal,
+    None,
+}
+
+/// CSS `hyphens` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hyphens {
+    None,
+    Manual,
+    Auto,
+}
+
+/// CSS `backface-visibility` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfaceVisibility {
+    Visible,
+    Hidden,
+}
+
+/// CSS `transform-style` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformStyle {
+    Flat,
+    Preserve3d,
+}
+
+/// CSS `text-align-last` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlignLast {
+    Auto,
+    Left,
+    Right,
+    Center,
+    Justify,
+    Start,
+    End,
+}
+
+/// CSS `text-justify` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextJustify {
+    Auto,
+    InterWord,
+    InterCharacter,
+    None,
+}
+
+/// CSS `text-underline-position` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextUnderlinePosition {
+    Auto,
+    Under,
+    Left,
+    Right,
+}
+
+/// CSS `text-rendering` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextRendering {
+    Auto,
+    OptimizeSpeed,
+    OptimizeLegibility,
+    GeometricPrecision,
+}
+
+/// CSS `scroll-snap-align` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapAlign {
+    None,
+    Start,
+    End,
+    Center,
+}
+
+/// CSS `scroll-snap-stop` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapStop {
+    Normal,
+    Always,
+}
+
+/// CSS `overscroll-behavior` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    Auto,
+    Contain,
+    None,
+}
+
+/// CSS `content-visibility` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentVisibility {
+    Visible,
+    Auto,
+    Hidden,
+}
+
+/// CSS `justify-self` / `justify-items` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifySelf {
+    Auto,
+    Start,
+    End,
+    Center,
+    Stretch,
+    FlexStart,
+    FlexEnd,
+}
