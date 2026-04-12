@@ -112,21 +112,23 @@ impl RenderTargetPool {
         // end_frame calls, destroyed on the 2nd".
         let retain = self.retain_frames as u64;
         let mut to_destroy: Vec<RenderTargetId> = Vec::new();
-        self.free.retain(|_, bucket| {
-            bucket.retain(|entry| {
+        for bucket in self.free.values() {
+            for entry in bucket {
                 let age = current.saturating_sub(entry.last_used_frame);
                 if age >= retain {
                     to_destroy.push(entry.id);
-                    false
-                } else {
-                    true
                 }
-            });
+            }
+        }
+        for id in &to_destroy {
+            backend.destroy_render_target(*id)?;
+        }
+        let destroy_set: std::collections::HashSet<RenderTargetId> =
+            to_destroy.into_iter().collect();
+        self.free.retain(|_, bucket| {
+            bucket.retain(|entry| !destroy_set.contains(&entry.id));
             !bucket.is_empty()
         });
-        for id in to_destroy {
-            backend.destroy_render_target(id)?;
-        }
 
         self.frame_index += 1;
         Ok(())
@@ -135,14 +137,21 @@ impl RenderTargetPool {
     /// Destroy every target the pool is holding. Call at shutdown or
     /// when the pool is being torn down (e.g. browser navigation).
     pub fn clear<B: SdiRenderTarget + ?Sized>(&mut self, backend: &mut B) -> Result<()> {
-        for (_, bucket) in self.free.drain() {
-            for entry in bucket {
-                backend.destroy_render_target(entry.id)?;
-            }
+        let free_ids: Vec<RenderTargetId> = self
+            .free
+            .values()
+            .flat_map(|bucket| bucket.iter().map(|e| e.id))
+            .collect();
+        let in_use_ids: Vec<RenderTargetId> =
+            self.in_use.iter().map(|(id, _)| *id).collect();
+        for id in &free_ids {
+            backend.destroy_render_target(*id)?;
         }
-        for (id, _) in self.in_use.drain(..) {
-            backend.destroy_render_target(id)?;
+        for id in &in_use_ids {
+            backend.destroy_render_target(*id)?;
         }
+        self.free.clear();
+        self.in_use.clear();
         Ok(())
     }
 

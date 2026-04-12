@@ -469,7 +469,6 @@ fn record_box(
         Some(LayerKind::Opacity) => dl.push(DisplayItem::PopLayer),
         None => {},
     }
-    let _ = needs_layer;
 
     // Restore clip.
     if matches!(
