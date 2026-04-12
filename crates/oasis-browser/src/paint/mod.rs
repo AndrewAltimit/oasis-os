@@ -21,6 +21,8 @@ pub(crate) mod filters;
 mod markers;
 #[allow(clippy::too_many_arguments, clippy::collapsible_if)]
 pub(crate) mod record;
+#[allow(dead_code)]
+pub(crate) mod render_target_pool;
 mod replaced;
 mod shadow;
 mod text;
@@ -700,6 +702,69 @@ pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
     }
 
     // will-change: transform/opacity/filter creates a stacking context.
+    if style.will_change_transform {
+        return true;
+    }
+
+    // `isolation: isolate` forces a stacking context so descendant
+    // `mix-blend-mode` is contained (CSS Compositing and Blending L1).
+    if matches!(
+        style.isolation,
+        crate::css::values::types::Isolation::Isolate
+    ) {
+        return true;
+    }
+
+    // `mix-blend-mode` on a non-Normal value implies a stacking context
+    // so the blend applies to the entire painted subtree.
+    if !matches!(
+        style.mix_blend_mode,
+        crate::css::values::types::BlendMode::Normal
+    ) {
+        return true;
+    }
+
+    // Non-empty backdrop-filter chain implies a stacking context
+    // (the backdrop is sampled at the layer's own boundary).
+    if !style.backdrop_filters.is_empty() {
+        return true;
+    }
+
+    false
+}
+
+/// Whether this layout box needs a *real* compositing layer — i.e. an
+/// offscreen render target — rather than just the cheap `PushLayer`
+/// opacity fast path.
+///
+/// True when any of `mix-blend-mode`, `backdrop-filter`, `filter`,
+/// `isolation: isolate`, or `will-change: transform/opacity/filter` is
+/// active. Plain `opacity < 1.0` stays on the fast path.
+pub(crate) fn creates_compositing_layer(layout_box: &LayoutBox) -> bool {
+    let style = &layout_box.style;
+
+    if !matches!(
+        style.mix_blend_mode,
+        crate::css::values::types::BlendMode::Normal
+    ) {
+        return true;
+    }
+
+    if !style.backdrop_filters.is_empty() {
+        return true;
+    }
+
+    if !style.filters.is_empty() {
+        return true;
+    }
+
+    if matches!(
+        style.isolation,
+        crate::css::values::types::Isolation::Isolate
+    ) {
+        return true;
+    }
+
     if style.will_change_transform {
         return true;
     }

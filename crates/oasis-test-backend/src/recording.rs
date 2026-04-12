@@ -5,12 +5,14 @@
 //! can be tested end-to-end.
 
 use oasis_types::backend::{
-    Color, DrawCommand, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    BlendMode, Color, DrawCommand, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
+    SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId,
+    bitmap_measure_text,
     stacks::{ClipStack, TranslateStack},
 };
-use oasis_types::error::Result;
+use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
+use std::collections::HashSet;
 
 /// Type alias for a custom `measure_text` callback.
 type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
@@ -42,6 +44,10 @@ pub struct RecordingBackend {
     translate_stack: TranslateStack,
     next_texture_id: u64,
     measure_text_fn: Option<MeasureTextFn>,
+    // Render-target pool state.
+    next_render_target_id: u64,
+    live_render_targets: HashSet<u64>,
+    render_target_bind_stack: Vec<RenderTargetId>,
 }
 
 impl RecordingBackend {
@@ -56,7 +62,27 @@ impl RecordingBackend {
             translate_stack: TranslateStack::new(),
             next_texture_id: 1,
             measure_text_fn: None,
+            next_render_target_id: 1,
+            live_render_targets: HashSet::new(),
+            render_target_bind_stack: Vec::new(),
         }
+    }
+
+    /// Return the number of render targets currently allocated (created
+    /// but not destroyed) on this backend.
+    pub fn live_render_target_count(&self) -> usize {
+        self.live_render_targets.len()
+    }
+
+    /// Return the current depth of the render-target bind stack.
+    /// Zero means subsequent draws land on the framebuffer.
+    pub fn render_target_bind_depth(&self) -> usize {
+        self.render_target_bind_stack.len()
+    }
+
+    /// Return the id at the top of the bind stack, if any.
+    pub fn currently_bound_render_target(&self) -> Option<RenderTargetId> {
+        self.render_target_bind_stack.last().copied()
     }
 
     /// Return all recorded draw commands.
@@ -165,6 +191,100 @@ impl SdiCore for RecordingBackend {
 
     fn shutdown(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+impl SdiRenderTarget for RecordingBackend {
+    fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
+        let id = RenderTargetId(self.next_render_target_id);
+        self.next_render_target_id += 1;
+        self.live_render_targets.insert(id.0);
+        self.commands
+            .push(DrawCommand::CreateRenderTarget { id, w, h });
+        Ok(id)
+    }
+
+    fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        if !self.live_render_targets.contains(&id.0) {
+            return Err(OasisError::Backend(
+                format!("bind_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        self.render_target_bind_stack.push(id);
+        self.commands.push(DrawCommand::BindRenderTarget { id });
+        Ok(())
+    }
+
+    fn unbind_render_target(&mut self) -> Result<()> {
+        if self.render_target_bind_stack.pop().is_none() {
+            return Err(OasisError::Backend(
+                "unbind_render_target: bind stack underflow".into(),
+            ));
+        }
+        self.commands.push(DrawCommand::UnbindRenderTarget);
+        Ok(())
+    }
+
+    fn composite_render_target(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        debug_assert!(
+            (0.0..=1.0).contains(&opacity),
+            "opacity must be in [0.0, 1.0], got {opacity}"
+        );
+        if !self.live_render_targets.contains(&id.0) {
+            return Err(OasisError::Backend(
+                format!("composite_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        self.commands.push(DrawCommand::CompositeRenderTarget {
+            id,
+            dst_x,
+            dst_y,
+            dst_w,
+            dst_h,
+            blend,
+            opacity,
+        });
+        Ok(())
+    }
+
+    fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
+        if !self.live_render_targets.contains(&id.0) {
+            return Err(OasisError::Backend(
+                format!("read_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        // Recording backend never stores pixel contents; return zeros
+        // so callers that exercise the readback path still get
+        // deterministic bytes.
+        dst.fill(0);
+        Ok(())
+    }
+
+    fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        if !self.live_render_targets.remove(&id.0) {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        self.commands.push(DrawCommand::DestroyRenderTarget { id });
+        Ok(())
+    }
+
+    fn supports_render_targets(&self) -> bool {
+        true
+    }
+
+    fn supports_render_target_readback(&self) -> bool {
+        true
     }
 }
 

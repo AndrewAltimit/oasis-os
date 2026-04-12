@@ -5,8 +5,8 @@
 //! [`SdiCore`](oasis_types::backend::SdiCore) and [`SdiBackend`](oasis_types::backend::SdiBackend) (with default implementations).
 
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
+    SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
 };
 use oasis_types::error::Result;
 
@@ -180,3 +180,4 @@ impl SdiTextures for MockSdiCore {}
 impl SdiClipTransform for MockSdiCore {}
 impl SdiVector for MockSdiCore {}
 impl SdiBatch for MockSdiCore {}
+impl SdiRenderTarget for MockSdiCore {}

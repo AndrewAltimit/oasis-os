@@ -12,7 +12,7 @@
 //! automatically implements `SdiBackend`.
 
 use super::{
-    Color, GradientStyle, RenderTargetId, SdiCore, TextMetrics, TextureId, arc_segments,
+    BlendMode, Color, GradientStyle, RenderTargetId, SdiCore, TextMetrics, TextureId, arc_segments,
     cos_approx_f32, sin_approx_f32,
 };
 use crate::error::{OasisError, Result};
@@ -1025,61 +1025,6 @@ pub trait SdiBlendMode: SdiCore {
     }
 }
 
-/// Compositing blend modes, aligned 1:1 with CSS `mix-blend-mode` and
-/// `background-blend-mode`.
-///
-/// `Normal` is standard alpha blending (`src * alpha + dst * (1 -
-/// alpha)`); the other 15 variants follow the formulas from
-/// [Compositing and Blending Level 1](https://drafts.fxtf.org/compositing/#blendingseparable).
-///
-/// The browser compositor passes one of these to
-/// [`SdiRenderTarget::composite_render_target`] when popping a
-/// compositing layer.  Backends are expected to implement all 16
-/// modes; SDL3 ships only 5 natively, so the SDL backend uses a CPU
-/// software path for the rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum BlendMode {
-    /// Standard alpha blending (`src * alpha + dst * (1 - alpha)`).
-    /// This is the default and matches CSS `mix-blend-mode: normal`.
-    #[default]
-    Normal,
-    /// `dst * src`. Darkens.
-    Multiply,
-    /// `1 - (1 - dst) * (1 - src)`. Lightens.
-    Screen,
-    /// Multiply or screen depending on destination luminance.
-    Overlay,
-    /// `min(src, dst)`.
-    Darken,
-    /// `max(src, dst)`.
-    Lighten,
-    /// Brightens the destination toward the source.
-    ColorDodge,
-    /// Darkens the destination toward the source.
-    ColorBurn,
-    /// Like `Overlay` but conditioned on source luminance.
-    HardLight,
-    /// Softer variant of `HardLight`.
-    SoftLight,
-    /// `|dst - src|`.
-    Difference,
-    /// Like `Difference` but lower contrast.
-    Exclusion,
-    /// Replaces destination hue with source hue.
-    Hue,
-    /// Replaces destination saturation with source saturation.
-    Saturation,
-    /// Replaces destination hue + saturation with source hue + saturation.
-    Color,
-    /// Replaces destination luminosity with source luminosity.
-    Luminosity,
-}
-
-impl BlendMode {
-    /// Whether this blend mode is the no-op default. Useful for the
-    /// recorder to skip emitting a compositing layer when the only
-    /// reason to push one would have been a `Normal` blend.
-    pub const fn is_normal(self) -> bool {
-        matches!(self, BlendMode::Normal)
-    }
-}
+// `BlendMode` moved to `super::types` so `DrawCommand` can reference it
+// without creating a circular module dependency. Re-exported from
+// `backend::mod.rs`.

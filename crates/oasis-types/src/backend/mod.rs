@@ -28,7 +28,7 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 
 // -- types --
 pub use types::{
-    ArcParams, BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, Color, DashStyle,
+    ArcParams, BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, BlendMode, Color, DashStyle,
     DrawCommand, GradientStyle, RenderTargetId, StrokeStyle, TextMetrics, TextureId, arc_segments,
     backend_require, bitmap_measure_text, cos_approx_f32, sin_approx_f32, texture_not_found,
     validate_rgba_data,
@@ -42,9 +42,8 @@ pub use sdi_backend::SdiBackend;
 
 // -- extension traits --
 pub use extensions::{
-    BatchRect, BatchText, BlendMode, GeometryVertex, SdiAlpha, SdiBatch, SdiBlendMode,
-    SdiClipTransform, SdiGeometry, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
-    SdiVector,
+    BatchRect, BatchText, GeometryVertex, SdiAlpha, SdiBatch, SdiBlendMode, SdiClipTransform,
+    SdiGeometry, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
 };
 
 // -- input --
@@ -1466,6 +1465,14 @@ mod tests {
                 dash,
                 gap,
             } => backend.stroke_line_dashed(*x1, *y1, *x2, *y2, *width, *color, *dash, *gap),
+            // Render-target markers are handled by the display-list
+            // replayer (not this SdiBackend-only dispatcher) because
+            // they require the SdiRenderTarget trait. Treat as no-ops.
+            DrawCommand::CreateRenderTarget { .. }
+            | DrawCommand::BindRenderTarget { .. }
+            | DrawCommand::UnbindRenderTarget
+            | DrawCommand::CompositeRenderTarget { .. }
+            | DrawCommand::DestroyRenderTarget { .. } => Ok(()),
         }
     }
 

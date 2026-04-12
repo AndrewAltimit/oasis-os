@@ -19,6 +19,7 @@ use oasis_types::backend::{BatchRect, BatchText, Color, GradientStyle, SdiBacken
 use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
+use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
 use crate::layout::box_model::Rect;
 
 // ---------------------------------------------------------------------------
@@ -136,6 +137,43 @@ pub enum DisplayItem {
     PushLayer { opacity: f32 },
     /// End a compositing layer and composite it back.
     PopLayer,
+    /// Begin a *real* compositing layer backed by an offscreen render
+    /// target. All items between this and the matching
+    /// `PopCompositingLayer` are drawn into an offscreen surface, then
+    /// composited back into the parent with the supplied blend mode,
+    /// opacity, filter chain, and (when `needs_backdrop`) backdrop
+    /// filter chain.
+    ///
+    /// This is the slow path used for `mix-blend-mode`, `backdrop-filter`,
+    /// `isolation: isolate`, box-level `filter`, and (once wired)
+    /// `mask-*`. Backends that haven't opted into `SdiRenderTarget` fall
+    /// back to a no-op: items are drawn without the effect.
+    ///
+    /// The simple opacity-only case stays on the `PushLayer` /
+    /// `PopLayer` fast path so backends without render-target support
+    /// pay zero extra cost.
+    PushCompositingLayer {
+        /// Pixel rect on the parent surface where the layer will be
+        /// composited back. Used both as the render target size and
+        /// as the destination rect for the composite.
+        bounds: Rect,
+        /// Cumulative opacity to multiply the layer by on composite.
+        opacity: f32,
+        /// Blend mode to use when compositing the layer back.
+        blend: CssBlendMode,
+        /// Whether the layer needs to sample the parent surface before
+        /// drawing (set by `backdrop-filter` and any non-Normal blend
+        /// mode that isn't simple alpha).
+        needs_backdrop: bool,
+        /// Filter chain applied to the layer pixels before composite.
+        filters: Vec<FilterFunction>,
+        /// Filter chain applied to the sampled backdrop pixels before
+        /// the layer contents are drawn on top. Only consulted when
+        /// `needs_backdrop` is true.
+        backdrop_filters: Vec<FilterFunction>,
+    },
+    /// End a [`PushCompositingLayer`](Self::PushCompositingLayer).
+    PopCompositingLayer,
     /// Hint that subsequent items in this layer should be blurred.
     /// Software fallback applies per-color approximation (desaturation +
     /// dimming) via [`super::filters::apply_filters`].
@@ -226,13 +264,25 @@ impl DisplayItem {
                     height: text_h as f32,
                 })
             },
+            DisplayItem::PushCompositingLayer { bounds, .. } => Some(*bounds),
             DisplayItem::PopClip
             | DisplayItem::PushLayer { .. }
             | DisplayItem::PopLayer
+            | DisplayItem::PopCompositingLayer
             | DisplayItem::BlurHint { .. }
             | DisplayItem::PushSticky { .. }
             | DisplayItem::PopSticky => None,
         }
+    }
+
+    /// Whether this item opens a compositing layer boundary that
+    /// [`DisplayList::compact`] / [`DisplayList::optimize`] must NOT
+    /// merge or eliminate rects across.
+    pub fn is_layer_boundary(&self) -> bool {
+        matches!(
+            self,
+            DisplayItem::PushCompositingLayer { .. } | DisplayItem::PopCompositingLayer
+        )
     }
 }
 
@@ -389,25 +439,39 @@ impl DisplayList {
         let mut drain = self.items.drain(..);
         let mut current = drain.next().expect("len >= 2");
 
+        // Track compositing-layer depth: rects inside a layer target a
+        // different surface from rects outside, so they must never
+        // merge with each other. `current` sits at `current_layer`
+        // depth; `next` sits at `next_layer` — if they differ the rects
+        // are on different surfaces and merging would be incorrect.
+        let mut current_layer: usize =
+            matches!(&current, DisplayItem::PushCompositingLayer { .. }) as usize;
         for next in drain {
-            if let (
-                DisplayItem::FillRect {
-                    x: cx,
-                    y: cy,
-                    w: cw,
-                    h: ch,
-                    color: cc,
-                    ..
-                },
-                DisplayItem::FillRect {
-                    x: nx,
-                    y: ny,
-                    w: nw,
-                    h: nh,
-                    color: nc,
-                    ..
-                },
-            ) = (&current, &next)
+            let next_layer = match &next {
+                DisplayItem::PushCompositingLayer { .. } => current_layer + 1,
+                DisplayItem::PopCompositingLayer => current_layer.saturating_sub(1),
+                _ => current_layer,
+            };
+
+            if current_layer == next_layer
+                && let (
+                    DisplayItem::FillRect {
+                        x: cx,
+                        y: cy,
+                        w: cw,
+                        h: ch,
+                        color: cc,
+                        ..
+                    },
+                    DisplayItem::FillRect {
+                        x: nx,
+                        y: ny,
+                        w: nw,
+                        h: nh,
+                        color: nc,
+                        ..
+                    },
+                ) = (&current, &next)
             {
                 // Same color, same y, same height, horizontally abutting?
                 // Note: node_id is intentionally NOT compared here so that
@@ -430,6 +494,7 @@ impl DisplayList {
             }
             merged.push(current);
             current = next;
+            current_layer = next_layer;
         }
         merged.push(current);
         self.items = merged;
@@ -460,25 +525,33 @@ impl DisplayList {
         let mut drain = self.items.drain(..);
         let mut current = drain.next().expect("len >= 2");
 
+        let mut current_layer: usize =
+            matches!(&current, DisplayItem::PushCompositingLayer { .. }) as usize;
         for next in drain {
-            if let (
-                DisplayItem::FillRect {
-                    x: cx,
-                    y: cy,
-                    w: cw,
-                    h: ch,
-                    color: cc,
-                    ..
-                },
-                DisplayItem::FillRect {
-                    x: nx,
-                    y: ny,
-                    w: nw,
-                    h: nh,
-                    color: nc,
-                    ..
-                },
-            ) = (&current, &next)
+            let next_layer = match &next {
+                DisplayItem::PushCompositingLayer { .. } => current_layer + 1,
+                DisplayItem::PopCompositingLayer => current_layer.saturating_sub(1),
+                _ => current_layer,
+            };
+            if current_layer == next_layer
+                && let (
+                    DisplayItem::FillRect {
+                        x: cx,
+                        y: cy,
+                        w: cw,
+                        h: ch,
+                        color: cc,
+                        ..
+                    },
+                    DisplayItem::FillRect {
+                        x: nx,
+                        y: ny,
+                        w: nw,
+                        h: nh,
+                        color: nc,
+                        ..
+                    },
+                ) = (&current, &next)
             {
                 // Same color, same x, same width, vertically abutting?
                 if cc == nc && cx == nx && cw == nw && cy + *ch as i32 == *ny {
@@ -495,6 +568,7 @@ impl DisplayList {
             }
             merged.push(current);
             current = next;
+            current_layer = next_layer;
         }
         merged.push(current);
         self.items = merged;
@@ -514,8 +588,10 @@ impl DisplayList {
         const SCAN_WINDOW: usize = 32;
         let mut clip_depth: usize = 0;
         let mut sticky_depth: usize = 0;
+        let mut compositing_depth: usize = 0;
         let mut clip_depths: Vec<usize> = Vec::with_capacity(self.items.len());
         let mut sticky_depths: Vec<usize> = Vec::with_capacity(self.items.len());
+        let mut compositing_depths: Vec<usize> = Vec::with_capacity(self.items.len());
         let mut in_translucent: Vec<bool> = Vec::with_capacity(self.items.len());
 
         // First pass: compute clip/sticky depth and translucent-layer flag.
@@ -525,6 +601,7 @@ impl DisplayList {
                 DisplayItem::PushClip { .. } => {
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                     clip_depth += 1;
                 },
@@ -532,11 +609,13 @@ impl DisplayList {
                     clip_depth = clip_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 DisplayItem::PushLayer { opacity } => {
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     if *opacity < 1.0 {
                         translucent_layer_depth += 1;
                     }
@@ -546,11 +625,34 @@ impl DisplayList {
                     translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
+                    in_translucent.push(translucent_layer_depth > 0);
+                },
+                DisplayItem::PushCompositingLayer { .. } => {
+                    clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
+                    // Contents of a compositing layer draw into an
+                    // offscreen surface and may be re-blended with a
+                    // non-Normal blend mode or filter — treat them as
+                    // translucent so they can neither be eliminated
+                    // nor act as occluders.
+                    compositing_depth += 1;
+                    translucent_layer_depth += 1;
+                    in_translucent.push(true);
+                },
+                DisplayItem::PopCompositingLayer => {
+                    compositing_depth = compositing_depth.saturating_sub(1);
+                    translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
+                    clip_depths.push(clip_depth);
+                    sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 DisplayItem::PushSticky { .. } => {
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                     sticky_depth += 1;
                 },
@@ -558,11 +660,13 @@ impl DisplayList {
                     sticky_depth = sticky_depth.saturating_sub(1);
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
                 _ => {
                     clip_depths.push(clip_depth);
                     sticky_depths.push(sticky_depth);
+                    compositing_depths.push(compositing_depth);
                     in_translucent.push(translucent_layer_depth > 0);
                 },
             }
@@ -585,10 +689,15 @@ impl DisplayList {
 
             let my_clip = clip_depths[i];
             let my_sticky = sticky_depths[i];
+            let my_compositing = compositing_depths[i];
             let start = i.saturating_sub(SCAN_WINDOW);
 
             for j in start..i {
-                if remove[j] || clip_depths[j] != my_clip || sticky_depths[j] != my_sticky {
+                if remove[j]
+                    || clip_depths[j] != my_clip
+                    || sticky_depths[j] != my_sticky
+                    || compositing_depths[j] != my_compositing
+                {
                     continue;
                 }
 
@@ -659,6 +768,24 @@ impl DisplayList {
                     continue;
                 },
                 DisplayItem::PopLayer => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    opacity_stack.pop();
+                    continue;
+                },
+                DisplayItem::PushCompositingLayer { opacity, .. } => {
+                    // Fallback path for backends that haven't opted into
+                    // `SdiRenderTarget`: treat the layer as if it were a
+                    // plain `PushLayer { opacity }` — blend mode, filters,
+                    // and backdrop filters are dropped. Documented as the
+                    // accepted degradation in docs/compositor-overhaul-plan.md
+                    // §3.4 step 4.
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    opacity_stack.push(*opacity);
+                    continue;
+                },
+                DisplayItem::PopCompositingLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.pop();
@@ -899,6 +1026,8 @@ impl DisplayList {
                 | DisplayItem::DrawText { .. }
                 | DisplayItem::PushLayer { .. }
                 | DisplayItem::PopLayer
+                | DisplayItem::PushCompositingLayer { .. }
+                | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
                 // BlurHint is metadata for GPU backends; software fallback
@@ -975,6 +1104,18 @@ impl DisplayList {
                     continue;
                 },
                 DisplayItem::PopLayer => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    opacity_stack.pop();
+                    continue;
+                },
+                DisplayItem::PushCompositingLayer { opacity, .. } => {
+                    flush_rect_batch(backend, &mut rect_batch)?;
+                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                    opacity_stack.push(*opacity);
+                    continue;
+                },
+                DisplayItem::PopCompositingLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.pop();
@@ -1203,6 +1344,8 @@ impl DisplayList {
                 | DisplayItem::PopClip
                 | DisplayItem::PushLayer { .. }
                 | DisplayItem::PopLayer
+                | DisplayItem::PushCompositingLayer { .. }
+                | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
                 DisplayItem::BlurHint { .. } => {},
@@ -2146,5 +2289,177 @@ mod tests {
         assert!(matches!(&backend.calls[0], DrawCall::FillRect { .. }));
         assert!(matches!(&backend.calls[1], DrawCall::DrawText { .. }));
         assert!(matches!(&backend.calls[2], DrawCall::FillRect { .. }));
+    }
+
+    // -----------------------------------------------------------------
+    // Compositing layer boundary tests (PR3 of compositor overhaul)
+    // -----------------------------------------------------------------
+
+    fn layer_rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
+    }
+
+    fn push_cl(bounds: Rect, opacity: f32) -> DisplayItem {
+        DisplayItem::PushCompositingLayer {
+            bounds,
+            opacity,
+            blend: CssBlendMode::Multiply,
+            needs_backdrop: false,
+            filters: Vec::new(),
+            backdrop_filters: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn compact_does_not_merge_fillrects_across_compositing_layer() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(10, 20, 30);
+        // Rect inside a layer.
+        dl.push(push_cl(layer_rect(0.0, 0.0, 200.0, 200.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+        // Abutting rect outside the layer (same color, same y, same h,
+        // would merge if not for the layer boundary).
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 0,
+            w: 10,
+            h: 10,
+            color,
+            node_id: None,
+        });
+
+        dl.compact();
+        // If compact() ignored the boundary we'd see a single merged
+        // 20-wide FillRect (len 3). The layer boundary must keep them
+        // separate.
+        let fill_count = dl
+            .items()
+            .iter()
+            .filter(|it| matches!(it, DisplayItem::FillRect { .. }))
+            .count();
+        assert_eq!(
+            fill_count,
+            2,
+            "rects must not merge across layers: {:#?}",
+            dl.items()
+        );
+    }
+
+    #[test]
+    fn merge_vertical_strips_does_not_cross_compositing_layer() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(10, 20, 30);
+        dl.push(push_cl(layer_rect(0.0, 0.0, 200.0, 200.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color,
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+        // Vertically abutting outside the layer.
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 10,
+            w: 10,
+            h: 10,
+            color,
+            node_id: None,
+        });
+        dl.optimize();
+        let fill_count = dl
+            .items()
+            .iter()
+            .filter(|it| matches!(it, DisplayItem::FillRect { .. }))
+            .count();
+        assert_eq!(fill_count, 2);
+    }
+
+    #[test]
+    fn eliminate_occluded_does_not_cross_compositing_layer() {
+        let mut dl = DisplayList::new();
+        // Opaque rect inside a layer.
+        dl.push(push_cl(layer_rect(0.0, 0.0, 200.0, 200.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 50,
+            h: 50,
+            color: Color::rgba(255, 0, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+        // A later opaque rect outside the layer that fully covers the
+        // inner one would normally cause elimination. It must not cross
+        // the layer boundary, because the inner rect draws to a
+        // different surface.
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+            color: Color::rgba(0, 255, 0, 255),
+            node_id: None,
+        });
+        let before = dl.len();
+        dl.optimize();
+        // Both inner and outer rect survive.
+        let after_fills = dl
+            .items()
+            .iter()
+            .filter(|it| matches!(it, DisplayItem::FillRect { .. }))
+            .count();
+        assert_eq!(after_fills, 2, "both fills must survive: {:#?}", dl.items());
+        assert!(dl.len() >= before.saturating_sub(1));
+    }
+
+    #[test]
+    fn push_compositing_layer_replays_as_opacity_fallback() {
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(0.0, 0.0, 100.0, 100.0), 0.5));
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgba(100, 100, 100, 200),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = MockBackend::new();
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+        // One fill emitted with opacity halved.
+        assert_eq!(backend.fill_rect_count(), 1);
+        match &backend.calls[0] {
+            DrawCall::FillRect { color, .. } => {
+                // 200 * 0.5 = 100
+                assert_eq!(color.a, 100);
+            },
+            _ => panic!("expected FillRect"),
+        }
+    }
+
+    #[test]
+    fn is_layer_boundary_flags_new_variants() {
+        assert!(push_cl(layer_rect(0.0, 0.0, 10.0, 10.0), 1.0).is_layer_boundary());
+        assert!(DisplayItem::PopCompositingLayer.is_layer_boundary());
+        assert!(!DisplayItem::PushLayer { opacity: 0.5 }.is_layer_boundary());
+        assert!(!DisplayItem::PopLayer.is_layer_boundary());
     }
 }

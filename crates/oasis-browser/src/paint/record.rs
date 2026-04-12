@@ -113,6 +113,19 @@ pub fn record_with_scroll(
 // Recursive box recorder
 // -------------------------------------------------------------------
 
+/// Which kind of compositing layer a `record_box` call opened for
+/// the current box, so the matching pop can close it.
+#[derive(Copy, Clone, Debug)]
+enum LayerKind {
+    /// Fast path: `PushLayer { opacity }`. Opacity only.
+    Opacity,
+    /// Slow path: `PushCompositingLayer { .. }`. Needs a real
+    /// offscreen render target to paint correctly; backends without
+    /// that capability fall back to the opacity fast path during
+    /// replay.
+    Compositing,
+}
+
 fn record_box(
     layout_box: &LayoutBox,
     dl: &mut DisplayList,
@@ -197,16 +210,59 @@ fn record_box(
         false
     };
 
-    // Emit a compositing layer for elements with sub-unit opacity.
-    // The PushLayer/PopLayer pair tells the replay path to multiply all
-    // enclosed colors' alpha by this opacity, providing correct stacking
-    // context compositing for the common case (per-item fallback).
-    let needs_layer = layout_box.style.opacity < 1.0;
-    if needs_layer {
-        dl.push(DisplayItem::PushLayer {
-            opacity: layout_box.style.opacity,
-        });
+    // Decide which kind of compositing layer (if any) this box needs:
+    //
+    // * Slow path (`PushCompositingLayer`) — required for
+    //   `mix-blend-mode`, `backdrop-filter`, box-level `filter`,
+    //   `isolation: isolate`, or `will-change: transform/opacity/filter`.
+    //   Carries the full set of parameters the future render-target
+    //   compositor needs. Backends without `SdiRenderTarget` support
+    //   fall back to plain opacity stacking (see display_list.rs).
+    //
+    // * Fast path (`PushLayer`) — the opacity-only common case.  No
+    //   offscreen surface needed.
+    let wants_compositing = super::creates_compositing_layer(layout_box);
+    let has_opacity = layout_box.style.opacity < 1.0;
+    let layer_kind = if wants_compositing {
+        Some(LayerKind::Compositing)
+    } else if has_opacity {
+        Some(LayerKind::Opacity)
+    } else {
+        None
+    };
+
+    match layer_kind {
+        Some(LayerKind::Compositing) => {
+            // Use the layout margin box as the layer bounds — covers
+            // box shadow, borders, and contents.
+            let mb = layout_box.dimensions.margin_box();
+            let bounds = Rect {
+                x: mb.x + offset_x as f32,
+                y: mb.y + offset_y as f32,
+                width: mb.width,
+                height: mb.height,
+            };
+            let mix_blend = layout_box.style.mix_blend_mode;
+            let has_backdrop = !layout_box.style.backdrop_filters.is_empty();
+            let needs_backdrop =
+                has_backdrop || !matches!(mix_blend, crate::css::values::types::BlendMode::Normal);
+            dl.push(DisplayItem::PushCompositingLayer {
+                bounds,
+                opacity: layout_box.style.opacity,
+                blend: mix_blend,
+                needs_backdrop,
+                filters: layout_box.style.filters.clone(),
+                backdrop_filters: layout_box.style.backdrop_filters.clone(),
+            });
+        },
+        Some(LayerKind::Opacity) => {
+            dl.push(DisplayItem::PushLayer {
+                opacity: layout_box.style.opacity,
+            });
+        },
+        None => {},
     }
+    let needs_layer = layer_kind.is_some();
 
     // Emit a blur hint for GPU backends that support render-target blur.
     // The software path already applies per-color approximation via
@@ -408,8 +464,10 @@ fn record_box(
 
     // Close the compositing layer (must be before clip restore so clip
     // state is still correct for any future render-target compositing).
-    if needs_layer {
-        dl.push(DisplayItem::PopLayer);
+    match layer_kind {
+        Some(LayerKind::Compositing) => dl.push(DisplayItem::PopCompositingLayer),
+        Some(LayerKind::Opacity) => dl.push(DisplayItem::PopLayer),
+        None => {},
     }
 
     // Restore clip.
