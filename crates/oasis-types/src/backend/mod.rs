@@ -2621,22 +2621,81 @@ mod tests {
 
     #[test]
     fn render_target_pool_isolation_between_backends() {
-        // Two independent backend instances must not share state.
+        // Two independent backend instances must not share state.  The
+        // earlier version of this test only checked that id sequences
+        // start at 1 and that unknown ids error — but identical id
+        // values are exactly what *shared* state would produce too, so
+        // that wasn't a real isolation proof.
+        //
+        // This version drives the two backends through divergent
+        // histories and asserts observable state on each afterward:
+        //
+        // - backend A creates 3 targets, destroys the middle one, then
+        //   binds + unbinds the first.  Ends up with 2 live targets,
+        //   empty bind stack, specific log trace.
+        // - backend C creates 1 target, binds it and leaves it bound.
+        //   Ends up with 1 live target, bind stack depth 1, different
+        //   log trace.
+        //
+        // If the pools shared any state, at least one of these
+        // assertions would collapse.
         let mut a = RtRecordingBackend::new();
         let mut c = RtRecordingBackend::new();
-        let id_a = a.create_render_target(4, 4).unwrap();
-        let id_c = c.create_render_target(4, 4).unwrap();
-        // Both start their id sequences from 1.
-        assert_eq!(id_a.0, 1);
-        assert_eq!(id_c.0, 1);
-        // Binding an unknown id errors (opaque u64 handles cannot prove
-        // cross-backend isolation, only unknown-id rejection).
-        a.bind_render_target(RenderTargetId(999)).unwrap_err();
-        // The owning backend can bind it.
-        a.bind_render_target(id_a).unwrap();
+
+        let a1 = a.create_render_target(4, 4).unwrap();
+        let a2 = a.create_render_target(8, 8).unwrap();
+        let a3 = a.create_render_target(16, 16).unwrap();
+        a.destroy_render_target(a2).unwrap();
+        a.bind_render_target(a1).unwrap();
         a.unbind_render_target().unwrap();
-        c.bind_render_target(id_c).unwrap();
+
+        let c1 = c.create_render_target(32, 32).unwrap();
+        c.bind_render_target(c1).unwrap();
+
+        // Id sequences are independent.
+        assert_eq!(a1.0, 1);
+        assert_eq!(a2.0, 2);
+        assert_eq!(a3.0, 3);
+        assert_eq!(c1.0, 1);
+
+        // Live-target pools diverged.
+        assert_eq!(a.targets.len(), 2, "A should have 2 live targets (a1, a3)");
+        assert!(a.targets.iter().any(|(t, ..)| *t == a1));
+        assert!(a.targets.iter().any(|(t, ..)| *t == a3));
+        assert!(!a.targets.iter().any(|(t, ..)| *t == a2));
+        assert_eq!(c.targets.len(), 1, "C should have 1 live target (c1)");
+
+        // Bind stacks diverged.
+        assert!(a.bind_stack.is_empty(), "A's bind stack should be empty");
+        assert_eq!(c.bind_stack.len(), 1, "C should have c1 still bound");
+        assert_eq!(c.bind_stack[0], c1);
+
+        // Logs diverged — A saw create+destroy+bind+unbind, C only saw
+        // create+bind.
+        assert_eq!(
+            a.log(),
+            vec![
+                "create(1,4x4)",
+                "create(2,8x8)",
+                "create(3,16x16)",
+                "destroy(2)",
+                "bind(1)",
+                "unbind(1)",
+            ],
+        );
+        assert_eq!(c.log(), vec!["create(1,32x32)", "bind(1)"]);
+
+        // Cross-pool id lookups still fail: c1 (id 1) is unknown to A
+        // *relative to the other ids A still owns* — but because both
+        // pools happen to use the u64 value 1, A would actually accept
+        // it if it did a membership check.  That's the limitation the
+        // earlier version of this test glossed over.  The real proof
+        // of isolation is the divergent state above, not the handle
+        // values.
+
+        // Clean up C so the test leaves no dangling bind.
         c.unbind_render_target().unwrap();
+        c.destroy_render_target(c1).unwrap();
     }
 
     // -- SdiBackend bounds for trait objects -----------------------------
