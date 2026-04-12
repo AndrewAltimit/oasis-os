@@ -749,11 +749,10 @@ fn resolve_clip_path_rect(shape: &ClipPath, border_box: &Rect) -> Option<Rect> {
             bottom,
             left,
         } => {
-            // `auto` sentinels (NaN) mean "use the border-box edge".
-            let t = if top.is_nan() { 0.0 } else { top };
-            let l = if left.is_nan() { 0.0 } else { left };
-            let r = if right.is_nan() { bw } else { right };
-            let b = if bottom.is_nan() { bh } else { bottom };
+            let t = top.unwrap_or(0.0);
+            let l = left.unwrap_or(0.0);
+            let r = right.unwrap_or(bw);
+            let b = bottom.unwrap_or(bh);
             Rect {
                 x: bx + l,
                 y: by + t,

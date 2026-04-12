@@ -2588,23 +2588,33 @@ fn parse_clip_path(value: &CssValue, parent_font_size: f32) -> Option<super::typ
             pct.trim()
                 .parse::<f32>()
                 .ok()
+                .filter(|v| *v >= 0.0)
                 .map(|v| ClipLength::Frac(v / 100.0))
         } else if let Some(px) = tok.strip_suffix("px") {
-            px.trim().parse::<f32>().ok().map(ClipLength::Px)
+            px.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(ClipLength::Px)
         } else if let Some(em) = tok.strip_suffix("em") {
             em.trim()
                 .parse::<f32>()
                 .ok()
+                .filter(|v| *v >= 0.0)
                 .map(|v| ClipLength::Px(v * parent_font_size))
         } else if let Some(rem) = tok.strip_suffix("rem") {
             rem.trim()
                 .parse::<f32>()
                 .ok()
+                .filter(|v| *v >= 0.0)
                 .map(|v| ClipLength::Px(v * super::types::ROOT_FONT_SIZE))
         } else if tok == "0" {
             Some(ClipLength::Px(0.0))
         } else {
-            tok.parse::<f32>().ok().map(ClipLength::Px)
+            tok.parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(ClipLength::Px)
         }
     };
 
@@ -2637,12 +2647,12 @@ fn parse_clip_path(value: &CssValue, parent_font_size: f32) -> Option<super::typ
         "rect" => {
             // Legacy `rect(top, right, bottom, left)`. All values must be px
             // lengths or `auto`. Fractions not allowed here per CSS 2.1.
-            let to_px = |tok: &str| -> Option<f32> {
+            let to_px = |tok: &str| -> Option<Option<f32>> {
                 if tok == "auto" {
-                    return Some(f32::NAN); // sentinel — replaced at paint time
+                    return Some(None);
                 }
                 match parse_len(tok)? {
-                    ClipLength::Px(v) => Some(v),
+                    ClipLength::Px(v) => Some(Some(v)),
                     ClipLength::Frac(_) => None,
                 }
             };

@@ -623,12 +623,13 @@ pub enum ClipPath {
         left: ClipLength,
     },
     /// `rect(top, right, bottom, left)` — legacy rect form, pixel values
-    /// measured from the border box top-left.
+    /// measured from the border box top-left.  `None` = `auto` (use the
+    /// border-box edge), resolved at paint time.
     Rect {
-        top: f32,
-        right: f32,
-        bottom: f32,
-        left: f32,
+        top: Option<f32>,
+        right: Option<f32>,
+        bottom: Option<f32>,
+        left: Option<f32>,
     },
     /// `circle(r at cx cy)` — approximated to its bounding box for now.
     Circle {

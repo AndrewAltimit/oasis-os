@@ -51,8 +51,10 @@ fn load_fixture(name: &str) -> String {
 ///
 /// Returns the built layout tree and the mock backend so the caller can
 /// assert on draw-call counts, layout topology, etc.
-fn run_pipeline(
+fn run_pipeline_sized(
     html: &str,
+    width: f32,
+    height: f32,
 ) -> (
     LayoutBox,
     MockSdiCore,
@@ -71,29 +73,38 @@ fn run_pipeline(
         &doc,
         &styles,
         &FixedMeasurer,
-        800.0,
-        600.0,
+        width,
+        height,
         None,
         &HashMap::new(),
     );
 
-    let mut backend = MockSdiCore::new(800, 600);
+    let mut backend = MockSdiCore::new(width as u32, height as u32);
     let vp = PaintViewport {
         scroll_y: 0.0,
         scroll_x: 0.0,
         x: 0,
         y: 0,
-        width: 800.0,
-        height: 600.0,
-        visible_height: 600.0,
+        width,
+        height,
+        visible_height: height,
     };
     let link_map = HashMap::new();
     paint_page(&layout, &mut backend, vp, &link_map).expect("paint must not error");
 
-    // Clone the kinds for caller inspection — Document isn't Send/Clone
-    // in a convenient way, so we snapshot what tests need.
     let kinds: Vec<NodeKind> = doc.nodes.iter().map(|n| n.kind.clone()).collect();
     (layout, backend, styles, kinds)
+}
+
+fn run_pipeline(
+    html: &str,
+) -> (
+    LayoutBox,
+    MockSdiCore,
+    Vec<Option<ComputedStyle>>,
+    Vec<NodeKind>,
+) {
+    run_pipeline_sized(html, 800.0, 600.0)
 }
 
 /// Count boxes of a given type in the layout tree.
@@ -234,7 +245,6 @@ fn adversarial_malformed_does_not_crash() {
 
 #[test]
 fn all_fixtures_paint_at_narrow_viewport() {
-    // Re-run pipeline at 320×240 to exercise wrapping / narrow layout.
     for name in &[
         "wikipedia_article.html",
         "news_homepage.html",
@@ -242,32 +252,10 @@ fn all_fixtures_paint_at_narrow_viewport() {
         "adversarial_malformed.html",
     ] {
         let html = load_fixture(name);
-        let tokens = Tokenizer::new(&html).tokenize();
-        let doc = TreeBuilder::build(tokens);
-        let ua = default_stylesheet();
-        let sheets: Vec<&Stylesheet> = vec![&ua];
-        let ctx = CascadeContext::default();
-        let styles = style_tree(&doc, &sheets, &[], &ctx);
-        let layout = build_layout_tree(
-            &doc,
-            &styles,
-            &FixedMeasurer,
-            320.0,
-            240.0,
-            None,
-            &HashMap::new(),
+        let (_layout, backend, _styles, _kinds) = run_pipeline_sized(&html, 320.0, 240.0);
+        assert!(
+            !backend.calls().is_empty(),
+            "{name} produced no paint calls at narrow viewport"
         );
-        let mut backend = MockSdiCore::new(320, 240);
-        let vp = PaintViewport {
-            scroll_y: 0.0,
-            scroll_x: 0.0,
-            x: 0,
-            y: 0,
-            width: 320.0,
-            height: 240.0,
-            visible_height: 240.0,
-        };
-        paint_page(&layout, &mut backend, vp, &HashMap::new())
-            .unwrap_or_else(|e| panic!("{name} failed to paint at narrow viewport: {e}"));
     }
 }
