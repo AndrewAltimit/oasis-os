@@ -75,6 +75,8 @@ These are recognised by the parser but **not yet stored or applied**:
 - **`@container` queries** — only `@media` and `@supports` are wired into the cascade.
 - **`scroll-snap-align` multi-value** — only single-keyword values (`start`, `end`, `center`, `none`) are parsed; the two-value form (`start center`) silently retains the default.
 - **`justify-items` initial value** — uses `Stretch` instead of spec `legacy` (no `Legacy` variant in the enum; pragmatic choice for the embedded engine).
+- **`text-decoration-thickness` percentage values** — the spec allows `<length-percentage>` but percentages are silently dropped; `resolve_length` has no containing-block context to resolve them. Only `<length>`, `<number>`, `calc()`, `auto`, and `from-font` are handled.
+- **`inset` shorthand multi-value** — only the 1-value form is expanded; 2–4 value forms (e.g. `inset: 10px 20px`) silently set all four sides to the single resolved value.
 - **`color-mix()`, `color()`, `lab()`, `lch()`, `oklab()`, `oklch()`** — only `rgb()`, `rgba()`, `hsl()`, `hsla()`, `#rrggbb`, and named colors are parsed.
 
 ## Storage vs. rendering
