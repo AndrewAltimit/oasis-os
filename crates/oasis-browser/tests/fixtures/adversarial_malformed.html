@@ -1,0 +1,23 @@
+<html>
+<head>
+<title>Adversarial page</title>
+<body>
+<p>Unclosed title above. Missing </head>.
+<p>Stray &lt;tr&gt; outside any table:
+<tr><td>should be foster-parented</td></tr>
+<p>Paragraph without closing tag before a block
+<div>block child under bare text
+<p>another para inside div
+<p>and another one
+</div>
+<p><b>bold without closing <i>italic <u>underline <p>para inside formatting</p> more bold</b>
+<table>
+<tr>
+<td>cell one</td>
+stray text inside table row
+<td>cell two with <ul><li>list inside cell</li></ul></td>
+</tr>
+<tr><td>row two</td></tr>
+</table>
+<p>Unmatched closing </span></div></a> tags in middle
+<p>final para, no closing html or body

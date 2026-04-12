@@ -30,8 +30,8 @@ pub(crate) mod tiling;
 use std::collections::HashMap;
 
 use crate::css::values::{
-    BackgroundImage, Dimension, Overflow, Position, TextOverflow, TransformFunction, Visibility,
-    WhiteSpace,
+    BackgroundImage, ClipLength, ClipPath, Dimension, Overflow, Position, TextOverflow,
+    TransformFunction, Visibility, WhiteSpace,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
@@ -347,6 +347,19 @@ pub(super) fn paint_box(
                 layout_box.style.white_space,
                 WhiteSpace::NoWrap | WhiteSpace::Pre
             );
+    }
+
+    // CSS `clip-path`: intersect with the resolved shape's bounding rect.
+    // True shape clipping (circle/ellipse edges) needs stencil support the
+    // backend trait does not expose yet; we approximate to the bounding box
+    // so at minimum the element can't paint outside its declared clip.
+    if let Some(shape) = &layout_box.style.clip_path
+        && let Some(shape_rect) = resolve_clip_path_rect(shape, &layout_box.dimensions.border_box())
+    {
+        ctx.clip_rect = Some(match ctx.clip_rect {
+            Some(existing) => intersect_rects(existing, shape_rect),
+            None => shape_rect,
+        });
     }
 
     // Push hardware clip rect to GPU when an overflow clip is active.
@@ -700,6 +713,96 @@ pub(crate) fn is_positioned(layout_box: &LayoutBox) -> bool {
 }
 
 /// Compute the intersection of two rectangles.
+/// Resolve a [`ClipPath`] shape to a bounding rect in the layout coordinate
+/// space, anchored to the element's border box.
+///
+/// Circle/ellipse shapes are reduced to their axis-aligned bounding box —
+/// the only clipping primitive the backend trait exposes today. Returns
+/// `None` if the shape collapses to an empty rect.
+fn resolve_clip_path_rect(shape: &ClipPath, border_box: &Rect) -> Option<Rect> {
+    let bw = border_box.width;
+    let bh = border_box.height;
+    let bx = border_box.x;
+    let by = border_box.y;
+
+    let rect = match *shape {
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+        } => {
+            let t = top.resolve(bh);
+            let r = right.resolve(bw);
+            let b = bottom.resolve(bh);
+            let l = left.resolve(bw);
+            Rect {
+                x: bx + l,
+                y: by + t,
+                width: (bw - l - r).max(0.0),
+                height: (bh - t - b).max(0.0),
+            }
+        },
+        ClipPath::Rect {
+            top,
+            right,
+            bottom,
+            left,
+        } => {
+            // `auto` sentinels (NaN) mean "use the border-box edge".
+            let t = if top.is_nan() { 0.0 } else { top };
+            let l = if left.is_nan() { 0.0 } else { left };
+            let r = if right.is_nan() { bw } else { right };
+            let b = if bottom.is_nan() { bh } else { bottom };
+            Rect {
+                x: bx + l,
+                y: by + t,
+                width: (r - l).max(0.0),
+                height: (b - t).max(0.0),
+            }
+        },
+        ClipPath::Circle { cx, cy, r } => {
+            let ref_diag = ((bw * bw + bh * bh) / 2.0).sqrt();
+            let radius = match r {
+                ClipLength::Px(v) => v,
+                ClipLength::Frac(f) => f * ref_diag,
+            };
+            let cx = cx.resolve(bw);
+            let cy = cy.resolve(bh);
+            Rect {
+                x: bx + cx - radius,
+                y: by + cy - radius,
+                width: (radius * 2.0).max(0.0),
+                height: (radius * 2.0).max(0.0),
+            }
+        },
+        ClipPath::Ellipse { cx, cy, rx, ry } => {
+            let rx_px = match rx {
+                ClipLength::Px(v) => v,
+                ClipLength::Frac(f) => f * bw,
+            };
+            let ry_px = match ry {
+                ClipLength::Px(v) => v,
+                ClipLength::Frac(f) => f * bh,
+            };
+            let cx = cx.resolve(bw);
+            let cy = cy.resolve(bh);
+            Rect {
+                x: bx + cx - rx_px,
+                y: by + cy - ry_px,
+                width: (rx_px * 2.0).max(0.0),
+                height: (ry_px * 2.0).max(0.0),
+            }
+        },
+    };
+
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        None
+    } else {
+        Some(rect)
+    }
+}
+
 fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let x = a.x.max(b.x);
     let y = a.y.max(b.y);
@@ -1075,6 +1178,67 @@ mod tests {
     // ---------------------------------------------------------------
     // Test: content height reported correctly
     // ---------------------------------------------------------------
+
+    #[test]
+    fn clip_path_inset_resolves_to_shrunken_rect() {
+        use crate::css::values::{ClipLength, ClipPath};
+        let bb = Rect {
+            x: 100.0,
+            y: 100.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let shape = ClipPath::Inset {
+            top: ClipLength::Px(10.0),
+            right: ClipLength::Px(20.0),
+            bottom: ClipLength::Px(30.0),
+            left: ClipLength::Px(40.0),
+        };
+        let r = resolve_clip_path_rect(&shape, &bb).expect("non-empty");
+        assert_eq!(r.x, 140.0);
+        assert_eq!(r.y, 110.0);
+        assert_eq!(r.width, 140.0);
+        assert_eq!(r.height, 60.0);
+    }
+
+    #[test]
+    fn clip_path_circle_half_width_bounding_box() {
+        use crate::css::values::{ClipLength, ClipPath};
+        let bb = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let shape = ClipPath::Circle {
+            cx: ClipLength::Frac(0.5),
+            cy: ClipLength::Frac(0.5),
+            r: ClipLength::Px(40.0),
+        };
+        let r = resolve_clip_path_rect(&shape, &bb).expect("non-empty");
+        assert_eq!(r.x, 10.0);
+        assert_eq!(r.y, 10.0);
+        assert_eq!(r.width, 80.0);
+        assert_eq!(r.height, 80.0);
+    }
+
+    #[test]
+    fn clip_path_inset_fully_collapsed_returns_none() {
+        use crate::css::values::{ClipLength, ClipPath};
+        let bb = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        let shape = ClipPath::Inset {
+            top: ClipLength::Frac(0.5),
+            right: ClipLength::Frac(0.5),
+            bottom: ClipLength::Frac(0.5),
+            left: ClipLength::Frac(0.5),
+        };
+        assert!(resolve_clip_path_rect(&shape, &bb).is_none());
+    }
 
     #[test]
     fn content_height_reported() {

@@ -8,6 +8,23 @@
 //!
 //! See `docs/` (in the crate root) for architecture, CSS coverage, and
 //! contributor guides. Start with `docs/README.md`.
+//!
+//! # Feature flags
+//!
+//! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
+//!   `<script>` execution, `fetch`, `setTimeout`, event dispatch, and
+//!   DOM bindings. **Intentionally disabled on the PSP backend**: the
+//!   QuickJS runtime binds ~400KB of code plus a runtime heap that
+//!   does not fit in the PSP's 24MB user-accessible RAM budget
+//!   alongside the browser engine, video decoder, SDI pool, and audio
+//!   buffers. PSP builds parse and cascade pages without script
+//!   execution — scripts are dropped at parse time. This is a deliberate
+//!   RAM-budget decision, not a porting gap, and will not change unless
+//!   a substantially smaller JS engine becomes available.
+//! - `webp` — enables WebP image decoding via the `image` crate.
+//! - `parallel-style` — parallel style cascade via rayon (desktop only).
+//! - `psp` — enables PSP-specific shrink-the-footprint code paths and
+//!   disables features that rely on desktop-only crates.
 
 pub mod config;
 pub(crate) mod css;

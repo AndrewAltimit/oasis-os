@@ -7,7 +7,7 @@ use oasis_types::backend::Color;
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackfaceVisibility, BackgroundBox,
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode,
-    BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ColorScheme,
+    BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
     ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
     FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight, GridTrackSize,
     Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
@@ -299,8 +299,8 @@ pub struct ComputedStyle {
     pub text_rendering: TextRendering,
 
     // -- 3D / clipping -------------------------------------------------
-    /// Raw `clip-path` value (e.g. `circle(50%)`). Stored opaque.
-    pub clip_path: Option<String>,
+    /// Structured `clip-path` value. `None` means `clip-path: none`.
+    pub clip_path: Option<ClipPath>,
     pub perspective: Option<f32>,
     /// Raw `perspective-origin` value (e.g. `center`, `50% 50%`).
     pub perspective_origin: Option<String>,

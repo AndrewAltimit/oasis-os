@@ -44,6 +44,14 @@ kernel-me = ["psp/kernel"]
 [dependencies]
 psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
+# NOTE: the `javascript` feature is intentionally NOT enabled on PSP.
+# QuickJS-NG binds ~400KB of code plus a runtime heap that cannot fit
+# within the PSP's 24MB user-accessible RAM alongside the browser engine,
+# video decode pipeline, SDI object pool, and audio buffers. The PSP build
+# of oasis-browser parses/cascades JS as inert content (scripts are
+# dropped at parse time). This is a deliberate RAM-budget call, not an
+# oversight — see CLAUDE.md "PSP Constraints" and
+# docs/psp-modernization-plan.md.
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }

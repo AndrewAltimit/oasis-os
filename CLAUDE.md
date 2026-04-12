@@ -239,6 +239,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/plugin-development.md`](docs/plugin-development.md) -- Plugin development guide
 - [`docs/ffi-integration.md`](docs/ffi-integration.md) -- UE5 / C-ABI integration guide
 - [`docs/psp-plugin.md`](docs/psp-plugin.md) -- PSP kernel plugin (PRX) documentation
+- [`docs/browser-backlog.md`](docs/browser-backlog.md) -- Browser engine backlog and roadmap
 
 ### Operations
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) -- Troubleshooting common issues

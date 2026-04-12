@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tech News Daily</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Georgia, serif; background: #fafafa; }
+header { background: #222; color: #fff; padding: 1em; }
+header h1 { margin: 0; font-size: 1.4em; }
+nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 1em; }
+nav li a { color: #eee; }
+.hero { background: #c00; color: #fff; padding: 2em; }
+.hero h2 { margin: 0 0 0.5em 0; font-size: 2em; }
+.grid { display: grid; grid-template-columns: 2fr 1fr; gap: 1em; padding: 1em; }
+article { background: #fff; border: 1px solid #ddd; padding: 1em; margin-bottom: 1em; }
+article h3 { margin: 0 0 0.5em 0; }
+.byline { color: #777; font-size: 0.85em; font-style: italic; }
+aside { background: #fff; border: 1px solid #ddd; padding: 1em; }
+footer { background: #222; color: #aaa; text-align: center; padding: 1em; font-size: 0.85em; }
+img { max-width: 100%; }
+</style>
+</head>
+<body>
+<header>
+<h1>Tech News Daily</h1>
+<nav><ul><li><a href="/">Home</a></li><li><a href="/ai">AI</a></li><li><a href="/hw">Hardware</a></li><li><a href="/about">About</a></li></ul></nav>
+</header>
+<section class="hero">
+<h2>Major Linux kernel release ships today</h2>
+<p class="byline">Filed by J. Reporter &middot; 2 hours ago</p>
+</section>
+<div class="grid">
+<main>
+<article>
+<h3>Inside the new scheduler</h3>
+<p>The release brings changes to the <code>sched_ext</code> subsystem, letting developers plug in BPF-based schedulers without recompiling the kernel.</p>
+<p>Core maintainers emphasised that the new APIs are <strong>experimental</strong>, but early benchmarks show latency improvements on mixed workloads.</p>
+<p class="byline">Read more &rarr;</p>
+</article>
+<article>
+<h3>Rust in the kernel expands</h3>
+<p>Rust support has landed for additional driver subsystems. The maintainers expect more drivers to migrate over the next two cycles.</p>
+<blockquote>&ldquo;The safety wins are real,&rdquo; said one contributor.</blockquote>
+</article>
+<article>
+<h3>Benchmarks: database throughput up 12%</h3>
+<p>Synthetic benchmarks under PostgreSQL show a measurable throughput increase on NUMA systems with many cores.</p>
+<table>
+<thead><tr><th>Workload</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>OLTP</td><td>42k tps</td><td>47k tps</td></tr>
+<tr><td>Analytical</td><td>1.2M rows/s</td><td>1.4M rows/s</td></tr>
+</tbody>
+</table>
+</article>
+</main>
+<aside>
+<h4>Trending</h4>
+<ul>
+<li><a href="#a">Why syscalls are getting cheaper</a></li>
+<li><a href="#b">io_uring at 5 years</a></li>
+<li><a href="#c">WebAssembly component model</a></li>
+</ul>
+<h4>Newsletter</h4>
+<form><input type="email" placeholder="you@example.com"><button type="submit">Subscribe</button></form>
+</aside>
+</div>
+<footer>&copy; 2026 Tech News Daily. All rights reserved.</footer>
+</body>
+</html>

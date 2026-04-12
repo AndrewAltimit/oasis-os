@@ -195,6 +195,27 @@ impl TreeBuilder {
             TagName::Html | TagName::Head | TagName::Body => {
                 // Ignore duplicates.
             },
+            // Stray table-structure tags in body scope are parse errors
+            // per WHATWG §13.2.6.4.7 ("in body" insertion mode). Ignore
+            // them — real browsers drop these instead of building a
+            // floating <tr>/<td> outside any table.
+            TagName::Caption
+            | TagName::Col
+            | TagName::Colgroup
+            | TagName::Tbody
+            | TagName::Thead
+            | TagName::Tfoot
+            | TagName::Tr
+            | TagName::Td
+            | TagName::Th => {
+                // Ignore. If a <table> is in scope we'd never reach
+                // here — `handle_in_table` / `handle_in_row` etc.
+                // handle them. Outside a table, dropping is correct.
+            },
+            // Unmatched </frame>, </frameset>, <frameset> etc. in body
+            // scope are also parse errors — we intentionally do not
+            // support framesets at all, so they fall to the generic
+            // arm below and get ignored via `close_to_tag_any_scope`.
             TagName::Table => {
                 self.close_p_if_in_scope();
                 let id = self.create_element_from_start_tag(tag);
@@ -269,7 +290,7 @@ impl TreeBuilder {
                 self.doc.append_child(parent, id);
                 // Void: do not push.
             },
-            TagName::Br | TagName::Img | TagName::Input | TagName::Source | TagName::Col => {
+            TagName::Br | TagName::Img | TagName::Input | TagName::Source => {
                 self.reconstruct_formatting();
                 let id = self.create_element_from_start_tag(tag);
                 let parent = self.current_node();
