@@ -2616,7 +2616,7 @@ fn parse_clip_path(value: &CssValue, parent_font_size: f32) -> Option<super::typ
         };
         let toks: Vec<&str> = s.split_whitespace().collect();
         let cx = toks.first().and_then(|t| parse_len(t)).unwrap_or(default.0);
-        let cy = toks.get(1).and_then(|t| parse_len(t)).unwrap_or(cx);
+        let cy = toks.get(1).and_then(|t| parse_len(t)).unwrap_or(default.1);
         (cx, cy)
     };
 
@@ -3261,6 +3261,25 @@ mod tests {
                 assert_eq!(r, ClipLength::Frac(0.5));
                 assert_eq!(cx, ClipLength::Frac(0.25));
                 assert_eq!(cy, ClipLength::Frac(0.75));
+            },
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_circle_single_coordinate_at() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "clip-path",
+            &CssValue::Keyword("circle(50% at 25%)".into()),
+            16.0,
+        );
+        match s.clip_path {
+            Some(ClipPath::Circle { cx, cy, r }) => {
+                assert_eq!(r, ClipLength::Frac(0.5));
+                assert_eq!(cx, ClipLength::Frac(0.25));
+                assert_eq!(cy, ClipLength::Frac(0.5));
             },
             other => panic!("expected Circle, got {other:?}"),
         }
