@@ -2116,25 +2116,531 @@ mod tests {
     fn blend_mode_set_blend_mode_default_ok() {
         // SdiBlendMode default impls accept any mode without error.
         let mut b = RtRecordingBackend::new();
-        for mode in [
-            BlendMode::Normal,
-            BlendMode::Multiply,
-            BlendMode::Screen,
-            BlendMode::Overlay,
-            BlendMode::Darken,
-            BlendMode::Lighten,
-            BlendMode::ColorDodge,
-            BlendMode::ColorBurn,
-            BlendMode::HardLight,
-            BlendMode::SoftLight,
-            BlendMode::Difference,
-            BlendMode::Exclusion,
-            BlendMode::Hue,
-            BlendMode::Saturation,
-            BlendMode::Color,
-            BlendMode::Luminosity,
-        ] {
+        for mode in ALL_BLEND_MODES {
             assert!(b.set_blend_mode(mode).is_ok());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Comprehensive PR1 validation
+    // -----------------------------------------------------------------------
+    //
+    // The tests below validate the trait surface from the angles a real
+    // browser compositor will hit it: object safety, generic bounds,
+    // exhaustive blend-mode coverage, default-Err message stability,
+    // multi-level nesting, RenderTargetId handle semantics, and the
+    // canonical record/replay sequence the recorder will emit in PR3.
+
+    /// Single source of truth for the 16 CSS-aligned blend modes.
+    /// Used by several tests; if anyone adds a 17th variant they only
+    /// need to update this constant and the exhaustive `match` below.
+    const ALL_BLEND_MODES: [BlendMode; 16] = [
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
+
+    /// Compile-time exhaustiveness check: if a variant is ever added
+    /// to or removed from `BlendMode`, this function fails to build.
+    /// Catches the case where ALL_BLEND_MODES drifts from the enum.
+    #[allow(dead_code)]
+    fn blend_mode_exhaustive_match(m: BlendMode) -> u8 {
+        match m {
+            BlendMode::Normal => 0,
+            BlendMode::Multiply => 1,
+            BlendMode::Screen => 2,
+            BlendMode::Overlay => 3,
+            BlendMode::Darken => 4,
+            BlendMode::Lighten => 5,
+            BlendMode::ColorDodge => 6,
+            BlendMode::ColorBurn => 7,
+            BlendMode::HardLight => 8,
+            BlendMode::SoftLight => 9,
+            BlendMode::Difference => 10,
+            BlendMode::Exclusion => 11,
+            BlendMode::Hue => 12,
+            BlendMode::Saturation => 13,
+            BlendMode::Color => 14,
+            BlendMode::Luminosity => 15,
+        }
+    }
+
+    // -- BlendMode value semantics ----------------------------------------
+
+    #[test]
+    fn blend_mode_all_16_distinct() {
+        use std::collections::HashSet;
+        let set: HashSet<_> = ALL_BLEND_MODES.iter().copied().collect();
+        assert_eq!(set.len(), 16, "all 16 blend modes must be distinct");
+    }
+
+    #[test]
+    fn blend_mode_only_normal_is_normal() {
+        for mode in ALL_BLEND_MODES {
+            assert_eq!(
+                mode.is_normal(),
+                mode == BlendMode::Normal,
+                "is_normal() should be true only for Normal, got {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blend_mode_copy_eq_hash() {
+        let a = BlendMode::Multiply;
+        let b = a; // Copy
+        assert_eq!(a, b);
+        let mut set = std::collections::HashSet::new();
+        for mode in ALL_BLEND_MODES {
+            set.insert(mode);
+        }
+        assert_eq!(set.len(), 16);
+        // Inserting an existing one is a no-op.
+        set.insert(BlendMode::Multiply);
+        assert_eq!(set.len(), 16);
+    }
+
+    #[test]
+    fn blend_mode_debug_format_distinct() {
+        // Each variant must produce a distinct Debug string so logs and
+        // operation traces don't collapse two modes together.
+        let mut seen = std::collections::HashSet::new();
+        for mode in ALL_BLEND_MODES {
+            let s = format!("{mode:?}");
+            assert!(
+                seen.insert(s.clone()),
+                "Debug for {mode:?} collides with another variant"
+            );
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn blend_mode_current_default_is_normal() {
+        // SdiBlendMode default impl returns Normal even though
+        // RtRecordingBackend never overrode it.
+        let b = RtRecordingBackend::new();
+        assert_eq!(b.current_blend_mode(), BlendMode::Normal);
+    }
+
+    // -- RenderTargetId handle semantics ----------------------------------
+
+    #[test]
+    fn render_target_id_copy_eq_hash() {
+        let a = RenderTargetId(42);
+        let b = a;
+        assert_eq!(a, b);
+        assert_eq!(RenderTargetId(1), RenderTargetId(1));
+        assert_ne!(RenderTargetId(1), RenderTargetId(2));
+
+        let mut set = std::collections::HashSet::new();
+        set.insert(RenderTargetId(7));
+        set.insert(RenderTargetId(8));
+        set.insert(RenderTargetId(7));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn render_target_id_debug_includes_value() {
+        let s = format!("{:?}", RenderTargetId(99));
+        assert!(s.contains("99"), "Debug should expose inner u64: {s}");
+    }
+
+    // -- Default-Err contract --------------------------------------------
+
+    /// A backend that implements only `SdiCore` and the eight base
+    /// extension traits with empty `impl` blocks — i.e. exactly what an
+    /// existing pre-PR1 backend looks like, untouched.  Validates that
+    /// every `SdiRenderTarget` and `SdiBlendMode` method has a working
+    /// default impl.
+    struct UntouchedBackend;
+
+    impl SdiCore for UntouchedBackend {
+        fn init(&mut self, _w: u32, _h: u32) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, _color: Color) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn blit(
+            &mut self,
+            _tex: TextureId,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn fill_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+            _color: Color,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn draw_text(
+            &mut self,
+            _text: &str,
+            _x: i32,
+            _y: i32,
+            _font_size: u16,
+            _color: Color,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn load_texture(
+            &mut self,
+            _w: u32,
+            _h: u32,
+            _data: &[u8],
+        ) -> crate::error::Result<TextureId> {
+            Ok(TextureId(0))
+        }
+        fn destroy_texture(&mut self, _tex: TextureId) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn measure_text(&self, t: &str, fs: u16) -> u32 {
+            bitmap_measure_text(t, fs)
+        }
+        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> crate::error::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn shutdown(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SdiShapes for UntouchedBackend {}
+    impl SdiGradients for UntouchedBackend {}
+    impl SdiAlpha for UntouchedBackend {}
+    impl SdiText for UntouchedBackend {}
+    impl SdiTextures for UntouchedBackend {}
+    impl SdiClipTransform for UntouchedBackend {}
+    impl SdiVector for UntouchedBackend {}
+    impl SdiBatch for UntouchedBackend {}
+    impl SdiRenderTarget for UntouchedBackend {}
+    impl SdiBlendMode for UntouchedBackend {}
+
+    #[test]
+    fn untouched_backend_satisfies_sdi_backend() {
+        // Compile-time assertion: UntouchedBackend implements SdiBackend
+        // via the blanket impl, which proves that adding empty impls of
+        // SdiRenderTarget + SdiBlendMode does not break the existing
+        // SdiBackend bound.
+        fn assert_sdi_backend<T: SdiBackend>() {}
+        assert_sdi_backend::<UntouchedBackend>();
+    }
+
+    #[test]
+    fn untouched_backend_default_render_target_errors() {
+        let mut b = UntouchedBackend;
+        // Capability flags default to false.
+        assert!(!b.supports_render_targets());
+        assert!(!b.supports_render_target_readback());
+
+        // All write methods default to Err.
+        let create_err = b.create_render_target(64, 64).unwrap_err();
+        let msg = format!("{create_err}");
+        assert!(
+            msg.contains("not supported"),
+            "default error message should mention 'not supported': {msg}"
+        );
+
+        assert!(b.bind_render_target(RenderTargetId(0)).is_err());
+        assert!(b.unbind_render_target().is_err());
+        assert!(
+            b.composite_render_target(RenderTargetId(0), 0, 0, 64, 64, BlendMode::Normal, 1.0,)
+                .is_err()
+        );
+        let mut buf = vec![0u8; 64 * 64 * 4];
+        let read_err = b
+            .read_render_target(RenderTargetId(0), &mut buf)
+            .unwrap_err();
+        assert!(
+            format!("{read_err}").contains("not supported"),
+            "read error message should mention 'not supported'"
+        );
+
+        // destroy_render_target is the lone exception — defaults to Ok.
+        assert!(b.destroy_render_target(RenderTargetId(0)).is_ok());
+    }
+
+    #[test]
+    fn untouched_backend_blend_mode_defaults() {
+        let mut b = UntouchedBackend;
+        // Default current_blend_mode is Normal.
+        assert_eq!(b.current_blend_mode(), BlendMode::Normal);
+        // Default set_blend_mode is a successful no-op for every mode.
+        for mode in ALL_BLEND_MODES {
+            assert!(
+                b.set_blend_mode(mode).is_ok(),
+                "set_blend_mode default impl must accept {mode:?}"
+            );
+        }
+    }
+
+    // -- Object safety ----------------------------------------------------
+
+    #[test]
+    fn sdi_render_target_is_object_safe() {
+        // If SdiRenderTarget were not object-safe (e.g. due to a
+        // generic method or a Self return type), this would not
+        // compile.  The compositor's per-frame target pool stores
+        // backend handles behind &mut dyn SdiRenderTarget, so this is
+        // a load-bearing requirement.
+        let mut b = RtRecordingBackend::new();
+        let dyn_b: &mut dyn SdiRenderTarget = &mut b;
+        assert!(dyn_b.supports_render_targets());
+        let id = dyn_b.create_render_target(8, 8).unwrap();
+        dyn_b.bind_render_target(id).unwrap();
+        dyn_b.unbind_render_target().unwrap();
+        dyn_b.destroy_render_target(id).unwrap();
+    }
+
+    #[test]
+    fn sdi_blend_mode_is_object_safe() {
+        let mut b = RtRecordingBackend::new();
+        let dyn_b: &mut dyn SdiBlendMode = &mut b;
+        for mode in ALL_BLEND_MODES {
+            assert!(dyn_b.set_blend_mode(mode).is_ok());
+        }
+    }
+
+    // -- Compositor-style generic bound ----------------------------------
+
+    /// The compositor in PR3 will be generic over this combined bound.
+    /// Asserting it compiles here freezes the public API contract.
+    fn compositor_round_trip<B>(backend: &mut B) -> crate::error::Result<()>
+    where
+        B: SdiBackend + SdiRenderTarget + SdiBlendMode,
+    {
+        let id = backend.create_render_target(16, 16)?;
+        backend.bind_render_target(id)?;
+        backend.fill_rect(0, 0, 16, 16, Color::WHITE)?;
+        backend.unbind_render_target()?;
+        backend.set_blend_mode(BlendMode::Multiply)?;
+        backend.composite_render_target(id, 0, 0, 16, 16, BlendMode::Multiply, 0.75)?;
+        backend.destroy_render_target(id)?;
+        Ok(())
+    }
+
+    #[test]
+    fn compositor_generic_bound_compiles_and_runs() {
+        let mut b = RtRecordingBackend::new();
+        compositor_round_trip(&mut b).unwrap();
+    }
+
+    // -- Multi-level nesting ---------------------------------------------
+
+    #[test]
+    fn render_target_three_level_nesting() {
+        let mut b = RtRecordingBackend::new();
+        let l0 = b.create_render_target(256, 256).unwrap();
+        let l1 = b.create_render_target(128, 128).unwrap();
+        let l2 = b.create_render_target(64, 64).unwrap();
+
+        b.bind_render_target(l0).unwrap();
+        b.fill_rect(0, 0, 256, 256, Color::BLACK).unwrap();
+
+        b.bind_render_target(l1).unwrap();
+        b.fill_rect(0, 0, 128, 128, Color::rgb(255, 0, 0)).unwrap();
+
+        b.bind_render_target(l2).unwrap();
+        b.fill_rect(0, 0, 64, 64, Color::rgb(0, 255, 0)).unwrap();
+        b.unbind_render_target().unwrap(); // pop l2
+
+        b.composite_render_target(l2, 0, 0, 64, 64, BlendMode::Screen, 1.0)
+            .unwrap();
+        b.unbind_render_target().unwrap(); // pop l1
+
+        b.composite_render_target(l1, 0, 0, 128, 128, BlendMode::Multiply, 0.5)
+            .unwrap();
+        b.unbind_render_target().unwrap(); // pop l0
+
+        b.composite_render_target(l0, 0, 0, 256, 256, BlendMode::Normal, 1.0)
+            .unwrap();
+
+        // Stack must be drained.
+        assert!(
+            b.bind_stack.borrow().is_empty(),
+            "bind stack should be empty"
+        );
+
+        // Verify pop ordering: each unbind comes after the matching bind
+        // and before any earlier bind's unbind.
+        let log = b.log();
+        let pos = |needle: &str| log.iter().position(|s| s == needle).unwrap();
+        assert!(pos("bind(1)") < pos("bind(2)"));
+        assert!(pos("bind(2)") < pos("bind(3)"));
+        assert!(pos("bind(3)") < pos("unbind(3)"));
+        assert!(pos("unbind(3)") < pos("unbind(2)"));
+        assert!(pos("unbind(2)") < pos("unbind(1)"));
+
+        // Cleanup
+        for id in [l2, l1, l0] {
+            b.destroy_render_target(id).unwrap();
+        }
+        assert!(b.targets.borrow().is_empty(), "all targets destroyed");
+    }
+
+    #[test]
+    fn render_target_destroy_drops_from_pool() {
+        let mut b = RtRecordingBackend::new();
+        let a = b.create_render_target(8, 8).unwrap();
+        let c = b.create_render_target(16, 16).unwrap();
+        assert_eq!(b.targets.borrow().len(), 2);
+        b.destroy_render_target(a).unwrap();
+        assert_eq!(b.targets.borrow().len(), 1);
+        // The remaining one is still bindable.
+        b.bind_render_target(c).unwrap();
+        b.unbind_render_target().unwrap();
+        b.destroy_render_target(c).unwrap();
+        assert!(b.targets.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_target_bind_unknown_id_errors() {
+        let mut b = RtRecordingBackend::new();
+        // The backend is fully capable but the id was never created.
+        let bogus = RenderTargetId(99_999);
+        assert!(b.bind_render_target(bogus).is_err());
+    }
+
+    #[test]
+    fn render_target_supports_flags_are_idempotent() {
+        // Flag queries must not depend on internal state — calling
+        // them in any order, before or after operations, should yield
+        // the same answer.
+        let mut b = RtRecordingBackend::new();
+        let initial = b.supports_render_targets();
+        let initial_rb = b.supports_render_target_readback();
+        let id = b.create_render_target(4, 4).unwrap();
+        assert_eq!(b.supports_render_targets(), initial);
+        assert_eq!(b.supports_render_target_readback(), initial_rb);
+        b.destroy_render_target(id).unwrap();
+        assert_eq!(b.supports_render_targets(), initial);
+        assert_eq!(b.supports_render_target_readback(), initial_rb);
+    }
+
+    #[test]
+    fn render_target_canonical_recorder_sequence() {
+        // Replicates the exact event sequence the PR3 display-list
+        // recorder will emit for a single PushCompositingLayer /
+        // PopCompositingLayer pair around two FillRects.  Locks the
+        // operation order so PR3 can write its assertion against the
+        // same trace shape.
+        let mut b = RtRecordingBackend::new();
+        let id = b.create_render_target(100, 80).unwrap();
+
+        b.bind_render_target(id).unwrap();
+        b.fill_rect(0, 0, 100, 80, Color::rgb(20, 20, 20)).unwrap();
+        b.fill_rect(10, 10, 80, 60, Color::rgb(200, 50, 50))
+            .unwrap();
+        b.unbind_render_target().unwrap();
+
+        b.composite_render_target(id, 50, 30, 100, 80, BlendMode::Overlay, 0.85)
+            .unwrap();
+        b.destroy_render_target(id).unwrap();
+
+        assert_eq!(
+            b.log(),
+            vec![
+                "create(1,100x80)",
+                "bind(1)",
+                "fill_rect",
+                "fill_rect",
+                "unbind(1)",
+                "composite(1,Overlay,0.85)",
+                "destroy(1)",
+            ]
+        );
+    }
+
+    #[test]
+    fn render_target_unbind_underflow_message() {
+        // The error path the recorder will hit if it ever emits a
+        // PopCompositingLayer without a matching push — must produce a
+        // diagnosable message rather than panic.
+        let mut b = RtRecordingBackend::new();
+        let err = b.unbind_render_target().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("underflow") || msg.contains("unbind"),
+            "underflow error should be diagnosable: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_target_id_zero_is_valid_handle() {
+        // The trait makes no claim that 0 is reserved.  A backend that
+        // chooses to start id allocation at 0 must work — verify by
+        // round-tripping the constructor.
+        let id = RenderTargetId(0);
+        assert_eq!(id.0, 0);
+        let copied = id;
+        assert_eq!(copied, id);
+    }
+
+    #[test]
+    fn render_target_pool_isolation_between_backends() {
+        // Two independent backend instances must not share state.
+        let mut a = RtRecordingBackend::new();
+        let mut c = RtRecordingBackend::new();
+        let id_a = a.create_render_target(4, 4).unwrap();
+        let id_c = c.create_render_target(4, 4).unwrap();
+        // Both start their id sequences from 1.
+        assert_eq!(id_a.0, 1);
+        assert_eq!(id_c.0, 1);
+        // Binding the foreign id on the wrong backend errors.
+        a.bind_render_target(RenderTargetId(999)).unwrap_err();
+        // The owning backend can bind it.
+        a.bind_render_target(id_a).unwrap();
+        a.unbind_render_target().unwrap();
+        c.bind_render_target(id_c).unwrap();
+        c.unbind_render_target().unwrap();
+    }
+
+    // -- SdiBackend bounds for trait objects -----------------------------
+
+    #[test]
+    fn dyn_sdi_render_target_with_lifetime_bounds() {
+        // Doc-test analog: ensure boxing works.  The compositor's
+        // per-frame target pool will hold owned backend handles in a
+        // Box<dyn ...> when running multiple backends side-by-side
+        // (e.g. desktop SDL + offscreen capture for tests).
+        let b: Box<dyn SdiRenderTarget> = Box::new(RtRecordingBackend::new());
+        assert!(b.supports_render_targets());
     }
 }
