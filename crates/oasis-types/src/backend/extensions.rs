@@ -917,9 +917,9 @@ pub trait SdiRenderTarget: SdiCore {
     /// Release a render target previously created with
     /// [`create_render_target`](Self::create_render_target).
     ///
-    /// This is the only required method on the trait — backends that
-    /// opt in must release resources, while backends that don't opt in
-    /// at all keep the no-op default since they never created any.
+    /// Backends that opt in should override this to release resources.
+    /// The default no-op is safe for backends that never create render
+    /// targets in the first place.
     fn destroy_render_target(&mut self, _id: RenderTargetId) -> Result<()> {
         Ok(())
     }

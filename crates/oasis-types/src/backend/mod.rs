@@ -1885,22 +1885,22 @@ mod tests {
     /// types crate alone can verify trait wiring.
     struct RtRecordingBackend {
         next_id: u64,
-        targets: RefCell<Vec<(RenderTargetId, u32, u32)>>,
-        bind_stack: RefCell<Vec<RenderTargetId>>,
-        log: RefCell<Vec<String>>,
+        targets: Vec<(RenderTargetId, u32, u32)>,
+        bind_stack: Vec<RenderTargetId>,
+        log: Vec<String>,
     }
 
     impl RtRecordingBackend {
         fn new() -> Self {
             Self {
                 next_id: 1,
-                targets: RefCell::new(Vec::new()),
-                bind_stack: RefCell::new(Vec::new()),
-                log: RefCell::new(Vec::new()),
+                targets: Vec::new(),
+                bind_stack: Vec::new(),
+                log: Vec::new(),
             }
         }
-        fn log(&self) -> Vec<String> {
-            self.log.borrow().clone()
+        fn log(&self) -> &[String] {
+            &self.log
         }
     }
 
@@ -1929,7 +1929,7 @@ mod tests {
             _h: u32,
             _color: Color,
         ) -> crate::error::Result<()> {
-            self.log.borrow_mut().push("fill_rect".into());
+            self.log.push("fill_rect".into());
             Ok(())
         }
         fn draw_text(
@@ -1993,29 +1993,26 @@ mod tests {
         fn create_render_target(&mut self, w: u32, h: u32) -> crate::error::Result<RenderTargetId> {
             let id = RenderTargetId(self.next_id);
             self.next_id += 1;
-            self.targets.borrow_mut().push((id, w, h));
-            self.log
-                .borrow_mut()
-                .push(format!("create({},{w}x{h})", id.0));
+            self.targets.push((id, w, h));
+            self.log.push(format!("create({},{w}x{h})", id.0));
             Ok(id)
         }
         fn bind_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
-            if !self.targets.borrow().iter().any(|(t, ..)| *t == id) {
+            if !self.targets.iter().any(|(t, ..)| *t == id) {
                 return Err(crate::error::OasisError::Backend(
                     format!("unknown rt {}", id.0).into(),
                 ));
             }
-            self.bind_stack.borrow_mut().push(id);
-            self.log.borrow_mut().push(format!("bind({})", id.0));
+            self.bind_stack.push(id);
+            self.log.push(format!("bind({})", id.0));
             Ok(())
         }
         fn unbind_render_target(&mut self) -> crate::error::Result<()> {
             let popped = self
                 .bind_stack
-                .borrow_mut()
                 .pop()
                 .ok_or_else(|| crate::error::OasisError::Backend("unbind underflow".into()))?;
-            self.log.borrow_mut().push(format!("unbind({})", popped.0));
+            self.log.push(format!("unbind({})", popped.0));
             Ok(())
         }
         fn composite_render_target(
@@ -2028,14 +2025,17 @@ mod tests {
             blend: BlendMode,
             opacity: f32,
         ) -> crate::error::Result<()> {
-            self.log
-                .borrow_mut()
-                .push(format!("composite({},{blend:?},{opacity})", id.0));
+            if !self.targets.iter().any(|(t, ..)| *t == id) {
+                return Err(crate::error::OasisError::Backend(
+                    format!("unknown rt {}", id.0).into(),
+                ));
+            }
+            self.log.push(format!("composite({},{blend:?},{opacity})", id.0));
             Ok(())
         }
         fn destroy_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
-            self.targets.borrow_mut().retain(|(t, ..)| *t != id);
-            self.log.borrow_mut().push(format!("destroy({})", id.0));
+            self.targets.retain(|(t, ..)| *t != id);
+            self.log.push(format!("destroy({})", id.0));
             Ok(())
         }
         fn supports_render_targets(&self) -> bool {
@@ -2088,7 +2088,7 @@ mod tests {
             .unwrap();
 
         // Stack must be empty at the end.
-        assert!(b.bind_stack.borrow().is_empty());
+        assert!(b.bind_stack.is_empty());
         // Inner must be unbound before outer.
         let log = b.log();
         let inner_unbind = log.iter().position(|s| s == "unbind(2)").unwrap();
@@ -2494,7 +2494,7 @@ mod tests {
 
         // Stack must be drained.
         assert!(
-            b.bind_stack.borrow().is_empty(),
+            b.bind_stack.is_empty(),
             "bind stack should be empty"
         );
 
@@ -2512,7 +2512,7 @@ mod tests {
         for id in [l2, l1, l0] {
             b.destroy_render_target(id).unwrap();
         }
-        assert!(b.targets.borrow().is_empty(), "all targets destroyed");
+        assert!(b.targets.is_empty(), "all targets destroyed");
     }
 
     #[test]
@@ -2520,14 +2520,14 @@ mod tests {
         let mut b = RtRecordingBackend::new();
         let a = b.create_render_target(8, 8).unwrap();
         let c = b.create_render_target(16, 16).unwrap();
-        assert_eq!(b.targets.borrow().len(), 2);
+        assert_eq!(b.targets.len(), 2);
         b.destroy_render_target(a).unwrap();
-        assert_eq!(b.targets.borrow().len(), 1);
+        assert_eq!(b.targets.len(), 1);
         // The remaining one is still bindable.
         b.bind_render_target(c).unwrap();
         b.unbind_render_target().unwrap();
         b.destroy_render_target(c).unwrap();
-        assert!(b.targets.borrow().is_empty());
+        assert!(b.targets.is_empty());
     }
 
     #[test]
