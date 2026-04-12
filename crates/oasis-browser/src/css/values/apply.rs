@@ -2213,7 +2213,6 @@ fn parse_iteration_count(s: &str) -> f32 {
     }
 }
 
-/// Parse a CSS `animation-direction` keyword.
 fn string_or_keyword(value: &CssValue) -> Option<String> {
     match value {
         CssValue::String(s) => Some(s.clone()),
@@ -2276,6 +2275,7 @@ fn parse_justify_self(s: &str) -> Option<JustifySelf> {
     })
 }
 
+/// Parse a CSS `animation-direction` keyword.
 fn parse_animation_direction(s: &str) -> Option<AnimationDirection> {
     match s {
         "normal" => Some(AnimationDirection::Normal),

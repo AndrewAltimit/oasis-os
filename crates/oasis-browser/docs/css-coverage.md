@@ -73,6 +73,7 @@ These are recognised by the parser but **not yet stored or applied**:
 - **Masking** — `mask`, `mask-image`, `mask-mode`, `mask-position`, `mask-size`, `mask-repeat`, `mask-clip`, `mask-origin`, `mask-composite`.
 - **Scroll padding/margin** — `scroll-padding-*`, `scroll-margin-*`.
 - **`@container` queries** — only `@media` and `@supports` are wired into the cascade.
+- **`justify-items` initial value** — uses `Stretch` instead of spec `legacy` (no `Legacy` variant in the enum; pragmatic choice for the embedded engine).
 - **`color-mix()`, `color()`, `lab()`, `lch()`, `oklab()`, `oklch()`** — only `rgb()`, `rgba()`, `hsl()`, `hsla()`, `#rrggbb`, and named colors are parsed.
 
 ## Storage vs. rendering
