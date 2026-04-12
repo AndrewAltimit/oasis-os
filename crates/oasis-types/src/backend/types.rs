@@ -190,6 +190,59 @@ pub struct TextureId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RenderTargetId(pub u64);
 
+/// CSS-aligned blend modes used when compositing a render target back
+/// into its parent surface.
+///
+/// The 16 variants match the CSS `mix-blend-mode` / `background-blend-mode`
+/// vocabulary from [Compositing and Blending Level 1](https://drafts.fxtf.org/compositing/#blendingseparable).
+/// `Normal` is standard alpha blending and is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BlendMode {
+    /// Standard alpha blending (`src * alpha + dst * (1 - alpha)`).
+    /// Matches CSS `mix-blend-mode: normal`.
+    #[default]
+    Normal,
+    /// `dst * src`. Darkens.
+    Multiply,
+    /// `1 - (1 - dst) * (1 - src)`. Lightens.
+    Screen,
+    /// Multiply or screen depending on destination luminance.
+    Overlay,
+    /// `min(src, dst)`.
+    Darken,
+    /// `max(src, dst)`.
+    Lighten,
+    /// Brightens the destination toward the source.
+    ColorDodge,
+    /// Darkens the destination toward the source.
+    ColorBurn,
+    /// Like `Overlay` but conditioned on source luminance.
+    HardLight,
+    /// Softer variant of `HardLight`.
+    SoftLight,
+    /// `|dst - src|`.
+    Difference,
+    /// Like `Difference` but lower contrast.
+    Exclusion,
+    /// Replaces destination hue with source hue.
+    Hue,
+    /// Replaces destination saturation with source saturation.
+    Saturation,
+    /// Replaces destination hue + saturation with source hue + saturation.
+    Color,
+    /// Replaces destination luminosity with source luminosity.
+    Luminosity,
+}
+
+impl BlendMode {
+    /// Whether this blend mode is the no-op default. Useful for the
+    /// recorder to skip emitting a compositing layer when the only
+    /// reason to push one would have been a `Normal` blend.
+    pub const fn is_normal(self) -> bool {
+        matches!(self, BlendMode::Normal)
+    }
+}
+
 /// A recorded draw command for batch submission.
 ///
 /// Draw commands capture all parameters needed to replay a draw call. The
@@ -314,6 +367,32 @@ pub enum DrawCommand {
         color: Color,
         dash: u16,
         gap: u16,
+    },
+    /// Allocate an offscreen render target.
+    CreateRenderTarget {
+        id: RenderTargetId,
+        w: u32,
+        h: u32,
+    },
+    /// Push a render target onto the bind stack.
+    BindRenderTarget {
+        id: RenderTargetId,
+    },
+    /// Pop the most recent `BindRenderTarget`.
+    UnbindRenderTarget,
+    /// Composite a render target back into the currently bound surface.
+    CompositeRenderTarget {
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        blend: BlendMode,
+        opacity: f32,
+    },
+    /// Release a render target.
+    DestroyRenderTarget {
+        id: RenderTargetId,
     },
 }
 
