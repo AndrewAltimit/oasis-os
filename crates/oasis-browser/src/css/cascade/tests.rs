@@ -284,7 +284,7 @@ fn inheritance_of_color_and_font() {
 
     let p_style = styles[p_id].as_ref().expect("p should have style");
     assert_eq!(p_style.color, Color::rgb(255, 0, 0));
-    assert_eq!(p_style.font_weight, FontWeight::Bold);
+    assert_eq!(p_style.font_weight, FontWeight::BOLD);
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn multiple_stylesheets_merged() {
     let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
     let style = styles[3].as_ref().expect("p should have style");
     assert_eq!(style.color, Color::rgb(255, 0, 0));
-    assert_eq!(style.font_weight, FontWeight::Bold);
+    assert_eq!(style.font_weight, FontWeight::BOLD);
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn element_defaults_applied() {
 
     let h1_style = styles[4].as_ref().unwrap();
     assert_eq!(h1_style.display, Display::Block);
-    assert_eq!(h1_style.font_weight, FontWeight::Bold);
+    assert_eq!(h1_style.font_weight, FontWeight::BOLD);
     assert_eq!(h1_style.font_style, crate::css::values::FontStyle::Normal);
     // h1 = 2em * ROOT_FONT_SIZE
     assert!((h1_style.font_size - crate::css::values::ROOT_FONT_SIZE * 2.0).abs() < f32::EPSILON);
@@ -1357,7 +1357,7 @@ fn pseudo_element_inherits_from_parent_when_not_set() {
     let ps = matching::resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx)
         .expect("should produce pseudo style");
     assert_eq!(ps.color, Color::rgb(0, 0, 255), "should inherit blue");
-    assert_eq!(ps.font_weight, FontWeight::Bold);
+    assert_eq!(ps.font_weight, FontWeight::BOLD);
 }
 
 #[test]

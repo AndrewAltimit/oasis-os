@@ -9,11 +9,13 @@ use super::resolve::{
 };
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxSizing, Clear, Display,
-    FlexDirection, FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition,
-    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, TextAlign, TextDecoration,
-    TextOverflow, TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility,
-    WhiteSpace, WordBreak,
+    AnimationPlayState, Appearance, BackgroundImage, BackgroundPosition, BackgroundRepeat,
+    BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxSizing, Clear, ColorScheme,
+    Cursor, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, Isolation,
+    JustifyContent, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow,
+    OverflowWrap, PointerEvents, Position, Resize, TextAlign, TextDecorationLine,
+    TextDecorationStyle, TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TouchAction, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -70,8 +72,12 @@ impl ComputedStyle {
                         "table-row" => Display::TableRow,
                         "table-cell" => Display::TableCell,
                         "flex" => Display::Flex,
+                        "inline-flex" => Display::InlineFlex,
                         "grid" => Display::Grid,
+                        "inline-grid" => Display::InlineGrid,
                         "none" => Display::None,
+                        // -webkit-box is used with -webkit-line-clamp
+                        "-webkit-box" => Display::Block,
                         _ => return,
                     };
                 }
@@ -363,7 +369,7 @@ impl ComputedStyle {
                 self.line_height = self.font_size * 1.5;
             },
             "font-weight" => {
-                self.font_weight = resolve_font_weight(value);
+                self.font_weight = resolve_font_weight(value, self.font_weight);
             },
             "font-style" => {
                 if let Some(kw) = as_keyword(value) {
@@ -399,11 +405,111 @@ impl ComputedStyle {
             },
             "text-decoration" => {
                 if let Some(kw) = as_keyword(value) {
-                    self.text_decoration = match kw {
-                        "none" => TextDecoration::None,
-                        "underline" => TextDecoration::Underline,
-                        "line-through" => TextDecoration::LineThrough,
-                        "overline" => TextDecoration::Overline,
+                    self.text_decoration.line = match kw {
+                        "none" => TextDecorationLine::NONE,
+                        "underline" => TextDecorationLine::UNDERLINE,
+                        "line-through" => TextDecorationLine::LINE_THROUGH,
+                        "overline" => TextDecorationLine::OVERLINE,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Multi-value shorthand: e.g. "underline line-through wavy red"
+                    // Reset line first, then accumulate with |=.
+                    self.text_decoration.line = TextDecorationLine::NONE;
+                    for v in vs {
+                        if let Some(kw) = as_keyword(v) {
+                            match kw {
+                                "none" => {
+                                    // CSS spec: `none` is exclusive — clears all
+                                    // line decorations and ignores further keywords.
+                                    self.text_decoration.line = TextDecorationLine::NONE;
+                                    break;
+                                },
+                                "underline" => {
+                                    self.text_decoration.line |= TextDecorationLine::UNDERLINE;
+                                },
+                                "line-through" => {
+                                    self.text_decoration.line |= TextDecorationLine::LINE_THROUGH;
+                                },
+                                "overline" => {
+                                    self.text_decoration.line |= TextDecorationLine::OVERLINE;
+                                },
+                                "solid" => {
+                                    self.text_decoration.style = TextDecorationStyle::Solid;
+                                },
+                                "dashed" => {
+                                    self.text_decoration.style = TextDecorationStyle::Dashed;
+                                },
+                                "dotted" => {
+                                    self.text_decoration.style = TextDecorationStyle::Dotted;
+                                },
+                                "double" => {
+                                    self.text_decoration.style = TextDecorationStyle::Double;
+                                },
+                                "wavy" => {
+                                    self.text_decoration.style = TextDecorationStyle::Wavy;
+                                },
+                                _ => {
+                                    if let Some(c) = resolve_color(v) {
+                                        self.text_decoration.color = Some(c);
+                                    }
+                                },
+                            }
+                        } else if let Some(c) = resolve_color(v) {
+                            self.text_decoration.color = Some(c);
+                        }
+                    }
+                }
+            },
+            "text-decoration-line" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_decoration.line = match kw {
+                        "none" => TextDecorationLine::NONE,
+                        "underline" => TextDecorationLine::UNDERLINE,
+                        "line-through" => TextDecorationLine::LINE_THROUGH,
+                        "overline" => TextDecorationLine::OVERLINE,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Multi-value longhand: e.g. "underline line-through".
+                    // Reset to NONE then accumulate with |=, mirroring the
+                    // shorthand parser.
+                    self.text_decoration.line = TextDecorationLine::NONE;
+                    for v in vs {
+                        if let Some(kw) = as_keyword(v) {
+                            match kw {
+                                "none" => {
+                                    self.text_decoration.line = TextDecorationLine::NONE;
+                                    break;
+                                },
+                                "underline" => {
+                                    self.text_decoration.line |= TextDecorationLine::UNDERLINE;
+                                },
+                                "line-through" => {
+                                    self.text_decoration.line |= TextDecorationLine::LINE_THROUGH;
+                                },
+                                "overline" => {
+                                    self.text_decoration.line |= TextDecorationLine::OVERLINE;
+                                },
+                                _ => {},
+                            }
+                        }
+                    }
+                }
+            },
+            "text-decoration-color" => {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
+                    self.text_decoration.color = Some(c);
+                }
+            },
+            "text-decoration-style" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_decoration.style = match kw {
+                        "solid" => TextDecorationStyle::Solid,
+                        "dashed" => TextDecorationStyle::Dashed,
+                        "dotted" => TextDecorationStyle::Dotted,
+                        "double" => TextDecorationStyle::Double,
+                        "wavy" => TextDecorationStyle::Wavy,
                         _ => return,
                     };
                 }
@@ -528,13 +634,41 @@ impl ComputedStyle {
             // -- Overflow -----------------------------------------------
             "overflow" => {
                 if let Some(kw) = as_keyword(value) {
-                    self.overflow = match kw {
+                    let v = match kw {
                         "visible" => Overflow::Visible,
                         "hidden" => Overflow::Hidden,
                         "scroll" => Overflow::Scroll,
                         "auto" => Overflow::Auto,
                         _ => return,
                     };
+                    self.overflow = v;
+                    self.overflow_x = v;
+                    self.overflow_y = v;
+                }
+            },
+            "overflow-x" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_x = match kw {
+                        "visible" => Overflow::Visible,
+                        "hidden" => Overflow::Hidden,
+                        "scroll" => Overflow::Scroll,
+                        "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                    // Promote to main overflow so scroll container detection works.
+                    self.overflow = Self::more_restrictive(self.overflow_x, self.overflow_y);
+                }
+            },
+            "overflow-y" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_y = match kw {
+                        "visible" => Overflow::Visible,
+                        "hidden" => Overflow::Hidden,
+                        "scroll" => Overflow::Scroll,
+                        "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                    self.overflow = Self::more_restrictive(self.overflow_x, self.overflow_y);
                 }
             },
 
@@ -550,6 +684,10 @@ impl ComputedStyle {
                         _ => return,
                     };
                 }
+            },
+
+            "object-position" => {
+                self.object_position = Self::resolve_obj_position(value, parent_font_size);
             },
 
             // -- Positioning --------------------------------------------
@@ -732,7 +870,20 @@ impl ComputedStyle {
 
             // -- Visual effects -----------------------------------------
             "border-radius" => {
-                self.border_radius = resolve_length(value, parent_font_size);
+                let r = resolve_length(value, parent_font_size);
+                self.border_radius = BorderRadius::uniform(r);
+            },
+            "border-top-left-radius" => {
+                self.border_radius.top_left = resolve_length(value, parent_font_size);
+            },
+            "border-top-right-radius" => {
+                self.border_radius.top_right = resolve_length(value, parent_font_size);
+            },
+            "border-bottom-right-radius" => {
+                self.border_radius.bottom_right = resolve_length(value, parent_font_size);
+            },
+            "border-bottom-left-radius" => {
+                self.border_radius.bottom_left = resolve_length(value, parent_font_size);
             },
             "opacity" => {
                 if let CssValue::Number(n) = value {
@@ -830,6 +981,44 @@ impl ComputedStyle {
                 }
             },
 
+            // -- Background size/position/repeat ---------------------------
+            "background-size" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.background_size = match kw {
+                        "cover" => BackgroundSize::Cover,
+                        "contain" => BackgroundSize::Contain,
+                        "auto" => BackgroundSize::Auto,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Two-value form: width height
+                    let Some(first) = vs.first() else { return };
+                    let w = Self::resolve_bg_size_component(first, parent_font_size);
+                    let h = vs
+                        .get(1)
+                        .map(|v| Self::resolve_bg_size_component(v, parent_font_size))
+                        .unwrap_or(None);
+                    self.background_size = BackgroundSize::Explicit(w, h);
+                } else {
+                    let w = Self::resolve_bg_size_component(value, parent_font_size);
+                    self.background_size = BackgroundSize::Explicit(w, None);
+                }
+            },
+            "background-position" => {
+                self.background_position = Self::resolve_bg_position(value, parent_font_size);
+            },
+            "background-repeat" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.background_repeat = match kw {
+                        "repeat" => BackgroundRepeat::Repeat,
+                        "no-repeat" => BackgroundRepeat::NoRepeat,
+                        "repeat-x" => BackgroundRepeat::RepeatX,
+                        "repeat-y" => BackgroundRepeat::RepeatY,
+                        _ => return,
+                    };
+                }
+            },
+
             // -- Text overflow ------------------------------------------
             "word-break" => {
                 if let Some(kw) = as_keyword(value) {
@@ -853,6 +1042,258 @@ impl ComputedStyle {
                     self.text_overflow = match kw {
                         "ellipsis" => TextOverflow::Ellipsis,
                         _ => TextOverflow::Clip,
+                    };
+                }
+            },
+
+            // -- Cursor -------------------------------------------------
+            "cursor" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.cursor = match kw {
+                        "auto" => Cursor::Auto,
+                        "default" => Cursor::Default,
+                        "pointer" => Cursor::Pointer,
+                        "text" => Cursor::Text,
+                        "move" => Cursor::Move,
+                        "not-allowed" => Cursor::NotAllowed,
+                        "crosshair" => Cursor::Crosshair,
+                        "wait" => Cursor::Wait,
+                        "help" => Cursor::Help,
+                        "grab" => Cursor::Grab,
+                        "grabbing" => Cursor::Grabbing,
+                        "col-resize" => Cursor::ColResize,
+                        "row-resize" => Cursor::RowResize,
+                        "n-resize" => Cursor::NResize,
+                        "e-resize" => Cursor::EResize,
+                        "s-resize" => Cursor::SResize,
+                        "w-resize" => Cursor::WResize,
+                        "ne-resize" => Cursor::NeResize,
+                        "nw-resize" => Cursor::NwResize,
+                        "se-resize" => Cursor::SeResize,
+                        "sw-resize" => Cursor::SwResize,
+                        "ew-resize" => Cursor::EwResize,
+                        "ns-resize" => Cursor::NsResize,
+                        "nesw-resize" => Cursor::NeswResize,
+                        "nwse-resize" => Cursor::NwseResize,
+                        "zoom-in" => Cursor::ZoomIn,
+                        "zoom-out" => Cursor::ZoomOut,
+                        "none" => Cursor::None,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Pointer events -----------------------------------------
+            "pointer-events" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.pointer_events = match kw {
+                        "auto" => PointerEvents::Auto,
+                        "none" => PointerEvents::None,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- User select --------------------------------------------
+            "user-select" | "-webkit-user-select" | "-moz-user-select" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.user_select = match kw {
+                        "auto" => UserSelect::Auto,
+                        "none" => UserSelect::None,
+                        "text" => UserSelect::Text,
+                        "all" => UserSelect::All,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Aspect ratio -------------------------------------------
+            "aspect-ratio" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "auto" {
+                        self.aspect_ratio = None;
+                    }
+                } else if let CssValue::Number(n) = value {
+                    if *n > 0.0 {
+                        self.aspect_ratio = Some(*n);
+                    }
+                } else if let CssValue::Multiple(vs) = value {
+                    // Parse "width / height" form.
+                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                        (vs.first(), vs.last())
+                        && *w > 0.0
+                        && *h > 0.0
+                    {
+                        self.aspect_ratio = Some(*w / *h);
+                    }
+                }
+            },
+
+            // -- Text underline offset ----------------------------------
+            "text-underline-offset" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.text_underline_offset = 0.0;
+                } else {
+                    self.text_underline_offset = resolve_length(value, parent_font_size);
+                }
+            },
+
+            // -- Direction (RTL/LTR) ------------------------------------
+            "direction" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.direction = match kw {
+                        "ltr" => TextDirection::Ltr,
+                        "rtl" => TextDirection::Rtl,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Place shorthands (grid/flex) ----------------------------
+            "place-items" => {
+                if let Some(kw) = as_keyword(value) {
+                    let ai = match kw {
+                        "start" | "flex-start" => AlignItems::FlexStart,
+                        "end" | "flex-end" => AlignItems::FlexEnd,
+                        "center" => AlignItems::Center,
+                        "stretch" => AlignItems::Stretch,
+                        "baseline" => AlignItems::Baseline,
+                        _ => return,
+                    };
+                    self.align_items = ai;
+                    // justify-items maps to justify-content for our model.
+                    self.justify_content = match kw {
+                        "start" | "flex-start" => JustifyContent::FlexStart,
+                        "end" | "flex-end" => JustifyContent::FlexEnd,
+                        "center" => JustifyContent::Center,
+                        _ => self.justify_content,
+                    };
+                }
+            },
+            "place-content" => {
+                if let Some(kw) = as_keyword(value) {
+                    let ac = match kw {
+                        "start" | "flex-start" => AlignContent::FlexStart,
+                        "end" | "flex-end" => AlignContent::FlexEnd,
+                        "center" => AlignContent::Center,
+                        "stretch" => AlignContent::Stretch,
+                        "space-between" => AlignContent::SpaceBetween,
+                        "space-around" => AlignContent::SpaceAround,
+                        "space-evenly" => AlignContent::SpaceEvenly,
+                        _ => return,
+                    };
+                    self.align_content = ac;
+                    self.justify_content = match kw {
+                        "start" | "flex-start" => JustifyContent::FlexStart,
+                        "end" | "flex-end" => JustifyContent::FlexEnd,
+                        "center" => JustifyContent::Center,
+                        "space-between" => JustifyContent::SpaceBetween,
+                        "space-around" => JustifyContent::SpaceAround,
+                        "space-evenly" => JustifyContent::SpaceEvenly,
+                        _ => self.justify_content,
+                    };
+                }
+            },
+
+            // -- Appearance ------------------------------------------------
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.appearance = match kw {
+                        "none" => Appearance::None,
+                        "auto" => Appearance::Auto,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Line clamp -----------------------------------------------
+            "-webkit-line-clamp" | "line-clamp" => {
+                if let CssValue::Number(n) = value {
+                    self.line_clamp = *n as u32;
+                } else if let Some("none") = as_keyword(value) {
+                    self.line_clamp = 0;
+                }
+            },
+            // Also recognize -webkit-box-orient for line-clamp compatibility
+            "-webkit-box-orient" => {
+                // Accepted but no separate field needed — line_clamp is sufficient.
+            },
+
+            // -- Accent color ---------------------------------------------
+            "accent-color" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.accent_color = None;
+                } else if let Some(c) = resolve_color(value) {
+                    self.accent_color = Some(c);
+                }
+            },
+
+            // -- Caret color ----------------------------------------------
+            "caret-color" => {
+                if let Some("auto") = as_keyword(value) {
+                    self.caret_color = None;
+                } else if let Some(c) = resolve_color_or_current(value, self.color) {
+                    self.caret_color = Some(c);
+                }
+            },
+
+            // -- Color scheme ---------------------------------------------
+            "color-scheme" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.color_scheme = match kw {
+                        "normal" => ColorScheme::Normal,
+                        "light" => ColorScheme::Light,
+                        "dark" => ColorScheme::Dark,
+                        _ => return,
+                    };
+                } else if let CssValue::Multiple(vs) = value {
+                    // "light dark" form
+                    let has_light = vs.iter().any(|v| as_keyword(v) == Some("light"));
+                    let has_dark = vs.iter().any(|v| as_keyword(v) == Some("dark"));
+                    if has_light && has_dark {
+                        self.color_scheme = ColorScheme::LightDark;
+                    } else if has_dark {
+                        self.color_scheme = ColorScheme::Dark;
+                    } else if has_light {
+                        self.color_scheme = ColorScheme::Light;
+                    }
+                }
+            },
+
+            // -- Isolation ------------------------------------------------
+            "isolation" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.isolation = match kw {
+                        "auto" => Isolation::Auto,
+                        "isolate" => Isolation::Isolate,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Resize ---------------------------------------------------
+            "resize" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.resize = match kw {
+                        "none" => Resize::None,
+                        "both" => Resize::Both,
+                        "horizontal" => Resize::Horizontal,
+                        "vertical" => Resize::Vertical,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Touch action ---------------------------------------------
+            "touch-action" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.touch_action = match kw {
+                        "auto" => TouchAction::Auto,
+                        "none" => TouchAction::None,
+                        "manipulation" => TouchAction::Manipulation,
+                        "pan-x" => TouchAction::PanX,
+                        "pan-y" => TouchAction::PanY,
+                        _ => return,
                     };
                 }
             },
@@ -1331,8 +1772,142 @@ impl ComputedStyle {
             "grid-auto-columns" => self.grid_auto_columns = Vec::new(),
             "table-layout" => self.table_layout_fixed = false,
             "animation" => self.animations = Vec::new(),
+            "background-size" => self.background_size = BackgroundSize::Auto,
+            "background-position" => self.background_position = BackgroundPosition::default(),
+            "background-repeat" => self.background_repeat = BackgroundRepeat::Repeat,
+            "text-decoration-color" => self.text_decoration.color = None,
+            "text-decoration-style" => self.text_decoration.style = TextDecorationStyle::Solid,
+            "border-top-left-radius" => self.border_radius.top_left = 0.0,
+            "border-top-right-radius" => self.border_radius.top_right = 0.0,
+            "border-bottom-right-radius" => self.border_radius.bottom_right = 0.0,
+            "border-bottom-left-radius" => self.border_radius.bottom_left = 0.0,
+            "overflow-x" => self.overflow_x = Overflow::Visible,
+            "overflow-y" => self.overflow_y = Overflow::Visible,
+            "cursor" => self.cursor = Cursor::Auto,
+            "pointer-events" => self.pointer_events = PointerEvents::Auto,
+            "user-select" => self.user_select = UserSelect::Auto,
+            "aspect-ratio" => self.aspect_ratio = None,
+            "text-underline-offset" => self.text_underline_offset = 0.0,
+            "direction" => self.direction = TextDirection::Ltr,
+            "object-position" => self.object_position = ObjectPosition::default(),
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                self.appearance = Appearance::Auto;
+            },
+            "-webkit-line-clamp" | "line-clamp" => self.line_clamp = 0,
+            "accent-color" => self.accent_color = None,
+            "caret-color" => self.caret_color = None,
+            "color-scheme" => self.color_scheme = ColorScheme::Normal,
+            "isolation" => self.isolation = Isolation::Auto,
+            "resize" => self.resize = Resize::None,
+            "touch-action" => self.touch_action = TouchAction::Auto,
             _ => {},
         }
+    }
+
+    /// Resolve a single background-size component (width or height).
+    fn resolve_bg_size_component(value: &CssValue, parent_font_size: f32) -> Option<f32> {
+        match value {
+            CssValue::Keyword(kw) if kw == "auto" => None,
+            CssValue::Percentage(p) => Some(-*p), // negative = percentage
+            _ => Some(resolve_length(value, parent_font_size)),
+        }
+    }
+
+    /// Resolve a background-position value.
+    fn resolve_bg_position(value: &CssValue, parent_font_size: f32) -> BackgroundPosition {
+        fn keyword_to_frac(kw: &str) -> Option<(f32, bool)> {
+            match kw {
+                "left" | "top" => Some((0.0, false)),
+                "center" => Some((0.5, false)),
+                "right" | "bottom" => Some((1.0, false)),
+                _ => None,
+            }
+        }
+
+        match value {
+            CssValue::Keyword(kw) => {
+                if let Some((frac, _)) = keyword_to_frac(kw) {
+                    // Single keyword: horizontal position, vertical defaults to center.
+                    match kw.as_str() {
+                        "top" | "bottom" => BackgroundPosition {
+                            x: 0.5,
+                            y: frac,
+                            x_is_px: false,
+                            y_is_px: false,
+                        },
+                        _ => BackgroundPosition {
+                            x: frac,
+                            y: 0.5,
+                            x_is_px: false,
+                            y_is_px: false,
+                        },
+                    }
+                } else {
+                    BackgroundPosition::default()
+                }
+            },
+            CssValue::Percentage(p) => BackgroundPosition {
+                x: *p / 100.0,
+                y: 0.5,
+                x_is_px: false,
+                y_is_px: false,
+            },
+            CssValue::Multiple(vs) if vs.len() >= 2 => {
+                let (x, x_is_px) = match &vs[0] {
+                    CssValue::Keyword(kw) => keyword_to_frac(kw).unwrap_or((0.0, false)),
+                    CssValue::Percentage(p) => (*p / 100.0, false),
+                    other => (resolve_length(other, parent_font_size), true),
+                };
+                let (y, y_is_px) = match &vs[1] {
+                    CssValue::Keyword(kw) => keyword_to_frac(kw).unwrap_or((0.0, false)),
+                    CssValue::Percentage(p) => (*p / 100.0, false),
+                    other => (resolve_length(other, parent_font_size), true),
+                };
+                BackgroundPosition {
+                    x,
+                    y,
+                    x_is_px,
+                    y_is_px,
+                }
+            },
+            other => {
+                let px = resolve_length(other, parent_font_size);
+                BackgroundPosition {
+                    x: px,
+                    y: 0.5,
+                    x_is_px: true,
+                    y_is_px: false,
+                }
+            },
+        }
+    }
+
+    /// Resolve an `object-position` value (same logic as background-position).
+    fn resolve_obj_position(value: &CssValue, parent_font_size: f32) -> ObjectPosition {
+        let bp = Self::resolve_bg_position(value, parent_font_size);
+        ObjectPosition {
+            x: bp.x,
+            y: bp.y,
+            x_is_px: bp.x_is_px,
+            y_is_px: bp.y_is_px,
+        }
+    }
+
+    /// Return the more restrictive of two overflow values.
+    ///
+    /// Used to promote `self.overflow` when `overflow-x`/`overflow-y` are set
+    /// independently, so scroll container detection (which checks `self.overflow`)
+    /// still works.
+    fn more_restrictive(a: Overflow, b: Overflow) -> Overflow {
+        fn rank(o: Overflow) -> u8 {
+            match o {
+                Overflow::Visible => 0,
+                Overflow::Auto => 1,
+                Overflow::Scroll => 2,
+                Overflow::Hidden => 3,
+            }
+        }
+        if rank(a) >= rank(b) { a } else { b }
     }
 }
 
@@ -1827,7 +2402,7 @@ mod tests {
     fn apply_font_weight_bold_keyword() {
         let mut s = ComputedStyle::default();
         s.apply_declaration("font-weight", &CssValue::Keyword("bold".into()), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Bold);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
     }
 
     #[test]
@@ -1835,15 +2410,26 @@ mod tests {
         // The CSS parser normalises "bold" to Number(700.0).
         let mut s = ComputedStyle::default();
         s.apply_declaration("font-weight", &CssValue::Number(700.0), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Bold);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
     }
 
     #[test]
     fn apply_font_weight_normal_number() {
         let mut s = ComputedStyle::default();
-        s.font_weight = FontWeight::Bold;
+        s.font_weight = FontWeight::BOLD;
         s.apply_declaration("font-weight", &CssValue::Number(400.0), 16.0);
-        assert_eq!(s.font_weight, FontWeight::Normal);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+    }
+
+    #[test]
+    fn apply_font_weight_numeric() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("font-weight", &CssValue::Number(300.0), 16.0);
+        assert_eq!(s.font_weight, FontWeight(300));
+        assert!(!s.font_weight.is_bold());
+        s.apply_declaration("font-weight", &CssValue::Number(600.0), 16.0);
+        assert_eq!(s.font_weight, FontWeight(600));
+        assert!(s.font_weight.is_bold());
     }
 
     #[test]

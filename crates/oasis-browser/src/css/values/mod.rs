@@ -15,11 +15,13 @@ pub use computed::ComputedStyle;
 #[allow(unused_imports)]
 pub use types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
-    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
-    Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle,
-    FontWeight, GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
-    ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE,
-    RadialGradient, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
-    TextTransform, TimingFunction, TransformFunction, TransformOrigin, Transition, VerticalAlign,
-    Visibility, WhiteSpace, WordBreak,
+    AnimationPlayState, Appearance, BackgroundImage, BackgroundPosition, BackgroundRepeat,
+    BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear,
+    ColorScheme, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
+    FontFamily, FontStyle, FontWeight, GradientDirection, GradientStop, GridTrackSize, Isolation,
+    JustifyContent, LinearGradient, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition,
+    Overflow, OverflowWrap, PointerEvents, Position, ROOT_FONT_SIZE, RadialGradient, Resize,
+    TextAlign, TextDecoration, TextDecorationLine, TextDecorationStyle, TextDirection,
+    TextOverflow, TextShadow, TextTransform, TimingFunction, TouchAction, TransformFunction,
+    TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };

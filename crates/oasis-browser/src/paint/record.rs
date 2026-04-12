@@ -487,13 +487,13 @@ fn record_background(
         &layout_box.style.filters,
     );
     if bg.a > 0 {
-        if layout_box.style.border_radius > 0.0 {
+        if !layout_box.style.border_radius.is_zero() {
             dl.push(DisplayItem::FillRoundedRect {
                 x,
                 y,
                 w,
                 h,
-                radius: layout_box.style.border_radius as u16,
+                radius: layout_box.style.border_radius.max_radius() as u16,
                 color: bg,
                 node_id: ctx.current_node,
             });
@@ -523,15 +523,30 @@ fn record_background(
         record_radial_gradient(dl, x, y, w, h, grad, effective_opacity);
     }
 
-    // Background image texture.
+    // Background image texture: emit one Blit per tile so background-size,
+    // background-position, and background-repeat are honored in the display
+    // list path (not just immediate-mode).
     if let Some(tex) = layout_box.background_texture {
-        dl.push(DisplayItem::Blit {
-            texture: tex,
+        let intrinsic = layout_box.background_texture_size.unwrap_or((w, h));
+        let tiles = super::background::background_image_tiles(
             x,
             y,
             w,
             h,
-        });
+            intrinsic,
+            &layout_box.style.background_size,
+            &layout_box.style.background_position,
+            layout_box.style.background_repeat,
+        );
+        for tile in tiles {
+            dl.push(DisplayItem::Blit {
+                texture: tex,
+                x: tile.x,
+                y: tile.y,
+                w: tile.w,
+                h: tile.h,
+            });
+        }
     }
 }
 
@@ -898,7 +913,7 @@ fn record_box_shadow(
     }
 
     let border = layout_box.dimensions.border_box();
-    let radius = layout_box.style.border_radius;
+    let radius = layout_box.style.border_radius.max_radius();
 
     for shadow in layout_box.style.box_shadow.iter().rev() {
         if shadow.inset {
@@ -1001,13 +1016,13 @@ fn record_inline_content(
         let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
         let w = pb.width as u32;
         let h = pb.height as u32;
-        if layout_box.style.border_radius > 0.0 {
+        if !layout_box.style.border_radius.is_zero() {
             dl.push(DisplayItem::FillRoundedRect {
                 x,
                 y,
                 w,
                 h,
-                radius: layout_box.style.border_radius as u16,
+                radius: layout_box.style.border_radius.max_radius() as u16,
                 color: bg,
                 node_id: ctx.current_node,
             });
@@ -1059,7 +1074,7 @@ fn record_text(
     // Opacity is handled by PushLayer/PopLayer during replay — use 1.0 here
     // to avoid doubling opacity (once in recording, once during replay).
     let color = apply_filters_and_opacity(style.color, 1.0, &style.filters);
-    let bold = style.font_weight == crate::css::values::FontWeight::Bold;
+    let bold = style.font_weight.is_bold();
     let italic = style.font_style == crate::css::values::FontStyle::Italic;
     let font_size = style.font_size as u16;
 
@@ -1135,37 +1150,34 @@ fn record_text(
         node_id: ctx.current_node,
     });
 
-    if style.text_decoration == crate::css::values::TextDecoration::Underline {
-        let underline_y = sy + (style.font_size * 0.85) as i32;
-        dl.push(DisplayItem::FillRect {
-            x: sx,
-            y: underline_y,
-            w: text_width,
-            h: 1,
-            color,
-            node_id: ctx.current_node,
+    if !style.text_decoration.line.is_none() {
+        let deco_color = style.text_decoration.color.map_or(color, |c| {
+            super::apply_filters_and_opacity(c, 1.0, &style.filters)
         });
-    }
-    if style.text_decoration == crate::css::values::TextDecoration::LineThrough {
-        let strike_y = sy + (style.font_size * 0.4) as i32;
-        dl.push(DisplayItem::FillRect {
-            x: sx,
-            y: strike_y,
-            w: text_width,
-            h: 1,
-            color,
-            node_id: ctx.current_node,
-        });
-    }
-    if style.text_decoration == crate::css::values::TextDecoration::Overline {
-        dl.push(DisplayItem::FillRect {
-            x: sx,
-            y: sy,
-            w: text_width,
-            h: 1,
-            color,
-            node_id: ctx.current_node,
-        });
+        let positions: &[(bool, i32)] = &[
+            (
+                style.text_decoration.line.has_underline(),
+                sy + (style.font_size * 0.85) as i32 + style.text_underline_offset as i32,
+            ),
+            (
+                style.text_decoration.line.has_line_through(),
+                sy + (style.font_size * 0.4) as i32,
+            ),
+            (style.text_decoration.line.has_overline(), sy),
+        ];
+        for &(active, deco_y) in positions {
+            if !active {
+                continue;
+            }
+            dl.push(DisplayItem::FillRect {
+                x: sx,
+                y: deco_y,
+                w: text_width,
+                h: 1,
+                color: deco_color,
+                node_id: ctx.current_node,
+            });
+        }
     }
 }
 
@@ -1396,13 +1408,13 @@ fn record_text_input(
     } else {
         Color::rgb(255, 255, 255)
     };
-    if style.border_radius > 0.0 {
+    if !style.border_radius.is_zero() {
         dl.push(DisplayItem::FillRoundedRect {
             x,
             y,
             w,
             h,
-            radius: style.border_radius as u16,
+            radius: style.border_radius.max_radius() as u16,
             color: bg,
             node_id: None,
         });
@@ -1951,13 +1963,13 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
     } else {
         Color::rgb(239, 239, 239)
     };
-    if style.border_radius > 0.0 {
+    if !style.border_radius.is_zero() {
         dl.push(DisplayItem::FillRoundedRect {
             x,
             y,
             w,
             h,
-            radius: style.border_radius as u16,
+            radius: style.border_radius.max_radius() as u16,
             color: bg,
             node_id: None,
         });

@@ -5,12 +5,14 @@ use rustc_hash::FxHashMap;
 use oasis_types::backend::Color;
 
 use super::types::{
-    AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BorderCollapse, BorderStyle,
-    BoxShadow, BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap,
-    Float, FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
-    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
-    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin,
-    Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackgroundImage,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderRadius,
+    BorderStyle, BoxShadow, BoxSizing, Clear, ColorScheme, Cursor, Dimension, Display,
+    FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
+    GridTrackSize, Isolation, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
+    ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
+    TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TouchAction,
+    TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -92,6 +94,8 @@ pub struct ComputedStyle {
 
     // -- Overflow ---------------------------------------------------
     pub overflow: Overflow,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
 
     // -- Positioning ------------------------------------------------
     pub position: Position,
@@ -107,9 +111,21 @@ pub struct ComputedStyle {
 
     // -- Replaced element sizing ----------------------------------------
     pub object_fit: ObjectFit,
+    pub object_position: ObjectPosition,
+
+    // -- Interaction ---------------------------------------------------
+    pub cursor: Cursor,
+    pub pointer_events: PointerEvents,
+    pub user_select: UserSelect,
+
+    // -- Aspect ratio --------------------------------------------------
+    pub aspect_ratio: Option<f32>,
+
+    // -- Text underline offset -----------------------------------------
+    pub text_underline_offset: f32,
 
     // -- Visual effects -----------------------------------------------
-    pub border_radius: f32,
+    pub border_radius: BorderRadius,
     pub box_shadow: Vec<BoxShadow>,
     pub text_shadow: Option<TextShadow>,
     pub opacity: f32,
@@ -133,6 +149,9 @@ pub struct ComputedStyle {
 
     // -- Background image -----------------------------------------------
     pub background_image: BackgroundImage,
+    pub background_size: BackgroundSize,
+    pub background_position: BackgroundPosition,
+    pub background_repeat: BackgroundRepeat,
 
     // -- Generated content (::before/::after) ---------------------------
     pub content: Option<String>,
@@ -218,6 +237,29 @@ pub struct ComputedStyle {
     // -- Animations ---------------------------------------------------
     pub animations: Vec<Animation>,
 
+    // -- Appearance ----------------------------------------------------
+    pub appearance: Appearance,
+
+    // -- Line clamp ----------------------------------------------------
+    /// Number of lines to clamp to, or 0 for no clamping.
+    pub line_clamp: u32,
+
+    // -- Accent / caret colors -----------------------------------------
+    pub accent_color: Option<Color>,
+    pub caret_color: Option<Color>,
+
+    // -- Color scheme --------------------------------------------------
+    pub color_scheme: ColorScheme,
+
+    // -- Isolation -----------------------------------------------------
+    pub isolation: Isolation,
+
+    // -- Resize --------------------------------------------------------
+    pub resize: Resize,
+
+    // -- Touch action --------------------------------------------------
+    pub touch_action: TouchAction,
+
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
 }
@@ -264,12 +306,12 @@ impl Default for ComputedStyle {
             // Text
             color: Color::BLACK,
             font_size: base_font_size,
-            font_weight: FontWeight::Normal,
+            font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
             font_family: FontFamily::SansSerif,
             text_align: TextAlign::Left,
             direction: TextDirection::Ltr,
-            text_decoration: TextDecoration::None,
+            text_decoration: TextDecoration::NONE,
             text_indent: 0.0,
             text_transform: TextTransform::None,
             line_height: base_font_size * 1.5,
@@ -295,6 +337,8 @@ impl Default for ComputedStyle {
 
             // Overflow
             overflow: Overflow::Visible,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
 
             // Positioning
             position: Position::Static,
@@ -307,9 +351,21 @@ impl Default for ComputedStyle {
 
             // Replaced element sizing
             object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+
+            // Interaction
+            cursor: Cursor::Auto,
+            pointer_events: PointerEvents::Auto,
+            user_select: UserSelect::Auto,
+
+            // Aspect ratio
+            aspect_ratio: None,
+
+            // Text underline offset
+            text_underline_offset: 0.0,
 
             // Visual effects
-            border_radius: 0.0,
+            border_radius: BorderRadius::ZERO,
             box_shadow: Vec::new(),
             text_shadow: None,
             opacity: 1.0,
@@ -333,6 +389,9 @@ impl Default for ComputedStyle {
 
             // Background image
             background_image: BackgroundImage::None,
+            background_size: BackgroundSize::Auto,
+            background_position: BackgroundPosition::default(),
+            background_repeat: BackgroundRepeat::Repeat,
 
             // Generated content
             content: None,
@@ -404,6 +463,15 @@ impl Default for ComputedStyle {
 
             animations: Vec::new(),
 
+            appearance: Appearance::Auto,
+            line_clamp: 0,
+            accent_color: None,
+            caret_color: None,
+            color_scheme: ColorScheme::Normal,
+            isolation: Isolation::Auto,
+            resize: Resize::None,
+            touch_action: TouchAction::Auto,
+
             custom_properties: FxHashMap::default(),
         }
     }
@@ -441,7 +509,9 @@ impl ComputedStyle {
                 Display::Inline => "inline",
                 Display::InlineBlock => "inline-block",
                 Display::Flex => "flex",
+                Display::InlineFlex => "inline-flex",
                 Display::Grid => "grid",
+                Display::InlineGrid => "inline-grid",
                 Display::ListItem => "list-item",
                 Display::Table => "table",
                 Display::TableRow => "table-row",
@@ -463,10 +533,7 @@ impl ComputedStyle {
             }
             .into(),
             "font-size" => format!("{}px", self.font_size),
-            "font-weight" => match self.font_weight {
-                FontWeight::Normal => "400".into(),
-                FontWeight::Bold => "700".into(),
-            },
+            "font-weight" => format!("{}", self.font_weight.0),
             "line-height" => format!("{}px", self.line_height),
             "width" => dim_to_css(self.width),
             "height" => dim_to_css(self.height),
@@ -504,7 +571,19 @@ impl ComputedStyle {
                 TextAlign::Justify => "justify",
             }
             .into(),
-            "border-radius" => format!("{}px", self.border_radius),
+            "border-radius" => {
+                if self.border_radius.is_uniform() {
+                    format!("{}px", self.border_radius.top_left)
+                } else {
+                    format!(
+                        "{}px {}px {}px {}px",
+                        self.border_radius.top_left,
+                        self.border_radius.top_right,
+                        self.border_radius.bottom_right,
+                        self.border_radius.bottom_left,
+                    )
+                }
+            },
             "float" => match self.float {
                 Float::None => "none",
                 Float::Left => "left",
@@ -519,6 +598,43 @@ impl ComputedStyle {
             "right" => dim_to_css(self.right),
             "bottom" => dim_to_css(self.bottom),
             "left" => dim_to_css(self.left),
+            "cursor" => match self.cursor {
+                Cursor::Auto => "auto",
+                Cursor::Default => "default",
+                Cursor::Pointer => "pointer",
+                Cursor::Text => "text",
+                Cursor::Move => "move",
+                Cursor::NotAllowed => "not-allowed",
+                Cursor::Crosshair => "crosshair",
+                Cursor::Wait => "wait",
+                Cursor::Help => "help",
+                Cursor::Grab => "grab",
+                Cursor::Grabbing => "grabbing",
+                Cursor::None => "none",
+                _ => "auto",
+            }
+            .into(),
+            "pointer-events" => match self.pointer_events {
+                PointerEvents::Auto => "auto",
+                PointerEvents::None => "none",
+            }
+            .into(),
+            "user-select" => match self.user_select {
+                UserSelect::Auto => "auto",
+                UserSelect::None => "none",
+                UserSelect::Text => "text",
+                UserSelect::All => "all",
+            }
+            .into(),
+            "aspect-ratio" => match self.aspect_ratio {
+                Some(r) => format!("{r}"),
+                None => "auto".into(),
+            },
+            "direction" => match self.direction {
+                TextDirection::Ltr | TextDirection::Auto => "ltr",
+                TextDirection::Rtl => "rtl",
+            }
+            .into(),
             _ => String::new(),
         }
     }
@@ -554,6 +670,10 @@ impl ComputedStyle {
             // Inherited table properties.
             border_collapse: parent.border_collapse,
             border_spacing: parent.border_spacing,
+            // Inherited interaction properties.
+            cursor: parent.cursor,
+            pointer_events: parent.pointer_events,
+            user_select: parent.user_select,
             // CSS custom properties always inherit.
             custom_properties: parent.custom_properties.clone(),
             // Non-inherited properties keep CSS initial values.
@@ -573,7 +693,7 @@ mod tests {
         assert_eq!(s.visibility, Visibility::Visible);
         assert_eq!(s.color, Color::BLACK);
         assert!((s.font_size - ROOT_FONT_SIZE).abs() < f32::EPSILON);
-        assert_eq!(s.font_weight, FontWeight::Normal);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
         assert_eq!(s.font_style, FontStyle::Normal);
         assert_eq!(s.font_family, FontFamily::SansSerif);
         assert!((s.line_height - ROOT_FONT_SIZE * 1.5).abs() < 0.01);
@@ -584,7 +704,7 @@ mod tests {
         assert_eq!(s.float, Float::None);
         assert_eq!(s.overflow, Overflow::Visible);
         assert_eq!(s.text_align, TextAlign::Left);
-        assert_eq!(s.text_decoration, TextDecoration::None);
+        assert_eq!(s.text_decoration, TextDecoration::NONE);
         assert_eq!(s.white_space, WhiteSpace::Normal);
         assert_eq!(s.list_style_type, ListStyleType::Disc);
         assert_eq!(s.border_collapse, BorderCollapse::Separate);
@@ -595,7 +715,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(255, 0, 0);
         parent.font_size = 20.0;
-        parent.font_weight = FontWeight::Bold;
+        parent.font_weight = FontWeight::BOLD;
         parent.text_align = TextAlign::Center;
         parent.visibility = Visibility::Hidden;
         parent.list_style_type = ListStyleType::Square;
@@ -605,7 +725,7 @@ mod tests {
         // Inherited.
         assert_eq!(child.color, Color::rgb(255, 0, 0));
         assert!((child.font_size - 20.0).abs() < f32::EPSILON);
-        assert_eq!(child.font_weight, FontWeight::Bold);
+        assert_eq!(child.font_weight, FontWeight::BOLD);
         assert_eq!(child.text_align, TextAlign::Center);
         assert_eq!(child.visibility, Visibility::Hidden);
         assert_eq!(child.list_style_type, ListStyleType::Square);

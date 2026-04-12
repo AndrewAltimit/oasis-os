@@ -1272,7 +1272,7 @@ fn get_style_numeric_value(style: &ComputedStyle, property: &str) -> Option<f32>
         "border-right-width" => Some(style.border_right_width),
         "border-bottom-width" => Some(style.border_bottom_width),
         "border-left-width" => Some(style.border_left_width),
-        "border-radius" => Some(style.border_radius),
+        "border-radius" => Some(style.border_radius.max_radius()),
         "border-spacing" => Some(style.border_spacing),
         "outline-width" => Some(style.outline_width),
         "outline-offset" => Some(style.outline_offset),

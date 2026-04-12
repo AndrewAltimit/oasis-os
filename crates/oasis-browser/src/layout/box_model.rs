@@ -235,6 +235,8 @@ pub struct LayoutBox {
     /// GPU texture for CSS `background-image`, assigned during the
     /// texture resolution pass.
     pub background_texture: Option<TextureId>,
+    /// Natural (intrinsic) size of the background image in pixels.
+    pub background_texture_size: Option<(u32, u32)>,
 }
 
 impl LayoutBox {
@@ -249,6 +251,7 @@ impl LayoutBox {
             text: None,
             dirty: true,
             background_texture: None,
+            background_texture_size: None,
         }
     }
 

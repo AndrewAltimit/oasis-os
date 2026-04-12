@@ -18,7 +18,9 @@ pub enum Display {
     Inline,
     InlineBlock,
     Flex,
+    InlineFlex,
     Grid,
+    InlineGrid,
     ListItem,
     Table,
     TableRow,
@@ -113,15 +115,57 @@ pub enum BorderStyle {
     Dashed,
     Dotted,
     Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
 }
 
-/// CSS `font-weight` property (subset).
+/// CSS `font-weight` property.
+///
+/// Stores the numeric weight (100–900). The `Normal` and `Bold` constants
+/// map to 400 and 700 respectively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontWeight {
-    /// Numeric weight 400.
-    Normal,
-    /// Numeric weight 700.
-    Bold,
+pub struct FontWeight(pub u16);
+
+impl FontWeight {
+    /// Normal weight (400).
+    pub const NORMAL: Self = Self(400);
+    /// Bold weight (700).
+    pub const BOLD: Self = Self(700);
+
+    /// Returns `true` when the weight is bold (≥ 600).
+    pub fn is_bold(self) -> bool {
+        self.0 >= 600
+    }
+
+    /// CSS Fonts Level 4 §4.5: relative `bolder` stepping.
+    pub fn bolder(self) -> Self {
+        if self.0 < 350 {
+            Self(400)
+        } else if self.0 < 550 {
+            Self(700)
+        } else {
+            Self(900)
+        }
+    }
+
+    /// CSS Fonts Level 4 §4.5: relative `lighter` stepping.
+    pub fn lighter(self) -> Self {
+        if self.0 < 550 {
+            Self(100)
+        } else if self.0 < 750 {
+            Self(400)
+        } else {
+            Self(700)
+        }
+    }
+}
+
+impl Default for FontWeight {
+    fn default() -> Self {
+        Self::NORMAL
+    }
 }
 
 /// CSS `font-style` property (subset).
@@ -148,13 +192,63 @@ pub enum TextAlign {
     Justify,
 }
 
-/// CSS `text-decoration` property (subset).
+/// CSS `text-decoration-line` as bitflags (supports `underline line-through`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextDecoration {
-    None,
-    Underline,
-    LineThrough,
-    Overline,
+pub struct TextDecorationLine(pub u8);
+
+impl TextDecorationLine {
+    pub const NONE: Self = Self(0);
+    pub const UNDERLINE: Self = Self(1);
+    pub const LINE_THROUGH: Self = Self(2);
+    pub const OVERLINE: Self = Self(4);
+
+    pub fn has_underline(self) -> bool {
+        self.0 & Self::UNDERLINE.0 != 0
+    }
+
+    pub fn has_line_through(self) -> bool {
+        self.0 & Self::LINE_THROUGH.0 != 0
+    }
+
+    pub fn has_overline(self) -> bool {
+        self.0 & Self::OVERLINE.0 != 0
+    }
+
+    pub fn is_none(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOrAssign for TextDecorationLine {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// CSS `text-decoration-style` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationStyle {
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Wavy,
+}
+
+/// Combined CSS text-decoration properties.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextDecoration {
+    pub line: TextDecorationLine,
+    pub style: TextDecorationStyle,
+    pub color: Option<Color>,
+}
+
+impl TextDecoration {
+    pub const NONE: Self = Self {
+        line: TextDecorationLine::NONE,
+        style: TextDecorationStyle::Solid,
+        color: None,
+    };
 }
 
 /// CSS `text-transform` property.
@@ -331,6 +425,54 @@ pub struct RadialGradient {
     pub stops: Vec<GradientStop>,
 }
 
+/// CSS `background-size` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundSize {
+    /// `auto` — intrinsic size.
+    Auto,
+    /// `cover` — scale to cover the entire area.
+    Cover,
+    /// `contain` — scale to fit within the area.
+    Contain,
+    /// Explicit width and height (pixels). `None` means `auto` for that axis.
+    Explicit(Option<f32>, Option<f32>),
+}
+
+/// CSS `background-position` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPosition {
+    /// Horizontal offset as fraction (0.0 = left, 0.5 = center, 1.0 = right)
+    /// or pixel value stored via `x_is_px`.
+    pub x: f32,
+    /// Vertical offset as fraction (0.0 = top, 0.5 = center, 1.0 = bottom)
+    /// or pixel value stored via `y_is_px`.
+    pub y: f32,
+    /// When `true`, `x` is in pixels rather than fraction of (container - image).
+    pub x_is_px: bool,
+    /// When `true`, `y` is in pixels rather than fraction of (container - image).
+    pub y_is_px: bool,
+}
+
+impl Default for BackgroundPosition {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            x_is_px: false,
+            y_is_px: false,
+        }
+    }
+}
+
+/// CSS `background-repeat` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundRepeat {
+    Repeat,
+    NoRepeat,
+    RepeatX,
+    RepeatY,
+}
+
 /// CSS `background-image` property.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
@@ -338,6 +480,63 @@ pub enum BackgroundImage {
     Url(String),
     Gradient(LinearGradient),
     RadialGradient(RadialGradient),
+}
+
+/// CSS `border-radius` with per-corner values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderRadius {
+    pub top_left: f32,
+    pub top_right: f32,
+    pub bottom_right: f32,
+    pub bottom_left: f32,
+}
+
+impl BorderRadius {
+    pub const ZERO: Self = Self {
+        top_left: 0.0,
+        top_right: 0.0,
+        bottom_right: 0.0,
+        bottom_left: 0.0,
+    };
+
+    /// Create a uniform border-radius.
+    pub fn uniform(r: f32) -> Self {
+        Self {
+            top_left: r,
+            top_right: r,
+            bottom_right: r,
+            bottom_left: r,
+        }
+    }
+
+    /// Returns `true` if all corners are zero.
+    pub fn is_zero(&self) -> bool {
+        self.top_left == 0.0
+            && self.top_right == 0.0
+            && self.bottom_right == 0.0
+            && self.bottom_left == 0.0
+    }
+
+    /// Returns `true` if all corners are the same value.
+    pub fn is_uniform(&self) -> bool {
+        self.top_left == self.top_right
+            && self.top_right == self.bottom_right
+            && self.bottom_right == self.bottom_left
+    }
+
+    /// Returns the maximum corner radius (used for single-value fallback).
+    pub fn max_radius(&self) -> f32 {
+        self.top_left
+            .max(self.top_right)
+            .max(self.bottom_right)
+            .max(self.bottom_left)
+    }
+}
+
+impl Default for BorderRadius {
+    fn default() -> Self {
+        Self::ZERO
+    }
 }
 
 /// CSS `text-shadow` value.
@@ -464,6 +663,122 @@ pub struct Animation {
     pub direction: AnimationDirection,
     pub fill_mode: AnimationFillMode,
     pub play_state: AnimationPlayState,
+}
+
+/// CSS `cursor` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cursor {
+    Auto,
+    Default,
+    Pointer,
+    Text,
+    Move,
+    NotAllowed,
+    Crosshair,
+    Wait,
+    Help,
+    Grab,
+    Grabbing,
+    ColResize,
+    RowResize,
+    NResize,
+    EResize,
+    SResize,
+    WResize,
+    NeResize,
+    NwResize,
+    SeResize,
+    SwResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+    None,
+}
+
+/// CSS `pointer-events` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+}
+
+/// CSS `user-select` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSelect {
+    Auto,
+    None,
+    Text,
+    All,
+}
+
+/// CSS `object-position` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectPosition {
+    /// Horizontal position as fraction (0.0 = left, 0.5 = center, 1.0 = right)
+    /// or pixel value when `x_is_px` is true.
+    pub x: f32,
+    /// Vertical position as fraction (0.0 = top, 0.5 = center, 1.0 = bottom)
+    /// or pixel value when `y_is_px` is true.
+    pub y: f32,
+    pub x_is_px: bool,
+    pub y_is_px: bool,
+}
+
+impl Default for ObjectPosition {
+    fn default() -> Self {
+        // CSS default: 50% 50% (centered)
+        Self {
+            x: 0.5,
+            y: 0.5,
+            x_is_px: false,
+            y_is_px: false,
+        }
+    }
+}
+
+/// CSS `appearance` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Auto,
+    None,
+}
+
+/// CSS `color-scheme` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Normal,
+    Light,
+    Dark,
+    LightDark,
+}
+
+/// CSS `isolation` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    Auto,
+    Isolate,
+}
+
+/// CSS `resize` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resize {
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+}
+
+/// CSS `touch-action` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchAction {
+    Auto,
+    None,
+    Manipulation,
+    PanX,
+    PanY,
 }
 
 /// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.

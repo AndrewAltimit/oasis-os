@@ -7,6 +7,26 @@ use oasis_types::error::Result;
 
 use super::PaintContext;
 
+/// Darken a color by 40% for 3D border effects.
+fn darken(c: Color) -> Color {
+    Color::rgba(
+        (c.r as f32 * 0.6) as u8,
+        (c.g as f32 * 0.6) as u8,
+        (c.b as f32 * 0.6) as u8,
+        c.a,
+    )
+}
+
+/// Lighten a color by 40% for 3D border effects.
+fn lighten(c: Color) -> Color {
+    Color::rgba(
+        (c.r as f32 + (255.0 - c.r as f32) * 0.4) as u8,
+        (c.g as f32 + (255.0 - c.g as f32) * 0.4) as u8,
+        (c.b as f32 + (255.0 - c.b as f32) * 0.4) as u8,
+        c.a,
+    )
+}
+
 pub(super) fn paint_borders(
     layout_box: &LayoutBox,
     backend: &mut dyn SdiBackend,
@@ -145,6 +165,37 @@ pub(super) fn paint_border_edge(
                 backend.fill_rect(x, y, line, h, color)?;
                 backend.fill_rect(x + (line + gap) as i32, y, line, h, color)?;
             }
+        },
+        BorderStyle::Groove | BorderStyle::Ridge => {
+            // 3D effect: two halves with light/dark colors.
+            // Groove: outer half darker, inner half lighter.
+            // Ridge: outer half lighter, inner half darker.
+            let (outer, inner) = if style == BorderStyle::Groove {
+                (darken(color), lighten(color))
+            } else {
+                (lighten(color), darken(color))
+            };
+            let thickness = if horizontal { h } else { w };
+            let half = thickness / 2;
+            let other = thickness - half;
+            if horizontal {
+                backend.fill_rect(x, y, w, half.max(1), outer)?;
+                backend.fill_rect(x, y + half as i32, w, other.max(1), inner)?;
+            } else {
+                backend.fill_rect(x, y, half.max(1), h, outer)?;
+                backend.fill_rect(x + half as i32, y, other.max(1), h, inner)?;
+            }
+        },
+        BorderStyle::Inset | BorderStyle::Outset => {
+            // 3D effect: top/left vs bottom/right get different shading.
+            // For a single edge we use simpler logic: inset makes top/left
+            // darker, outset makes top/left lighter.
+            let is_top_or_left = horizontal; // called with horizontal=true for top edge
+            let shade = match (style, is_top_or_left) {
+                (BorderStyle::Inset, true) | (BorderStyle::Outset, false) => darken(color),
+                _ => lighten(color),
+            };
+            backend.fill_rect(x, y, w, h, shade)?;
         },
         BorderStyle::None => {},
     }

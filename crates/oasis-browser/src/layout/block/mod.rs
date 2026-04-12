@@ -637,7 +637,11 @@ fn establishes_bfc(style: &ComputedStyle) -> bool {
         || matches!(style.position, Position::Absolute | Position::Fixed)
         || matches!(
             style.display,
-            Display::InlineBlock | Display::Flex | Display::Grid
+            Display::InlineBlock
+                | Display::Flex
+                | Display::InlineFlex
+                | Display::Grid
+                | Display::InlineGrid
         )
 }
 

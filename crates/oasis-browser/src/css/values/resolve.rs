@@ -130,11 +130,15 @@ fn keyword_color(name: &str) -> Option<Color> {
 pub(super) fn resolve_border_style(value: &CssValue) -> Option<BorderStyle> {
     let kw = as_keyword(value)?;
     let s = match kw {
-        "none" => BorderStyle::None,
+        "none" | "hidden" => BorderStyle::None,
         "solid" => BorderStyle::Solid,
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
         _ => return None,
     };
     Some(s)
@@ -146,21 +150,20 @@ pub(super) fn resolve_border_style(value: &CssValue) -> Option<BorderStyle> {
 /// `CssValue::Number(700.0)` and `normal` becomes
 /// `CssValue::Number(400.0)`. We also handle keywords directly
 /// for inline style strings that may bypass that normalisation.
-pub(super) fn resolve_font_weight(value: &CssValue) -> FontWeight {
+///
+/// `bolder`/`lighter` need the inherited weight and are handled in
+/// `apply_declaration` directly; this function returns `None` for them.
+pub(super) fn resolve_font_weight(value: &CssValue, inherited: FontWeight) -> FontWeight {
     match value {
-        CssValue::Number(n) => {
-            if *n >= 600.0 {
-                FontWeight::Bold
-            } else {
-                FontWeight::Normal
-            }
-        },
+        CssValue::Number(n) => FontWeight((*n as u16).clamp(1, 1000)),
         CssValue::Keyword(kw) => match kw.as_str() {
-            "bold" => FontWeight::Bold,
-            "normal" => FontWeight::Normal,
-            _ => FontWeight::Normal,
+            "bold" => FontWeight::BOLD,
+            "bolder" => inherited.bolder(),
+            "lighter" => inherited.lighter(),
+            "normal" => FontWeight::NORMAL,
+            _ => FontWeight::NORMAL,
         },
-        _ => FontWeight::Normal,
+        _ => FontWeight::NORMAL,
     }
 }
 
