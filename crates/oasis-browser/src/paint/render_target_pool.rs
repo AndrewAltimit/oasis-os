@@ -80,9 +80,7 @@ impl RenderTargetPool {
         height: u32,
     ) -> Result<RenderTargetId> {
         if width == 0 || height == 0 {
-            return Err(OasisError::Backend(
-                "zero-dimension render target".into(),
-            ));
+            return Err(OasisError::Backend("zero-dimension render target".into()));
         }
         let key = (width, height);
         let id = if let Some(bucket) = self.free.get_mut(&key)
@@ -132,11 +130,11 @@ impl RenderTargetPool {
             match backend.destroy_render_target(*id) {
                 Ok(()) => {
                     destroyed.insert(*id);
-                }
+                },
                 Err(e) if first_err.is_none() => {
                     first_err = Some(e);
-                }
-                Err(_) => {}
+                },
+                Err(_) => {},
             }
         }
         self.free.retain(|_, bucket| {
@@ -159,16 +157,15 @@ impl RenderTargetPool {
             .values()
             .flat_map(|bucket| bucket.iter().map(|e| e.id))
             .collect();
-        let in_use_ids: Vec<RenderTargetId> =
-            self.in_use.iter().map(|(id, _)| *id).collect();
+        let in_use_ids: Vec<RenderTargetId> = self.in_use.iter().map(|(id, _)| *id).collect();
         let mut first_err: Option<OasisError> = None;
         for id in free_ids.iter().chain(in_use_ids.iter()) {
             match backend.destroy_render_target(*id) {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(e) if first_err.is_none() => {
                     first_err = Some(e);
-                }
-                Err(_) => {}
+                },
+                Err(_) => {},
             }
         }
         self.free.clear();
