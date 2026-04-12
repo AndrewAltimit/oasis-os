@@ -1659,6 +1659,7 @@ impl ComputedStyle {
             "background-origin" => {
                 if let Some(kw) = as_keyword(value)
                     && let Some(b) = parse_background_box(kw)
+                    && b != BackgroundBox::Text
                 {
                     self.background_origin = b;
                 }

@@ -771,7 +771,6 @@ impl ComputedStyle {
             text_align_last: parent.text_align_last,
             text_justify: parent.text_justify,
             text_underline_position: parent.text_underline_position,
-            text_decoration_thickness: parent.text_decoration_thickness,
             text_rendering: parent.text_rendering,
             image_rendering: parent.image_rendering,
             // CSS custom properties always inherit.
