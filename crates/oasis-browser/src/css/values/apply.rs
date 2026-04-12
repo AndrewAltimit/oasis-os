@@ -1766,7 +1766,10 @@ impl ComputedStyle {
             "text-decoration-thickness" => {
                 if as_keyword(value) == Some("auto") || as_keyword(value) == Some("from-font") {
                     self.text_decoration_thickness = None;
-                } else {
+                } else if matches!(
+                    value,
+                    CssValue::Length(..) | CssValue::Number(_) | CssValue::Calc(_)
+                ) {
                     self.text_decoration_thickness = Some(resolve_length(value, parent_font_size));
                 }
             },
@@ -1796,7 +1799,10 @@ impl ComputedStyle {
             "perspective" => {
                 if as_keyword(value) == Some("none") {
                     self.perspective = None;
-                } else {
+                } else if matches!(
+                    value,
+                    CssValue::Length(..) | CssValue::Number(_) | CssValue::Calc(_)
+                ) {
                     self.perspective = Some(resolve_length(value, parent_font_size));
                 }
             },
