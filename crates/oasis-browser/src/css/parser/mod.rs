@@ -632,6 +632,15 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "resize",
     "touch-action",
     "grid-template",
+    // Mask longhands (compositor overhaul PR6).
+    "mask-image",
+    "mask-mode",
+    "mask-composite",
+    "mask-clip",
+    "mask-origin",
+    "mask-position",
+    "mask-size",
+    "mask-repeat",
 ];
 
 /// Evaluate an `@supports` condition string.

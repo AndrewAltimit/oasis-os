@@ -1673,6 +1673,76 @@ impl ComputedStyle {
                     };
                 }
             },
+
+            // -- Mask properties (compositor overhaul PR6) ------------
+            // The 8 `mask-*` longhands. Values are parsed and stored on
+            // the computed style today; the destination-in composite
+            // path lives in a follow-up (the filter-chain readback
+            // pipeline is the foundation).
+            "mask-image" | "-webkit-mask-image" => {
+                if as_keyword(value) == Some("none") {
+                    self.mask_image = None;
+                } else if let CssValue::Url(ref url) = *value {
+                    self.mask_image = Some(url.clone());
+                }
+            },
+            "mask-mode" | "-webkit-mask-mode" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.mask_mode = match kw {
+                        "alpha" => crate::css::values::types::MaskMode::Alpha,
+                        "luminance" => crate::css::values::types::MaskMode::Luminance,
+                        _ => crate::css::values::types::MaskMode::MatchSource,
+                    };
+                }
+            },
+            "mask-composite" | "-webkit-mask-composite" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.mask_composite = match kw {
+                        "subtract" => crate::css::values::types::MaskComposite::Subtract,
+                        "intersect" => crate::css::values::types::MaskComposite::Intersect,
+                        "exclude" => crate::css::values::types::MaskComposite::Exclude,
+                        _ => crate::css::values::types::MaskComposite::Add,
+                    };
+                }
+            },
+            "mask-clip" | "-webkit-mask-clip" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(b) = parse_background_box(kw)
+                {
+                    self.mask_clip = b;
+                }
+            },
+            "mask-origin" | "-webkit-mask-origin" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(b) = parse_background_box(kw)
+                    && b != BackgroundBox::Text
+                {
+                    self.mask_origin = b;
+                }
+            },
+            "mask-position" | "-webkit-mask-position" => {
+                self.mask_position = Self::resolve_bg_position(value, parent_font_size);
+            },
+            "mask-size" | "-webkit-mask-size" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.mask_size = match kw {
+                        "cover" => BackgroundSize::Cover,
+                        "contain" => BackgroundSize::Contain,
+                        _ => BackgroundSize::Auto,
+                    };
+                }
+            },
+            "mask-repeat" | "-webkit-mask-repeat" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.mask_repeat = match kw {
+                        "repeat" => BackgroundRepeat::Repeat,
+                        "no-repeat" => BackgroundRepeat::NoRepeat,
+                        "repeat-x" => BackgroundRepeat::RepeatX,
+                        "repeat-y" => BackgroundRepeat::RepeatY,
+                        _ => return,
+                    };
+                }
+            },
             "content-visibility" => {
                 if let Some(kw) = as_keyword(value) {
                     self.content_visibility = match kw {

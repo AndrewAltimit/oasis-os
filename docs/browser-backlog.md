@@ -61,50 +61,6 @@ MIPS are not fun.
 
 ---
 
-## Epic: Compositor overhaul
-
-**Effort:** 2–3 weeks. **Needs design doc before any coding.** Enables a
-large chunk of parsed-but-dead properties in a single architectural
-change.
-
-All the properties below require the same missing primitive:
-render-to-texture + composite-back. Our `SdiBackend` is pure
-immediate-mode, so this is a new trait surface.
-
-**Trait extension.** Add to `oasis-types/src/backend.rs`:
-
-- `create_render_target(width, height) -> RenderTargetId`
-- `bind_render_target(id)` / `unbind_render_target()`
-- `composite(src_id, dst_rect, blend_mode, opacity)`
-- `destroy_render_target(id)`
-
-**Backend implementations:**
-
-- **SDL** — trivial, `SDL_Texture` with `SDL_TEXTUREACCESS_TARGET`.
-- **WASM** — offscreen canvas per render target.
-- **UE5** — `UTextureRenderTarget2D`.
-- **test-backend** — no-op stubs, assert ordering.
-- **PSP** — **the hard one.** 2MB VRAM budget, no stencil, no shaders.
-  Likely needs a software readback path using main RAM for render
-  targets, then GU blit back to the framebuffer. May not be practical
-  for backdrop-filter at all on PSP.
-
-**Properties unlocked once the compositor exists:**
-
-- `mix-blend-mode` (16 modes, parsing already done)
-- `background-blend-mode` (same)
-- `backdrop-filter` — backdrop sample → filter chain → composite. PSP
-  may need to fall back to a static blur or skip entirely.
-- `mask-image`, `mask-position`, `mask-size`, `mask-repeat`, `mask-clip`,
-  `mask-origin`, `mask-composite`, `mask-mode` — **none of these are
-  even parsed today**. Add parsing + paint in one PR after the
-  compositor lands.
-- `isolation: isolate` (force stacking context + private backdrop)
-- `filter` on layout boxes (today `filters.rs` only applies to colors,
-  not to element backgrounds/borders via readback)
-
----
-
 ## Epic: 3D transforms
 
 **Effort:** 1–2 weeks. Standalone from compositor, similar
