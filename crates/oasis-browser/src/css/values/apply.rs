@@ -480,6 +480,7 @@ impl ComputedStyle {
                             match kw {
                                 "none" => {
                                     self.text_decoration.line = TextDecorationLine::NONE;
+                                    break;
                                 },
                                 "underline" => {
                                     self.text_decoration.line |= TextDecorationLine::UNDERLINE;
@@ -991,7 +992,8 @@ impl ComputedStyle {
                     };
                 } else if let CssValue::Multiple(vs) = value {
                     // Two-value form: width height
-                    let w = Self::resolve_bg_size_component(&vs[0], parent_font_size);
+                    let Some(first) = vs.first() else { return };
+                    let w = Self::resolve_bg_size_component(first, parent_font_size);
                     let h = vs
                         .get(1)
                         .map(|v| Self::resolve_bg_size_component(v, parent_font_size))
