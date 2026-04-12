@@ -523,15 +523,30 @@ fn record_background(
         record_radial_gradient(dl, x, y, w, h, grad, effective_opacity);
     }
 
-    // Background image texture.
+    // Background image texture: emit one Blit per tile so background-size,
+    // background-position, and background-repeat are honored in the display
+    // list path (not just immediate-mode).
     if let Some(tex) = layout_box.background_texture {
-        dl.push(DisplayItem::Blit {
-            texture: tex,
+        let intrinsic = layout_box.background_texture_size.unwrap_or((w, h));
+        let tiles = super::background::background_image_tiles(
             x,
             y,
             w,
             h,
-        });
+            intrinsic,
+            &layout_box.style.background_size,
+            &layout_box.style.background_position,
+            layout_box.style.background_repeat,
+        );
+        for tile in tiles {
+            dl.push(DisplayItem::Blit {
+                texture: tex,
+                x: tile.x,
+                y: tile.y,
+                w: tile.w,
+                h: tile.h,
+            });
+        }
     }
 }
 

@@ -74,11 +74,22 @@ pub(super) fn paint_background(
     Ok(())
 }
 
-/// Paint a background image with size, position, and repeat properties.
+/// A single tile blit position computed by [`background_image_tiles`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BgTile {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Compute the list of background-image tiles to blit.
+///
+/// Shared between immediate-mode painting (`paint_background_image`) and the
+/// display-list recording path (`record.rs::record_background`). Returns an
+/// empty Vec when the image would be invisible (zero size).
 #[allow(clippy::too_many_arguments)]
-fn paint_background_image(
-    backend: &mut dyn SdiBackend,
-    tex: TextureId,
+pub(crate) fn background_image_tiles(
     container_x: i32,
     container_y: i32,
     container_w: u32,
@@ -87,11 +98,10 @@ fn paint_background_image(
     size: &BackgroundSize,
     position: &BackgroundPosition,
     repeat: BackgroundRepeat,
-) -> Result<()> {
+) -> Vec<BgTile> {
     let (tex_w, tex_h) = intrinsic_size;
-
     if tex_w == 0 || tex_h == 0 {
-        return Ok(());
+        return Vec::new();
     }
 
     // Compute the rendered image dimensions based on background-size.
@@ -114,7 +124,6 @@ fn paint_background_image(
                 Some(v) if v.is_sign_negative() => (container_w as f32 * (-*v / 100.0)) as u32,
                 Some(v) => *v as u32,
                 None => {
-                    // Auto: maintain aspect ratio from the other dimension.
                     if let Some(hv) = h {
                         let hpx = if hv.is_sign_negative() {
                             container_h as f32 * (-*hv / 100.0)
@@ -130,25 +139,19 @@ fn paint_background_image(
             let ih = match h {
                 Some(v) if v.is_sign_negative() => (container_h as f32 * (-*v / 100.0)) as u32,
                 Some(v) => *v as u32,
-                None => {
-                    // Auto: maintain aspect ratio.
-                    (tex_h as f32 * iw as f32 / tex_w as f32) as u32
-                },
+                None => (tex_h as f32 * iw as f32 / tex_w as f32) as u32,
             };
-            // If either dimension resolves to zero, the image is invisible.
             if iw == 0 || ih == 0 {
-                return Ok(());
+                return Vec::new();
             }
             (iw, ih)
         },
     };
 
-    // Guard against zero-size images (e.g. Cover/Contain with a zero container).
     if img_w == 0 || img_h == 0 {
-        return Ok(());
+        return Vec::new();
     }
 
-    // Compute the position of the image within the container.
     let pos_x = if position.x_is_px {
         position.x as i32
     } else {
@@ -160,59 +163,86 @@ fn paint_background_image(
         ((container_h as f32 - img_h as f32) * position.y) as i32
     };
 
-    // Determine repeat behavior.
     let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
     let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
 
-    if !repeat_x && !repeat_y {
-        // Single image at the computed position.
-        backend.blit(tex, container_x + pos_x, container_y + pos_y, img_w, img_h)?;
-    } else {
-        // Tile the image. Compute the starting offset so tiles cover the container.
-        let start_x = if repeat_x {
-            let offset = pos_x % img_w as i32;
-            if offset > 0 {
-                offset - img_w as i32
-            } else {
-                offset
-            }
-        } else {
-            pos_x
-        };
-        let start_y = if repeat_y {
-            let offset = pos_y % img_h as i32;
-            if offset > 0 {
-                offset - img_h as i32
-            } else {
-                offset
-            }
-        } else {
-            pos_y
-        };
+    let mut tiles = Vec::new();
 
-        let mut ty = start_y;
-        loop {
-            if ty >= container_h as i32 {
-                break;
-            }
-            let mut tx = start_x;
-            loop {
-                if tx >= container_w as i32 {
-                    break;
-                }
-                backend.blit(tex, container_x + tx, container_y + ty, img_w, img_h)?;
-                if !repeat_x {
-                    break;
-                }
-                tx += img_w as i32;
-            }
-            if !repeat_y {
-                break;
-            }
-            ty += img_h as i32;
-        }
+    if !repeat_x && !repeat_y {
+        tiles.push(BgTile {
+            x: container_x + pos_x,
+            y: container_y + pos_y,
+            w: img_w,
+            h: img_h,
+        });
+        return tiles;
     }
 
+    let start_x = if repeat_x {
+        pos_x.rem_euclid(img_w as i32) - img_w as i32
+    } else {
+        pos_x
+    };
+    let start_y = if repeat_y {
+        pos_y.rem_euclid(img_h as i32) - img_h as i32
+    } else {
+        pos_y
+    };
+
+    let mut ty = start_y;
+    while ty < container_h as i32 {
+        let mut tx = start_x;
+        loop {
+            if tx >= container_w as i32 {
+                break;
+            }
+            tiles.push(BgTile {
+                x: container_x + tx,
+                y: container_y + ty,
+                w: img_w,
+                h: img_h,
+            });
+            if !repeat_x {
+                break;
+            }
+            tx += img_w as i32;
+        }
+        if !repeat_y {
+            break;
+        }
+        ty += img_h as i32;
+    }
+
+    tiles
+}
+
+/// Paint a background image with size, position, and repeat properties.
+#[allow(clippy::too_many_arguments)]
+fn paint_background_image(
+    backend: &mut dyn SdiBackend,
+    tex: TextureId,
+    container_x: i32,
+    container_y: i32,
+    container_w: u32,
+    container_h: u32,
+    intrinsic_size: (u32, u32),
+    size: &BackgroundSize,
+    position: &BackgroundPosition,
+    repeat: BackgroundRepeat,
+) -> Result<()> {
+    let tiles = background_image_tiles(
+        container_x,
+        container_y,
+        container_w,
+        container_h,
+        intrinsic_size,
+        size,
+        position,
+        repeat,
+    );
+    for tile in tiles {
+        backend.blit(tex, tile.x, tile.y, tile.w, tile.h)?;
+    }
     Ok(())
 }
 

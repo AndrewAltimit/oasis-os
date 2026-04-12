@@ -470,6 +470,30 @@ impl ComputedStyle {
                         "overline" => TextDecorationLine::OVERLINE,
                         _ => return,
                     };
+                } else if let CssValue::Multiple(vs) = value {
+                    // Multi-value longhand: e.g. "underline line-through".
+                    // Reset to NONE then accumulate with |=, mirroring the
+                    // shorthand parser.
+                    self.text_decoration.line = TextDecorationLine::NONE;
+                    for v in vs {
+                        if let Some(kw) = as_keyword(v) {
+                            match kw {
+                                "none" => {
+                                    self.text_decoration.line = TextDecorationLine::NONE;
+                                },
+                                "underline" => {
+                                    self.text_decoration.line |= TextDecorationLine::UNDERLINE;
+                                },
+                                "line-through" => {
+                                    self.text_decoration.line |= TextDecorationLine::LINE_THROUGH;
+                                },
+                                "overline" => {
+                                    self.text_decoration.line |= TextDecorationLine::OVERLINE;
+                                },
+                                _ => {},
+                            }
+                        }
+                    }
                 }
             },
             "text-decoration-color" => {
