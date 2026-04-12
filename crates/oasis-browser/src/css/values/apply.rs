@@ -1793,7 +1793,7 @@ impl ComputedStyle {
                 if as_keyword(value) == Some("none") {
                     self.clip_path = None;
                 } else {
-                    self.clip_path = string_or_keyword(value);
+                    self.clip_path = parse_clip_path(value, parent_font_size);
                 }
             },
             "perspective" => {
@@ -2546,6 +2546,148 @@ fn parse_transform_origin(
     TransformOrigin { x, y, x_pct, y_pct }
 }
 
+/// Parse a CSS `clip-path` value into a structured [`ClipPath`].
+///
+/// Accepts: `inset(top [right [bottom [left]]])`, `rect(t, r, b, l)`,
+/// `circle(r [at cx cy])`, `ellipse(rx ry [at cx cy])`. Length units are
+/// resolved against `parent_font_size` for em values; percentages become
+/// fractions (0..=1) resolved against the border box at paint time.
+///
+/// Unsupported forms (e.g. `polygon()`, SVG `url(#id)`) return `None`.
+fn parse_clip_path(value: &CssValue, parent_font_size: f32) -> Option<super::types::ClipPath> {
+    use super::types::{ClipLength, ClipPath};
+
+    let raw = match value {
+        CssValue::Keyword(s) if s == "none" => return None,
+        CssValue::Keyword(s) | CssValue::String(s) => s.trim(),
+        _ => return None,
+    };
+
+    let paren = raw.find('(')?;
+    let func = raw[..paren].trim();
+    let close = raw.rfind(')')?;
+    if close <= paren {
+        return None;
+    }
+    let args_str = raw[paren + 1..close].trim();
+
+    // Split on `at` to separate shape args from position args.
+    let (shape_args, pos_args) = match args_str.split_once(" at ") {
+        Some((a, b)) => (a.trim(), Some(b.trim())),
+        None => (args_str, None),
+    };
+
+    // Tokenize shape args on whitespace (commas treated as whitespace).
+    let shape_tokens: Vec<&str> = shape_args
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let parse_len = |tok: &str| -> Option<ClipLength> {
+        if let Some(pct) = tok.strip_suffix('%') {
+            pct.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(|v| ClipLength::Frac(v / 100.0))
+        } else if let Some(px) = tok.strip_suffix("px") {
+            px.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(ClipLength::Px)
+        } else if let Some(em) = tok.strip_suffix("em") {
+            em.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(|v| ClipLength::Px(v * parent_font_size))
+        } else if let Some(rem) = tok.strip_suffix("rem") {
+            rem.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(|v| ClipLength::Px(v * super::types::ROOT_FONT_SIZE))
+        } else if tok == "0" {
+            Some(ClipLength::Px(0.0))
+        } else {
+            tok.parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(ClipLength::Px)
+        }
+    };
+
+    // `at <x> <y>` → (cx, cy). Defaults to 50% 50% (center).
+    let parse_at = |s: Option<&str>| -> (ClipLength, ClipLength) {
+        let default = (ClipLength::Frac(0.5), ClipLength::Frac(0.5));
+        let Some(s) = s else {
+            return default;
+        };
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        let cx = toks.first().and_then(|t| parse_len(t)).unwrap_or(default.0);
+        let cy = toks.get(1).and_then(|t| parse_len(t)).unwrap_or(default.1);
+        (cx, cy)
+    };
+
+    match func {
+        "inset" => {
+            // CSS shorthand: 1-4 values like margin/padding.
+            let t = parse_len(shape_tokens.first()?)?;
+            let r = shape_tokens.get(1).and_then(|s| parse_len(s)).unwrap_or(t);
+            let b = shape_tokens.get(2).and_then(|s| parse_len(s)).unwrap_or(t);
+            let l = shape_tokens.get(3).and_then(|s| parse_len(s)).unwrap_or(r);
+            Some(ClipPath::Inset {
+                top: t,
+                right: r,
+                bottom: b,
+                left: l,
+            })
+        },
+        "rect" => {
+            // Legacy `rect(top, right, bottom, left)`. All values must be px
+            // lengths or `auto`. Fractions not allowed here per CSS 2.1.
+            let to_px = |tok: &str| -> Option<Option<f32>> {
+                if tok == "auto" {
+                    return Some(None);
+                }
+                match parse_len(tok)? {
+                    ClipLength::Px(v) => Some(Some(v)),
+                    ClipLength::Frac(_) => None,
+                }
+            };
+            let t = to_px(shape_tokens.first()?)?;
+            let r = to_px(shape_tokens.get(1)?)?;
+            let b = to_px(shape_tokens.get(2)?)?;
+            let l = to_px(shape_tokens.get(3)?)?;
+            Some(ClipPath::Rect {
+                top: t,
+                right: r,
+                bottom: b,
+                left: l,
+            })
+        },
+        "circle" => {
+            let r = shape_tokens
+                .first()
+                .and_then(|s| parse_len(s))
+                .unwrap_or(ClipLength::Frac(0.5));
+            let (cx, cy) = parse_at(pos_args);
+            Some(ClipPath::Circle { cx, cy, r })
+        },
+        "ellipse" => {
+            let rx = shape_tokens
+                .first()
+                .and_then(|s| parse_len(s))
+                .unwrap_or(ClipLength::Frac(0.5));
+            let ry = shape_tokens.get(1).and_then(|s| parse_len(s)).unwrap_or(rx);
+            let (cx, cy) = parse_at(pos_args);
+            Some(ClipPath::Ellipse { cx, cy, rx, ry })
+        },
+        _ => None,
+    }
+}
+
 /// Parse a CSS `filter` value into a list of [`FilterFunction`]s.
 fn parse_filter(value: &CssValue) -> Vec<super::types::FilterFunction> {
     use super::types::FilterFunction;
@@ -3067,6 +3209,119 @@ mod tests {
         let mut s = ComputedStyle::default();
         s.apply_declaration("scroll-behavior", &CssValue::Keyword("smooth".into()), 16.0);
         assert_eq!(s.scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn parse_clip_path_inset_four_values() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "clip-path",
+            &CssValue::Keyword("inset(10px 20px 30px 40px)".into()),
+            16.0,
+        );
+        match s.clip_path {
+            Some(ClipPath::Inset {
+                top,
+                right,
+                bottom,
+                left,
+            }) => {
+                assert_eq!(top, ClipLength::Px(10.0));
+                assert_eq!(right, ClipLength::Px(20.0));
+                assert_eq!(bottom, ClipLength::Px(30.0));
+                assert_eq!(left, ClipLength::Px(40.0));
+            },
+            other => panic!("expected Inset, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_inset_shorthand_one_value() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("clip-path", &CssValue::Keyword("inset(5%)".into()), 16.0);
+        match s.clip_path {
+            Some(ClipPath::Inset {
+                top,
+                right,
+                bottom,
+                left,
+            }) => {
+                assert_eq!(top, ClipLength::Frac(0.05));
+                assert_eq!(right, ClipLength::Frac(0.05));
+                assert_eq!(bottom, ClipLength::Frac(0.05));
+                assert_eq!(left, ClipLength::Frac(0.05));
+            },
+            other => panic!("expected Inset, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_circle_with_at() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "clip-path",
+            &CssValue::Keyword("circle(50% at 25% 75%)".into()),
+            16.0,
+        );
+        match s.clip_path {
+            Some(ClipPath::Circle { cx, cy, r }) => {
+                assert_eq!(r, ClipLength::Frac(0.5));
+                assert_eq!(cx, ClipLength::Frac(0.25));
+                assert_eq!(cy, ClipLength::Frac(0.75));
+            },
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_circle_single_coordinate_at() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "clip-path",
+            &CssValue::Keyword("circle(50% at 25%)".into()),
+            16.0,
+        );
+        match s.clip_path {
+            Some(ClipPath::Circle { cx, cy, r }) => {
+                assert_eq!(r, ClipLength::Frac(0.5));
+                assert_eq!(cx, ClipLength::Frac(0.25));
+                assert_eq!(cy, ClipLength::Frac(0.5));
+            },
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_ellipse_default_center() {
+        use super::super::types::{ClipLength, ClipPath};
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "clip-path",
+            &CssValue::Keyword("ellipse(40px 20px)".into()),
+            16.0,
+        );
+        match s.clip_path {
+            Some(ClipPath::Ellipse { cx, cy, rx, ry }) => {
+                assert_eq!(rx, ClipLength::Px(40.0));
+                assert_eq!(ry, ClipLength::Px(20.0));
+                assert_eq!(cx, ClipLength::Frac(0.5));
+                assert_eq!(cy, ClipLength::Frac(0.5));
+            },
+            other => panic!("expected Ellipse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_clip_path_none_clears() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("clip-path", &CssValue::Keyword("inset(10px)".into()), 16.0);
+        assert!(s.clip_path.is_some());
+        s.apply_declaration("clip-path", &CssValue::Keyword("none".into()), 16.0);
+        assert!(s.clip_path.is_none());
     }
 
     #[test]

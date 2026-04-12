@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>On simplicity &mdash; A Dev Blog</title>
+<style>
+body { font-family: -apple-system, Helvetica, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; color: #333; line-height: 1.55; }
+h1 { font-size: 2em; }
+h2 { margin-top: 1.8em; }
+pre { background: #f4f4f4; padding: 1em; overflow-x: auto; font-family: monospace; font-size: 0.9em; border-left: 3px solid #09c; }
+code { background: #f4f4f4; padding: 0.1em 0.3em; font-family: monospace; }
+blockquote { border-left: 3px solid #ccc; margin: 1em 0; padding: 0.5em 1em; color: #666; font-style: italic; }
+.meta { color: #999; font-size: 0.85em; }
+a { color: #09c; }
+hr { border: 0; border-top: 1px solid #eee; margin: 2em 0; }
+</style>
+</head>
+<body>
+<article>
+<h1>On simplicity</h1>
+<p class="meta">Posted on April 12, 2026 by someone</p>
+<p>Software engineers reach for complexity too fast. This post argues we should reach for it <em>more slowly</em>, and that the cost of doing so is rarely what we think it is.</p>
+<h2>The myth of the generic abstraction</h2>
+<p>You open a file. You write five lines. They work. Then someone on the team says &ldquo;we should make this generic&rdquo; and suddenly you have a builder pattern, three traits, and a factory.</p>
+<pre><code>fn hello() -&gt; String {
+    String::from("hi")
+}</code></pre>
+<p>The generic version is not an improvement. The generic version is a <em>bet</em> on a future that has not arrived. That bet costs every reader for the rest of the file&rsquo;s life.</p>
+<blockquote>
+<p>The cheapest code is code that doesn&rsquo;t exist. The second cheapest is code a junior can delete without fear.</p>
+</blockquote>
+<h2>When abstraction is worth it</h2>
+<p>Abstraction pays when three conditions hold:</p>
+<ol>
+<li>You have <strong>three</strong> concrete uses &mdash; not one, not two.</li>
+<li>Those uses change <em>together</em> under realistic pressures.</li>
+<li>The abstraction boundary compresses the mental model, rather than expanding it.</li>
+</ol>
+<p>If any of those conditions fails, you&rsquo;re paying interest on a loan for a purchase you never make.</p>
+<hr>
+<h2>What to do instead</h2>
+<p>Write the concrete version. Ship it. Observe what actually changes. Then, if a pattern emerges, refactor with the benefit of evidence. See also: <a href="https://example.com/yagni">YAGNI</a>, <a href="https://example.com/rule-of-three">the rule of three</a>.</p>
+<p>&mdash; end</p>
+</article>
+</body>
+</html>

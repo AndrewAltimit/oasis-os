@@ -607,6 +607,64 @@ pub enum FilterFunction {
     HueRotate(f32),
 }
 
+/// CSS `clip-path` basic shape.
+///
+/// Values are resolved to pixel offsets relative to the element's border
+/// box at style-apply time. Percentage inputs are stored as pre-resolved
+/// fractions (0.0..=1.0) and multiplied by the border box at paint time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipPath {
+    /// `inset(top right bottom left)` — insets from the border box edges.
+    /// Each component is either a pixel length or a fraction (0..=1).
+    Inset {
+        top: ClipLength,
+        right: ClipLength,
+        bottom: ClipLength,
+        left: ClipLength,
+    },
+    /// `rect(top, right, bottom, left)` — legacy rect form, pixel values
+    /// measured from the border box top-left.  `None` = `auto` (use the
+    /// border-box edge), resolved at paint time.
+    Rect {
+        top: Option<f32>,
+        right: Option<f32>,
+        bottom: Option<f32>,
+        left: Option<f32>,
+    },
+    /// `circle(r at cx cy)` — approximated to its bounding box for now.
+    Circle {
+        cx: ClipLength,
+        cy: ClipLength,
+        r: ClipLength,
+    },
+    /// `ellipse(rx ry at cx cy)` — approximated to its bounding box.
+    Ellipse {
+        cx: ClipLength,
+        cy: ClipLength,
+        rx: ClipLength,
+        ry: ClipLength,
+    },
+}
+
+/// A length that is either an absolute pixel value or a fraction of the
+/// reference box (used for percentage inputs to `clip-path`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipLength {
+    Px(f32),
+    /// 0.0..=1.0 fraction of the reference dimension.
+    Frac(f32),
+}
+
+impl ClipLength {
+    /// Resolve against a reference length (e.g. border-box width or height).
+    pub fn resolve(self, reference: f32) -> f32 {
+        match self {
+            ClipLength::Px(v) => v,
+            ClipLength::Frac(f) => f * reference,
+        }
+    }
+}
+
 /// A CSS easing function.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TimingFunction {

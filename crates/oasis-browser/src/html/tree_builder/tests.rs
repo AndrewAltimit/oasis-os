@@ -942,6 +942,121 @@ fn implicit_html_head_body_from_title() {
     );
 }
 
+// ---- Recovery: stray table-structure tags in body scope ----
+
+/// Stray `<tr>` / `<td>` outside any table must be ignored per
+/// WHATWG §13.2.6.4.7 ("in body" insertion mode, "tr" / "td" / "th"
+/// start tag → parse error, ignore token). Real browsers drop these
+/// instead of building floating table elements.
+#[test]
+fn stray_tr_td_outside_table_are_ignored() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("p"),
+        text("before"),
+        end("p"),
+        start("tr"), // stray
+        start("td"), // stray
+        text("should be ignored"),
+        end("td"),
+        end("tr"),
+        start("p"),
+        text("after"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+
+    // No Tr or Td anywhere in the tree.
+    let has_tr = doc
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Tr));
+    let has_td = doc
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Td));
+    assert!(!has_tr, "stray <tr> outside table must be ignored");
+    assert!(!has_td, "stray <td> outside table must be ignored");
+
+    // Both paragraphs still present.
+    let body = doc.body().unwrap();
+    let tc = doc.text_content(body);
+    assert!(tc.contains("before"));
+    assert!(tc.contains("after"));
+    // The text inside the stray <td> becomes a plain text run in body,
+    // which is acceptable recovery (spec says "ignore the token" for the
+    // tag, but subsequent character tokens are still processed).
+}
+
+#[test]
+fn stray_tbody_thead_tfoot_outside_table_ignored() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("thead"),
+        start("tbody"),
+        start("tfoot"),
+        start("caption"),
+        start("colgroup"),
+        start("p"),
+        text("real content"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    for name in [
+        TagName::Thead,
+        TagName::Tbody,
+        TagName::Tfoot,
+        TagName::Caption,
+        TagName::Colgroup,
+    ] {
+        let present = doc
+            .nodes
+            .iter()
+            .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == name));
+        assert!(!present, "stray <{name:?}> must be ignored");
+    }
+    let body = doc.body().unwrap();
+    assert!(doc.text_content(body).contains("real content"));
+}
+
+/// An actual `<table>` containing `<tr><td>` must still build correctly —
+/// the stray-tag filter must not apply once we're in table scope.
+#[test]
+fn legitimate_table_with_rows_still_works() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("table"),
+        start("tr"),
+        start("td"),
+        text("cell"),
+        end("td"),
+        end("tr"),
+        end("table"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let has_table = doc
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Table));
+    let has_tr = doc
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Tr));
+    let has_td = doc
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Td));
+    assert!(has_table && has_tr && has_td);
+    let body = doc.body().unwrap();
+    assert!(doc.text_content(body).contains("cell"));
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;
