@@ -12,10 +12,10 @@
 //! automatically implements `SdiBackend`.
 
 use super::{
-    Color, GradientStyle, SdiCore, TextMetrics, TextureId, arc_segments, cos_approx_f32,
-    sin_approx_f32,
+    Color, GradientStyle, RenderTargetId, SdiCore, TextMetrics, TextureId, arc_segments,
+    cos_approx_f32, sin_approx_f32,
 };
-use crate::error::Result;
+use crate::error::{OasisError, Result};
 
 // ---------------------------------------------------------------------------
 // SdiShapes
@@ -819,31 +819,136 @@ pub trait SdiBatch: SdiCore {
 
 /// Offscreen render target operations for compositing and tile caching.
 ///
-/// Backends that support GPU render targets (SDL3, WebGL) should override
-/// these methods. The default implementation is a no-op that renders
-/// directly to the screen, preserving current behavior for backends
-/// without render target support (PSP, UE5 software).
+/// This is the trait surface the browser compositor uses to implement
+/// `mix-blend-mode`, `background-blend-mode`, `backdrop-filter`,
+/// `mask-*`, `isolation: isolate`, and box-level `filter`.  All of those
+/// properties need the same primitive: render-to-texture +
+/// composite-back.
+///
+/// All `Result`-returning methods default to `Err(OasisError::Backend("...not
+/// supported"))` except [`destroy_render_target`](Self::destroy_render_target)
+/// which defaults to `Ok(())` for opt-out backends.  Capability probes
+/// ([`supports_render_targets`](Self::supports_render_targets),
+/// [`supports_render_target_readback`](Self::supports_render_target_readback))
+/// return `bool` and default to `false`.  The browser checks support
+/// before use and falls back to a no-op (drawing without the effect)
+/// when unsupported.
+///
+/// # Bind stack
+///
+/// [`bind_render_target`](Self::bind_render_target) is *nestable*.
+/// Backends maintain their own stack so a `mix-blend-mode` child of a
+/// `backdrop-filter` parent composes correctly.  Each
+/// `bind_render_target` must be paired with exactly one
+/// [`unbind_render_target`](Self::unbind_render_target).
+///
+/// # Readback
+///
+/// [`read_render_target`](Self::read_render_target) is a separate
+/// capability gated by
+/// [`supports_render_target_readback`](Self::supports_render_target_readback).
+/// It is required for `backdrop-filter` (sample the parent surface
+/// before drawing the layer on top).  Backends that cannot afford a
+/// per-frame readback (PSP) report `false` and the browser drops
+/// `backdrop-filter` to a static-tint shim.
 pub trait SdiRenderTarget: SdiCore {
-    /// Create an offscreen render target texture of the given size.
+    /// Allocate an offscreen RGBA8 surface of the given size.
     ///
-    /// Returns a [`TextureId`] that can be passed to
-    /// [`SdiRenderTarget::set_render_target`] and later blitted to the
-    /// screen with [`blit`](SdiCore::blit).
-    fn create_render_target(&mut self, _w: u32, _h: u32) -> Result<TextureId> {
-        Err(crate::error::OasisError::Backend(
-            "render targets not supported".into(),
+    /// Returns a [`RenderTargetId`] that can be bound for drawing,
+    /// composited back, read back, and finally destroyed.  Backends
+    /// that cannot satisfy the request (e.g. PSP out of VRAM) return
+    /// `Err`.
+    fn create_render_target(&mut self, _w: u32, _h: u32) -> Result<RenderTargetId> {
+        Err(OasisError::Backend("render targets not supported".into()))
+    }
+
+    /// Redirect all subsequent draw calls into the given render target.
+    ///
+    /// Backends save the current draw state (clip rect, translation,
+    /// active target) onto an internal stack and clear the clip on the
+    /// new target.  Calls are nestable.
+    fn bind_render_target(&mut self, _id: RenderTargetId) -> Result<()> {
+        Err(OasisError::Backend("render targets not supported".into()))
+    }
+
+    /// Pop the most recent [`bind_render_target`](Self::bind_render_target).
+    ///
+    /// Restores the draw state that was active when the corresponding
+    /// `bind_render_target` was called.  After the outermost pop,
+    /// drawing returns to the framebuffer.
+    fn unbind_render_target(&mut self) -> Result<()> {
+        Err(OasisError::Backend("render targets not supported".into()))
+    }
+
+    /// Composite a render target into the *currently bound* surface
+    /// (framebuffer or another render target).
+    ///
+    /// `dst_x`/`dst_y`/`dst_w`/`dst_h` give the destination rectangle.
+    /// `blend` selects one of the 16 CSS-aligned blend modes.
+    /// `opacity` is in `[0.0, 1.0]` and multiplies the source alpha.
+    #[allow(clippy::too_many_arguments)]
+    fn composite_render_target(
+        &mut self,
+        _id: RenderTargetId,
+        _dst_x: i32,
+        _dst_y: i32,
+        _dst_w: u32,
+        _dst_h: u32,
+        _blend: BlendMode,
+        _opacity: f32,
+    ) -> Result<()> {
+        debug_assert!(
+            (0.0..=1.0).contains(&_opacity),
+            "opacity must be in [0.0, 1.0], got {_opacity}"
+        );
+        Err(OasisError::Backend("render targets not supported".into()))
+    }
+
+    /// Read RGBA8 pixels back from a render target into a
+    /// caller-supplied buffer.
+    ///
+    /// Required for `backdrop-filter`: the browser samples the parent
+    /// surface, runs the filter chain on CPU, and draws the filtered
+    /// backdrop into the layer before painting the contained items on
+    /// top.  Backends that cannot afford a per-frame readback report
+    /// `false` from
+    /// [`supports_render_target_readback`](Self::supports_render_target_readback)
+    /// and the browser falls back to a static-tint shim.
+    ///
+    /// `dst.len()` must equal the render target's width * height * 4
+    /// (the dimensions passed to [`create_render_target`](Self::create_render_target)).
+    fn read_render_target(&mut self, _id: RenderTargetId, _dst: &mut [u8]) -> Result<()> {
+        Err(OasisError::Backend(
+            "render-target readback not supported".into(),
         ))
     }
 
-    /// Redirect all subsequent draw calls to the given render target.
+    /// Release a render target previously created with
+    /// [`create_render_target`](Self::create_render_target).
     ///
-    /// Pass `None` to restore drawing to the default screen target.
-    fn set_render_target(&mut self, _target: Option<TextureId>) -> Result<()> {
+    /// Backends that opt in should override this to release resources.
+    /// The default no-op is safe for backends that never create render
+    /// targets in the first place.
+    fn destroy_render_target(&mut self, _id: RenderTargetId) -> Result<()> {
         Ok(())
     }
 
     /// Query whether this backend supports offscreen render targets.
+    ///
+    /// The browser compositor probes this once at startup and disables
+    /// the slow path entirely on backends that return `false` —
+    /// `mix-blend-mode`, `mask-*`, etc. degrade to "draw without the
+    /// effect" so the page still renders.
     fn supports_render_targets(&self) -> bool {
+        false
+    }
+
+    /// Query whether this backend can read pixels back from a render
+    /// target.  Distinct from
+    /// [`supports_render_targets`](Self::supports_render_targets)
+    /// because PSP can render offscreen but not afford a per-frame
+    /// readback.
+    fn supports_render_target_readback(&self) -> bool {
         false
     }
 }
@@ -900,6 +1005,14 @@ pub struct GeometryVertex {
 // ---------------------------------------------------------------------------
 
 /// Alpha blending mode control for compositing layers.
+///
+/// This trait is the *low-level* counterpart to
+/// [`SdiRenderTarget::composite_render_target`]: it switches the
+/// active blend mode for subsequent immediate-mode draws on the
+/// currently bound surface.  Most browser code uses the higher-level
+/// composite-render-target path; this trait exists for backends that
+/// want to expose blend modes outside the compositor (e.g. SDL3's
+/// native `SDL_SetRenderDrawBlendMode`).
 pub trait SdiBlendMode: SdiCore {
     /// Set the active blend mode for subsequent draw operations.
     fn set_blend_mode(&mut self, _mode: BlendMode) -> Result<()> {
@@ -908,20 +1021,65 @@ pub trait SdiBlendMode: SdiCore {
 
     /// Query the current blend mode.
     fn current_blend_mode(&self) -> BlendMode {
-        BlendMode::Blend
+        BlendMode::Normal
     }
 }
 
-/// Blend modes for compositing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Compositing blend modes, aligned 1:1 with CSS `mix-blend-mode` and
+/// `background-blend-mode`.
+///
+/// `Normal` is standard alpha blending (`src * alpha + dst * (1 -
+/// alpha)`); the other 15 variants follow the formulas from
+/// [Compositing and Blending Level 1](https://drafts.fxtf.org/compositing/#blendingseparable).
+///
+/// The browser compositor passes one of these to
+/// [`SdiRenderTarget::composite_render_target`] when popping a
+/// compositing layer.  Backends are expected to implement all 16
+/// modes; SDL3 ships only 5 natively, so the SDL backend uses a CPU
+/// software path for the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BlendMode {
-    /// No blending — source overwrites destination.
-    None,
-    /// Standard alpha blending (src * alpha + dst * (1 - alpha)).
+    /// Standard alpha blending (`src * alpha + dst * (1 - alpha)`).
+    /// This is the default and matches CSS `mix-blend-mode: normal`.
     #[default]
-    Blend,
-    /// Additive blending (src + dst).
-    Add,
-    /// Multiplicative blending (src * dst).
+    Normal,
+    /// `dst * src`. Darkens.
     Multiply,
+    /// `1 - (1 - dst) * (1 - src)`. Lightens.
+    Screen,
+    /// Multiply or screen depending on destination luminance.
+    Overlay,
+    /// `min(src, dst)`.
+    Darken,
+    /// `max(src, dst)`.
+    Lighten,
+    /// Brightens the destination toward the source.
+    ColorDodge,
+    /// Darkens the destination toward the source.
+    ColorBurn,
+    /// Like `Overlay` but conditioned on source luminance.
+    HardLight,
+    /// Softer variant of `HardLight`.
+    SoftLight,
+    /// `|dst - src|`.
+    Difference,
+    /// Like `Difference` but lower contrast.
+    Exclusion,
+    /// Replaces destination hue with source hue.
+    Hue,
+    /// Replaces destination saturation with source saturation.
+    Saturation,
+    /// Replaces destination hue + saturation with source hue + saturation.
+    Color,
+    /// Replaces destination luminosity with source luminosity.
+    Luminosity,
+}
+
+impl BlendMode {
+    /// Whether this blend mode is the no-op default. Useful for the
+    /// recorder to skip emitting a compositing layer when the only
+    /// reason to push one would have been a `Normal` blend.
+    pub const fn is_normal(self) -> bool {
+        matches!(self, BlendMode::Normal)
+    }
 }
