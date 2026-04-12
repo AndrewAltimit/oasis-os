@@ -143,11 +143,11 @@ impl RenderTargetPool {
             bucket.retain(|entry| !destroyed.contains(&entry.id));
             !bucket.is_empty()
         });
+        self.frame_index += 1;
         if let Some(e) = first_err {
             return Err(e);
         }
 
-        self.frame_index += 1;
         Ok(())
     }
 
