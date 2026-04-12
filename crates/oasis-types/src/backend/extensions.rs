@@ -826,7 +826,8 @@ pub trait SdiBatch: SdiCore {
 /// composite-back.
 ///
 /// All methods default to returning `OasisError::Backend("...not
-/// supported")` so backends opt in by overriding.  The browser probes
+/// supported")` except [`destroy_render_target`](Self::destroy_render_target)
+/// which defaults to `Ok(())` for opt-out backends.  The browser probes
 /// support via [`SdiRenderTarget::supports_render_targets`] and falls
 /// back to a no-op (drawing without the effect) when unsupported.
 ///
@@ -893,6 +894,10 @@ pub trait SdiRenderTarget: SdiCore {
         _blend: BlendMode,
         _opacity: f32,
     ) -> Result<()> {
+        debug_assert!(
+            (0.0..=1.0).contains(&_opacity),
+            "opacity must be in [0.0, 1.0], got {_opacity}"
+        );
         Err(OasisError::Backend("render targets not supported".into()))
     }
 
@@ -907,7 +912,8 @@ pub trait SdiRenderTarget: SdiCore {
     /// [`supports_render_target_readback`](Self::supports_render_target_readback)
     /// and the browser falls back to a static-tint shim.
     ///
-    /// `dst.len()` must equal `width * height * 4`.
+    /// `dst.len()` must equal the render target's width * height * 4
+    /// (the dimensions passed to [`create_render_target`](Self::create_render_target)).
     fn read_render_target(&mut self, _id: RenderTargetId, _dst: &mut [u8]) -> Result<()> {
         Err(OasisError::Backend(
             "render-target readback not supported".into(),

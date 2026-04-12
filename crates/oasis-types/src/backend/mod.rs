@@ -2030,6 +2030,10 @@ mod tests {
                     format!("unknown rt {}", id.0).into(),
                 ));
             }
+            debug_assert!(
+                (0.0..=1.0).contains(&opacity),
+                "opacity must be in [0.0, 1.0], got {opacity}"
+            );
             self.log.push(format!("composite({},{blend:?},{opacity})", id.0));
             Ok(())
         }
