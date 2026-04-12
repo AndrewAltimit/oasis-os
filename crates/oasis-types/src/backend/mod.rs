@@ -2034,7 +2034,8 @@ mod tests {
                 (0.0..=1.0).contains(&opacity),
                 "opacity must be in [0.0, 1.0], got {opacity}"
             );
-            self.log.push(format!("composite({},{blend:?},{opacity})", id.0));
+            self.log
+                .push(format!("composite({},{blend:?},{opacity})", id.0));
             Ok(())
         }
         fn destroy_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
@@ -2502,10 +2503,7 @@ mod tests {
             .unwrap();
 
         // Stack must be drained.
-        assert!(
-            b.bind_stack.is_empty(),
-            "bind stack should be empty"
-        );
+        assert!(b.bind_stack.is_empty(), "bind stack should be empty");
 
         // Verify pop ordering: each unbind comes after the matching bind
         // and before any earlier bind's unbind.
