@@ -2038,6 +2038,11 @@ mod tests {
             Ok(())
         }
         fn destroy_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
+            if !self.targets.iter().any(|(t, ..)| *t == id) {
+                return Err(crate::error::OasisError::Backend(
+                    format!("double-destroy rt {}", id.0).into(),
+                ));
+            }
             self.targets.retain(|(t, ..)| *t != id);
             self.log.push(format!("destroy({})", id.0));
             Ok(())
@@ -2627,7 +2632,8 @@ mod tests {
         // Both start their id sequences from 1.
         assert_eq!(id_a.0, 1);
         assert_eq!(id_c.0, 1);
-        // Binding the foreign id on the wrong backend errors.
+        // Binding an unknown id errors (opaque u64 handles cannot prove
+        // cross-backend isolation, only unknown-id rejection).
         a.bind_render_target(RenderTargetId(999)).unwrap_err();
         // The owning backend can bind it.
         a.bind_render_target(id_a).unwrap();
