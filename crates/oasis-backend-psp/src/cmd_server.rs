@@ -10,7 +10,7 @@
 //!   reboot            → cold reset
 //!   exit              → exit to XMB
 //!   log               → responds with last 2KB of eboot.log
-//!   logfull           → responds with last 8KB of eboot.log
+//!   logfull           → responds with last 32KB of eboot.log
 //!   status            → JSON: kiosk, free_kb, max_blk_kb, frame,
 //!                        audio_only, build
 //!   video-status      → JSON: state, width, height, decoded, errors,
@@ -54,7 +54,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v30-remote-browse-net";
+const BUILD_ID: &str = "v46-cascade-fine";
 
 /// Pending skin change request from TCP server.
 /// Written by server thread, read + cleared by main loop.
@@ -341,7 +341,7 @@ fn handle_client(cfd: i32) {
     } else if cmd == b"log" {
         send_log(cfd, 2048);
     } else if cmd == b"logfull" {
-        send_log(cfd, 8192);
+        send_log(cfd, 32768);
     } else if cmd == b"status" {
         send_status(cfd);
     } else if cmd.starts_with(b"press ") {

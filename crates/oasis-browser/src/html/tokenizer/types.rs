@@ -49,6 +49,7 @@ pub struct Attribute {
 
 /// Tokenizer state machine states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
 pub(crate) enum State {
     Data,
     TagOpen,

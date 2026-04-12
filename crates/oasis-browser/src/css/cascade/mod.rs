@@ -130,6 +130,54 @@ pub struct CascadeContext<'a> {
 // Public API
 // -----------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Diagnostic progress + yield hooks
+// ---------------------------------------------------------------------------
+//
+// PSP needs cooperative yields out of the cascade walk so the
+// `cmd_server` thread (and the WLAN driver) get CPU between batches
+// of compute_style calls. Without this, the synchronous `style_tree`
+// hogs the main thread for tens of seconds on a Wikipedia-sized DOM
+// (2430 elements) and the firmware kills the WLAN driver.
+
+type CascadeProgressFn = fn(u64, u64);
+type CascadeYieldFn = fn();
+static CASCADE_PROGRESS_HOOK: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static CASCADE_YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install a cascade progress hook fired every 256 element styled.
+/// Args are `(elements_styled, total_elements)`.
+pub fn set_cascade_progress_hook(hook: CascadeProgressFn) {
+    CASCADE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Install a cooperative yield hook fired every 64 elements styled.
+pub fn set_cascade_yield_hook(hook: CascadeYieldFn) {
+    CASCADE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn cascade_progress(idx: u64, total: u64) {
+    let raw = CASCADE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: raw is either 0 (handled above) or a `CascadeProgressFn`
+    // we previously stored.
+    let hook: CascadeProgressFn = unsafe { std::mem::transmute::<usize, CascadeProgressFn>(raw) };
+    hook(idx, total);
+}
+
+fn cascade_yield_fn() {
+    let raw = CASCADE_YIELD_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: raw is either 0 or a `CascadeYieldFn` we stored.
+    let hook: CascadeYieldFn = unsafe { std::mem::transmute::<usize, CascadeYieldFn>(raw) };
+    hook();
+}
+
 /// Style a DOM tree by applying stylesheets and inline styles.
 ///
 /// Returns a `Vec` indexed by `NodeId`. Elements get `Some(style)`;
@@ -140,14 +188,17 @@ pub fn style_tree(
     inline_styles: &[(NodeId, Vec<Declaration>)],
     ctx: &CascadeContext<'_>,
 ) -> Vec<Option<ComputedStyle>> {
+    cascade_progress(100, stylesheets.len() as u64); // marker: enter style_tree
     // Build selector index for O(1) bucket lookups instead of O(rules).
     let index = SelectorIndex::build(stylesheets);
+    cascade_progress(101, 0); // marker: SelectorIndex built
 
     // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
     let inline_map: FxHashMap<NodeId, &[Declaration]> = inline_styles
         .iter()
         .map(|(nid, decls)| (*nid, decls.as_slice()))
         .collect();
+    cascade_progress(102, 0); // marker: inline_map built
     // --- Parallel path (feature = "parallel-style") ---
     #[cfg(feature = "parallel-style")]
     {
@@ -169,12 +220,23 @@ pub fn style_tree(
     // --- Sequential path (default) ---
     #[cfg(not(feature = "parallel-style"))]
     {
+        cascade_progress(0, 0); // marker: about to allocate styles vec
         let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
+        cascade_progress(1, 0); // marker: styles vec allocated
 
         // Cache for lowercased tag names to avoid repeated allocations
         // during selector index lookups.
         let mut tag_cache = FxHashMap::<String, String>::default();
+        cascade_progress(2, 0); // marker: tag_cache ready
 
+        // Count of element nodes for the progress hook denominator.
+        let element_count = doc
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Element(_)))
+            .count() as u64;
+        cascade_progress(3, element_count); // marker: counted elements
+        let mut elements_styled: u64 = 0;
         style_subtree(
             doc,
             doc.root,
@@ -184,7 +246,10 @@ pub fn style_tree(
             &mut styles,
             ctx,
             &mut tag_cache,
+            &mut elements_styled,
+            element_count,
         );
+        cascade_progress(elements_styled, element_count);
         styles
     }
 }
@@ -202,6 +267,8 @@ fn style_subtree(
     styles: &mut [Option<ComputedStyle>],
     ctx: &CascadeContext<'_>,
     tag_cache: &mut FxHashMap<String, String>,
+    elements_styled: &mut u64,
+    total_elements: u64,
 ) {
     let node = &doc.nodes[node_id];
 
@@ -219,6 +286,23 @@ fn style_subtree(
             tag_cache,
         );
         styles[node_id] = Some(style);
+        *elements_styled += 1;
+        // Cooperative yield + sparse progress logging so PSP's
+        // cmd_server thread keeps getting CPU during the cascade.
+        // Yield aggressively at the start (every 16 elements for the
+        // first 256) so the cmd_server stays alive while the heap
+        // allocator is most contended, then back off to every 64.
+        let yield_interval = if *elements_styled < 256 { 16 } else { 64 };
+        if elements_styled.is_multiple_of(yield_interval) {
+            cascade_yield_fn();
+        }
+        // Progress every 64 elements for the first 512, then every
+        // 256 — so we can see early progress in the diag log even if
+        // cascade dies early.
+        let log_interval = if *elements_styled < 512 { 64 } else { 256 };
+        if elements_styled.is_multiple_of(log_interval) {
+            cascade_progress(*elements_styled, total_elements);
+        }
     }
 
     // Recurse into children. Iterate by index to avoid cloning the Vec.
@@ -234,6 +318,8 @@ fn style_subtree(
             styles,
             ctx,
             tag_cache,
+            elements_styled,
+            total_elements,
         );
     }
 }

@@ -41,6 +41,7 @@ pub mod video;
 // ---------------------------------------------------------------------------
 
 pub use audio::PspAudioBackend;
+pub use video::vlog_force;
 pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
 #[cfg(feature = "kernel-exception")]

@@ -14,6 +14,67 @@ mod tests;
 use super::dom::{Document, NodeId};
 use super::tokenizer::Token;
 
+// ---------------------------------------------------------------------------
+// Diagnostic progress + yield hooks
+// ---------------------------------------------------------------------------
+
+type TreeProgressFn = fn(u64, usize, usize);
+type TreeYieldFn = fn();
+type TreeRawLogFn = fn(&str);
+static TREE_PROGRESS_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TREE_YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TREE_RAW_LOG_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install a raw log hook fired at tree builder entry points to
+/// distinguish "function never called" from "function called but
+/// progress hook silently failed". Used by PSP backend wired to
+/// `vlog_force`.
+pub fn set_tree_builder_raw_log_hook(hook: TreeRawLogFn) {
+    TREE_RAW_LOG_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[allow(dead_code)] // Only called from per-step bisect builds.
+pub(crate) fn tree_raw_log(msg: &str) {
+    let raw = TREE_RAW_LOG_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: raw is either 0 or a `TreeRawLogFn` we stored.
+    let hook: TreeRawLogFn = unsafe { std::mem::transmute::<usize, TreeRawLogFn>(raw) };
+    hook(msg);
+}
+
+/// Install a tree-builder progress hook. Called every 256 tokens with
+/// `(tokens_processed, total_tokens, dom_nodes)`.
+pub fn set_tree_builder_progress_hook(hook: TreeProgressFn) {
+    TREE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Install a cooperative yield hook fired every 128 tree builder iters.
+pub fn set_tree_builder_yield_hook(hook: TreeYieldFn) {
+    TREE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn tree_progress_log(idx: u64, total: usize, nodes: usize) {
+    let raw = TREE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: raw is either 0 or a `TreeProgressFn` we stored.
+    let hook: TreeProgressFn = unsafe { std::mem::transmute::<usize, TreeProgressFn>(raw) };
+    hook(idx, total, nodes);
+}
+
+fn tree_yield() {
+    let raw = TREE_YIELD_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: raw is either 0 or a `TreeYieldFn` we stored.
+    let hook: TreeYieldFn = unsafe { std::mem::transmute::<usize, TreeYieldFn>(raw) };
+    hook();
+}
+
 // ------------------------------------------------------------------
 // Insertion mode
 // ------------------------------------------------------------------
@@ -83,10 +144,17 @@ impl TreeBuilder {
     /// Build a DOM tree from a token stream.
     pub fn build(tokens: Vec<Token>) -> Document {
         let mut builder = TreeBuilder::new();
-        for token in tokens {
+        let total = tokens.len();
+        for (idx, token) in tokens.into_iter().enumerate() {
             // Enforce DOM node limit to prevent memory exhaustion.
             if builder.doc.nodes.len() >= MAX_DOM_NODES {
                 break;
+            }
+            if idx.is_multiple_of(256) {
+                tree_progress_log(idx as u64, total, builder.doc.nodes.len());
+            }
+            if idx.is_multiple_of(128) {
+                tree_yield();
             }
             builder.process_token(token);
         }
@@ -110,9 +178,16 @@ impl TreeBuilder {
             frameset_ok: true,
             original_mode: InsertionMode::InBody,
         };
-        for token in tokens {
+        let total = tokens.len();
+        for (idx, token) in tokens.into_iter().enumerate() {
             if builder.doc.nodes.len() >= MAX_DOM_NODES {
                 break;
+            }
+            if idx.is_multiple_of(256) {
+                tree_progress_log(idx as u64, total, builder.doc.nodes.len());
+            }
+            if idx.is_multiple_of(128) {
+                tree_yield();
             }
             builder.process_token(token);
         }

@@ -210,6 +210,14 @@ impl BrowserState {
             widget.set_window(0, 14, 480, 244);
             // Attach TLS provider for HTTPS.
             widget.set_tls_provider(Box::new(oasis_backend_psp::PspTlsProvider::new()));
+            // Diagnostic log hook → on-disk eboot.log so remote
+            // testing can capture where a synchronous navigate_vfs is
+            // spending its time. The hook fires on entry/exit of the
+            // network fetch, response processing, and each image
+            // fetch in the PSP synchronous batch loop.
+            widget.set_diag_log(Box::new(|msg: &str| {
+                oasis_backend_psp::vlog_force(msg);
+            }));
             self.widget = Some(widget);
         }
         self.widget.as_mut().expect("just initialized above")
