@@ -15,7 +15,7 @@
 //! bind, composite, and destroy.
 
 use oasis_types::backend::{RenderTargetId, SdiRenderTarget};
-use oasis_types::error::Result;
+use oasis_types::error::{OasisError, Result};
 use std::collections::HashMap;
 
 /// Default number of frames an unused render target stays resident
@@ -120,15 +120,27 @@ impl RenderTargetPool {
                 }
             }
         }
+        let mut destroyed: std::collections::HashSet<RenderTargetId> =
+            std::collections::HashSet::new();
+        let mut first_err: Option<OasisError> = None;
         for id in &to_destroy {
-            backend.destroy_render_target(*id)?;
+            match backend.destroy_render_target(*id) {
+                Ok(()) => {
+                    destroyed.insert(*id);
+                }
+                Err(e) if first_err.is_none() => {
+                    first_err = Some(e);
+                }
+                Err(_) => {}
+            }
         }
-        let destroy_set: std::collections::HashSet<RenderTargetId> =
-            to_destroy.into_iter().collect();
         self.free.retain(|_, bucket| {
-            bucket.retain(|entry| !destroy_set.contains(&entry.id));
+            bucket.retain(|entry| !destroyed.contains(&entry.id));
             !bucket.is_empty()
         });
+        if let Some(e) = first_err {
+            return Err(e);
+        }
 
         self.frame_index += 1;
         Ok(())
@@ -144,15 +156,22 @@ impl RenderTargetPool {
             .collect();
         let in_use_ids: Vec<RenderTargetId> =
             self.in_use.iter().map(|(id, _)| *id).collect();
-        for id in &free_ids {
-            backend.destroy_render_target(*id)?;
-        }
-        for id in &in_use_ids {
-            backend.destroy_render_target(*id)?;
+        let mut first_err: Option<OasisError> = None;
+        for id in free_ids.iter().chain(in_use_ids.iter()) {
+            match backend.destroy_render_target(*id) {
+                Ok(()) => {}
+                Err(e) if first_err.is_none() => {
+                    first_err = Some(e);
+                }
+                Err(_) => {}
+            }
         }
         self.free.clear();
         self.in_use.clear();
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Total number of render targets currently resident in the pool
