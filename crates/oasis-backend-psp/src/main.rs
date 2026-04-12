@@ -451,6 +451,35 @@ fn psp_main() {
             }
         }
 
+        // -- Poll remote browse requests --
+        // Accepts a URL from the TCP command server and drives a
+        // synchronous `BrowserWidget::navigate_vfs`, switching to the
+        // Browser app if necessary. PSP must use `navigate_vfs`
+        // (not `navigate_to`) because the browser's per-frame
+        // `tick()` is not called on PSP — `std::time::Instant`
+        // crashes on Allegrex, so the async fetch state machine never
+        // advances. `navigate_vfs` does the fetch + parse + image
+        // load synchronously inside this single call.
+        if let Some(url) = oasis_backend_psp::cmd_server::take_pending_browse() {
+            kiosk_app = KioskApp::Browser;
+            // The cmd_server's auto_connect_wifi sets `NET_STACK_INITIALIZED`
+            // but not the full `NET_INITIALIZED` flag the browser's TLS
+            // provider checks. Call `ensure_net_init_pub` here to take
+            // the GotIp fast path and flip the flag without showing the
+            // WiFi dialog.
+            if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
+                dbg_log(&format!("[CMD] browse net init failed: {:?}", e));
+            }
+            let _ = br.ensure_widget();
+            let BrowserState { widget, vfs, .. } = &mut br;
+            if let Some(w) = widget.as_mut() {
+                w.navigate_vfs(&url, vfs);
+            }
+            br.loading = false;
+            br.status_msg = format!("Loaded {}", url);
+            dbg_log(&format!("[CMD] browse -> {}", url));
+        }
+
         // -- Poll remote skin change requests --
         if let Some(key) = oasis_backend_psp::cmd_server::take_pending_skin() {
             let preset = skins::PspSkinPreset::from_key(&key);
