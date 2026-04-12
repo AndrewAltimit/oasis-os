@@ -15,12 +15,54 @@
 //! collected into batches so backends can submit them as a single GPU
 //! draw call.
 
-use oasis_types::backend::{BatchRect, BatchText, Color, GradientStyle, SdiBackend, TextureId};
+use oasis_types::backend::{
+    BatchRect, BatchText, BlendMode as BackendBlendMode, Color, GradientStyle, RenderTargetId,
+    SdiBackend, TextureId,
+};
 use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
 use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
 use crate::layout::box_model::Rect;
+
+/// Convert a parsed CSS `BlendMode` into the backend's `BlendMode`
+/// (they are the same 16-variant vocabulary — a direct map).
+fn css_blend_to_backend(m: CssBlendMode) -> BackendBlendMode {
+    match m {
+        CssBlendMode::Normal => BackendBlendMode::Normal,
+        CssBlendMode::Multiply => BackendBlendMode::Multiply,
+        CssBlendMode::Screen => BackendBlendMode::Screen,
+        CssBlendMode::Overlay => BackendBlendMode::Overlay,
+        CssBlendMode::Darken => BackendBlendMode::Darken,
+        CssBlendMode::Lighten => BackendBlendMode::Lighten,
+        CssBlendMode::ColorDodge => BackendBlendMode::ColorDodge,
+        CssBlendMode::ColorBurn => BackendBlendMode::ColorBurn,
+        CssBlendMode::HardLight => BackendBlendMode::HardLight,
+        CssBlendMode::SoftLight => BackendBlendMode::SoftLight,
+        CssBlendMode::Difference => BackendBlendMode::Difference,
+        CssBlendMode::Exclusion => BackendBlendMode::Exclusion,
+        CssBlendMode::Hue => BackendBlendMode::Hue,
+        CssBlendMode::Saturation => BackendBlendMode::Saturation,
+        CssBlendMode::Color => BackendBlendMode::Color,
+        CssBlendMode::Luminosity => BackendBlendMode::Luminosity,
+    }
+}
+
+/// Entry in the compositor layer stack kept during `replay()`.
+struct ActiveLayer {
+    /// Allocated render target id. `None` when the backend reported
+    /// `supports_render_targets() == false` and we fell through to
+    /// the opacity-only fast path.
+    id: Option<RenderTargetId>,
+    /// Destination rect on the parent surface.
+    dst_x: i32,
+    dst_y: i32,
+    dst_w: u32,
+    dst_h: u32,
+    /// Composite parameters.
+    opacity: f32,
+    blend: BackendBlendMode,
+}
 
 // ---------------------------------------------------------------------------
 // Display items
@@ -753,11 +795,22 @@ impl DisplayList {
         // Sticky correction stack: Y offset adjustment for sticky elements
         // when replaying with a scroll delta different from recording time.
         let mut sticky_dy_stack: Vec<i32> = Vec::new();
+        // Active compositor layer stack. Each entry carries the
+        // render-target id (if the backend supports it) and composite
+        // parameters for the matching `PopCompositingLayer`. An
+        // additional translation (`-bounds.x`, `-bounds.y`) is applied
+        // to every drawable inside the layer so contents land at
+        // target-local coordinates.
+        let mut layer_stack: Vec<ActiveLayer> = Vec::new();
+        let mut compositor_dx: i32 = 0;
+        let mut compositor_dy: i32 = 0;
         // Batch of consecutive FillRect items for batched submission.
         let mut rect_batch: Vec<BatchRect> = Vec::new();
         // Batch of consecutive same-style DrawText items.
         let mut text_batch: Vec<BatchText<'_>> = Vec::new();
         let mut text_batch_key: (u16, bool, bool) = (0, false, false);
+
+        let supports_rt = backend.supports_render_targets();
 
         for item in &self.items {
             match item {
@@ -773,22 +826,79 @@ impl DisplayList {
                     opacity_stack.pop();
                     continue;
                 },
-                DisplayItem::PushCompositingLayer { opacity, .. } => {
-                    // Fallback path for backends that haven't opted into
-                    // `SdiRenderTarget`: treat the layer as if it were a
-                    // plain `PushLayer { opacity }` — blend mode, filters,
-                    // and backdrop filters are dropped. Documented as the
-                    // accepted degradation in docs/compositor-overhaul-plan.md
-                    // §3.4 step 4.
+                DisplayItem::PushCompositingLayer {
+                    bounds,
+                    opacity,
+                    blend,
+                    ..
+                } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.push(*opacity);
+                    let dx = bounds.x as i32;
+                    let dy = bounds.y as i32;
+                    let dw = bounds.width.max(1.0) as u32;
+                    let dh = bounds.height.max(1.0) as u32;
+                    let blend_backend = css_blend_to_backend(*blend);
+                    let layer_id = if supports_rt {
+                        match backend.create_render_target(dw, dh) {
+                            Ok(id) => {
+                                if backend.bind_render_target(id).is_ok() {
+                                    Some(id)
+                                } else {
+                                    let _ = backend.destroy_render_target(id);
+                                    None
+                                }
+                            },
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    if layer_id.is_some() {
+                        // Contents draw at target-local coordinates by
+                        // subtracting the layer's screen-space origin.
+                        compositor_dx -= dx;
+                        compositor_dy -= dy;
+                    } else {
+                        // Fallback: plain opacity stacking. Blend mode
+                        // and filters are dropped — documented as the
+                        // accepted degradation in
+                        // `docs/compositor-overhaul-plan.md` §3.4 step 4.
+                        opacity_stack.push(*opacity);
+                    }
+                    layer_stack.push(ActiveLayer {
+                        id: layer_id,
+                        dst_x: dx,
+                        dst_y: dy,
+                        dst_w: dw,
+                        dst_h: dh,
+                        opacity: *opacity,
+                        blend: blend_backend,
+                    });
                     continue;
                 },
                 DisplayItem::PopCompositingLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.pop();
+                    if let Some(layer) = layer_stack.pop() {
+                        if let Some(id) = layer.id {
+                            compositor_dx += layer.dst_x;
+                            compositor_dy += layer.dst_y;
+                            backend.unbind_render_target()?;
+                            backend.composite_render_target(
+                                id,
+                                layer.dst_x,
+                                layer.dst_y,
+                                layer.dst_w,
+                                layer.dst_h,
+                                layer.blend,
+                                layer.opacity,
+                            )?;
+                            backend.destroy_render_target(id)?;
+                        } else {
+                            opacity_stack.pop();
+                        }
+                    }
                     continue;
                 },
                 DisplayItem::PushSticky {
@@ -833,7 +943,15 @@ impl DisplayList {
 
             let layer_opacity = layer_opacity_product(&opacity_stack);
             let sticky_correction = sticky_dy_stack.last().copied().unwrap_or(0);
-            let eff_dy = scroll_dy + sticky_correction;
+            // When a compositing layer is active, items are drawn at
+            // target-local coordinates — `compositor_dx`/`compositor_dy`
+            // translate screen-space recordings into that space. When
+            // no layer is active both values are zero. Shadow the
+            // outer `scroll_dx` so the existing per-item drawing
+            // branches below pick up the layer offset automatically.
+            #[allow(clippy::shadow_unrelated)]
+            let scroll_dx = scroll_dx + compositor_dx;
+            let eff_dy = scroll_dy + compositor_dy + sticky_correction;
 
             match item {
                 DisplayItem::FillRect {
@@ -2461,5 +2579,124 @@ mod tests {
         assert!(DisplayItem::PopCompositingLayer.is_layer_boundary());
         assert!(!DisplayItem::PushLayer { opacity: 0.5 }.is_layer_boundary());
         assert!(!DisplayItem::PopLayer.is_layer_boundary());
+    }
+
+    #[test]
+    fn compositing_layer_drives_render_target_commands() {
+        // Against a backend that reports `supports_render_targets()`,
+        // replay() must create+bind+draw+unbind+composite+destroy.
+        use oasis_test_backend::RecordingBackend;
+        use oasis_types::backend::DrawCommand;
+
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(10.0, 20.0, 80.0, 60.0), 0.75));
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 20,
+            w: 40,
+            h: 30,
+            color: Color::rgba(100, 150, 200, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+
+        let cmds = backend.commands();
+        // Find the compositor commands in the recorded stream.
+        let create_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::CreateRenderTarget { .. }))
+            .expect("create fired");
+        let bind_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::BindRenderTarget { .. }))
+            .expect("bind fired");
+        let unbind_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::UnbindRenderTarget))
+            .expect("unbind fired");
+        let composite_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::CompositeRenderTarget { .. }))
+            .expect("composite fired");
+        let destroy_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::DestroyRenderTarget { .. }))
+            .expect("destroy fired");
+        assert!(create_idx < bind_idx);
+        assert!(bind_idx < unbind_idx);
+        assert!(unbind_idx < composite_idx);
+        assert!(composite_idx < destroy_idx);
+
+        // The composite command references the layer bounds + blend +
+        // opacity we supplied.
+        let composite = &cmds[composite_idx];
+        match composite {
+            DrawCommand::CompositeRenderTarget {
+                dst_x,
+                dst_y,
+                dst_w,
+                dst_h,
+                blend,
+                opacity,
+                ..
+            } => {
+                assert_eq!((*dst_x, *dst_y, *dst_w, *dst_h), (10, 20, 80, 60));
+                assert_eq!(*blend, oasis_types::backend::BlendMode::Multiply);
+                assert!((*opacity - 0.75).abs() < 1e-5);
+            },
+            _ => panic!("expected CompositeRenderTarget"),
+        }
+
+        // An inner FillRect must appear between bind and unbind — it
+        // draws into the target, not the framebuffer.
+        let inner_fill = cmds[bind_idx + 1..unbind_idx]
+            .iter()
+            .any(|c| matches!(c, DrawCommand::FillRect { .. }));
+        assert!(inner_fill, "inner fill recorded outside the layer");
+    }
+
+    #[test]
+    fn compositing_layer_translates_contents_to_local_space() {
+        use oasis_test_backend::RecordingBackend;
+        use oasis_types::backend::DrawCommand;
+
+        // Layer bounds at (50, 100) with size 30x20; inner rect at
+        // screen-space (60, 110, 10, 10). After translation it should
+        // land at target-local (10, 10, 10, 10).
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(50.0, 100.0, 30.0, 20.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 60,
+            y: 110,
+            w: 10,
+            h: 10,
+            color: Color::rgba(0, 0, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+
+        let cmds = backend.commands();
+        let bind_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::BindRenderTarget { .. }))
+            .expect("bind");
+        let unbind_idx = cmds
+            .iter()
+            .position(|c| matches!(c, DrawCommand::UnbindRenderTarget))
+            .expect("unbind");
+        let inner = cmds[bind_idx + 1..unbind_idx]
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .expect("inner fill");
+        assert_eq!(inner, (10, 10, 10, 10), "local-space translation wrong");
     }
 }

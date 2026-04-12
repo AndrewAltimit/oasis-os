@@ -257,6 +257,7 @@ mod tests {
     impl oasis_types::backend::SdiClipTransform for NullBackend {}
     impl oasis_types::backend::SdiVector for NullBackend {}
     impl oasis_types::backend::SdiBatch for NullBackend {}
+    impl oasis_types::backend::SdiRenderTarget for NullBackend {}
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {

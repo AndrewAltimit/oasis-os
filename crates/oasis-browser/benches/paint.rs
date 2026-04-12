@@ -74,6 +74,7 @@ impl SdiTextures for NullBackend {}
 impl SdiClipTransform for NullBackend {}
 impl SdiVector for NullBackend {}
 impl SdiBatch for NullBackend {}
+impl oasis_types::backend::SdiRenderTarget for NullBackend {}
 
 /// Generate a page with various elements that produce paint commands.
 fn generate_mixed_page(n: usize) -> String {

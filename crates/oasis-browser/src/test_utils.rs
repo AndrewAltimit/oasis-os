@@ -4,8 +4,8 @@
 //! in integration and unit tests across browser modules.
 
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId,
+    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
+    SdiText, SdiTextures, SdiVector, TextureId,
 };
 use oasis_types::error::Result;
 
@@ -249,3 +249,4 @@ impl SdiTextures for MockBackend {}
 impl SdiClipTransform for MockBackend {}
 impl SdiVector for MockBackend {}
 impl SdiBatch for MockBackend {}
+impl SdiRenderTarget for MockBackend {}

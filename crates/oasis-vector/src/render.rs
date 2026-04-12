@@ -380,6 +380,7 @@ mod tests {
     impl SdiText for MockBackend {}
     impl SdiTextures for MockBackend {}
     impl SdiBatch for MockBackend {}
+    impl oasis_types::backend::SdiRenderTarget for MockBackend {}
 
     #[test]
     fn test_render_empty_scene() {
