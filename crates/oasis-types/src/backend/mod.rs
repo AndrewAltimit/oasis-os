@@ -29,8 +29,9 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 // -- types --
 pub use types::{
     ArcParams, BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, Color, DashStyle,
-    DrawCommand, GradientStyle, StrokeStyle, TextMetrics, TextureId, arc_segments, backend_require,
-    bitmap_measure_text, cos_approx_f32, sin_approx_f32, texture_not_found, validate_rgba_data,
+    DrawCommand, GradientStyle, RenderTargetId, StrokeStyle, TextMetrics, TextureId, arc_segments,
+    backend_require, bitmap_measure_text, cos_approx_f32, sin_approx_f32, texture_not_found,
+    validate_rgba_data,
 };
 
 // -- core trait --
@@ -1849,5 +1850,291 @@ mod tests {
         let (w, h) = b.measure_text_extents("ABCD", 12);
         assert_eq!(w, m.width);
         assert_eq!(h, m.height);
+    }
+
+    // -----------------------------------------------------------------------
+    // SdiRenderTarget defaults
+    // -----------------------------------------------------------------------
+
+    impl SdiRenderTarget for RecordingBackend {}
+    impl SdiBlendMode for RecordingBackend {}
+
+    #[test]
+    fn render_target_default_unsupported() {
+        let mut b = RecordingBackend::new();
+        assert!(!b.supports_render_targets());
+        assert!(!b.supports_render_target_readback());
+        assert!(b.create_render_target(64, 64).is_err());
+        assert!(b.bind_render_target(RenderTargetId(0)).is_err());
+        assert!(b.unbind_render_target().is_err());
+        assert!(
+            b.composite_render_target(RenderTargetId(0), 0, 0, 64, 64, BlendMode::Normal, 1.0,)
+                .is_err()
+        );
+        let mut buf = vec![0u8; 64 * 64 * 4];
+        assert!(b.read_render_target(RenderTargetId(0), &mut buf).is_err());
+        // destroy_render_target is the *only* method that defaults to Ok —
+        // backends that opted out never created any to destroy.
+        assert!(b.destroy_render_target(RenderTargetId(0)).is_ok());
+    }
+
+    /// Capability-supporting test backend.  Records the bind/composite
+    /// stack so we can assert ordering on the compositor's behalf in
+    /// later PRs.  This is the foundational fixture for PR2 (the
+    /// test-backend implementation) and is duplicated here so the
+    /// types crate alone can verify trait wiring.
+    struct RtRecordingBackend {
+        next_id: u64,
+        targets: RefCell<Vec<(RenderTargetId, u32, u32)>>,
+        bind_stack: RefCell<Vec<RenderTargetId>>,
+        log: RefCell<Vec<String>>,
+    }
+
+    impl RtRecordingBackend {
+        fn new() -> Self {
+            Self {
+                next_id: 1,
+                targets: RefCell::new(Vec::new()),
+                bind_stack: RefCell::new(Vec::new()),
+                log: RefCell::new(Vec::new()),
+            }
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.borrow().clone()
+        }
+    }
+
+    impl SdiCore for RtRecordingBackend {
+        fn init(&mut self, _w: u32, _h: u32) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, _color: Color) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn blit(
+            &mut self,
+            _tex: TextureId,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn fill_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+            _color: Color,
+        ) -> crate::error::Result<()> {
+            self.log.borrow_mut().push("fill_rect".into());
+            Ok(())
+        }
+        fn draw_text(
+            &mut self,
+            _text: &str,
+            _x: i32,
+            _y: i32,
+            _font_size: u16,
+            _color: Color,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn load_texture(
+            &mut self,
+            _w: u32,
+            _h: u32,
+            _data: &[u8],
+        ) -> crate::error::Result<TextureId> {
+            Ok(TextureId(0))
+        }
+        fn destroy_texture(&mut self, _tex: TextureId) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            bitmap_measure_text(text, font_size)
+        }
+        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> crate::error::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn shutdown(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SdiShapes for RtRecordingBackend {}
+    impl SdiGradients for RtRecordingBackend {}
+    impl SdiAlpha for RtRecordingBackend {}
+    impl SdiText for RtRecordingBackend {}
+    impl SdiTextures for RtRecordingBackend {}
+    impl SdiClipTransform for RtRecordingBackend {}
+    impl SdiVector for RtRecordingBackend {}
+    impl SdiBatch for RtRecordingBackend {}
+    impl SdiBlendMode for RtRecordingBackend {}
+
+    impl SdiRenderTarget for RtRecordingBackend {
+        fn create_render_target(&mut self, w: u32, h: u32) -> crate::error::Result<RenderTargetId> {
+            let id = RenderTargetId(self.next_id);
+            self.next_id += 1;
+            self.targets.borrow_mut().push((id, w, h));
+            self.log
+                .borrow_mut()
+                .push(format!("create({},{w}x{h})", id.0));
+            Ok(id)
+        }
+        fn bind_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
+            if !self.targets.borrow().iter().any(|(t, ..)| *t == id) {
+                return Err(crate::error::OasisError::Backend(
+                    format!("unknown rt {}", id.0).into(),
+                ));
+            }
+            self.bind_stack.borrow_mut().push(id);
+            self.log.borrow_mut().push(format!("bind({})", id.0));
+            Ok(())
+        }
+        fn unbind_render_target(&mut self) -> crate::error::Result<()> {
+            let popped = self
+                .bind_stack
+                .borrow_mut()
+                .pop()
+                .ok_or_else(|| crate::error::OasisError::Backend("unbind underflow".into()))?;
+            self.log.borrow_mut().push(format!("unbind({})", popped.0));
+            Ok(())
+        }
+        fn composite_render_target(
+            &mut self,
+            id: RenderTargetId,
+            _dst_x: i32,
+            _dst_y: i32,
+            _dst_w: u32,
+            _dst_h: u32,
+            blend: BlendMode,
+            opacity: f32,
+        ) -> crate::error::Result<()> {
+            self.log
+                .borrow_mut()
+                .push(format!("composite({},{blend:?},{opacity})", id.0));
+            Ok(())
+        }
+        fn destroy_render_target(&mut self, id: RenderTargetId) -> crate::error::Result<()> {
+            self.targets.borrow_mut().retain(|(t, ..)| *t != id);
+            self.log.borrow_mut().push(format!("destroy({})", id.0));
+            Ok(())
+        }
+        fn supports_render_targets(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn render_target_basic_lifecycle() {
+        let mut b = RtRecordingBackend::new();
+        let id = b.create_render_target(64, 32).unwrap();
+        b.bind_render_target(id).unwrap();
+        b.fill_rect(0, 0, 64, 32, Color::WHITE).unwrap();
+        b.unbind_render_target().unwrap();
+        b.composite_render_target(id, 10, 20, 64, 32, BlendMode::Multiply, 0.5)
+            .unwrap();
+        b.destroy_render_target(id).unwrap();
+
+        assert_eq!(
+            b.log(),
+            vec![
+                "create(1,64x32)",
+                "bind(1)",
+                "fill_rect",
+                "unbind(1)",
+                "composite(1,Multiply,0.5)",
+                "destroy(1)",
+            ],
+        );
+    }
+
+    #[test]
+    fn render_target_nested_bind_stack() {
+        let mut b = RtRecordingBackend::new();
+        let outer = b.create_render_target(128, 128).unwrap();
+        let inner = b.create_render_target(32, 32).unwrap();
+
+        // Outer layer drawn into outer; inner layer nested inside it.
+        b.bind_render_target(outer).unwrap();
+        b.fill_rect(0, 0, 128, 128, Color::BLACK).unwrap();
+        b.bind_render_target(inner).unwrap();
+        b.fill_rect(0, 0, 32, 32, Color::WHITE).unwrap();
+        b.unbind_render_target().unwrap();
+        // Composite inner back into outer (still bound).
+        b.composite_render_target(inner, 4, 4, 32, 32, BlendMode::Screen, 1.0)
+            .unwrap();
+        b.unbind_render_target().unwrap();
+        // Composite outer back into the framebuffer.
+        b.composite_render_target(outer, 0, 0, 128, 128, BlendMode::Normal, 1.0)
+            .unwrap();
+
+        // Stack must be empty at the end.
+        assert!(b.bind_stack.borrow().is_empty());
+        // Inner must be unbound before outer.
+        let log = b.log();
+        let inner_unbind = log.iter().position(|s| s == "unbind(2)").unwrap();
+        let outer_unbind = log.iter().position(|s| s == "unbind(1)").unwrap();
+        assert!(
+            inner_unbind < outer_unbind,
+            "inner must unbind before outer: {log:?}"
+        );
+    }
+
+    #[test]
+    fn render_target_unbind_underflow_errors() {
+        let mut b = RtRecordingBackend::new();
+        assert!(b.unbind_render_target().is_err());
+    }
+
+    #[test]
+    fn blend_mode_default_is_normal() {
+        assert_eq!(BlendMode::default(), BlendMode::Normal);
+        assert!(BlendMode::Normal.is_normal());
+        assert!(!BlendMode::Multiply.is_normal());
+    }
+
+    #[test]
+    fn blend_mode_set_blend_mode_default_ok() {
+        // SdiBlendMode default impls accept any mode without error.
+        let mut b = RtRecordingBackend::new();
+        for mode in [
+            BlendMode::Normal,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ] {
+            assert!(b.set_blend_mode(mode).is_ok());
+        }
     }
 }

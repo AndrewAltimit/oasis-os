@@ -179,6 +179,17 @@ impl Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(pub u64);
 
+/// Opaque handle to an offscreen render target.
+///
+/// Render targets are surfaces that can be drawn into via
+/// [`SdiRenderTarget::bind_render_target`](super::SdiRenderTarget::bind_render_target),
+/// then composited back into the parent surface with a blend mode.
+/// They are the primitive the browser compositor uses to implement
+/// `mix-blend-mode`, `backdrop-filter`, `mask-*`, `isolation: isolate`,
+/// and box-level `filter`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderTargetId(pub u64);
+
 /// A recorded draw command for batch submission.
 ///
 /// Draw commands capture all parameters needed to replay a draw call. The
