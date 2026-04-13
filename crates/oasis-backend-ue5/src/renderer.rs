@@ -10,15 +10,17 @@
 use std::rc::Rc;
 
 use oasis_core::backend::{
-    Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiGradients, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId, texture_not_found, validate_rgba_data,
+    BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform,
+    SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId,
+    texture_not_found, validate_rgba_data,
 };
-use oasis_core::error::Result;
+use oasis_core::error::{OasisError, Result};
 use oasis_rasterize::SoftwareBuffer;
 use oasis_types::backend::SdiCore;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::PixelSink;
+use std::collections::HashMap;
 
 use crate::font;
 
@@ -40,6 +42,18 @@ pub struct Ue5Backend {
     textures: Vec<Option<Texture>>,
     clip_stack: ClipStack,
     translate_stack: TranslateStack,
+    /// Offscreen render targets. Keyed by `RenderTargetId` inner u64.
+    /// When a target is *bound*, its buffer is temporarily swapped into
+    /// `self.fb` and the parent surface is stored on the bind stack.
+    render_targets: HashMap<u64, SoftwareBuffer>,
+    /// Bind stack: each entry holds the render target id that was
+    /// active before the bind (`None` = framebuffer) and the
+    /// corresponding swapped-out buffer.
+    render_target_bind_stack: Vec<(Option<u64>, SoftwareBuffer)>,
+    /// Currently bound render target id (`None` = framebuffer).
+    current_render_target: Option<u64>,
+    /// Monotonic counter for render-target ids.
+    next_render_target_id: u64,
 }
 
 impl Ue5Backend {
@@ -51,6 +65,10 @@ impl Ue5Backend {
             textures: Vec::new(),
             clip_stack: ClipStack::new(width, height),
             translate_stack: TranslateStack::new(),
+            render_targets: HashMap::new(),
+            render_target_bind_stack: Vec::new(),
+            current_render_target: None,
+            next_render_target_id: 1,
         }
     }
 
@@ -523,6 +541,125 @@ impl SdiClipTransform for Ue5Backend {
 // -------------------------------------------------------------------
 
 impl SdiBatch for Ue5Backend {}
+
+// -------------------------------------------------------------------
+// SdiRenderTarget: Offscreen compositing layers (compositor PR4)
+// -------------------------------------------------------------------
+
+impl SdiRenderTarget for Ue5Backend {
+    fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
+        if w == 0 || h == 0 {
+            return Err(OasisError::Backend(
+                format!("create_render_target: zero dimension ({w}x{h})").into(),
+            ));
+        }
+        let id = self.next_render_target_id;
+        self.next_render_target_id += 1;
+        self.render_targets.insert(id, SoftwareBuffer::new(w, h));
+        Ok(RenderTargetId(id))
+    }
+
+    fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        // Take the target's buffer out of storage and swap it with
+        // `self.fb`. The previous fb ends up held by the bind stack
+        // entry and is swapped back on `unbind_render_target`.
+        let mut target_fb = self.render_targets.remove(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("bind_render_target: unknown id {id:?}").into())
+        })?;
+        std::mem::swap(&mut self.fb, &mut target_fb);
+        self.render_target_bind_stack
+            .push((self.current_render_target, target_fb));
+        self.current_render_target = Some(id.0);
+        Ok(())
+    }
+
+    fn unbind_render_target(&mut self) -> Result<()> {
+        let (prev_id, mut saved_parent) = self.render_target_bind_stack.pop().ok_or_else(|| {
+            OasisError::Backend("unbind_render_target: bind stack underflow".into())
+        })?;
+        // Swap the parent surface back in; the target's buffer ends up
+        // in `saved_parent` which we return to the pool.
+        std::mem::swap(&mut self.fb, &mut saved_parent);
+        debug_assert!(
+            self.current_render_target.is_some(),
+            "unbind_render_target called without active target"
+        );
+        if let Some(active_id) = self.current_render_target {
+            self.render_targets.insert(active_id, saved_parent);
+        }
+        self.current_render_target = prev_id;
+        Ok(())
+    }
+
+    fn composite_render_target(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        _blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        let src = self.render_targets.get(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
+        })?;
+        let sw = src.width();
+        let sh = src.height();
+        debug_assert_eq!(sw, dst_w, "composite_render_target: dst_w != src width");
+        debug_assert_eq!(sh, dst_h, "composite_render_target: dst_h != src height");
+        let src_pixels = src.data().to_vec();
+        self.fb
+            .composite_rgba(dst_x, dst_y, sw, sh, &src_pixels, opacity);
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
+        let src = self.render_targets.get(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("read_render_target: unknown id {id:?}").into())
+        })?;
+        let expected = (src.width() * src.height() * 4) as usize;
+        if dst.len() < expected {
+            return Err(OasisError::Backend(
+                format!(
+                    "read_render_target: buffer too small ({} < {expected})",
+                    dst.len()
+                )
+                .into(),
+            ));
+        }
+        dst[..expected].copy_from_slice(src.data());
+        Ok(())
+    }
+
+    fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        if self.current_render_target == Some(id.0)
+            || self
+                .render_target_bind_stack
+                .iter()
+                .any(|(stacked, _)| *stacked == Some(id.0))
+        {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: id {id:?} is still bound").into(),
+            ));
+        }
+        if self.render_targets.remove(&id.0).is_none() {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn supports_render_targets(&self) -> bool {
+        true
+    }
+
+    fn supports_render_target_readback(&self) -> bool {
+        true
+    }
+}
 
 #[cfg(test)]
 mod tests {

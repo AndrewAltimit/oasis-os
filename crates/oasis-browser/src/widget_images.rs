@@ -453,7 +453,15 @@ impl BrowserWidget {
 
             // On WASM/PSP, load and decode synchronously (no threads).
             #[cfg(any(target_arch = "wasm32", feature = "psp"))]
-            if let Ok(loaded) = load_resource(vfs, &request, self.tls.as_deref()) {
+            self.diag(&format!("[BR] image fetch start: {resolved}"));
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            let load_result = load_resource(vfs, &request, self.tls.as_deref());
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            if let Ok(loaded) = load_result {
+                self.diag(&format!(
+                    "[BR] image fetch ok: {} bytes",
+                    loaded.response.body.len()
+                ));
                 if let Some(decoded) = image::decode_image(&loaded.response.body) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
@@ -475,7 +483,13 @@ impl BrowserWidget {
                     self.decoded_images.insert(resolved, decoded);
                     self.image_info_dirty = true;
                     any_decoded = true;
+                } else {
+                    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                    self.diag("[BR] image decode failed");
                 }
+            } else {
+                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                self.diag("[BR] image fetch err");
             }
 
             // Check time budget after each image (not on PSP --

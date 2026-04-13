@@ -884,6 +884,38 @@ pub enum BackgroundBox {
     Text,
 }
 
+/// CSS `mask-mode` — how the mask image's channel is interpreted.
+///
+/// Added for compositor overhaul PR6. Parsed today; the actual
+/// destination-in composite path wires up in a follow-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// Use alpha channel on images with alpha, luminance otherwise.
+    #[default]
+    MatchSource,
+    /// Use luminance channel.
+    Luminance,
+    /// Use alpha channel.
+    Alpha,
+}
+
+/// CSS `mask-composite` — how multiple mask layers combine.
+///
+/// Only single-layer masks are currently wired up; the multi-layer
+/// composite operations are parsed but reduce to `Add` at paint time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskComposite {
+    /// `source-over` semantics — default single-layer behavior.
+    #[default]
+    Add,
+    /// `xor` of the two mask layers.
+    Subtract,
+    /// `in` — intersect the two layers.
+    Intersect,
+    /// `xor` — symmetric difference.
+    Exclude,
+}
+
 /// CSS `image-rendering` property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageRendering {

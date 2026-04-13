@@ -1064,6 +1064,7 @@ mod tests {
     impl SdiClipTransform for MockBackend {}
     impl SdiVector for MockBackend {}
     impl SdiBatch for MockBackend {}
+    impl oasis_core::backend::SdiRenderTarget for MockBackend {}
 
     #[test]
     fn new_is_idle() {

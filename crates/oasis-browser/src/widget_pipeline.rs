@@ -195,6 +195,7 @@ impl BrowserWidget {
 
     /// Synchronous resource load and processing (VFS or fallback).
     fn execute_sync_load(&mut self, url: &str, vfs: &dyn Vfs, request: ResourceRequest) {
+        self.diag(&format!("[BR] sync_load fetch start: {url}"));
         match load_resource(
             vfs,
             &request,
@@ -205,15 +206,23 @@ impl BrowserWidget {
             Some(&self.cache),
         ) {
             Ok(loaded) => {
+                self.diag(&format!(
+                    "[BR] sync_load fetch ok: {} bytes, status={}",
+                    loaded.response.body.len(),
+                    loaded.response.status,
+                ));
                 let url_str = loaded.response.url.clone();
                 let etag = loaded.etag.clone();
                 let last_modified = loaded.last_modified.clone();
                 self.page_csp = loaded.csp;
+                self.diag("[BR] process_response start");
                 self.process_response(loaded.response);
+                self.diag("[BR] process_response done");
                 self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
                 let err_msg = e.to_string();
+                self.diag(&format!("[BR] sync_load fetch err: {err_msg}"));
                 let err_resp = loader::vfs::error_page(url, &err_msg);
                 self.process_response(err_resp);
                 self.state = LoadingState::Error;
@@ -224,13 +233,19 @@ impl BrowserWidget {
 
         // Collect image requests for time-sliced loading across frames.
         self.collect_page_image_requests();
+        self.diag(&format!(
+            "[BR] image queue: {} pending",
+            self.pending_images.len()
+        ));
 
         // On PSP, tick() is not called (std::time::Instant crashes on
         // Allegrex -- confirmed by testing), so load all images
         // synchronously here before returning.
         #[cfg(feature = "psp")]
         if !self.pending_images.is_empty() {
+            self.diag("[BR] image batch start (PSP synchronous)");
             self.load_next_image_batch(vfs, 5000);
+            self.diag("[BR] image batch done");
         }
 
         // On desktop/WASM, images stream in via `load_next_image_batch()`
@@ -498,6 +513,10 @@ impl BrowserWidget {
     const MAX_HTML_SOURCE_BYTES: usize = 10 * 1024 * 1024;
 
     pub fn load_html(&mut self, html_source: &str, url: &str) {
+        self.diag(&format!(
+            "[BR] load_html start: {} bytes",
+            html_source.len()
+        ));
         // Guard against oversized HTML input.
         let source = if html_source.len() > Self::MAX_HTML_SOURCE_BYTES {
             log::warn!(
@@ -512,12 +531,16 @@ impl BrowserWidget {
 
         // 1. Tokenize and build DOM, reusing the previous document's
         //    arena allocation when available to avoid reallocations.
+        self.diag("[BR] html tokenize start");
         let tokens = html::tokenizer::Tokenizer::new(source).tokenize();
+        self.diag(&format!("[BR] html tokenize done: {} tokens", tokens.len()));
+        self.diag("[BR] tree build start");
         let doc = if let Some(old_doc) = self.document.take() {
             html::tree_builder::TreeBuilder::build_reuse(tokens, old_doc)
         } else {
             html::tree_builder::TreeBuilder::build(tokens)
         };
+        self.diag(&format!("[BR] tree build done: {} nodes", doc.nodes.len()));
 
         // 1b. Execute inline <script> blocks (if JS enabled).
         //
@@ -609,10 +632,17 @@ impl BrowserWidget {
 
         // 3. Collect <style> blocks and inline style="" attributes from DOM.
         //    Cache them so hover restyles don't re-parse.
+        self.diag("[BR] collect stylesheets start");
         let author_sheets = Self::collect_style_sheets(&doc);
         let inline_styles = Self::collect_inline_styles(&doc);
+        self.diag(&format!(
+            "[BR] collect stylesheets done: {} sheets, {} inline",
+            author_sheets.len(),
+            inline_styles.len()
+        ));
 
         // 4. CSS cascade: user-agent + author stylesheets + inline styles.
+        self.diag("[BR] cascade start");
         let ua_sheet = css::default::default_stylesheet();
         let (styles, selector_index) = {
             let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
@@ -625,10 +655,12 @@ impl BrowserWidget {
                 focused_node: None,
             };
             let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+            self.diag("[BR] selector index start");
             // Build selector index while all_sheets is alive.
             let idx = css::cascade::SelectorIndex::build(&all_sheets);
             (styles, idx)
         };
+        self.diag(&format!("[BR] cascade done: {} styles", styles.len()));
 
         // Update shared computed styles for JS getComputedStyle().
         #[cfg(feature = "javascript")]
@@ -670,6 +702,7 @@ impl BrowserWidget {
         let href_map = Self::build_link_map(&doc);
 
         // 6. Build layout tree.
+        self.diag("[BR] layout start");
         let content_h = self.config.content_height(self.window_h);
         self.refresh_image_info();
         let shared = std::rc::Rc::clone(&self.text_cache);
@@ -686,6 +719,7 @@ impl BrowserWidget {
             Some(url),
             &self.cached_image_info,
         );
+        self.diag("[BR] layout done");
 
         // 7a. Collect canvas states from layout tree.
         #[cfg(feature = "javascript")]
@@ -714,6 +748,7 @@ impl BrowserWidget {
             self.nav.navigate(url, &title);
         }
         self.skip_nav_push = false;
+        self.diag("[BR] load_html done");
     }
 
     /// Walk the DOM to build a map of `<a>` element NodeIds to their

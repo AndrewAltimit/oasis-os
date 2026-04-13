@@ -25,10 +25,11 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, Color, DashStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
-    SdiShapes, SdiTextures, SdiVector, StrokeStyle, TextureId,
+    ArcParams, BackendErrExt, BlendMode, Color, DashStyle, RenderTargetId, SdiAlpha, SdiBatch,
+    SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiTextures, SdiVector, StrokeStyle,
+    TextureId,
 };
-use oasis_core::error::Result;
+use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 pub use oasis_types::geometry::ClipRect;
 
@@ -81,6 +82,18 @@ pub struct SdlBackend {
     // The explicit Drop impl also clears this map, but field order provides
     // defense-in-depth. Reordering these fields without the Drop impl is UB.
     pub(crate) textures: HashMap<u64, Texture<'static>>,
+    /// Offscreen render targets (compositor PR4). Same lifetime story
+    /// as `textures` — the `Texture<'static>` handles borrow from
+    /// `texture_creator`, must be dropped before the creator.
+    pub(crate) render_targets: HashMap<u64, Texture<'static>>,
+    /// Bind stack for `SdiRenderTarget`. Each entry is the `RenderTargetId`
+    /// that was active before the corresponding `bind_render_target`
+    /// call, i.e. popping restores the entry. `None` means "framebuffer".
+    pub(crate) render_target_bind_stack: Vec<Option<u64>>,
+    /// Currently bound render target (`None` = framebuffer).
+    pub(crate) current_render_target: Option<u64>,
+    /// Monotonic counter for render-target ids.
+    pub(crate) next_render_target_id: u64,
     /// Maps glyph key to a cached SDL texture ID (lives in `textures`).
     pub(crate) glyph_cache: HashMap<GlyphCacheKey, u64>,
     /// LRU access timestamps for glyph cache eviction.
@@ -134,6 +147,10 @@ impl SdlBackend {
             canvas,
             event_pump,
             textures: HashMap::new(),
+            render_targets: HashMap::new(),
+            render_target_bind_stack: Vec::new(),
+            current_render_target: None,
+            next_render_target_id: 1,
             glyph_cache: HashMap::new(),
             glyph_access: HashMap::new(),
             glyph_access_counter: 0,
@@ -505,6 +522,212 @@ impl SdiClipTransform for SdlBackend {
 
 impl SdiBatch for SdlBackend {}
 
+// -------------------------------------------------------------------
+// SdiRenderTarget: Offscreen compositing layers (compositor PR4)
+// -------------------------------------------------------------------
+
+/// Map a CSS blend mode onto SDL3's built-in blend-mode enum.
+///
+/// SDL3 only ships a handful of blend modes natively: `NONE`, `BLEND`,
+/// `ADD`, `MOD`, `MUL`. Anything CSS-specific (`Overlay`, `ColorDodge`,
+/// the non-separable HSL modes, …) falls back to plain alpha blending
+/// for the moment — documented as accepted degradation in
+/// `docs/compositor-overhaul-plan.md` §3.4 step 4. A CPU compositor
+/// extension is queued for a follow-up PR.
+fn sdl_blend_for(mode: BlendMode) -> sdl3::render::BlendMode {
+    use sdl3::render::BlendMode as Sdl;
+    match mode {
+        BlendMode::Normal => Sdl::Blend,
+        // SDL3 `MOD` is `dst * src`, matching CSS `multiply` closely enough
+        // for alpha-1 src. Non-unit alpha will drift but is still closer
+        // than plain alpha over.
+        BlendMode::Multiply => Sdl::Mod,
+        // Everything else: software path is TODO, degrade to standard
+        // alpha blending so the page still renders.
+        _ => Sdl::Blend,
+    }
+}
+
+impl SdiRenderTarget for SdlBackend {
+    fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
+        if w == 0 || h == 0 {
+            return Err(OasisError::Backend(
+                format!("create_render_target: zero dimension ({w}x{h})").into(),
+            ));
+        }
+        // Create an ABGR8888 texture with TARGET access so the
+        // renderer can draw into it.
+        let raw_renderer = self.canvas.raw();
+        // SAFETY: raw_renderer is a valid SDL_Renderer pointer owned
+        // by `canvas`. SDL_CreateTexture does not retain the pointer;
+        // it returns a fresh SDL_Texture on success or null on failure.
+        let raw_tex = unsafe {
+            sdl3::sys::render::SDL_CreateTexture(
+                raw_renderer,
+                sdl3::sys::pixels::SDL_PIXELFORMAT_ABGR8888,
+                sdl3::sys::render::SDL_TEXTUREACCESS_TARGET,
+                w as i32,
+                h as i32,
+            )
+        };
+        if raw_tex.is_null() {
+            return Err(OasisError::Backend(
+                format!("SDL_CreateTexture (target {w}x{h}) failed").into(),
+            ));
+        }
+        // SAFETY: raw_tex is a valid SDL_Texture; wrap in Rust handle.
+        // Lifetime is erased to `'static` using the same pattern as
+        // regular textures on this backend; correctness relies on
+        // `render_targets.clear()` in `Drop`.
+        let tex: Texture<'_> = unsafe { self.texture_creator.raw_create_texture(raw_tex) };
+        let tex: Texture<'static> = unsafe { std::mem::transmute(tex) };
+        let id = self.next_render_target_id;
+        self.next_render_target_id += 1;
+        self.render_targets.insert(id, tex);
+        Ok(RenderTargetId(id))
+    }
+
+    fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        let raw_tex = match self.render_targets.get(&id.0) {
+            Some(tex) => self::sdl_texture_raw(tex),
+            None => {
+                return Err(OasisError::Backend(
+                    format!("bind_render_target: unknown id {id:?}").into(),
+                ));
+            },
+        };
+        // Remember the previous binding so unbind can restore it.
+        self.render_target_bind_stack
+            .push(self.current_render_target);
+        // SAFETY: raw_tex is a valid SDL_Texture owned by this backend.
+        // SDL_SetRenderTarget accepts any texture created with
+        // `TEXTUREACCESS_TARGET` from the same renderer.
+        let ok = unsafe { sdl3::sys::render::SDL_SetRenderTarget(self.canvas.raw(), raw_tex) };
+        if !ok {
+            self.render_target_bind_stack.pop();
+            return Err(OasisError::Backend(
+                "SDL_SetRenderTarget (bind) failed".into(),
+            ));
+        }
+        self.current_render_target = Some(id.0);
+        Ok(())
+    }
+
+    fn unbind_render_target(&mut self) -> Result<()> {
+        let prev = self.render_target_bind_stack.pop().ok_or_else(|| {
+            OasisError::Backend("unbind_render_target: bind stack underflow".into())
+        })?;
+        let raw_tex: *mut sdl3::sys::render::SDL_Texture = match prev {
+            Some(id) => match self.render_targets.get(&id) {
+                Some(tex) => self::sdl_texture_raw(tex),
+                None => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
+        };
+        // SAFETY: raw_tex is either null (framebuffer) or a valid
+        // texture owned by this backend that has outlived the current
+        // bind scope.
+        let ok = unsafe { sdl3::sys::render::SDL_SetRenderTarget(self.canvas.raw(), raw_tex) };
+        if !ok {
+            return Err(OasisError::Backend(
+                "SDL_SetRenderTarget (unbind) failed".into(),
+            ));
+        }
+        self.current_render_target = prev;
+        Ok(())
+    }
+
+    fn composite_render_target(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        debug_assert!(
+            (0.0..=1.0).contains(&opacity),
+            "opacity must be in [0.0, 1.0], got {opacity}"
+        );
+        let Self {
+            canvas,
+            render_targets,
+            ..
+        } = self;
+        let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
+        })?;
+        tex.set_blend_mode(sdl_blend_for(blend));
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        tex.set_alpha_mod(alpha);
+        tex.set_color_mod(255, 255, 255);
+        let r = canvas
+            .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
+            .backend_err();
+        tex.set_alpha_mod(255);
+        tex.set_blend_mode(sdl3::render::BlendMode::Blend);
+        r
+    }
+
+    fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        // If the caller destroys a still-bound target, refuse — same
+        // contract the RecordingBackend tests enforce.
+        if self.current_render_target == Some(id.0)
+            || self.render_target_bind_stack.contains(&Some(id.0))
+        {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: id {id:?} is still bound").into(),
+            ));
+        }
+        if self.render_targets.remove(&id.0).is_none() {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn supports_render_targets(&self) -> bool {
+        true
+    }
+
+    fn supports_render_target_readback(&self) -> bool {
+        // SDL3 supports SDL_RenderReadPixels but read_render_target
+        // is not yet wired — report false until implemented.
+        false
+    }
+}
+
+/// Extract the raw `SDL_Texture` pointer from a safe `Texture`
+/// handle.
+///
+/// The sdl3 crate hides its `raw` field behind `pub(crate)`, but we
+/// need the pointer to call `SDL_SetRenderTarget`.  `Texture<'r>` in
+/// sdl3 0.17 is `{ raw: *mut SDL_Texture, _marker: PhantomData }` —
+/// layout-compatible with a single pointer. We cast through a
+/// repr-identical shadow struct.
+#[repr(C)]
+struct TextureLayout {
+    raw: *mut sdl3::sys::render::SDL_Texture,
+    _marker: std::marker::PhantomData<&'static ()>,
+}
+
+fn sdl_texture_raw(tex: &Texture<'static>) -> *mut sdl3::sys::render::SDL_Texture {
+    // SAFETY: This relies on sdl3 0.17 `Texture<'r>` having the exact
+    // layout `{ raw: *mut SDL_Texture, _marker: PhantomData }`, which
+    // it does (verified in `render.rs:2213-2216` of the sdl3 crate).
+    // `TextureLayout` mirrors that layout with `#[repr(C)]` and a
+    // single pointer-sized field + ZST.  A bump in the sdl3 crate
+    // that changes this layout is the reason we gate sdl3 at exact
+    // minor version in Cargo.toml.
+    unsafe {
+        let layout: &TextureLayout = &*(tex as *const Texture<'static>).cast::<TextureLayout>();
+        layout.raw
+    }
+}
+
 impl oasis_core::backend::ClipboardBackend for SdlBackend {
     fn copy(&mut self, text: &str) {
         let clipboard = self.canvas.window().subsystem().clipboard();
@@ -545,6 +768,9 @@ impl Drop for SdlBackend {
         self.glyph_cache.clear();
         self.glyph_access.clear();
         self.textures.clear();
+        // Render targets share the same lifetime-erasure pattern as
+        // `textures` and must be dropped before `texture_creator`.
+        self.render_targets.clear();
     }
 }
 

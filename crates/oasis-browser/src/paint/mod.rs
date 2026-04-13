@@ -17,6 +17,8 @@ mod background;
 mod borders;
 #[allow(dead_code)]
 pub(crate) mod display_list;
+#[allow(dead_code)]
+pub(crate) mod filter_chain;
 pub(crate) mod filters;
 mod markers;
 #[allow(clippy::too_many_arguments, clippy::collapsible_if)]

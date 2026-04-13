@@ -8,8 +8,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::stacks::{ClipStack, TranslateStack};
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiCore, SdiText, SdiVector, TextMetrics, TextureId,
-    texture_not_found, validate_rgba_data,
+    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiCore, SdiRenderTarget, SdiText,
+    SdiVector, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 
@@ -59,6 +59,25 @@ pub(crate) struct TextureData {
 /// Maximum number of cached glyphs before LRU eviction kicks in.
 const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
+/// A single offscreen render target: its canvas element plus a
+/// cached 2D context so we don't pay `getContext("2d")` per bind.
+pub(crate) struct RenderTargetData {
+    pub(crate) canvas: HtmlCanvasElement,
+    pub(crate) ctx: CanvasRenderingContext2d,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// Saved framebuffer state pushed onto the bind stack during
+/// `bind_render_target`.
+struct SavedSurface {
+    prev_id: Option<u64>,
+    canvas: HtmlCanvasElement,
+    ctx: CanvasRenderingContext2d,
+    width: u32,
+    height: u32,
+}
+
 pub struct WasmBackend {
     pub(crate) canvas: HtmlCanvasElement,
     pub(crate) ctx: CanvasRenderingContext2d,
@@ -77,6 +96,15 @@ pub struct WasmBackend {
     glyph_access: HashMap<GlyphCacheKey, u64>,
     glyph_access_counter: u64,
     pub(crate) gradient_cache: HashMap<crate::gradients::GradientCacheKey, web_sys::CanvasGradient>,
+    /// Offscreen render targets (compositor PR4). Each is a
+    /// separate `<canvas>` element plus cached context.
+    pub(crate) render_targets: HashMap<u64, RenderTargetData>,
+    /// Stack of saved framebuffer states for nested compositing.
+    render_target_bind_stack: Vec<SavedSurface>,
+    /// Currently bound render target (`None` = framebuffer).
+    pub(crate) current_render_target: Option<u64>,
+    /// Monotonic counter for render-target ids.
+    next_render_target_id: u64,
 }
 
 impl WasmBackend {
@@ -110,6 +138,10 @@ impl WasmBackend {
             glyph_access: HashMap::new(),
             glyph_access_counter: 0,
             gradient_cache: HashMap::new(),
+            render_targets: HashMap::new(),
+            render_target_bind_stack: Vec::new(),
+            current_render_target: None,
+            next_render_target_id: 1,
         })
     }
 
@@ -602,6 +634,201 @@ impl SdiText for WasmBackend {
 // -------------------------------------------------------------------
 
 impl SdiBatch for WasmBackend {}
+
+// -------------------------------------------------------------------
+// SdiRenderTarget: Offscreen compositing layers (compositor PR4)
+// -------------------------------------------------------------------
+
+/// Map a CSS blend mode onto the Canvas2D `globalCompositeOperation`
+/// string. Canvas2D ships native support for all 16 CSS blend modes.
+fn canvas_composite_op(mode: BlendMode) -> &'static str {
+    match mode {
+        BlendMode::Normal => "source-over",
+        BlendMode::Multiply => "multiply",
+        BlendMode::Screen => "screen",
+        BlendMode::Overlay => "overlay",
+        BlendMode::Darken => "darken",
+        BlendMode::Lighten => "lighten",
+        BlendMode::ColorDodge => "color-dodge",
+        BlendMode::ColorBurn => "color-burn",
+        BlendMode::HardLight => "hard-light",
+        BlendMode::SoftLight => "soft-light",
+        BlendMode::Difference => "difference",
+        BlendMode::Exclusion => "exclusion",
+        BlendMode::Hue => "hue",
+        BlendMode::Saturation => "saturation",
+        BlendMode::Color => "color",
+        BlendMode::Luminosity => "luminosity",
+    }
+}
+
+impl SdiRenderTarget for WasmBackend {
+    fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
+        if w == 0 || h == 0 {
+            return Err(OasisError::Backend(
+                format!("create_render_target: zero dimension ({w}x{h})").into(),
+            ));
+        }
+        let target_canvas = self.make_offscreen(w, h)?;
+        let target_ctx = get_2d_context(&target_canvas)?;
+        target_ctx.set_image_smoothing_enabled(false);
+        let id = self.next_render_target_id;
+        self.next_render_target_id += 1;
+        self.render_targets.insert(
+            id,
+            RenderTargetData {
+                canvas: target_canvas,
+                ctx: target_ctx,
+                width: w,
+                height: h,
+            },
+        );
+        Ok(RenderTargetId(id))
+    }
+
+    fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        let target = self.render_targets.remove(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("bind_render_target: unknown id {id:?}").into())
+        })?;
+        // Save the current surface and swap the target in.
+        let saved_canvas = std::mem::replace(&mut self.canvas, target.canvas);
+        let saved_ctx = std::mem::replace(&mut self.ctx, target.ctx);
+        let saved_width = std::mem::replace(&mut self.width, target.width);
+        let saved_height = std::mem::replace(&mut self.height, target.height);
+        self.render_target_bind_stack.push(SavedSurface {
+            prev_id: self.current_render_target,
+            canvas: saved_canvas,
+            ctx: saved_ctx,
+            width: saved_width,
+            height: saved_height,
+        });
+        self.current_render_target = Some(id.0);
+        Ok(())
+    }
+
+    fn unbind_render_target(&mut self) -> Result<()> {
+        let saved = self.render_target_bind_stack.pop().ok_or_else(|| {
+            OasisError::Backend("unbind_render_target: bind stack underflow".into())
+        })?;
+        // Put the target back into storage under its id, then restore
+        // the saved surface.
+        if let Some(active_id) = self.current_render_target {
+            let target_canvas = std::mem::replace(&mut self.canvas, saved.canvas);
+            let target_ctx = std::mem::replace(&mut self.ctx, saved.ctx);
+            let target_w = std::mem::replace(&mut self.width, saved.width);
+            let target_h = std::mem::replace(&mut self.height, saved.height);
+            self.render_targets.insert(
+                active_id,
+                RenderTargetData {
+                    canvas: target_canvas,
+                    ctx: target_ctx,
+                    width: target_w,
+                    height: target_h,
+                },
+            );
+        } else {
+            debug_assert!(false, "unbind_render_target called without active target");
+            self.canvas = saved.canvas;
+            self.ctx = saved.ctx;
+            self.width = saved.width;
+            self.height = saved.height;
+        }
+        self.current_render_target = saved.prev_id;
+        Ok(())
+    }
+
+    fn composite_render_target(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        debug_assert!(
+            (0.0..=1.0).contains(&opacity),
+            "opacity must be in [0.0, 1.0], got {opacity}"
+        );
+        let target = self.render_targets.get(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
+        })?;
+        let prev_op = self.ctx.global_composite_operation().map_err(js_err)?;
+        let prev_alpha = self.ctx.global_alpha();
+        self.ctx
+            .set_global_composite_operation(canvas_composite_op(blend))
+            .map_err(js_err)?;
+        self.ctx.set_global_alpha(opacity.clamp(0.0, 1.0) as f64);
+        let r = self
+            .ctx
+            .draw_image_with_html_canvas_element_and_dw_and_dh(
+                &target.canvas,
+                dst_x as f64,
+                dst_y as f64,
+                dst_w as f64,
+                dst_h as f64,
+            )
+            .map_err(js_err);
+        // Restore state unconditionally before propagating draw errors.
+        self.ctx
+            .set_global_composite_operation(&prev_op)
+            .map_err(js_err)?;
+        self.ctx.set_global_alpha(prev_alpha);
+        r
+    }
+
+    fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
+        let target = self.render_targets.get(&id.0).ok_or_else(|| {
+            OasisError::Backend(format!("read_render_target: unknown id {id:?}").into())
+        })?;
+        let image_data = target
+            .ctx
+            .get_image_data(0.0, 0.0, target.width as f64, target.height as f64)
+            .map_err(js_err)?;
+        let data = image_data.data();
+        let expected = (target.width * target.height * 4) as usize;
+        if dst.len() < expected || data.len() < expected {
+            return Err(OasisError::Backend(
+                format!(
+                    "read_render_target: buffer too small ({} < {expected})",
+                    dst.len()
+                )
+                .into(),
+            ));
+        }
+        dst[..expected].copy_from_slice(&data[..expected]);
+        Ok(())
+    }
+
+    fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        if self.current_render_target == Some(id.0)
+            || self
+                .render_target_bind_stack
+                .iter()
+                .any(|entry| entry.prev_id == Some(id.0))
+        {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: id {id:?} is still bound").into(),
+            ));
+        }
+        if self.render_targets.remove(&id.0).is_none() {
+            return Err(OasisError::Backend(
+                format!("destroy_render_target: unknown id {id:?}").into(),
+            ));
+        }
+        // HtmlCanvasElement is GC'd by JS once Rust drops its handle.
+        Ok(())
+    }
+
+    fn supports_render_targets(&self) -> bool {
+        true
+    }
+
+    fn supports_render_target_readback(&self) -> bool {
+        true
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Extra public helpers

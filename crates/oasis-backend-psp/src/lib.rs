@@ -41,6 +41,7 @@ pub mod video;
 // ---------------------------------------------------------------------------
 
 pub use audio::PspAudioBackend;
+pub use video::vlog_force;
 pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
 #[cfg(feature = "kernel-exception")]
@@ -804,6 +805,30 @@ impl SdiClipTransform for PspBackend {
 
 impl SdiVector for PspBackend {}
 impl SdiBatch for PspBackend {}
+
+// ---------------------------------------------------------------------------
+// SdiRenderTarget: Offscreen compositing layers (compositor overhaul PR7)
+// ---------------------------------------------------------------------------
+//
+// PSP hardware has ~900KB of usable VRAM after framebuffers + 1MB GU
+// command buffer. Phase A (VRAM-only small targets capped at 256x256)
+// was evaluated but the benefit is marginal against the cost: the
+// currently-supported PSP browse-path (TV Guide + simple static pages)
+// does not use `mix-blend-mode`, `backdrop-filter`, or `mask-*`.
+//
+// PSP therefore opts out of `SdiRenderTarget` entirely: the empty impl
+// below picks up the default `Err("not supported")` methods,
+// `supports_render_targets()` returns `false`, and the display-list
+// replay falls through to the opacity-only fast path for
+// `PushCompositingLayer`. Content still renders; the affected effects
+// simply don't apply.
+//
+// If a specific PSP surface (blurred shutter, overlay cards) ever
+// needs real offscreen rendering, the path is: small VRAM targets
+// (≤256x256) via `VolatileAllocator`, with a main-RAM fallback via
+// `sceGuCopyImage` for anything larger. That work is out of scope for
+// the compositor overhaul epic.
+impl oasis_core::backend::SdiRenderTarget for PspBackend {}
 
 // ---------------------------------------------------------------------------
 // PSP-tuned WM theme (compact for 480x272 screen)

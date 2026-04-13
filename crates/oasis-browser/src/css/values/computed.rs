@@ -282,6 +282,25 @@ pub struct ComputedStyle {
     pub image_rendering: ImageRendering,
     pub content_visibility: ContentVisibility,
 
+    // -- Mask properties (compositor overhaul PR6) ---------------------
+    /// `mask-image` URL (`url(...)`) parsed as a raw string. None = no mask.
+    pub mask_image: Option<String>,
+    /// `mask-mode` — alpha / luminance / match-source.
+    pub mask_mode: crate::css::values::types::MaskMode,
+    /// `mask-composite` (single-layer). Multi-layer composition falls
+    /// back to `Add` until the compositor grows multi-layer support.
+    pub mask_composite: crate::css::values::types::MaskComposite,
+    /// `mask-clip` — which box is the mask clipped to.
+    pub mask_clip: BackgroundBox,
+    /// `mask-origin` — which box is the mask positioned relative to.
+    pub mask_origin: BackgroundBox,
+    /// `mask-position` — reused from the background-position machinery.
+    pub mask_position: BackgroundPosition,
+    /// `mask-size` — reused from background-size.
+    pub mask_size: BackgroundSize,
+    /// `mask-repeat` — reused from background-repeat.
+    pub mask_repeat: BackgroundRepeat,
+
     // -- Font extensions -----------------------------------------------
     pub font_variant: FontVariant,
     pub font_stretch: FontStretch,
@@ -537,6 +556,15 @@ impl Default for ComputedStyle {
             background_origin: BackgroundBox::PaddingBox,
             image_rendering: ImageRendering::Auto,
             content_visibility: ContentVisibility::Visible,
+
+            mask_image: None,
+            mask_mode: crate::css::values::types::MaskMode::MatchSource,
+            mask_composite: crate::css::values::types::MaskComposite::Add,
+            mask_clip: BackgroundBox::BorderBox,
+            mask_origin: BackgroundBox::BorderBox,
+            mask_position: BackgroundPosition::default(),
+            mask_size: BackgroundSize::Auto,
+            mask_repeat: BackgroundRepeat::Repeat,
 
             font_variant: FontVariant::Normal,
             font_stretch: FontStretch::Normal,

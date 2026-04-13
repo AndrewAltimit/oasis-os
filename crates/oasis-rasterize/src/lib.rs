@@ -229,6 +229,68 @@ impl SoftwareBuffer {
         }
     }
 
+    /// Composite `src_pixels` (a `src_w * src_h * 4` RGBA8 buffer) over
+    /// the destination rect at `(dst_x, dst_y, dst_w, dst_h)`,
+    /// stretching 1:1 (no scaling) and applying per-pixel src-over
+    /// alpha blending multiplied by `opacity`.
+    ///
+    /// This is the fallback compositor path for backends without
+    /// hardware blend (UE5, PSP, and SDL non-native blend modes).
+    /// `opacity` is clamped to `[0.0, 1.0]`.
+    pub fn composite_rgba(
+        &mut self,
+        dst_x: i32,
+        dst_y: i32,
+        src_w: u32,
+        src_h: u32,
+        src_pixels: &[u8],
+        opacity: f32,
+    ) {
+        if src_w == 0 || src_h == 0 || src_pixels.len() < (src_w * src_h * 4) as usize {
+            return;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        let op_u16 = (opacity * 256.0).round() as u16;
+        if op_u16 == 0 {
+            return;
+        }
+        let dst_stride = (self.width * 4) as usize;
+        let src_stride = (src_w * 4) as usize;
+        for row in 0..src_h as i32 {
+            let dy = dst_y + row;
+            if dy < 0 || dy as u32 >= self.height {
+                continue;
+            }
+            for col in 0..src_w as i32 {
+                let dx = dst_x + col;
+                if dx < 0 || dx as u32 >= self.width {
+                    continue;
+                }
+                let src_off = (row as usize) * src_stride + (col as usize) * 4;
+                let dst_off = (dy as usize) * dst_stride + (dx as usize) * 4;
+                let sr = src_pixels[src_off];
+                let sg = src_pixels[src_off + 1];
+                let sb = src_pixels[src_off + 2];
+                let sa = src_pixels[src_off + 3];
+                // Apply layer opacity to source alpha (256-scale).
+                let a = ((sa as u16 * op_u16) >> 8) as u8;
+                if a == 0 {
+                    continue;
+                }
+                let inv = 255 - a as u16;
+                let dr = self.buffer[dst_off];
+                let dg = self.buffer[dst_off + 1];
+                let db = self.buffer[dst_off + 2];
+                let da = self.buffer[dst_off + 3];
+                // Standard src-over.
+                self.buffer[dst_off] = ((sr as u16 * a as u16 + dr as u16 * inv) / 255) as u8;
+                self.buffer[dst_off + 1] = ((sg as u16 * a as u16 + dg as u16 * inv) / 255) as u8;
+                self.buffer[dst_off + 2] = ((sb as u16 * a as u16 + db as u16 * inv) / 255) as u8;
+                self.buffer[dst_off + 3] = (a as u16 + ((da as u16 * inv) / 255)) as u8;
+            }
+        }
+    }
+
     /// Blit raw RGBA pixels into the buffer at the given position (no alpha
     /// blending, direct copy).
     pub fn blit_rgba(&mut self, x: u32, y: u32, w: u32, h: u32, pixels: &[u8]) {

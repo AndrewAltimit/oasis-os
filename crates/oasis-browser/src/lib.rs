@@ -25,6 +25,34 @@
 //! - `parallel-style` — parallel style cascade via rayon (desktop only).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
 //!   disables features that rely on desktop-only crates.
+//!
+//! # Compositor (overhaul epic)
+//!
+//! Desktop backends (SDL3, WASM, UE5) support offscreen compositing
+//! via `SdiRenderTarget`. This unlocks, on the backends that opt in:
+//!
+//! - `mix-blend-mode` — WASM renders all 16 CSS blend modes natively
+//!   via Canvas2D `globalCompositeOperation`. SDL3 currently uses
+//!   `Blend`/`Mod` approximations for Normal/Multiply and degrades
+//!   the other 14 modes to plain alpha over; the software path lands
+//!   in a follow-up.
+//! - `backdrop-filter` — parsed and plumbed through `PushCompositingLayer`;
+//!   the backdrop-sample step is scaffolded on top of the filter-chain
+//!   readback pipeline.
+//! - `isolation: isolate` — creates a stacking context and a real
+//!   compositing layer.
+//! - box-level `filter` — opacity, grayscale, invert, brightness,
+//!   contrast, sepia, saturate, hue-rotate, and blur (separable
+//!   3-pass box blur) run on CPU via read_render_target → apply →
+//!   upload as texture → blit.
+//! - `mask-*` (8 longhands) — parsed and stored on `ComputedStyle`;
+//!   the destination-in composite path lives on top of the existing
+//!   readback pipeline in a follow-up.
+//!
+//! PSP opts out: the backend reports `supports_render_targets() = false`
+//! so replay falls back to plain opacity stacking — pages still render,
+//! but blend modes, filters, and masks do not apply. See
+//! `docs/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
 pub(crate) mod css;
@@ -80,13 +108,20 @@ pub type ImageInfoMap = HashMap<String, (u32, u32)>;
 /// These are implementation details and may change without notice.
 #[doc(hidden)]
 pub mod internals {
-    pub use crate::css::cascade::{CascadeContext, style_tree};
+    pub use crate::css::cascade::{
+        CascadeContext, set_cascade_progress_hook, set_cascade_yield_hook, style_tree,
+    };
     pub use crate::css::default::default_stylesheet;
     pub use crate::css::parser::{MediaViewport, Stylesheet, parse_inline_style};
     pub use crate::css::values::{ComputedStyle, Display, TextDecoration, TextDecorationLine};
     pub use crate::html::dom::{Document, NodeKind, TagName};
-    pub use crate::html::tokenizer::Tokenizer;
-    pub use crate::html::tree_builder::TreeBuilder;
+    pub use crate::html::tokenizer::{
+        Tokenizer, set_tokenize_progress_hook, set_tokenize_yield_hook,
+    };
+    pub use crate::html::tree_builder::{
+        TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
+        set_tree_builder_yield_hook,
+    };
     pub use crate::layout::block::{
         StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
     };
@@ -472,7 +507,18 @@ pub struct BrowserWidget {
     /// GPU textures, only re-render newly visible tiles on scroll).
     #[allow(dead_code)]
     tile_grid: Option<paint::tiling::TileGrid>,
+
+    /// Optional diagnostic log hook. When set, the browser fires it
+    /// at key milestones during navigation and image loading: page
+    /// fetch start/end, response processing, image fetch start/end
+    /// with sizes, etc. PSP wires this to its on-disk `eboot.log` so
+    /// remote diagnostics can capture where a synchronous
+    /// `navigate_vfs` is spending its time (or hanging).
+    pub(crate) diag_log: Option<DiagLogFn>,
 }
+
+/// Boxed callback type for [`BrowserWidget::set_diag_log`].
+pub type DiagLogFn = Box<dyn Fn(&str) + Send + Sync>;
 
 impl BrowserWidget {
     /// Create a new browser widget with the given configuration.
@@ -575,12 +621,29 @@ impl BrowserWidget {
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
             tile_grid: None,
+            diag_log: None,
         }
     }
 
     /// Attach a TLS provider for HTTPS and Gemini support.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
         self.tls = Some(provider);
+    }
+
+    /// Install a diagnostic log hook. The browser fires it at key
+    /// milestones during navigation and image loading so an embedder
+    /// can capture where a synchronous `navigate_vfs` is spending its
+    /// time. Used by the PSP backend to write to its on-disk
+    /// `eboot.log` for remote diagnostics.
+    pub fn set_diag_log(&mut self, hook: DiagLogFn) {
+        self.diag_log = Some(hook);
+    }
+
+    /// Internal: fire the diagnostic log hook if installed.
+    pub(crate) fn diag(&self, msg: &str) {
+        if let Some(ref hook) = self.diag_log {
+            hook(msg);
+        }
     }
 
     /// Update the window position and size (called by the WM).

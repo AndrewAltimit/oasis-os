@@ -10,7 +10,7 @@
 //!   reboot            → cold reset
 //!   exit              → exit to XMB
 //!   log               → responds with last 2KB of eboot.log
-//!   logfull           → responds with last 8KB of eboot.log
+//!   logfull           → responds with last 32KB of eboot.log
 //!   status            → JSON: kiosk, free_kb, max_blk_kb, frame,
 //!                        audio_only, build
 //!   video-status      → JSON: state, width, height, decoded, errors,
@@ -54,12 +54,17 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v27-shader-wallpapers";
+const BUILD_ID: &str = "v48-arena-8mb-tv";
 
 /// Pending skin change request from TCP server.
 /// Written by server thread, read + cleared by main loop.
 /// Single Mutex ensures the skin key is read and cleared atomically.
 static PENDING_SKIN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Pending browser navigation request from the TCP server. When set,
+/// the main loop switches to the Browser app (if not already there)
+/// and drives a `BrowserWidget::navigate_to` to the URL.
+static PENDING_BROWSE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Push a synthetic input event for the main loop to consume.
 pub fn inject_event(ev: InputEvent) {
@@ -92,6 +97,19 @@ pub fn take_pending_skin() -> Option<String> {
 fn request_skin_change(key: &str) {
     let mut guard = PENDING_SKIN.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(key.to_string());
+}
+
+/// Check for a pending browser navigation request. Returns the URL
+/// if one is pending and clears it atomically.
+pub fn take_pending_browse() -> Option<String> {
+    let mut guard = PENDING_BROWSE.lock().unwrap_or_else(|e| e.into_inner());
+    guard.take()
+}
+
+/// Request a browser navigation from the TCP server thread.
+fn request_browse(url: &str) {
+    let mut guard = PENDING_BROWSE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(url.to_string());
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +341,7 @@ fn handle_client(cfd: i32) {
     } else if cmd == b"log" {
         send_log(cfd, 2048);
     } else if cmd == b"logfull" {
-        send_log(cfd, 8192);
+        send_log(cfd, 32768);
     } else if cmd == b"status" {
         send_status(cfd);
     } else if cmd.starts_with(b"press ") {
@@ -397,6 +415,19 @@ fn handle_client(cfd: i32) {
             cfd,
             b"psix classic balatro retro-cga solarized highcontrast terminal altimit tactical\n",
         );
+    } else if cmd.starts_with(b"browse ") {
+        // Protocol: "browse <url>\n" — queue a browser navigation for
+        // the main loop. Switches to the Browser app if needed.
+        let url = core::str::from_utf8(&cmd[7..]).unwrap_or("").trim();
+        if url.is_empty() {
+            send_response(cfd, b"err: usage: browse <url>\n");
+        } else if !(url.starts_with("http://") || url.starts_with("https://")) {
+            send_response(cfd, b"err: url must start with http:// or https://\n");
+        } else {
+            request_browse(url);
+            send_response(cfd, format!("ok: navigating to {}\n", url).as_bytes());
+            log_msg(&format!("[CMD] browse -> {}", url));
+        }
     } else if cmd.starts_with(b"skin ") {
         let key = core::str::from_utf8(&cmd[5..]).unwrap_or("").trim();
         let known = [

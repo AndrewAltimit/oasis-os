@@ -14,8 +14,8 @@
 //!    traits.  The blanket impl gives you `SdiBackend` for free.
 
 use super::{
-    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText, SdiTextures,
-    SdiVector,
+    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
+    SdiText, SdiTextures, SdiVector,
 };
 
 /// Full rendering backend trait combining all extensions.
@@ -37,6 +37,7 @@ pub trait SdiBackend:
     + SdiClipTransform
     + SdiVector
     + SdiBatch
+    + SdiRenderTarget
 {
 }
 
@@ -52,6 +53,7 @@ impl<T> SdiBackend for T where
         + SdiClipTransform
         + SdiVector
         + SdiBatch
+        + SdiRenderTarget
         + ?Sized
 {
 }

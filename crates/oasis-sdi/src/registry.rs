@@ -816,6 +816,7 @@ font_size = 16
     impl oasis_types::backend::SdiClipTransform for RecordingBackend {}
     impl oasis_types::backend::SdiVector for RecordingBackend {}
     impl oasis_types::backend::SdiBatch for RecordingBackend {}
+    impl oasis_types::backend::SdiRenderTarget for RecordingBackend {}
 
     #[test]
     fn draw_dispatches_fill_rect_for_colored_objects() {

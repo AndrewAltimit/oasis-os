@@ -87,6 +87,56 @@ fn psp_main() {
 
     dbg_log("[EBOOT] psp_main entered");
 
+    // Wire HTML tokenizer progress hook → on-disk eboot.log so a
+    // synchronous `navigate_vfs` that hangs in tokenize is observable
+    // from the remote test harness.
+    oasis_browser::internals::set_tokenize_progress_hook(|iter, pos, len, tokens, state| {
+        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
+        let max_blk_kb = unsafe { psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024 };
+        oasis_backend_psp::vlog_force(&format!(
+            "[BR/TOK] iter={iter} pos={pos}/{len} tokens={tokens} state={state} free={free_kb}KB blk={max_blk_kb}KB"
+        ));
+    });
+    // Cooperative yield: lets the cmd_server / audio / video threads
+    // run between batches of tokenizer state-machine iterations so a
+    // long synchronous `navigate_vfs` doesn't starve them.
+    // `sleep_ms(1)` is the smallest unit the PSP scheduler exposes.
+    oasis_browser::internals::set_tokenize_yield_hook(|| {
+        psp::thread::sleep_ms(1);
+    });
+    oasis_browser::internals::set_tree_builder_progress_hook(|idx, total, nodes| {
+        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
+        let max_blk_kb = unsafe { psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024 };
+        oasis_backend_psp::vlog_force(&format!(
+            "[BR/TREE] idx={idx}/{total} nodes={nodes} free={free_kb}KB blk={max_blk_kb}KB"
+        ));
+    });
+    oasis_browser::internals::set_tree_builder_yield_hook(|| {
+        psp::thread::sleep_ms(1);
+    });
+    oasis_browser::internals::set_tree_builder_raw_log_hook(|msg| {
+        oasis_backend_psp::vlog_force(msg);
+    });
+    oasis_browser::internals::set_cascade_progress_hook(|idx, total| {
+        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
+        oasis_backend_psp::vlog_force(&format!(
+            "[BR/CASCADE] idx={idx}/{total} free={free_kb}KB"
+        ));
+    });
+    oasis_browser::internals::set_cascade_yield_hook(|| {
+        psp::thread::sleep_ms(1);
+    });
+
+    // Pre-warm the lazily-initialised UA stylesheet so the first
+    // browser navigation doesn't have to parse ~7 KB of CSS through
+    // LazyLock's first-init lock while the cascade is also trying
+    // to allocate. Verified on real PSP that this turns a hard hang
+    // into a clean cascade run.
+    {
+        let _ = oasis_browser::internals::default_stylesheet();
+        dbg_log("[EBOOT] UA stylesheet pre-warmed");
+    }
+
     let mut backend = PspBackend::new();
     backend.init();
     boot::show_boot_screen(&mut backend, "Initializing...", 10);
@@ -287,11 +337,51 @@ fn psp_main() {
     let mut cached_free_kb: i32 = 0;
     let mut cached_max_blk_kb: i32 = 0;
 
+    // PPSSPP-driven test loop: auto-trigger a wikipedia browse on
+    // boot using a hardcoded VFS resource so we can iterate on the
+    // browser pipeline without needing the full deploy / reboot /
+    // wifi cycle on real hardware. Gated behind the
+    // `auto-browse-wiki` cargo feature so the 92 KB `test_wiki.html`
+    // fixture only lands in the EBOOT data segment when explicitly
+    // enabled (default builds don't pay the size cost).
+    #[cfg(feature = "auto-browse-wiki")]
+    const WIKI_TRUNC_BYTES: usize = 92443;
+    #[cfg(feature = "auto-browse-wiki")]
+    static WIKI_HTML: &[u8] = include_bytes!("../test_wiki.html");
+    #[cfg(feature = "auto-browse-wiki")]
+    let mut auto_browse_fired = false;
+    #[cfg(feature = "auto-browse-wiki")]
+    {
+        use oasis_core::vfs::Vfs;
+        let truncated = &WIKI_HTML[..WIKI_TRUNC_BYTES.min(WIKI_HTML.len())];
+        let _ = br.vfs.write("/test_wiki.html", truncated);
+        dbg_log(&format!(
+            "[EBOOT] auto-browse-wiki armed: {} bytes in vfs",
+            truncated.len()
+        ));
+    }
+
     loop {
         let _dt = frame_timer.tick();
         // Log first frame only.
         if viz_frame == 0 {
             dbg_log("[EBOOT] first frame tick");
+        }
+        // Auto-browse trigger after a brief warm-up so the boot
+        // splash + first frame complete before we monopolise the
+        // main thread inside navigate_vfs.
+        #[cfg(feature = "auto-browse-wiki")]
+        if !auto_browse_fired && viz_frame == 30 {
+            auto_browse_fired = true;
+            dbg_log("[EBOOT] auto-browse-wiki firing");
+            kiosk_app = KioskApp::Browser;
+            let _ = br.ensure_widget();
+            let BrowserState { widget, vfs, .. } = &mut br;
+            if let Some(w) = widget.as_mut() {
+                oasis_backend_psp::vlog_force("[BR/MAIN] auto navigate_vfs start");
+                w.navigate_vfs("vfs:///test_wiki.html", vfs);
+                oasis_backend_psp::vlog_force("[BR/MAIN] auto navigate_vfs end");
+            }
         }
         // Prevent idle auto-suspend while running.
         oasis_backend_psp::power_tick();
@@ -449,6 +539,37 @@ fn psp_main() {
                 );
                 oasis_backend_psp::video::unblock_stuck_decode();
             }
+        }
+
+        // -- Poll remote browse requests --
+        // Accepts a URL from the TCP command server and drives a
+        // synchronous `BrowserWidget::navigate_vfs`, switching to the
+        // Browser app if necessary. PSP must use `navigate_vfs`
+        // (not `navigate_to`) because the browser's per-frame
+        // `tick()` is not called on PSP — `std::time::Instant`
+        // crashes on Allegrex, so the async fetch state machine never
+        // advances. `navigate_vfs` does the fetch + parse + image
+        // load synchronously inside this single call.
+        if let Some(url) = oasis_backend_psp::cmd_server::take_pending_browse() {
+            kiosk_app = KioskApp::Browser;
+            // The cmd_server's auto_connect_wifi sets `NET_STACK_INITIALIZED`
+            // but not the full `NET_INITIALIZED` flag the browser's TLS
+            // provider checks. Call `ensure_net_init_pub` here to take
+            // the GotIp fast path and flip the flag without showing the
+            // WiFi dialog.
+            if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
+                dbg_log(&format!("[CMD] browse net init failed: {:?}", e));
+            }
+            let _ = br.ensure_widget();
+            oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs start: {}", url));
+            let BrowserState { widget, vfs, .. } = &mut br;
+            if let Some(w) = widget.as_mut() {
+                w.navigate_vfs(&url, vfs);
+            }
+            oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs end: {}", url));
+            br.loading = false;
+            br.status_msg = format!("Loaded {}", url);
+            dbg_log(&format!("[CMD] browse -> {}", url));
         }
 
         // -- Poll remote skin change requests --
