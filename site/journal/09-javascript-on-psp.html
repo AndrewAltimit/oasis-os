@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JavaScript on a 2004 Handheld - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Bringing up a full ES2023+ JavaScript engine on the PSP Allegrex. A story about three hardware-only bring-up bugs: a MIPS alignment trap in std's random module, an orphaned std overlay for Instant that panicked on every call, and a cmd-server thread stack too small for boa_engine's parser. None of them reproduced in PPSSPP.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</h1>
+    <p class="article-subtitle">
+      Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three
+      bring-up bugs blocked it &mdash; a 4-byte-alignment trap in std's
+      random module, an orphaned time overlay that routed
+      <code>Instant::now</code> into a panicking shim, and a cmd-server
+      thread stack too small for boa's parser. None reproduced in
+      PPSSPP. All three fixed; <code>1 + 2 + 3</code> now returns
+      <code>6</code> on real hardware.
+    </p>
+    <div class="article-meta">
+      <span>Entry 09</span>
+      <span>javascript, rust-psp, debugging, std-overlay</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Epic, As It Was Written</h2>
+
+  <p>
+    The <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/browser-backlog.md">browser
+    backlog</a> carried a long-standing epic called &ldquo;PSP JavaScript
+    integration&rdquo;. Its scope was ambitious: vendor
+    <a href="https://github.com/quickjs-ng/quickjs">QuickJS-NG</a> via the
+    <code>cc</code> crate, hand-write a thin FFI wrapper (explicitly
+    <em>not</em> <code>rquickjs</code>), wire it through <code>oasis-js</code>,
+    enable the <code>javascript</code> feature on <code>oasis-browser</code>
+    for the PSP build, and ship JavaScript on a 2004 handheld.
+  </p>
+
+  <p>
+    Two assumptions in that plan turned out to be wrong. The first was
+    that rquickjs couldn&rsquo;t be used because it depends on
+    <code>std::time::Instant</code>, which the project memory insisted
+    &ldquo;crashes on PSP Allegrex (confirmed by testing).&rdquo; The second
+    was that the QuickJS C source would be the most tractable starting
+    point. Fixing the first assumption also made the second one
+    unnecessary.
+  </p>
+
+  <p>
+    This entry is the story of those two assumptions, a stack overflow
+    that looked like a kernel fault, and a pure-Rust JavaScript engine
+    running on hardware Sony shipped the year the Nintendo DS came out.
+  </p>
+
+  <h2>Symptom 1: &ldquo;Instant Crashes on Allegrex&rdquo; (Except It Doesn&rsquo;t)</h2>
+
+  <p>
+    Before writing any new JavaScript integration code, I started with
+    a sanity check: was the claim in the project memory about
+    <code>std::time::Instant</code> still true? A two-minute test in
+    the TCP command server would tell us &mdash; just call
+    <code>Instant::now()</code> twice with log writes between every
+    step, and observe where it dies.
+  </p>
+
+  <pre><code>fn run_instant_timetest(cfd: i32) {
+    log_msg("[timetest] start");
+    let t0 = std::time::Instant::now();
+    log_msg("[timetest] Instant::now() #1 ok");
+    psp::thread::sleep_ms(10);
+    let t1 = std::time::Instant::now();
+    let elapsed = t1.duration_since(t0).as_micros();
+    log_msg(&amp;format!("[timetest] elapsed={elapsed}us"));
+}</code></pre>
+
+  <p>
+    Built, deployed, rebooted. And then the PSP froze during boot at the
+    &ldquo;Loading config&hellip;&rdquo; splash &mdash; <em>before</em>
+    <code>run_instant_timetest</code> had any chance to run. The bug was
+    somewhere else entirely, and my probe wouldn&rsquo;t even get a
+    chance to fire.
+  </p>
+
+  <p>
+    The first step in any PSP debugging session is to decide whether
+    the regression came from the <code>oasis-os</code> branch or from
+    one of its dependencies. The <code>rust-psp</code> submodule had
+    three recent commits:
+  </p>
+
+  <ol>
+    <li><code>#28</code> &mdash; eliminating <code>static mut</code> from kernel and dialog modules</li>
+    <li><code>#29</code> &mdash; arena allocator + strided CSC + BorrowedBuf init revert</li>
+    <li><code>#30</code> &mdash; adopt new <code>BorrowedCursor</code> API (<code>advance_checked</code>)</li>
+  </ol>
+
+  <p>
+    The arena allocator (<code>#29</code>) looked suspicious &mdash; it
+    replaced the old &ldquo;one kernel block per Rust allocation&rdquo;
+    scheme with a single 8 MB block backed by
+    <code>linked_list_allocator</code>. I rolled rust-psp back to
+    before <code>#29</code>, rebuilt, deployed via recovery mode,
+    rebooted&hellip; and the freeze was <em>exactly the same</em>.
+    Not the allocator.
+  </p>
+
+  <h2>Reading eboot.log Through a Bricked EBOOT</h2>
+
+  <p>
+    Diagnosing a boot-time freeze on the PSP means getting
+    <code>eboot.log</code> off the memory stick while the device
+    won&rsquo;t boot. The recovery EBOOT
+    (<a href="08-remote-dev-automation.html">Entry 08</a>) supported
+    <code>upload</code> but not <code>readfile</code>, so I added one:
+  </p>
+
+  <pre><code>// oasis-recovery-psp: read file and stream over TCP
+fn read_file(cfd: i32, path: &amp;[u8]) {
+    let fd = unsafe { psp::sys::sceIoOpen(path_buf.as_ptr(), RD_ONLY, 0) };
+    let size = unsafe { psp::sys::sceIoLseek(fd, 0, IoWhence::End) };
+    unsafe { psp::sys::sceIoLseek(fd, 0, IoWhence::Set) };
+    send(cfd, format!("{size}\n").as_bytes());
+    // ... stream the file back in 4 KB chunks ...
+}</code></pre>
+
+  <p>
+    Rebuilt the recovery binary, uploaded it over WiFi into
+    <code>ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP</code>, and on the
+    next R-trigger boot ARK-4 loaded the enhanced recovery. I could
+    now read <code>eboot.log</code> from a device that refused to boot
+    into the main OS. The log showed a consistent pattern:
+  </p>
+
+  <pre><code>[EBOOT] creating theme...
+[EBOOT] skin_key=psix
+[EBOOT] preset resolved
+[theme] to_active_theme entered
+[theme] base_colors extracted
+[theme] probe alloc ok: len=5
+[theme] probe dropped
+[theme] probe2 alloc ok: len=11
+[theme] probe2 dropped
+[theme] probe3: creating HashMap
+&lt;crash&gt;</code></pre>
+
+  <p>
+    Interesting. Simple <code>String::to_string</code> allocations
+    worked. <code>HashMap::new()</code> did not. And crucially,
+    <code>HashMap::new()</code> is what <code>RandomState::new()</code>
+    uses to seed itself on first use &mdash; which on PSP routes through
+    the rust-psp std overlay's
+    <code>sys/random/psp.rs</code>.
+  </p>
+
+  <h2>Root Cause 1: A <code>[u8]</code> Where a <code>[u32]</code> Was Required</h2>
+
+  <p>
+    The PSP std overlay backed the Mersenne Twister context with a plain
+    byte array:
+  </p>
+
+  <pre><code>// BEFORE — rust-std-src/library/std/src/sys/random/psp.rs
+static mut MT_CTX: [u8; 2504] = [0u8; 2504];</code></pre>
+
+  <p>
+    Straightforward, right? Except the C ABI helpers in
+    <code>psp/src/std_support/random.rs</code> cast that pointer to
+    <code>*mut SceKernelUtilsMt19937Context</code>, whose definition
+    is:
+  </p>
+
+  <pre><code>#[repr(C)]
+pub struct SceKernelUtilsMt19937Context {
+    pub count: u32,
+    pub state: [u32; 624usize],
+}</code></pre>
+
+  <p>
+    That struct requires <strong>4-byte alignment</strong>. The
+    byte-array static gets 1-byte alignment by default. On x86, ARM,
+    and PPSSPP's HLE nobody cares &mdash; unaligned word loads are
+    tolerated or silently fixed up. On MIPS Allegrex,
+    <code>lw</code>/<code>sw</code> on a non-4-aligned address
+    <em>traps</em>, and <code>sceKernelUtilsMt19937Init</code> starts
+    issuing <code>sw</code> instructions the moment you call it.
+  </p>
+
+  <p>
+    So: the very first <code>HashMap::new()</code> call on the device
+    seeded <code>RandomState</code>, which called <code>getrandom</code>,
+    which called the PSP std overlay's
+    <code>fill_bytes</code>, which called
+    <code>__psp_mt19937_init</code> on a misaligned context, which
+    trapped the kernel the moment it tried to touch <code>state[0]</code>.
+    The fix was nine lines:
+  </p>
+
+  <pre><code>// AFTER — aligned to the struct&rsquo;s actual requirement
+#[repr(align(4))]
+struct MtCtx([u32; 626]);
+static mut MT_CTX: MtCtx = MtCtx([0u32; 626]);
+
+fn mt_ctx_ptr() -&gt; *mut u8 {
+    unsafe { (&amp;raw mut MT_CTX) as *mut u8 }
+}</code></pre>
+
+  <p>
+    Rebuilt. Deployed via recovery. Rebooted. The device booted into
+    the dashboard for the first time in hours. Main loop running,
+    frame counter incrementing, voronoi shader rendering the retro-cga
+    wallpaper at 2.5 ms/frame. The bricking regression was fixed.
+    Time to run the <em>original</em> experiment.
+  </p>
+
+  <h2>Symptom 2: <code>Instant::now()</code> Still Crashes</h2>
+
+  <pre><code>$ echo "timetest" | nc 192.168.0.249 9293
+timetest: start
+$ echo "ping"    | nc 192.168.0.249 9293
+&lt;silence&gt;</code></pre>
+
+  <p>
+    The alignment fix got boot working, but
+    <code>std::time::Instant::now()</code> still crashed. The cmd_server
+    thread reported &ldquo;start&rdquo;, and then nothing &mdash; the
+    whole EBOOT watchdog-reset before the next log line could be
+    written. The original memory note about Instant was, somehow, still
+    pointing at something real.
+  </p>
+
+  <p>
+    A look at the generated binary told the whole story:
+  </p>
+
+  <pre><code>$ llvm-nm target/mipsel-sony-psp-std/release/oasis-backend-psp | grep Instant
+002996a8 t _RNvMNtNtNtCs4sz6D5RTzsi_3std3sys4time11unsupportedNtB2_7Instant3now</code></pre>
+
+  <p>
+    <code>sys::time::<strong>unsupported</strong>::Instant::now</code>.
+    The linker was resolving <code>std::time::Instant::now</code> to
+    the <em>unsupported</em> shim &mdash; the one whose implementation
+    is literally:
+  </p>
+
+  <pre><code>// rust-std-src/library/std/src/sys/time/unsupported.rs
+pub fn now() -&gt; Instant {
+    panic!("time not implemented on this platform")
+}</code></pre>
+
+  <p>
+    But the rust-psp overlay had a perfectly functional
+    <code>Instant</code> backed by
+    <code>sceKernelGetSystemTimeWide</code> in
+    <code>rust-std-src/library/std/src/sys/pal/psp/time.rs</code>.
+    Why wasn't the linker picking it up?
+  </p>
+
+  <p>
+    The answer was an upstream restructure that the overlay hadn&rsquo;t
+    followed. Current nightly std moved platform time implementations
+    from <code>sys/pal/&lt;target&gt;/time.rs</code> to
+    <code>sys/time/&lt;target&gt;.rs</code>, with selection driven by a
+    top-level <code>cfg_select!</code> in
+    <code>sys/time/mod.rs</code>:
+  </p>
+
+  <pre><code>cfg_select! {
+    target_os = "windows" =&gt; { mod windows; use windows as imp; }
+    target_family = "unix" =&gt; { mod unix; use unix as imp; }
+    target_os = "hermit" =&gt; { mod hermit; use hermit as imp; }
+    // ... many more arms ...
+    _ =&gt; { mod unsupported; use unsupported as imp; }
+}</code></pre>
+
+  <p>
+    No <code>target_os = "psp"</code> arm. PSP fell through to the
+    <code>_</code> catch-all, got the panicking
+    <code>unsupported::Instant</code>, and the project memory inherited
+    three months of incorrect lore about &ldquo;Instant crashes on
+    Allegrex.&rdquo; The rust-psp overlay's
+    <code>pal/psp/time.rs</code> had been <strong>orphaned since the
+    upstream restructure</strong> and nobody noticed because the only
+    symptom was <code>Instant::now()</code> &mdash; which everyone had
+    already been told not to call.
+  </p>
+
+  <h2>Fix 2: Wire the Overlay Back In</h2>
+
+  <p>
+    Two files. Copy the overlay implementation into the new
+    location, then add the missing cfg arm:
+  </p>
+
+  <pre><code>// rust-std-src/library/std/src/sys/time/psp.rs
+// (unchanged from the orphaned pal/psp/time.rs, just moved)
+pub struct Instant(Duration);
+impl Instant {
+    pub fn now() -&gt; Instant {
+        let us = unsafe { __psp_get_system_time_wide() } as u64;
+        Instant(Duration::from_micros(us))
+    }
+    // ...
+}</code></pre>
+
+  <pre><code>// rust-std-src/library/std/src/sys/time/mod.rs
+cfg_select! {
+    // ... existing arms ...
+    target_os = "psp" =&gt; {
+        mod psp;
+        use psp as imp;
+    }
+    // ... catch-all ...
+}</code></pre>
+
+  <p>
+    Rebuilt. Deployed via the (now bumped from 8 MB to 24 MB)
+    cmd_server <code>deploy</code> command. Cycled the device. Ran the
+    timetest again:
+  </p>
+
+  <pre><code>$ echo "timetest" | nc 192.168.0.249 9293
+timetest: ok elapsed=247324us t0_elapsed=934979us
+$ echo "ping" | nc 192.168.0.249 9293
+pong</code></pre>
+
+  <p>
+    Two microsecond-precision timestamps, a correctly computed
+    <code>duration_since</code>, an <code>elapsed()</code> measurement,
+    and a device that stays alive after the call. The memory note I
+    had inherited for months was <strong>empirically wrong</strong>.
+    <code>rquickjs</code>&rsquo;s supposed use of <code>Instant</code>
+    had never been the real blocker &mdash; it was just the most
+    confident-sounding wrong answer. Time to go back to the original
+    plan and build some JavaScript.
+  </p>
+
+  <h2>Why boa Instead of QuickJS</h2>
+
+  <p>
+    The original epic called for vendoring QuickJS-NG via the
+    <code>cc</code> crate, but that path has a different blocker:
+    <code>cc</code> needs a C cross-compiler for
+    <code>mipsel-sony-psp</code>, and that means pspdev, newlib, and
+    a toolchain build that doesn&rsquo;t ship prebuilt for aarch64
+    Linux. With the std overlay fixed, a pure-Rust JavaScript engine
+    became feasible for the first time &mdash; no C toolchain, no
+    header vendoring, no MIPS libc.
+  </p>
+
+  <p>
+    <a href="https://github.com/boa-dev/boa">boa_engine</a> is a full
+    ES2023+ interpreter in safe Rust with no native dependencies. It
+    fit on PSP the moment <code>HashMap</code>, <code>Instant</code>,
+    and the global allocator started working. The tradeoff is
+    performance: boa is an interpreted reference implementation rather
+    than a JIT. On Allegrex I expect it to be ~10&times; slower than
+    QuickJS, which is already ~500&times; slower than desktop V8.
+    Small bootstrap scripts for inert pages will work; React SPAs will
+    not. That was always the realistic scope.
+  </p>
+
+  <p>
+    <code>oasis-js</code> (the existing crate, built on rquickjs) got
+    restructured around two mutually-optional feature flags:
+  </p>
+
+  <pre><code>[features]
+default = ["rquickjs-engine"]
+rquickjs-engine = ["dep:rquickjs"]
+boa             = ["dep:boa_engine"]</code></pre>
+
+  <p>
+    Shared <code>JsValue</code> / <code>JsError</code> types moved into
+    a new <code>types.rs</code> so both backends can return the same
+    enum. The rquickjs-backed <code>JsEngine</code> &mdash; with its
+    console buffering, fetch handler, local storage, timer queue, and
+    the raw <code>with_context</code> escape hatch the browser DOM
+    glue depends on &mdash; stayed intact. Desktop, WASM, and UE5
+    still take the default and pay no boa cost. PSP takes
+    <code>default-features = false, features = ["boa"]</code> and gets
+    a separate, smaller <code>BoaJsEngine</code> type with only
+    <code>new</code> / <code>eval</code>:
+  </p>
+
+  <pre><code>pub struct BoaJsEngine {
+    context: Context,
+}
+
+impl BoaJsEngine {
+    pub fn new(_max_memory_bytes: usize) -&gt; Result&lt;Self, JsError&gt; {
+        Ok(Self { context: Context::default() })
+    }
+
+    pub fn eval(&amp;mut self, script: &amp;str) -&gt; Result&lt;JsValue, JsError&gt; {
+        let source = Source::from_bytes(script.as_bytes());
+        match self.context.eval(source) {
+            Ok(value) =&gt; Ok(boa_value_to_js(&amp;value, &amp;mut self.context)),
+            Err(err) =&gt; Err(JsError { message: format!("{err}"), stack: None }),
+        }
+    }
+}</code></pre>
+
+  <p>
+    The six-variant <code>JsValue</code> enum is the one contact point.
+    <code>boa_value_to_js</code> collapses boa's value type to that
+    enum, special-casing numbers that fit losslessly in <code>i32</code>
+    (matching the rquickjs backend's behavior) and rendering objects /
+    arrays / BigInts via JS-side <code>String(value)</code> so callers
+    always see <em>something</em> printable. Six unit tests cover it.
+    All green on the host.
+  </p>
+
+  <h2>Symptom 3: &ldquo;Help, My Stack Is Only 16 KB&rdquo;</h2>
+
+  <p>
+    boa compiled for <code>mipsel-sony-psp</code> in 31 seconds on the
+    first try. No codegen issues, no missing headers, no panics during
+    link. The EBOOT grew from 5 MB to 14 MB
+    (<code>opt-level = "z"</code> on the boa subcrates trimmed 1.4 MB
+    back off), well within the 24 MB user partition. Deployed via
+    recovery mode since it now exceeded the cmd_server's old 8 MB
+    deploy cap. Device booted cleanly, arena at 8 MB, 5.4 MB free for
+    everything else. Time for the moment of truth:
+  </p>
+
+  <pre><code>$ echo "js 1 + 2 + 3" | nc -w 15 192.168.0.249 9293
+&lt;silence&gt;
+$ echo "ping" | nc -w 3 192.168.0.249 9293
+&lt;silence&gt;</code></pre>
+
+  <p>
+    Crash. Watchdog reset. The third bring-up bug of the day,
+    hiding in plain sight:
+  </p>
+
+  <pre><code>// oasis-backend-psp/src/cmd_server.rs — the old configuration
+pub fn spawn() {
+    if let Ok(handle) = psp::thread::ThreadBuilder::new(b"cmd_srv\0")
+        .priority(40)
+        .stack_size(16384)   // &lt;-- 16 KB
+        .spawn(move || { ... })
+    // ...
+}</code></pre>
+
+  <p>
+    <code>cmd_srv</code> runs on its own thread with a dedicated stack,
+    and that stack was 16 KB &mdash; sized for a network handler that
+    mostly calls <code>recv</code> and <code>send</code>. Running
+    boa's parser on it was like trying to park a bus in a garden shed.
+    The boa AST lexer alone builds a non-trivial state machine on the
+    stack per token, plus interner state, plus the interpreter's
+    evaluation frames. 16 KB evaporates in the first few dozen
+    tokens.
+  </p>
+
+  <p>
+    Bumped to 512 KB with a comment explaining why:
+  </p>
+
+  <pre><code>// 512 KB is large for a network handler thread, but the `js`
+// command runs `boa_engine` inline on this thread and the boa
+// parser builds a sizable AST + interner state on the stack.
+// Empirically 16 KB (the previous value) crashed the first `eval`
+// call on real PSP hardware.
+.stack_size(512 * 1024)</code></pre>
+
+  <p>
+    Rebuilt. Redeployed via recovery. Rebooted. And then:
+  </p>
+
+  <pre><code>$ echo "js 1 + 2 + 3" | nc -w 15 192.168.0.249 9293
+js: 6</code></pre>
+
+  <p>
+    <strong>Six.</strong> JavaScript on a 2004 handheld, returning the
+    correct answer, via a TCP command.
+  </p>
+
+  <h2>A Tour of What Works</h2>
+
+  <pre><code>$ echo "js 'hello ' + 'world'" | nc 192.168.0.249 9293
+js: hello world
+
+$ echo "js [1,2,3].reduce((a,b) =&gt; a + b, 0)" | nc 192.168.0.249 9293
+js: 6
+
+$ echo 'js JSON.stringify({x:1,y:2})' | nc 192.168.0.249 9293
+js: {"x":1,"y":2}
+
+$ echo "js (function fib(n){ return n&lt;2 ? n : fib(n-1)+fib(n-2); })(10)" | nc 192.168.0.249 9293
+js: 55
+
+$ echo "js Math.sqrt(144)" | nc 192.168.0.249 9293
+js: 12
+
+$ echo "js typeof globalThis" | nc 192.168.0.249 9293
+js: object</code></pre>
+
+  <p>
+    Arrow functions. <code>Array.prototype.reduce</code>.
+    <code>JSON.stringify</code>. Recursive Fibonacci through an inline
+    function expression. The <code>Math</code> library.
+    <code>globalThis</code> resolving correctly. Every modern JS
+    feature boa supports, running on the same hardware that shipped
+    with <em>Lumines</em>.
+  </p>
+
+  <p>
+    After all seven test calls the device is still at
+    <code>frame: 2310</code>, main loop humming, voronoi shader
+    rendering the retro-cga wallpaper. The <code>BoaJsEngine</code>
+    instance is created and destroyed inside each <code>js</code>
+    command &mdash; no shared state across calls &mdash; which keeps
+    the memory footprint bounded.
+  </p>
+
+  <h2>What Didn&rsquo;t Ship (Yet)</h2>
+
+  <p>
+    The <code>javascript</code> feature on <code>oasis-browser</code>
+    is still disabled for the PSP build. The DOM bindings in
+    <code>oasis-browser/src/js_dom.rs</code> are tightly coupled to
+    rquickjs's <code>Ctx</code>/<code>Function</code>/<code>Object</code>
+    API, and porting them to boa requires a parallel implementation
+    &mdash; a substantial chunk of work that belongs in a follow-up
+    PR. For now, PSP can evaluate standalone JavaScript expressions
+    via the <code>js</code> TCP command and any future terminal /
+    script surfaces that don't need DOM access. Browser scripts on PSP
+    still drop silently at parse time, same as before.
+  </p>
+
+  <p>
+    The timer-based interrupt handler from the rquickjs backend is
+    also not yet wired to boa. boa exposes an instruction-counting
+    cancellation mechanism that's different enough to deserve its own
+    design pass. Scripts that run forever will hang the
+    <code>cmd_srv</code> thread; callers should treat <code>eval</code>
+    as blocking and only run expressions known to terminate. A runaway
+    <code>while (true) {}</code> on PSP hardware is not a good time.
+  </p>
+
+  <h2>Bugs That Only Live on Hardware</h2>
+
+  <p>
+    All three bring-up bugs in this story share a property that makes
+    them especially painful: <strong>none of them reproduced in
+    PPSSPP</strong>. The emulator ran the exact same EBOOT cleanly
+    through the theme creation path, the <code>Instant::now</code>
+    path, and eventually the boa parser. Every fix required a physical
+    deploy + reboot + observe cycle, and two of the three bricked the
+    device until R-trigger recovery.
+  </p>
+
+  <p>
+    There is a clear pattern:
+  </p>
+
+  <ul>
+    <li>
+      <strong>MIPS alignment traps are a real-hardware-only failure
+      mode.</strong> PPSSPP's HLE is lenient about unaligned word
+      accesses. Real Allegrex is not. Anywhere a Rust-side type cast
+      reinterprets a byte buffer as a word-aligned struct needs
+      <code>#[repr(align(N))]</code> on the backing store, not just
+      the target type.
+    </li>
+    <li>
+      <strong>std overlays drift silently when upstream restructures.</strong>
+      <code>sys/pal/psp/time.rs</code> was a perfectly good file that
+      nothing was linking to, because the arm in <code>sys/time/mod.rs</code>
+      that would have selected it never got added. The compiler was
+      happy. Every test passed. And every <code>Instant::now</code>
+      call since nightly moved the files had been routing through a
+      <code>panic!</code>. The fix is trivial once you find it; the
+      finding is the hard part.
+    </li>
+    <li>
+      <strong>Thread stacks are contracts with the code that runs on
+      them.</strong> 16 KB was generous for what the original
+      <code>cmd_srv</code> thread actually did. It was nowhere near
+      enough the moment we asked it to parse JavaScript. The
+      <em>same</em> <code>BoaJsEngine</code> instance runs fine with a
+      512 KB stack and crashes deterministically with a 16 KB one.
+    </li>
+    <li>
+      <strong>Memory notes decay.</strong> The project memory
+      confidently said &ldquo;Instant crashes on Allegrex (confirmed by
+      testing)&rdquo; because someone had confirmed a crash by testing.
+      They just hadn&rsquo;t confirmed the cause. Three months later,
+      after an upstream std restructure, the memory was still pointing
+      at the wrong thing. Every false memory rules out a working
+      solution until someone goes and looks.
+    </li>
+  </ul>
+
+  <h2>The Footnote Neither Roadmap Predicted</h2>
+
+  <p>
+    The original epic budgeted one to three weeks at &ldquo;high
+    risk&rdquo; on the assumption that the hard part was MIPS codegen
+    for QuickJS's C source. It turned out the hard part was fixing
+    three unrelated bugs in rust-psp's std overlay that had been
+    hiding under a misdiagnosed premise. Once those were fixed, boa
+    compiled and ran on the first try. The entire &ldquo;PSP
+    JavaScript integration&rdquo; epic, minus the browser DOM glue,
+    closed in a single session.
+  </p>
+
+  <p>
+    It&rsquo;s tempting to call that lucky. I think it&rsquo;s closer
+    to what happens every time you take a &ldquo;known impossible&rdquo;
+    constraint seriously enough to try it on real hardware: the
+    impossibility turns out to be a specific, solvable bug, and once
+    the bug is gone you&rsquo;re surprised at how much was blocked
+    behind it. The PSP will never run React, but it now runs
+    <code>1 + 2 + 3</code>, and everything downstream from that is
+    just scope.
+  </p>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+      <span>&middot;</span>
+      <a href="../">Home</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+
+</body>
+</html>

@@ -83,7 +83,7 @@ graph TD
 - Light compositor: display list batching, occlusion culling, clip intersection, sticky scroll caching
 - Hover-triggered CSS transitions, `@media`/`@supports` queries, `calc()`, custom properties
 - Form elements with select dropdown, label association, Tab focus, GET/POST submission
-- JavaScript engine (QuickJS-NG): DOM manipulation, event dispatch, `fetch()`, `localStorage`
+- JavaScript engine: QuickJS-NG on desktop/WASM/UE5 with full DOM manipulation, event dispatch, `fetch()`, `localStorage`; pure-Rust `boa_engine` on PSP for standalone `eval` (no DOM glue yet)
 
 **Shell & Apps**
 - 90+ terminal commands across 17 modules with piping, globs, aliases, variable expansion
