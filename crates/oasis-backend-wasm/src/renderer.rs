@@ -760,7 +760,8 @@ impl SdiRenderTarget for WasmBackend {
             .set_global_composite_operation(canvas_composite_op(blend))
             .map_err(js_err)?;
         self.ctx.set_global_alpha(opacity.clamp(0.0, 1.0) as f64);
-        self.ctx
+        let r = self
+            .ctx
             .draw_image_with_html_canvas_element_and_dw_and_dh(
                 &target.canvas,
                 dst_x as f64,
@@ -768,13 +769,13 @@ impl SdiRenderTarget for WasmBackend {
                 dst_w as f64,
                 dst_h as f64,
             )
-            .map_err(js_err)?;
-        // Restore state.
+            .map_err(js_err);
+        // Restore state unconditionally before propagating draw errors.
         self.ctx
             .set_global_composite_operation(&prev_op)
             .map_err(js_err)?;
         self.ctx.set_global_alpha(prev_alpha);
-        Ok(())
+        r
     }
 
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
