@@ -31,9 +31,63 @@ impl fmt::Display for JsValue {
             Self::Null => f.write_str("null"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(n) => write!(f, "{n}"),
-            Self::Float(v) => write!(f, "{v}"),
+            // Match JS number-to-string semantics for the corner cases
+            // Rust's default `f64` formatter gets wrong:
+            //   - `f64::INFINITY`         -> JS "Infinity"  (Rust "inf")
+            //   - `f64::NEG_INFINITY`     -> JS "-Infinity" (Rust "-inf")
+            //   - `f64::NAN`              -> JS "NaN"       (Rust "NaN" — already correct)
+            // Finite values use Rust's default formatter, which matches
+            // JS for all values that fit this path (non-integer numbers
+            // the int-folding branch in `boa_value_to_js` doesn't
+            // downcast to `Int`).
+            Self::Float(v) => {
+                if v.is_infinite() {
+                    let sign = if v.is_sign_negative() { "-" } else { "" };
+                    write!(f, "{sign}Infinity")
+                } else {
+                    write!(f, "{v}")
+                }
+            },
             Self::String(s) => f.write_str(s),
         }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn display_primitives() {
+        assert_eq!(JsValue::Undefined.to_string(), "undefined");
+        assert_eq!(JsValue::Null.to_string(), "null");
+        assert_eq!(JsValue::Bool(true).to_string(), "true");
+        assert_eq!(JsValue::Bool(false).to_string(), "false");
+        assert_eq!(JsValue::Int(42).to_string(), "42");
+        assert_eq!(JsValue::Int(-7).to_string(), "-7");
+        assert_eq!(JsValue::String("hi".to_string()).to_string(), "hi");
+    }
+
+    #[test]
+    fn display_float_finite() {
+        assert_eq!(JsValue::Float(3.25).to_string(), "3.25");
+        assert_eq!(JsValue::Float(-0.5).to_string(), "-0.5");
+    }
+
+    #[test]
+    fn display_float_infinity_matches_javascript() {
+        // JS: String(Infinity)  === "Infinity"
+        // JS: String(-Infinity) === "-Infinity"
+        // Rust default: "inf" / "-inf" — that's the bug this test pins.
+        assert_eq!(JsValue::Float(f64::INFINITY).to_string(), "Infinity");
+        assert_eq!(JsValue::Float(f64::NEG_INFINITY).to_string(), "-Infinity");
+    }
+
+    #[test]
+    fn display_float_nan_matches_javascript() {
+        // Rust's default NaN formatter already matches JS ("NaN"), but
+        // pinning it keeps us honest if the default ever changes.
+        assert_eq!(JsValue::Float(f64::NAN).to_string(), "NaN");
     }
 }
 
