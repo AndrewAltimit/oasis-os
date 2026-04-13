@@ -105,7 +105,12 @@ fn boa_value_to_js(value: &BoaValue, context: &mut Context) -> JsValue {
     if let Some(n) = value.as_number() {
         // Mirror rquickjs's behaviour: prefer `Int` when the value is
         // an exact 32-bit integer, otherwise fall back to `Float`.
-        if n.is_finite() && n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
+        if n.is_finite()
+            && n.fract() == 0.0
+            && !(n == 0.0 && n.is_sign_negative())
+            && n >= i32::MIN as f64
+            && n <= i32::MAX as f64
+        {
             return JsValue::Int(n as i32);
         }
         return JsValue::Float(n);

@@ -18,9 +18,8 @@
 //!   upload <size> <path>      → receive file and write to ms0:
 //!   readfile <path>           → stream file contents back: "<size>\n<bytes...>"
 //!   delete <path>             → remove file from ms0:
-//!   ls <path>                 → list directory (TODO)
-//!   reboot                    → cold hardware reset
 //!   ls <path>                 → list directory contents
+//!   reboot                    → cold hardware reset
 //!   status                    → JSON with free memory, WiFi state
 //!
 //! ## Deploy
@@ -341,9 +340,9 @@ fn read_file(cfd: i32, path: &[u8]) {
     }
 
     let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) };
-    unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
+    let seek_ret = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
 
-    if size < 0 {
+    if size < 0 || seek_ret < 0 {
         unsafe { psp::sys::sceIoClose(fd) };
         send(cfd, b"err: bad size\n");
         return;
