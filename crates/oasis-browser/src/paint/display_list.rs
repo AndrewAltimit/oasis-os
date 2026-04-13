@@ -929,17 +929,11 @@ impl DisplayList {
                             // the render target itself.
                             let composite_res = if unbind_res.is_ok() {
                                 let run_filter = !layer.filters.is_empty()
-                                    && backend
-                                        .supports_render_target_readback();
+                                    && backend.supports_render_target_readback();
                                 if run_filter {
-                                    let byte_count =
-                                        (layer.dst_w * layer.dst_h * 4)
-                                            as usize;
+                                    let byte_count = (layer.dst_w * layer.dst_h * 4) as usize;
                                     let mut buf = vec![0u8; byte_count];
-                                    if backend
-                                        .read_render_target(id, &mut buf)
-                                        .is_ok()
-                                    {
+                                    if backend.read_render_target(id, &mut buf).is_ok() {
                                         crate::paint::filter_chain::apply_filter_chain(
                                             &mut buf,
                                             layer.dst_w,
@@ -949,26 +943,14 @@ impl DisplayList {
                                         // Pre-multiply opacity into
                                         // alpha so a plain alpha-over
                                         // blit gives the correct result.
-                                        if (layer.opacity - 1.0).abs()
-                                            > f32::EPSILON
-                                        {
-                                            let f =
-                                                layer.opacity.clamp(0.0, 1.0);
-                                            for chunk in
-                                                buf.chunks_exact_mut(4)
-                                            {
-                                                chunk[3] =
-                                                    ((chunk[3] as f32) * f)
-                                                        .round()
-                                                        as u8;
+                                        if (layer.opacity - 1.0).abs() > f32::EPSILON {
+                                            let f = layer.opacity.clamp(0.0, 1.0);
+                                            for chunk in buf.chunks_exact_mut(4) {
+                                                chunk[3] = ((chunk[3] as f32) * f).round() as u8;
                                             }
                                         }
                                         if let Ok(tex) =
-                                            backend.load_texture(
-                                                layer.dst_w,
-                                                layer.dst_h,
-                                                &buf,
-                                            )
+                                            backend.load_texture(layer.dst_w, layer.dst_h, &buf)
                                         {
                                             let _ = backend.blit(
                                                 tex,
@@ -977,8 +959,7 @@ impl DisplayList {
                                                 layer.dst_w,
                                                 layer.dst_h,
                                             );
-                                            let _ =
-                                                backend.destroy_texture(tex);
+                                            let _ = backend.destroy_texture(tex);
                                         }
                                         Ok(())
                                     } else {
@@ -1008,11 +989,8 @@ impl DisplayList {
                             };
                             // Always destroy the render target even
                             // if unbind/composite failed.
-                            let destroy_res =
-                                backend.destroy_render_target(id);
-                            unbind_res
-                                .and(composite_res)
-                                .and(destroy_res)?;
+                            let destroy_res = backend.destroy_render_target(id);
+                            unbind_res.and(composite_res).and(destroy_res)?;
                         } else {
                             opacity_stack.pop();
                         }
