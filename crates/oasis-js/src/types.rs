@@ -1,10 +1,9 @@
 //! Engine-agnostic value and error types.
 //!
-//! Both the rquickjs-backed [`crate::JsEngine`] and the boa-backed
-//! [`crate::BoaJsEngine`] return `JsValue` from their `eval` methods
-//! and `JsError` on failure. Keeping the types here means callers can
-//! write engine-independent code that works under either backend
-//! without paying for the other backend's transitive dependencies.
+//! The rquickjs-backed [`crate::JsEngine`] returns `JsValue` from its
+//! `eval` method and `JsError` on failure. These types live in their
+//! own module so callers can write engine-independent code and so the
+//! shape stays stable if additional backends reappear later.
 
 use core::fmt;
 
