@@ -596,8 +596,8 @@ impl SdiRenderTarget for Ue5Backend {
         id: RenderTargetId,
         dst_x: i32,
         dst_y: i32,
-        _dst_w: u32,
-        _dst_h: u32,
+        dst_w: u32,
+        dst_h: u32,
         _blend: BlendMode,
         opacity: f32,
     ) -> Result<()> {
@@ -606,9 +606,8 @@ impl SdiRenderTarget for Ue5Backend {
         })?;
         let sw = src.width();
         let sh = src.height();
-        // Software src-over composite. Non-Normal blend modes currently
-        // degrade to Normal on UE5; see `docs/compositor-overhaul-plan.md`
-        // §3.4 step 4.
+        debug_assert_eq!(sw, dst_w, "composite_render_target: dst_w != src width");
+        debug_assert_eq!(sh, dst_h, "composite_render_target: dst_h != src height");
         let src_pixels = src.data().to_vec();
         self.fb
             .composite_rgba(dst_x, dst_y, sw, sh, &src_pixels, opacity);

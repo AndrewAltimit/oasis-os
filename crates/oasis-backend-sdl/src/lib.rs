@@ -696,10 +696,9 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn supports_render_target_readback(&self) -> bool {
-        // SDL3 supports SDL_RenderReadPixels on the currently bound
-        // target. Wiring the readback path is PR5 work; report the
-        // capability now so the compositor can plan for it.
-        true
+        // SDL3 supports SDL_RenderReadPixels but read_render_target
+        // is not yet wired — report false until implemented.
+        false
     }
 }
 
