@@ -54,7 +54,7 @@ static MAX_BLK_KB: AtomicI32 = AtomicI32::new(0);
 static FRAME_COUNT: AtomicI32 = AtomicI32::new(0);
 
 /// Build identifier — bump this on each deploy iteration.
-const BUILD_ID: &str = "v46-cascade-fine";
+const BUILD_ID: &str = "v48-arena-8mb-tv";
 
 /// Pending skin change request from TCP server.
 /// Written by server thread, read + cleared by main loop.

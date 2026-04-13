@@ -66,7 +66,7 @@ static YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsi
 /// Embedders use this on real hardware to spot infinite loops or
 /// pathological slowdowns inside `Tokenizer::tokenize`.
 pub fn set_tokenize_progress_hook(hook: ProgressFn) {
-    PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 /// Install a cooperative yield hook fired every 2048 tokenize iters.
@@ -74,11 +74,11 @@ pub fn set_tokenize_progress_hook(hook: ProgressFn) {
 /// remote test harness stays responsive while a long synchronous
 /// `navigate_vfs` is running.
 pub fn set_tokenize_yield_hook(hook: YieldFn) {
-    YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 fn tokenize_progress_log(iter: u64, pos: usize, input_len: usize, tokens: usize, state_id: u32) {
-    let raw = PROGRESS_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }
@@ -90,7 +90,7 @@ fn tokenize_progress_log(iter: u64, pos: usize, input_len: usize, tokens: usize,
 }
 
 fn tokenize_yield() {
-    let raw = YIELD_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }

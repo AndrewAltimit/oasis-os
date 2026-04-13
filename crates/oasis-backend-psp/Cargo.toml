@@ -40,6 +40,11 @@ kernel-exception = ["psp/kernel"]
 kernel-volatile = ["psp/kernel"]
 kernel-me-clock = ["psp/kernel"]
 kernel-me = ["psp/kernel"]
+# Bake the bundled `test_wiki.html` (~92 KB) into the EBOOT data
+# segment and auto-trigger a `navigate_vfs` to it on first frame.
+# Used by PPSSPP-driven offline browser perf bisection. Disabled by
+# default to keep the EBOOT lean.
+auto-browse-wiki = []
 
 [dependencies]
 psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }

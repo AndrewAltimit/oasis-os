@@ -66,6 +66,14 @@ struct ActiveLayer {
     /// composite. Empty = no filter pass, fast composite_render_target
     /// path. Non-empty triggers a CPU readback + filter + re-upload.
     filters: Vec<FilterFunction>,
+    /// Saved `(compositor_dx, compositor_dy)` from before this layer
+    /// was pushed. Restored on `PopCompositingLayer` so that nested
+    /// layers don't accumulate translation incorrectly. (Without
+    /// save/restore, an inner layer's screen-space origin would be
+    /// subtracted on top of the outer layer's translation, leaving
+    /// items off-target after the inner pop.)
+    saved_compositor_dx: i32,
+    saved_compositor_dy: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -859,11 +867,22 @@ impl DisplayList {
                     } else {
                         None
                     };
+                    // Snapshot the current compositor offset BEFORE
+                    // we mutate it for the new layer. The pop path
+                    // restores from this snapshot, which is correct
+                    // even when layers are nested (the inner pop
+                    // restores the outer layer's offset, not zero).
+                    let saved_dx = compositor_dx;
+                    let saved_dy = compositor_dy;
                     if layer_id.is_some() {
-                        // Contents draw at target-local coordinates by
-                        // subtracting the layer's screen-space origin.
-                        compositor_dx -= dx;
-                        compositor_dy -= dy;
+                        // Contents draw at target-local coordinates,
+                        // i.e. the screen-space origin of the layer
+                        // becomes (0, 0) inside the offscreen target.
+                        // For nested layers this absolute reset is
+                        // correct because each render target has its
+                        // own coordinate space starting at (0, 0).
+                        compositor_dx = -dx;
+                        compositor_dy = -dy;
                     } else {
                         // Fallback: plain opacity stacking. Blend mode
                         // and filters are dropped — documented as the
@@ -880,6 +899,8 @@ impl DisplayList {
                         opacity: *opacity,
                         blend: blend_backend,
                         filters: filters.clone(),
+                        saved_compositor_dx: saved_dx,
+                        saved_compositor_dy: saved_dy,
                     });
                     continue;
                 },
@@ -888,8 +909,13 @@ impl DisplayList {
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     if let Some(layer) = layer_stack.pop() {
                         if let Some(id) = layer.id {
-                            compositor_dx += layer.dst_x;
-                            compositor_dy += layer.dst_y;
+                            // Restore the parent layer's compositor
+                            // offset (or zero if this was the
+                            // outermost layer) instead of trying to
+                            // back out the inner layer's translation
+                            // by addition.
+                            compositor_dx = layer.saved_compositor_dx;
+                            compositor_dy = layer.saved_compositor_dy;
                             backend.unbind_render_target()?;
                             // Filter pass: if the layer has any
                             // filters AND the backend supports pixel
@@ -2762,5 +2788,72 @@ mod tests {
             })
             .expect("inner fill");
         assert_eq!(inner, (10, 10, 10, 10), "local-space translation wrong");
+    }
+
+    /// Regression test for the nested compositing layer coordinate
+    /// bug found in PR #114 review. Outer layer at (10, 20), inner
+    /// layer at (50, 60), inner content at screen (55, 65). The
+    /// inner content must land at inner-local (5, 5), and after the
+    /// inner pop the outer content at screen (15, 25) must land at
+    /// outer-local (5, 5) — not at compositor_dx +/- accumulated
+    /// junk.
+    #[test]
+    fn nested_compositing_layers_use_per_layer_local_space() {
+        use oasis_test_backend::RecordingBackend;
+        use oasis_types::backend::DrawCommand;
+
+        let mut dl = DisplayList::new();
+        // Outer layer.
+        dl.push(push_cl(layer_rect(10.0, 20.0, 200.0, 200.0), 1.0));
+        // Outer-only content (between outer push and inner push).
+        dl.push(DisplayItem::FillRect {
+            x: 15,
+            y: 25,
+            w: 1,
+            h: 1,
+            color: Color::rgba(255, 0, 0, 255),
+            node_id: None,
+        });
+        // Inner layer.
+        dl.push(push_cl(layer_rect(50.0, 60.0, 100.0, 100.0), 1.0));
+        // Inner-only content.
+        dl.push(DisplayItem::FillRect {
+            x: 55,
+            y: 65,
+            w: 2,
+            h: 2,
+            color: Color::rgba(0, 255, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+        // Outer-only content (after inner pop).
+        dl.push(DisplayItem::FillRect {
+            x: 16,
+            y: 26,
+            w: 3,
+            h: 3,
+            color: Color::rgba(0, 0, 255, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+        let cmds = backend.commands();
+
+        // Walk the trace and find the three FillRects in order.
+        let mut fills = cmds.iter().filter_map(|c| match c {
+            DrawCommand::FillRect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+            _ => None,
+        });
+        // Outer-content-before-inner: screen (15, 25) → outer-local
+        // (5, 5).
+        assert_eq!(fills.next(), Some((5, 5, 1, 1)), "outer-before");
+        // Inner content: screen (55, 65) → inner-local (5, 5).
+        assert_eq!(fills.next(), Some((5, 5, 2, 2)), "inner");
+        // Outer-content-after-inner: screen (16, 26) must again
+        // resolve to outer-local (6, 6) — would be wrong if the pop
+        // path naively added inner.dst_x back to compositor_dx.
+        assert_eq!(fills.next(), Some((6, 6, 3, 3)), "outer-after");
     }
 }

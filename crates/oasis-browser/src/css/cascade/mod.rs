@@ -149,16 +149,16 @@ static CASCADE_YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 /// Install a cascade progress hook fired every 256 element styled.
 /// Args are `(elements_styled, total_elements)`.
 pub fn set_cascade_progress_hook(hook: CascadeProgressFn) {
-    CASCADE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    CASCADE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 /// Install a cooperative yield hook fired every 64 elements styled.
 pub fn set_cascade_yield_hook(hook: CascadeYieldFn) {
-    CASCADE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    CASCADE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 fn cascade_progress(idx: u64, total: u64) {
-    let raw = CASCADE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = CASCADE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }
@@ -169,7 +169,7 @@ fn cascade_progress(idx: u64, total: u64) {
 }
 
 fn cascade_yield_fn() {
-    let raw = CASCADE_YIELD_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = CASCADE_YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }

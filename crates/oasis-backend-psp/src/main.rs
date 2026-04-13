@@ -339,22 +339,24 @@ fn psp_main() {
 
     // PPSSPP-driven test loop: auto-trigger a wikipedia browse on
     // boot using a hardcoded VFS resource so we can iterate on the
-    // tokenizer hang without needing the full deploy/reboot/wifi
-    // cycle on real hardware. Activated by the `WIKI_AUTOBROWSE` cfg
-    // flag at build time. Truncate the slice via `WIKI_TRUNC_BYTES`
-    // for input bisection. The HTML is mounted into the browser's
-    // VFS as `vfs:///test_wiki.html` so navigate_vfs treats it like
-    // any other resource.
-    const AUTO_BROWSE: bool = false;
+    // browser pipeline without needing the full deploy / reboot /
+    // wifi cycle on real hardware. Gated behind the
+    // `auto-browse-wiki` cargo feature so the 92 KB `test_wiki.html`
+    // fixture only lands in the EBOOT data segment when explicitly
+    // enabled (default builds don't pay the size cost).
+    #[cfg(feature = "auto-browse-wiki")]
     const WIKI_TRUNC_BYTES: usize = 92443;
+    #[cfg(feature = "auto-browse-wiki")]
     static WIKI_HTML: &[u8] = include_bytes!("../test_wiki.html");
+    #[cfg(feature = "auto-browse-wiki")]
     let mut auto_browse_fired = false;
-    if AUTO_BROWSE {
+    #[cfg(feature = "auto-browse-wiki")]
+    {
         use oasis_core::vfs::Vfs;
         let truncated = &WIKI_HTML[..WIKI_TRUNC_BYTES.min(WIKI_HTML.len())];
         let _ = br.vfs.write("/test_wiki.html", truncated);
         dbg_log(&format!(
-            "[EBOOT] AUTO_BROWSE armed: {} bytes in vfs",
+            "[EBOOT] auto-browse-wiki armed: {} bytes in vfs",
             truncated.len()
         ));
     }
@@ -368,9 +370,10 @@ fn psp_main() {
         // Auto-browse trigger after a brief warm-up so the boot
         // splash + first frame complete before we monopolise the
         // main thread inside navigate_vfs.
-        if AUTO_BROWSE && !auto_browse_fired && viz_frame == 30 {
+        #[cfg(feature = "auto-browse-wiki")]
+        if !auto_browse_fired && viz_frame == 30 {
             auto_browse_fired = true;
-            dbg_log("[EBOOT] AUTO_BROWSE firing");
+            dbg_log("[EBOOT] auto-browse-wiki firing");
             kiosk_app = KioskApp::Browser;
             let _ = br.ensure_widget();
             let BrowserState { widget, vfs, .. } = &mut br;

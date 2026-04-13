@@ -30,12 +30,12 @@ static TREE_RAW_LOG_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::At
 /// progress hook silently failed". Used by PSP backend wired to
 /// `vlog_force`.
 pub fn set_tree_builder_raw_log_hook(hook: TreeRawLogFn) {
-    TREE_RAW_LOG_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    TREE_RAW_LOG_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 #[allow(dead_code)] // Only called from per-step bisect builds.
 pub(crate) fn tree_raw_log(msg: &str) {
-    let raw = TREE_RAW_LOG_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = TREE_RAW_LOG_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }
@@ -47,16 +47,16 @@ pub(crate) fn tree_raw_log(msg: &str) {
 /// Install a tree-builder progress hook. Called every 256 tokens with
 /// `(tokens_processed, total_tokens, dom_nodes)`.
 pub fn set_tree_builder_progress_hook(hook: TreeProgressFn) {
-    TREE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    TREE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 /// Install a cooperative yield hook fired every 128 tree builder iters.
 pub fn set_tree_builder_yield_hook(hook: TreeYieldFn) {
-    TREE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Relaxed);
+    TREE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
 }
 
 fn tree_progress_log(idx: u64, total: usize, nodes: usize) {
-    let raw = TREE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = TREE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }
@@ -66,7 +66,7 @@ fn tree_progress_log(idx: u64, total: usize, nodes: usize) {
 }
 
 fn tree_yield() {
-    let raw = TREE_YIELD_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let raw = TREE_YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
         return;
     }
