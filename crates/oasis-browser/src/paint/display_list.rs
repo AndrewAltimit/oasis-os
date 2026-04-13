@@ -916,7 +916,7 @@ impl DisplayList {
                             // by addition.
                             compositor_dx = layer.saved_compositor_dx;
                             compositor_dy = layer.saved_compositor_dy;
-                            backend.unbind_render_target()?;
+                            let unbind_res = backend.unbind_render_target();
                             // Filter pass: if the layer has any
                             // filters AND the backend supports pixel
                             // readback, read the target, apply the
@@ -927,42 +927,72 @@ impl DisplayList {
                             // keeps opacity — documented degradation
                             // until a read-modify-write path lands on
                             // the render target itself.
-                            let run_filter = !layer.filters.is_empty()
-                                && backend.supports_render_target_readback();
-                            if run_filter {
-                                let byte_count = (layer.dst_w * layer.dst_h * 4) as usize;
-                                let mut buf = vec![0u8; byte_count];
-                                if backend.read_render_target(id, &mut buf).is_ok() {
-                                    crate::paint::filter_chain::apply_filter_chain(
-                                        &mut buf,
-                                        layer.dst_w,
-                                        layer.dst_h,
-                                        &layer.filters,
-                                    );
-                                    // Pre-multiply opacity into alpha
-                                    // so a plain alpha-over blit gives
-                                    // the correct result.
-                                    if (layer.opacity - 1.0).abs() > f32::EPSILON {
-                                        let f = layer.opacity.clamp(0.0, 1.0);
-                                        for chunk in buf.chunks_exact_mut(4) {
-                                            chunk[3] = ((chunk[3] as f32) * f).round() as u8;
-                                        }
-                                    }
-                                    if let Ok(tex) =
-                                        backend.load_texture(layer.dst_w, layer.dst_h, &buf)
+                            let composite_res = if unbind_res.is_ok() {
+                                let run_filter = !layer.filters.is_empty()
+                                    && backend
+                                        .supports_render_target_readback();
+                                if run_filter {
+                                    let byte_count =
+                                        (layer.dst_w * layer.dst_h * 4)
+                                            as usize;
+                                    let mut buf = vec![0u8; byte_count];
+                                    if backend
+                                        .read_render_target(id, &mut buf)
+                                        .is_ok()
                                     {
-                                        let _ = backend.blit(
-                                            tex,
+                                        crate::paint::filter_chain::apply_filter_chain(
+                                            &mut buf,
+                                            layer.dst_w,
+                                            layer.dst_h,
+                                            &layer.filters,
+                                        );
+                                        // Pre-multiply opacity into
+                                        // alpha so a plain alpha-over
+                                        // blit gives the correct result.
+                                        if (layer.opacity - 1.0).abs()
+                                            > f32::EPSILON
+                                        {
+                                            let f =
+                                                layer.opacity.clamp(0.0, 1.0);
+                                            for chunk in
+                                                buf.chunks_exact_mut(4)
+                                            {
+                                                chunk[3] =
+                                                    ((chunk[3] as f32) * f)
+                                                        .round()
+                                                        as u8;
+                                            }
+                                        }
+                                        if let Ok(tex) =
+                                            backend.load_texture(
+                                                layer.dst_w,
+                                                layer.dst_h,
+                                                &buf,
+                                            )
+                                        {
+                                            let _ = backend.blit(
+                                                tex,
+                                                layer.dst_x,
+                                                layer.dst_y,
+                                                layer.dst_w,
+                                                layer.dst_h,
+                                            );
+                                            let _ =
+                                                backend.destroy_texture(tex);
+                                        }
+                                        Ok(())
+                                    } else {
+                                        backend.composite_render_target(
+                                            id,
                                             layer.dst_x,
                                             layer.dst_y,
                                             layer.dst_w,
                                             layer.dst_h,
-                                        );
-                                        let _ = backend.destroy_texture(tex);
+                                            layer.blend,
+                                            layer.opacity,
+                                        )
                                     }
                                 } else {
-                                    // Readback failed; fall back to
-                                    // direct composite without filters.
                                     backend.composite_render_target(
                                         id,
                                         layer.dst_x,
@@ -971,20 +1001,18 @@ impl DisplayList {
                                         layer.dst_h,
                                         layer.blend,
                                         layer.opacity,
-                                    )?;
+                                    )
                                 }
                             } else {
-                                backend.composite_render_target(
-                                    id,
-                                    layer.dst_x,
-                                    layer.dst_y,
-                                    layer.dst_w,
-                                    layer.dst_h,
-                                    layer.blend,
-                                    layer.opacity,
-                                )?;
-                            }
-                            backend.destroy_render_target(id)?;
+                                Ok(())
+                            };
+                            // Always destroy the render target even
+                            // if unbind/composite failed.
+                            let destroy_res =
+                                backend.destroy_render_target(id);
+                            unbind_res
+                                .and(composite_res)
+                                .and(destroy_res)?;
                         } else {
                             opacity_stack.pop();
                         }

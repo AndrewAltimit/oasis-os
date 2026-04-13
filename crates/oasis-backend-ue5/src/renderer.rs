@@ -580,6 +580,10 @@ impl SdiRenderTarget for Ue5Backend {
         // Swap the parent surface back in; the target's buffer ends up
         // in `saved_parent` which we return to the pool.
         std::mem::swap(&mut self.fb, &mut saved_parent);
+        debug_assert!(
+            self.current_render_target.is_some(),
+            "unbind_render_target called without active target"
+        );
         if let Some(active_id) = self.current_render_target {
             self.render_targets.insert(active_id, saved_parent);
         }
