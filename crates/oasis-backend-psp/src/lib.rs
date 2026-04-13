@@ -12,6 +12,7 @@
 
 #![feature(restricted_std)]
 #![feature(asm_experimental_arch)]
+#![feature(c_variadic)]
 
 // ---------------------------------------------------------------------------
 // Module declarations
@@ -27,6 +28,13 @@ pub mod power;
 pub mod procedural;
 pub mod psmf;
 pub mod psmf_decode;
+// Rust shim that exposes the libc / libm / time / stdio symbols that
+// rquickjs-sys's QuickJS-NG C sources reference. Pspdev's prebuilt
+// libc.a/libm.a/libcglue.a are eabi32 + single-float + abicalls and
+// can't be linked against Rust's o32 + double-float code, so we
+// provide the surface in pure Rust instead. See the module docs for
+// the full rationale.
+pub mod quickjs_shim;
 pub mod render;
 pub mod sfx;
 pub mod shapes;

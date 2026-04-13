@@ -27,7 +27,14 @@ rustflags = [
   # `mipsel-sony-psp-std.json`.
   '-C', 'link-arg=--emit-relocs',
   '-C', 'link-arg=--nmagic',
-  '-C', 'link-arg=--script=tools/psp-linkscript.ld',
+  # rust-psp's target-spec link script doesn't define `_gp` (the
+  # MIPS global pointer) because rust-lld normally synthesises it
+  # from the small-data layout. psp-ld wants it explicit or the
+  # `.rodata.sceModuleInfo` descriptor's `_gp` slot relocation
+  # fails. Point it at 0 — with `-G0` nothing lands in small-data
+  # for our objects and rust-psp's own objects don't reference
+  # _gp either.
+  '-C', 'link-arg=--defsym=_gp=0',
   # NOTE: we intentionally do NOT link pspdev's prebuilt `libc.a`,
   # `libm.a`, or `libcglue.a`. Those archives are compiled as
   # eabi32 / msingle-float / abicalls, which cannot be merged with
@@ -49,7 +56,7 @@ PSPDEV = "/opt/pspdev"
 CC_mipsel_sony_psp_std = { value = "tools/psp-gcc-wrap.sh", relative = true }
 CXX_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-g++"
 AR_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-ar"
-CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -mdouble-float -fno-stack-protector -fno-function-sections -fno-data-sections -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types -Wno-error=pointer-sign -DCLOCK_MONOTONIC=CLOCK_MONOTONIC_RAW -D__wasi__"
+CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -mdouble-float -fno-stack-protector -fno-function-sections -fno-data-sections -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types -Wno-error=pointer-sign -DCLOCK_MONOTONIC=CLOCK_MONOTONIC_RAW -D__wasi__ -isystem/home/mikunpc/Documents/repos/oasis-os/crates/oasis-backend-psp/tools/newlib-shim"
 # bindgen invokes libclang directly, which by default resolves system
 # headers from /usr/include (glibc). Force it to use pspdev's newlib
 # sysroot instead — otherwise rquickjs-sys fails at `#include <stdio.h>`
