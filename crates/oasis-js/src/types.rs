@@ -33,15 +33,14 @@ impl fmt::Display for JsValue {
             Self::Int(n) => write!(f, "{n}"),
             // Match JS number-to-string semantics for the corner cases
             // Rust's default `f64` formatter gets wrong:
+            //   - `-0.0`                  -> JS "0"         (Rust "-0")
             //   - `f64::INFINITY`         -> JS "Infinity"  (Rust "inf")
             //   - `f64::NEG_INFINITY`     -> JS "-Infinity" (Rust "-inf")
             //   - `f64::NAN`              -> JS "NaN"       (Rust "NaN" — already correct)
-            // Finite values use Rust's default formatter, which matches
-            // JS for all values that fit this path (non-integer numbers
-            // the int-folding branch in `boa_value_to_js` doesn't
-            // downcast to `Int`).
             Self::Float(v) => {
-                if v.is_infinite() {
+                if *v == 0.0 && v.is_sign_negative() {
+                    f.write_str("0")
+                } else if v.is_infinite() {
                     let sign = if v.is_sign_negative() { "-" } else { "" };
                     write!(f, "{sign}Infinity")
                 } else {
@@ -72,6 +71,13 @@ mod display_tests {
     fn display_float_finite() {
         assert_eq!(JsValue::Float(3.25).to_string(), "3.25");
         assert_eq!(JsValue::Float(-0.5).to_string(), "-0.5");
+    }
+
+    #[test]
+    fn display_float_negative_zero() {
+        // JS: String(-0) === "0" — Rust default formats as "-0".
+        assert_eq!(JsValue::Float(-0.0).to_string(), "0");
+        assert_eq!(JsValue::Float(0.0).to_string(), "0");
     }
 
     #[test]
