@@ -739,7 +739,7 @@ fn run_instant_timetest(cfd: i32) {
 /// ```
 fn run_js_eval(cfd: i32, script: &[u8]) {
     let script_str = match core::str::from_utf8(script) {
-        Ok(s) => s,
+        Ok(s) => s.trim(),
         Err(_) => {
             send_response(cfd, b"js: error: script is not valid UTF-8\n");
             return;
@@ -759,9 +759,8 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
 
     match engine.eval(script_str) {
         Ok(value) => {
-            let rendered = render_js_value(&value);
-            log_msg(&format!("[js] ok -> {}", rendered));
-            let reply = format!("js: {}\n", rendered);
+            log_msg(&format!("[js] ok -> {value}"));
+            let reply = format!("js: {value}\n");
             send_response(cfd, reply.as_bytes());
         }
         Err(err) => {
@@ -769,20 +768,6 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
             let reply = format!("js: error: {}\n", err.message);
             send_response(cfd, reply.as_bytes());
         }
-    }
-}
-
-/// Format a `JsValue` for the TCP reply line. Mirrors the rendering
-/// in the rquickjs-backed console output so a future shared printer
-/// can replace both call sites.
-fn render_js_value(value: &oasis_js::JsValue) -> String {
-    match value {
-        oasis_js::JsValue::Undefined => "undefined".to_string(),
-        oasis_js::JsValue::Null => "null".to_string(),
-        oasis_js::JsValue::Bool(b) => b.to_string(),
-        oasis_js::JsValue::Int(n) => n.to_string(),
-        oasis_js::JsValue::Float(f) => f.to_string(),
-        oasis_js::JsValue::String(s) => s.clone(),
     }
 }
 

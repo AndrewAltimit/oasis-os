@@ -6,6 +6,8 @@
 //! write engine-independent code that works under either backend
 //! without paying for the other backend's transitive dependencies.
 
+use core::fmt;
+
 /// A simple representation of a JavaScript return value.
 ///
 /// Engines collapse complex JS values (objects, arrays, BigInts,
@@ -20,6 +22,19 @@ pub enum JsValue {
     Int(i32),
     Float(f64),
     String(String),
+}
+
+impl fmt::Display for JsValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Undefined => f.write_str("undefined"),
+            Self::Null => f.write_str("null"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(n) => write!(f, "{n}"),
+            Self::Float(v) => write!(f, "{v}"),
+            Self::String(s) => f.write_str(s),
+        }
+    }
 }
 
 /// An error produced by JavaScript execution.
