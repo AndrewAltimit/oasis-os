@@ -404,9 +404,16 @@ fn psp_main() {
             &dbg_log,
         );
 
-        // Browser tick disabled on PSP -- std::time::Instant crashes
-        // on Allegrex (confirmed by testing). Image loading happens
-        // synchronously during navigate_vfs instead.
+        // Browser tick is currently still gated off on PSP. The
+        // historical reason ("std::time::Instant crashes on Allegrex")
+        // turned out to be wrong — the rust-psp std overlay was
+        // missing a target_os = "psp" arm in sys/time/mod.rs, so PSP
+        // fell through to unsupported::Instant::now which panic!()s.
+        // Fixed in rust-psp branch
+        // fix/psp-hardware-std-overlay-alignment-and-time. Image
+        // loading still happens synchronously during navigate_vfs;
+        // the gate above can be removed whenever browser perf needs
+        // progressive image loading on PSP.
 
         // Poll radio streaming state from audio thread atomics.
         if radio.status == RadioStatus::Buffering || radio.status == RadioStatus::Playing {
@@ -544,12 +551,15 @@ fn psp_main() {
         // -- Poll remote browse requests --
         // Accepts a URL from the TCP command server and drives a
         // synchronous `BrowserWidget::navigate_vfs`, switching to the
-        // Browser app if necessary. PSP must use `navigate_vfs`
+        // Browser app if necessary. PSP currently uses `navigate_vfs`
         // (not `navigate_to`) because the browser's per-frame
-        // `tick()` is not called on PSP — `std::time::Instant`
-        // crashes on Allegrex, so the async fetch state machine never
-        // advances. `navigate_vfs` does the fetch + parse + image
-        // load synchronously inside this single call.
+        // `tick()` isn't wired up on PSP — historically because of a
+        // misdiagnosed "std::time::Instant crashes on Allegrex" claim
+        // (the real cause was the orphaned rust-psp std time overlay,
+        // fixed in branch fix/psp-hardware-std-overlay-alignment-and-time).
+        // `navigate_vfs` does the fetch + parse + image load
+        // synchronously inside this single call. Switching PSP to the
+        // async fetch path is a follow-up once we wire `tick()` back in.
         if let Some(url) = oasis_backend_psp::cmd_server::take_pending_browse() {
             kiosk_app = KioskApp::Browser;
             // The cmd_server's auto_connect_wifi sets `NET_STACK_INITIALIZED`

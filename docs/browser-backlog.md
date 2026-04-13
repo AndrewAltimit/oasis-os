@@ -14,50 +14,70 @@ Last updated: 2026-04-12 (tracked in `feat/browser-improvements`).
 
 ## Epic: PSP JavaScript integration
 
-**Effort:** 1–3 weeks. **Risk:** high (MIPS codegen quirks, debugging on
-real hardware). **Value:** enables a large class of modern sites that use
-JS for content hydration.
+**Effort:** 1–3 weeks. **Risk:** medium (revised — see below). **Value:**
+enables a large class of modern sites that use JS for content hydration.
 
-QuickJS-NG has been ported to ESP32-class microcontrollers (520KB SRAM,
-4MB flash). PSP has 24MB user RAM + 333MHz MIPS — strictly more than
-ESP32. The RAM argument does not hold up; the real obstacles are build
-pipeline and MIPS codegen, not memory budget.
+PSP has 24MB user RAM + 333MHz MIPS. With the rust-psp std overlay fixed
+on 2026-04-13 (`HashMap`, `Instant::now`, and full `std::sync` all
+verified working on real hardware), every prerequisite for a pure-Rust
+JS engine is in place.
 
-**Phase 1 — Feasibility: does QuickJS compile for `mipsel-sony-psp`?**
+### Revised plan: pure-Rust engine (`boa_engine`) instead of QuickJS-NG
 
-- Add `quickjs-ng` as a C dependency via the `cc` crate in a standalone
-  test binary under `crates/oasis-backend-psp/tests/`.
-- Verify `cc` emits usable MIPS code for QuickJS's large switch tables,
-  `setjmp`/`longjmp` usage, and bytecode dispatch loop.
-- Expect to hit LLVM MIPS codegen issues similar to the existing
-  "manual byte loops needed for memcpy/memset" constraint. Budget a
-  week just for this phase — it's the risk-heavy step.
+The original three-phase plan called for vendoring QuickJS-NG via the
+`cc` crate and writing a hand-rolled FFI wrapper. The two motivations
+behind that approach have both evaporated:
 
-**Phase 2 — Thin FFI wrapper (not `rquickjs`).**
+1. **"`rquickjs` uses `std::time::Instant`, which crashes on PSP
+   Allegrex"** — this turned out to be wrong. `Instant::now` was hitting
+   `unsupported::Instant::now` because the rust-psp std overlay had no
+   `target_os = "psp"` arm in the new `sys/time/mod.rs`; it never had
+   anything to do with `rquickjs`. Fixed in rust-psp branch
+   `fix/psp-hardware-std-overlay-alignment-and-time` and verified on
+   hardware.
+2. **"Need a thin FFI wrapper because `rquickjs` is too heavy"** — the
+   real blocker was getting QuickJS's C source to cross-compile for
+   `mipsel-sony-psp`, which requires a MIPS libc / cross-compiler
+   (pspdev) that isn't installed on the dev box. Sidestepped entirely
+   by using `boa_engine`, which is pure Rust with no C dependencies.
 
-- `rquickjs` uses `std::time::Instant`, which **crashes on PSP
-  Allegrex** (documented in memory). Do not try to port `rquickjs`.
-- Write a narrow FFI crate exposing just what `oasis-js` needs: engine
-  init, eval, function calls, object property get/set, callback
-  registration. Route all time sources through `sceKernelGetSystemTimeLow`.
-- Configure QuickJS memory limit at ~1MB initial heap, grow to ~4MB
-  max. Leaves ~18–20MB for browser/video/SDI/audio.
+**Phase 1 — Add `boa_engine` to `oasis-js` behind a feature flag.**
+
+- New `boa` feature on `oasis-js` swaps the `rquickjs`-backed
+  `JsEngine` for a `boa_engine`-backed one with the same public API
+  (`new`, `eval`, `JsValue`, `JsError`).
+- Desktop and WASM keep using `rquickjs` (no behavior change). PSP
+  builds with `--features boa` and gets the pure-Rust engine.
+- Console/fetch/storage/timers stay rquickjs-only for this PR — those
+  glue layers can be ported to boa in a follow-up if PSP needs them.
+
+**Phase 2 — Wire `oasis-js` into the PSP backend.**
+
+- Add `oasis-js = { workspace = true, features = ["boa"] }` to
+  `oasis-backend-psp` so the engine is linked into the EBOOT.
+- Add a `js <code>` command to `cmd_server.rs` that evaluates a
+  one-shot JavaScript expression and returns the result over TCP.
+  Exercises the engine end-to-end on real hardware without needing
+  the full DOM glue.
 
 **Phase 3 — Wire through `oasis-browser` PSP build.**
 
-- Gate on a new `psp-quickjs` feature flag on `oasis-js`.
-- Enable the `javascript` feature on `oasis-browser` in the PSP Cargo.toml.
-- Audit the DOM binding layer for PSP-hostile code (threading, time, fs).
+- DOM bindings (`oasis-browser/src/js_dom.rs`) are heavily tied to
+  `rquickjs::{Ctx, Function, Object}` — porting to boa requires a
+  parallel implementation. Defer this to a follow-up PR; for now the
+  PSP build of `oasis-browser` keeps `javascript = false` and scripts
+  are still dropped at parse time.
 - Update the `# Feature flags` docstring in `src/lib.rs` and the
-  `oasis-backend-psp/Cargo.toml` comment to reflect the new state.
+  `oasis-backend-psp/Cargo.toml` note to describe the new state.
 
-**Non-goals:** V8-level performance. Expect 500–1000× slower than
-desktop. Inert pages with small bootstrap scripts will work; React SPAs
-will be unusable. That's fine — degraded is better than dead.
+**Non-goals:** V8-level performance. boa is an interpreted reference
+implementation; expect ~10× slower than QuickJS, which itself is
+~500-1000× slower than V8 on Allegrex. Inert pages with small
+bootstrap scripts will work; React SPAs will be unusable. That's fine
+— degraded is better than dead.
 
-**Testing:** PPSSPP headless for smoke tests; real hardware for
-performance. Budget extra time for debugging — QuickJS stack traces on
-MIPS are not fun.
+**Testing:** PPSSPP headless for the unit test, real hardware for the
+end-to-end `js` command via TCP cmd_server.
 
 ---
 

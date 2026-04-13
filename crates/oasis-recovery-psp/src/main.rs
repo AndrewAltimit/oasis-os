@@ -16,8 +16,10 @@
 //!
 //!   ping                      → "pong\n"
 //!   upload <size> <path>      → receive file and write to ms0:
-//!   reboot                    → cold hardware reset
+//!   readfile <path>           → stream file contents back: "<size>\n<bytes...>"
+//!   delete <path>             → remove file from ms0:
 //!   ls <path>                 → list directory contents
+//!   reboot                    → cold hardware reset
 //!   status                    → JSON with free memory, WiFi state
 //!
 //! ## Deploy
@@ -91,9 +93,11 @@ fn psp_main() {
     print("Commands:\n");
     print("  ping                    - test connection\n");
     print("  upload <size> <path>    - write file to ms0:\n");
-    print("  ls <path>              - list directory\n");
-    print("  reboot                 - cold restart\n");
-    print("  status                 - system info\n\n");
+    print("  readfile <path>         - stream file back to host\n");
+    print("  delete <path>           - remove file from ms0:\n");
+    print("  ls <path>               - list directory\n");
+    print("  reboot                  - cold restart\n");
+    print("  status                  - system info\n\n");
     print("Waiting for connections...\n\n");
 
     server_main();
@@ -237,6 +241,12 @@ fn handle_client(cfd: i32) {
     } else if cmd.starts_with(b"ls ") {
         let path = &cmd[3..];
         list_directory(cfd, path);
+    } else if cmd.starts_with(b"readfile ") {
+        let path = &cmd[9..];
+        read_file(cfd, path);
+    } else if cmd.starts_with(b"delete ") {
+        let path = &cmd[7..];
+        delete_file(cfd, path);
     } else {
         send(cfd, b"err: unknown command\n");
     }
@@ -305,6 +315,83 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
 fn list_directory(cfd: i32, _path: &[u8]) {
     // TODO: implement directory listing once SceIoDirent types are available.
     send(cfd, b"err: ls not yet implemented\n");
+}
+
+/// Read a file from disk and stream its contents back to the client.
+///
+/// Protocol: `readfile <path>\n` -> `<size>\n<bytes...>` on success
+/// or `err: <reason>\n` on failure. Lets the host read crash logs
+/// (`ms0:/PSP/GAME/OASISOS/eboot.log`) while the main EBOOT is dead.
+fn read_file(cfd: i32, path: &[u8]) {
+    let mut path_buf = Vec::with_capacity(path.len() + 1);
+    path_buf.extend_from_slice(path);
+    path_buf.push(0);
+
+    let fd = unsafe {
+        psp::sys::sceIoOpen(
+            path_buf.as_ptr(),
+            psp::sys::IoOpenFlags::RD_ONLY,
+            0,
+        )
+    };
+    if fd < psp::sys::SceUid(0) {
+        send(cfd, b"err: open failed\n");
+        return;
+    }
+
+    let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) };
+    let seek_ret = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
+
+    if size < 0 || seek_ret < 0 {
+        unsafe { psp::sys::sceIoClose(fd) };
+        send(cfd, b"err: bad size\n");
+        return;
+    }
+
+    let header = format!("{}\n", size);
+    send(cfd, header.as_bytes());
+
+    let mut remaining = size;
+    let mut buf = [0u8; 4096];
+    while remaining > 0 {
+        let chunk = buf.len().min(remaining as usize);
+        let n = unsafe {
+            psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, chunk as u32)
+        };
+        if n <= 0 {
+            break;
+        }
+        unsafe {
+            psp::sys::sceNetInetSend(
+                cfd,
+                buf.as_ptr() as *const c_void,
+                n as usize,
+                0,
+            );
+        }
+        remaining -= n as i64;
+    }
+
+    unsafe { psp::sys::sceIoClose(fd) };
+    print(&format!("[<] readfile {} bytes\n", size));
+}
+
+/// Delete a file from disk. Useful for clearing eboot.log before a
+/// fresh boot attempt so the captured trace contains only the latest
+/// run, and for nuking a corrupted config file (config.rcfg).
+fn delete_file(cfd: i32, path: &[u8]) {
+    let mut path_buf = Vec::with_capacity(path.len() + 1);
+    path_buf.extend_from_slice(path);
+    path_buf.push(0);
+
+    let ret = unsafe { psp::sys::sceIoRemove(path_buf.as_ptr()) };
+    if ret < 0 {
+        send(cfd, b"err: delete failed\n");
+    } else {
+        send(cfd, b"ok\n");
+        let path_str = core::str::from_utf8(path).unwrap_or("?");
+        print(&format!("[<] deleted {}\n", path_str));
+    }
 }
 
 // ---------------------------------------------------------------------------

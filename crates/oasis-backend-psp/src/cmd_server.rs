@@ -122,7 +122,15 @@ fn request_browse(url: &str) {
 pub fn spawn() {
     if let Ok(handle) = psp::thread::ThreadBuilder::new(b"cmd_srv\0")
         .priority(40)
-        .stack_size(16384)
+        // 512 KB is large for a network handler thread, but the `js`
+        // command runs `boa_engine` inline on this thread and the
+        // boa parser builds a sizable AST + interner state on the
+        // stack. Empirically 16 KB (the previous value) crashed the
+        // first `eval` call on real PSP hardware. 512 KB gives the
+        // boa parser room to breathe with plenty of headroom; the
+        // user partition has the slack for it now that the EBOOT
+        // baseline already pays for boa's code section.
+        .stack_size(512 * 1024)
         .spawn(move || {
             // Auto-connect WiFi in background before server starts.
             auto_connect_wifi();
@@ -319,6 +327,11 @@ fn handle_client(cfd: i32) {
 
     if cmd == b"ping" {
         send_response(cfd, b"pong\n");
+    } else if cmd == b"timetest" {
+        run_instant_timetest(cfd);
+    } else if cmd.starts_with(b"js ") {
+        let script = &cmd[3..];
+        run_js_eval(cfd, script);
     } else if cmd == b"screenshot" {
         take_screenshot();
         send_response(cfd, b"ok\n");
@@ -380,7 +393,7 @@ fn handle_client(cfd: i32) {
         if parts.len() >= 2 {
             let size = parse_u32(parts[0]);
             let path = parts[1];
-            if size > 0 && size < 8_000_000 && !path.is_empty() {
+            if size > 0 && size < 24_000_000 && !path.is_empty() {
                 let header_end = raw.iter().position(|&b| b == b'\n')
                     .map(|p| p + 1).unwrap_or(n as usize);
                 let leftover = &buf[header_end..n as usize];
@@ -402,7 +415,7 @@ fn handle_client(cfd: i32) {
         } else {
             None
         };
-        if size > 0 && size < 8_000_000 {
+        if size > 0 && size < 24_000_000 {
             let header_end = raw.iter().position(|&b| b == b'\n')
                 .map(|p| p + 1).unwrap_or(n as usize);
             let leftover = &buf[header_end..n as usize];
@@ -659,6 +672,103 @@ fn parse_u32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| {
         if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
     })
+}
+
+/// Probe `std::time::Instant` on PSP hardware. **Now passes** —
+/// kept around as a regression check for the rust-psp std overlay
+/// fix in branch `fix/psp-hardware-std-overlay-alignment-and-time`
+/// (see `MEMORY.md` and `docs/browser-backlog.md` for the full
+/// debugging story). Earlier sessions believed `Instant::now`
+/// crashed on Allegrex; the real cause was that the rust-psp std
+/// overlay had no `target_os = "psp"` arm in the new
+/// `sys/time/mod.rs`, so PSP fell through to the panicking
+/// `unsupported::Instant` shim. With the overlay wired up, every
+/// `Instant`/`Duration` API works as expected on real hardware.
+fn run_instant_timetest(cfd: i32) {
+    log_msg("[timetest] start");
+    send_response(cfd, b"timetest: start\n");
+
+    log_msg("[timetest] calling Instant::now() #1");
+    let t0 = std::time::Instant::now();
+    log_msg("[timetest] Instant::now() #1 ok");
+
+    psp::thread::sleep_ms(10);
+
+    log_msg("[timetest] calling Instant::now() #2");
+    let t1 = std::time::Instant::now();
+    log_msg("[timetest] Instant::now() #2 ok");
+
+    log_msg("[timetest] computing duration_since");
+    let d = t1.duration_since(t0);
+    log_msg("[timetest] duration_since ok");
+
+    log_msg("[timetest] calling as_micros");
+    let us = d.as_micros();
+    let msg = format!("[timetest] elapsed={}us\n", us);
+    log_msg(&msg);
+
+    log_msg("[timetest] calling elapsed() on t0");
+    let el = t0.elapsed();
+    let el_us = el.as_micros();
+    let msg2 = format!("[timetest] t0.elapsed()={}us\n", el_us);
+    log_msg(&msg2);
+
+    log_msg("[timetest] all ok");
+    let reply = format!("timetest: ok elapsed={}us t0_elapsed={}us\n", us, el_us);
+    send_response(cfd, reply.as_bytes());
+}
+
+/// Evaluate a one-shot JavaScript expression on the boa-backed
+/// `oasis_js::BoaJsEngine` and stream the result back over TCP.
+///
+/// Protocol: `js <script>\n` -> `<value>\n` on success or
+/// `js: error: <message>\n` on failure. The engine is created fresh
+/// per invocation — no shared state across calls — so this is purely
+/// for smoke-testing the runtime end-to-end on real hardware. The
+/// browser-facing JS path will own a long-lived engine when DOM
+/// bindings are ported (see `docs/browser-backlog.md` "PSP JavaScript
+/// integration").
+///
+/// Examples (from the host):
+///
+/// ```text
+/// $ echo "js 1 + 2 + 3" | nc -w 5 192.168.0.249 9293
+/// js: 6
+/// $ echo "js 'foo' + 'bar'" | nc -w 5 192.168.0.249 9293
+/// js: foobar
+/// ```
+fn run_js_eval(cfd: i32, script: &[u8]) {
+    let script_str = match core::str::from_utf8(script) {
+        Ok(s) => s.trim(),
+        Err(_) => {
+            send_response(cfd, b"js: error: script is not valid UTF-8\n");
+            return;
+        }
+    };
+    log_msg(&format!("[js] eval ({} bytes)", script_str.len()));
+
+    let mut engine = match oasis_js::BoaJsEngine::new(0) {
+        Ok(e) => e,
+        Err(err) => {
+            log_msg(&format!("[js] engine init failed: {}", err.message));
+            let reply = format!("js: error: engine init: {}\n", err.message);
+            send_response(cfd, reply.as_bytes());
+            return;
+        }
+    };
+
+    match engine.eval(script_str) {
+        Ok(value) => {
+            log_msg(&format!("[js] ok -> {value}"));
+            let reply = format!("js: {value}\n");
+            send_response(cfd, reply.as_bytes());
+        }
+        Err(err) => {
+            log_msg(&format!("[js] error: {}", err.message));
+            let reply = format!("js: error: {}\n", err.message);
+            send_response(cfd, reply.as_bytes());
+        }
+    }
 }
 
 fn send_response(cfd: i32, data: &[u8]) {

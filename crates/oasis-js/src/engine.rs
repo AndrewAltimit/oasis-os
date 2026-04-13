@@ -12,24 +12,11 @@ use crate::timers::TimerQueue;
 /// Default maximum JS execution time per eval call (5 seconds).
 const DEFAULT_MAX_EXEC_MS: u64 = 5_000;
 
-/// A simple representation of a JavaScript return value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum JsValue {
-    Undefined,
-    Null,
-    Bool(bool),
-    Int(i32),
-    Float(f64),
-    String(String),
-}
-
-/// An error produced by JavaScript execution.
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{message}{}", stack.as_ref().map(|s| format!("\n{s}")).unwrap_or_default())]
-pub struct JsError {
-    pub message: String,
-    pub stack: Option<String>,
-}
+// `JsValue` and `JsError` live in `crate::types` so the boa-backed
+// engine can return the same types without pulling in rquickjs. The
+// re-export here keeps existing `use crate::engine::{JsValue, JsError}`
+// paths working without churn inside this file.
+pub use crate::types::{JsError, JsValue};
 
 /// JavaScript engine wrapping a QuickJS-NG runtime and context.
 ///

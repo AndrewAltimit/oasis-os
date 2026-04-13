@@ -238,9 +238,13 @@ impl BrowserWidget {
             self.pending_images.len()
         ));
 
-        // On PSP, tick() is not called (std::time::Instant crashes on
-        // Allegrex -- confirmed by testing), so load all images
-        // synchronously here before returning.
+        // On PSP, tick() isn't currently called from the main loop
+        // (originally because of a misdiagnosed "std::time::Instant
+        // crashes on Allegrex" claim — the real cause was the
+        // orphaned rust-psp std time overlay, fixed in branch
+        // fix/psp-hardware-std-overlay-alignment-and-time). Until the
+        // PSP main loop is wired up to call tick() each frame, load
+        // all images synchronously here before returning.
         #[cfg(feature = "psp")]
         if !self.pending_images.is_empty() {
             self.diag("[BR] image batch start (PSP synchronous)");

@@ -49,15 +49,17 @@ auto-browse-wiki = []
 [dependencies]
 psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
-# NOTE: the `javascript` feature is intentionally NOT enabled on PSP.
-# QuickJS-NG binds ~400KB of code plus a runtime heap that cannot fit
-# within the PSP's 24MB user-accessible RAM alongside the browser engine,
-# video decode pipeline, SDI object pool, and audio buffers. The PSP build
-# of oasis-browser parses/cascades JS as inert content (scripts are
-# dropped at parse time). This is a deliberate RAM-budget call, not an
-# oversight — see CLAUDE.md "PSP Constraints" and
-# docs/psp-modernization-plan.md.
+# NOTE: the `javascript` feature on `oasis-browser` is intentionally
+# NOT enabled on PSP. The full DOM binding layer in
+# `oasis-browser/src/js_dom.rs` is hard-wired to the rquickjs API
+# (`Ctx`, `Function`, `Object`...) and would need a parallel
+# implementation against the boa backend before it can run on PSP.
+# Standalone JavaScript evaluation (no DOM) IS available on PSP via
+# `oasis-js` with the `boa` feature — exposed through the `js <code>`
+# TCP command in `cmd_server.rs` and reachable from terminal/script
+# call sites that don't need DOM bindings.
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
+oasis-js = { path = "../oasis-js", default-features = false, features = ["boa"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }
 libm = "0.2"
@@ -85,6 +87,28 @@ lto = "thin"
 codegen-units = 4
 panic = "abort"
 # Do NOT set strip = true -- it conflicts with --emit-relocs needed by prxgen.
+
+# Boa's pure-Rust JS engine adds ~9 MB of code at default opt-level=3
+# because the interpreter dispatch loop generates a lot of inlined
+# state-machine code per opcode. PSP's user partition is only 24 MB
+# total, so we shrink the boa crate (and its sub-crates) with
+# `opt-level = "z"` which trades ~10-15% runtime perf for ~50% binary
+# size. Other crates keep the default release profile so hot paths
+# (browser layout, video decode, GU command emission) stay fast.
+[profile.release.package.boa_engine]
+opt-level = "z"
+[profile.release.package.boa_ast]
+opt-level = "z"
+[profile.release.package.boa_parser]
+opt-level = "z"
+[profile.release.package.boa_interner]
+opt-level = "z"
+[profile.release.package.boa_gc]
+opt-level = "z"
+[profile.release.package.boa_macros]
+opt-level = "z"
+[profile.release.package.boa_string]
+opt-level = "z"
 
 [profile.dev]
 opt-level = 1

@@ -392,8 +392,13 @@ impl BrowserWidget {
             return;
         }
 
-        // std::time::Instant crashes on PSP Allegrex (confirmed).
-        // Skip time budgeting and process all images in one pass.
+        // Time budgeting is skipped on PSP for legacy reasons. The
+        // earlier "std::time::Instant crashes on Allegrex" rationale
+        // was a misdiagnosis (the rust-psp std overlay was missing a
+        // target_os = "psp" arm in sys/time/mod.rs); Instant works on
+        // hardware now. Re-enabling time budgeting here is safe; left
+        // as a follow-up so the PSP image-loading path keeps its
+        // current behaviour during the JS-integration PR.
         #[cfg(not(feature = "psp"))]
         let start = std::time::Instant::now();
         #[cfg(not(feature = "psp"))]

@@ -13,14 +13,18 @@
 //!
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
 //!   `<script>` execution, `fetch`, `setTimeout`, event dispatch, and
-//!   DOM bindings. **Intentionally disabled on the PSP backend**: the
-//!   QuickJS runtime binds ~400KB of code plus a runtime heap that
-//!   does not fit in the PSP's 24MB user-accessible RAM budget
-//!   alongside the browser engine, video decoder, SDI pool, and audio
-//!   buffers. PSP builds parse and cascade pages without script
-//!   execution — scripts are dropped at parse time. This is a deliberate
-//!   RAM-budget decision, not a porting gap, and will not change unless
-//!   a substantially smaller JS engine becomes available.
+//!   DOM bindings. **Currently still disabled on the PSP backend**,
+//!   but for a different reason than the original docstring claimed.
+//!   The PSP backend now depends on `oasis-js` with
+//!   `default-features = false, features = ["boa"]` and gets
+//!   standalone `BoaJsEngine::eval` available through
+//!   `cmd_server.rs`'s `js <code>` TCP command. Wiring
+//!   `oasis-browser`'s `javascript` feature through boa requires
+//!   porting `js_dom.rs` — which is hard-wired to the rquickjs API
+//!   (`Ctx`, `Function`, `Object`) — to a parallel boa impl. That
+//!   porting work is the remaining piece of the "PSP JavaScript
+//!   integration" epic in `docs/browser-backlog.md`. Until then,
+//!   PSP browser scripts still drop at parse time.
 //! - `webp` — enables WebP image decoding via the `image` crate.
 //! - `parallel-style` — parallel style cascade via rayon (desktop only).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
