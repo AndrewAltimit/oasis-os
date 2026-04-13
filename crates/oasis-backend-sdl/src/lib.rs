@@ -663,14 +663,12 @@ impl SdiRenderTarget for SdlBackend {
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         tex.set_alpha_mod(alpha);
         tex.set_color_mod(255, 255, 255);
-        canvas
+        let r = canvas
             .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
-            .backend_err()?;
-        // Leave the texture in a neutral state so the next composite
-        // is predictable.
+            .backend_err();
         tex.set_alpha_mod(255);
         tex.set_blend_mode(sdl3::render::BlendMode::Blend);
-        Ok(())
+        r
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {

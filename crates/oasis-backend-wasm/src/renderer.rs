@@ -727,7 +727,7 @@ impl SdiRenderTarget for WasmBackend {
                 },
             );
         } else {
-            // Shouldn't happen, but be defensive.
+            debug_assert!(false, "unbind_render_target called without active target");
             self.canvas = saved.canvas;
             self.ctx = saved.ctx;
             self.width = saved.width;
