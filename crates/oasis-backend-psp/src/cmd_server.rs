@@ -792,7 +792,7 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
             oasis_js::rquickjs::qjs::JS_Eval(
                 raw_ctx,
                 src_buf.as_ptr() as *const core::ffi::c_char,
-                script_str.len(),
+                script_str.len() as _,
                 fname,
                 oasis_js::rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32,
             )
@@ -800,7 +800,7 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
         log_msg("[js] JS_Eval returned");
 
         let is_exc = unsafe { oasis_js::rquickjs::qjs::JS_IsException(val) };
-        if is_exc != 0 {
+        if is_exc {
             log_msg("[js] result: exception");
             result_msg.extend_from_slice(b"js: error: exception\n");
             unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
