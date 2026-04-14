@@ -142,6 +142,19 @@ fn psp_main() {
     boot::show_boot_screen(&mut backend, "Initializing...", 10);
     dbg_log("[EBOOT] backend init OK");
 
+    // Boot-time JS self-test: run BEFORE any other init so a crash
+    // during the rest of the boot can't mask the JSTEST result.
+    // Sentinel deleted on success; exits cleanly so the next launch
+    // from XMB boots normally. See `run_js_selftest` below.
+    if psp::io::stat("ms0:/JSTEST").is_ok() {
+        boot::show_boot_screen(&mut backend, "Running JS self-test...", 20);
+        oasis_backend_psp::vlog_force("[JSTEST] sentinel found, running JS probes");
+        run_js_selftest();
+        let _ = psp::io::remove_file("ms0:/JSTEST");
+        oasis_backend_psp::vlog_force("[JSTEST] done, exiting cleanly");
+        unsafe { psp::sys::sceKernelExitGame() };
+    }
+
     // Register exception handler (kernel mode only) for crash diagnostics.
     #[cfg(feature = "kernel-exception")]
     oasis_backend_psp::register_exception_handler();
@@ -867,3 +880,135 @@ fn psp_main() {
 
 // Remaining extracted modules: desktop, chrome, views, boot, theme, types.
 // Command interpreter and utilities are in commands.rs module.
+
+/// Run a straight-line QuickJS bring-up probe from the sentinel
+/// handler above. Every step writes a log line to `eboot.log` before
+/// and after the call so a crash inside any of them leaves the name
+/// of the last-attempted call on disk. The rquickjs calls are done
+/// through the raw ffi (`oasis_js::rquickjs::qjs::*`) to keep the
+/// Rust glue out of the failure surface and to isolate where the
+/// crash really is.
+fn run_js_selftest() {
+    use oasis_js::rquickjs;
+
+    fn log(step: &str) {
+        oasis_backend_psp::vlog_force(&format!("[JSTEST] {step}"));
+    }
+
+    log("Runtime::new begin");
+    let runtime = match rquickjs::Runtime::new() {
+        Ok(r) => { log("Runtime::new ok"); r },
+        Err(e) => { log(&format!("Runtime::new err: {e}")); return; },
+    };
+
+    log("Context::base begin");
+    let context = match rquickjs::Context::base(&runtime) {
+        Ok(c) => { log("Context::base ok"); c },
+        Err(e) => { log(&format!("Context::base err: {e}")); return; },
+    };
+
+    log("context.with begin");
+    context.with(|ctx| {
+        let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
+        log(&format!("raw ctx ptr = {raw_ctx:?}"));
+
+        log("JS_GetGlobalObject begin");
+        let gval = unsafe { rquickjs::qjs::JS_GetGlobalObject(raw_ctx) };
+        log("JS_GetGlobalObject ok");
+        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, gval) };
+        log("JS_FreeValue(global) ok");
+
+        fn free_kb() -> i32 {
+            unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 }
+        }
+
+        let fname = b"<jstest>\0".as_ptr() as *const core::ffi::c_char;
+        let global_flag = rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32;
+        let compile_only = global_flag
+            | rquickjs::qjs::JS_EVAL_FLAG_COMPILE_ONLY as i32;
+
+        // Probe A: call JS_Eval2 — which takes a JSEvalOptions
+        // pointer instead of the 5-arg-list form JS_Eval uses.
+        // Only 4 args, all fit in $a0-$a3, no stack-passed args.
+        // If this works and JS_Eval doesn't, the crash is the
+        // MIPS o32 shadow-space ABI mismatch between rustc and GCC
+        // for 5-arg calls.
+        log(&format!("A: free={}KB, JS_Eval2 \"0\" (4-arg form) begin", free_kb()));
+        let mut opts = rquickjs::qjs::JSEvalOptions {
+            version: 1, // QuickJS rejects version != 1 with
+                        // JS_ThrowInternalError, whose variadic
+                        // error formatter path crashes under our
+                        // stub `vsnprintf` on real hardware.
+            eval_flags: compile_only,
+            filename: fname,
+            line_num: 1,
+        };
+        let va = unsafe {
+            rquickjs::qjs::JS_Eval2(
+                raw_ctx,
+                b"0\0".as_ptr() as *const core::ffi::c_char,
+                1,
+                &mut opts as *mut _,
+            )
+        };
+        log("A: JS_Eval2 returned");
+        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, va) };
+        log("A: freed");
+
+        // Probe B: compile-only "0". Exercises lexer + parser +
+        // codegen for a single literal. No bytecode execution. If
+        // this crashes but A does not, parse/codegen for integer
+        // literals is the issue.
+        log(&format!("B: free={}KB, JS_Eval \"0\" COMPILE_ONLY begin", free_kb()));
+        let vb = unsafe {
+            rquickjs::qjs::JS_Eval(
+                raw_ctx,
+                b"0\0".as_ptr() as *const core::ffi::c_char,
+                1,
+                fname,
+                compile_only,
+            )
+        };
+        log("B: returned");
+        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, vb) };
+        log("B: freed");
+
+        // Probe C: full eval of "0". Adds bytecode interpreter.
+        log(&format!("C: free={}KB, JS_Eval \"0\" FULL begin", free_kb()));
+        let vc = unsafe {
+            rquickjs::qjs::JS_Eval(
+                raw_ctx,
+                b"0\0".as_ptr() as *const core::ffi::c_char,
+                1,
+                fname,
+                global_flag,
+            )
+        };
+        log("C: returned");
+        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, vc) };
+        log("C: freed");
+
+        // Probes D-F: previously-passing PPSSPP cases, for
+        // reference once C starts returning.
+        for (label, src_bytes) in [
+            ("D=1+2+3", b"1+2+3\0".as_slice()),
+            ("E='hi'+'!'", b"'hi'+'!'\0".as_slice()),
+            ("F=(fn(){return 42})()", b"(function(){return 42})()\0".as_slice()),
+        ] {
+            log(&format!("{label}: free={}KB, begin", free_kb()));
+            let val = unsafe {
+                rquickjs::qjs::JS_Eval(
+                    raw_ctx,
+                    src_bytes.as_ptr() as *const core::ffi::c_char,
+                    (src_bytes.len() - 1) as _,
+                    fname,
+                    global_flag,
+                )
+            };
+            log(&format!("{label}: returned"));
+            unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
+            log(&format!("{label}: freed"));
+        }
+    });
+    log("context.with ok");
+}

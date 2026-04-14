@@ -5,4 +5,66 @@
 # cargo-psp generates a custom target spec (mipsel-sony-psp-std.json),
 # so we apply the flag to all targets via [build].
 [build]
-rustflags = ['--cfg', 'getrandom_backend="custom"']
+rustflags = [
+  '--cfg', 'getrandom_backend="custom"',
+  # Route the final link through pspdev's binutils `psp-ld` instead
+  # of `rust-lld`. rust-lld strictly rejects the `.symtab` section
+  # header layout that GCC 15 / binutils 2.43 produces on MIPS (see
+  # `tools/psp-gcc-wrap.sh` for the object-file side of the story).
+  # `psp-ld` is permissive, so flipping the linker sidesteps the
+  # issue without having to rewrite every QuickJS `.o` file.
+  #
+  # Needs `-Z unstable-options` because the stable `linker-flavor`
+  # values don't include `gnu` — only `gnu-lld`, which would send us
+  # back to rust-lld.
+  '-Z', 'unstable-options',
+  '-C', 'linker=/opt/pspdev/bin/psp-ld',
+  '-C', 'linker-flavor=gnu',
+  # Target-spec pre-link-args (`--emit-relocs`, `--nmagic`) and the
+  # inline PRX linker script are only auto-forwarded for the
+  # `gnu-lld` flavor, so replay them here under `gnu`. The vendored
+  # link script is a byte-for-byte copy of the one in rust-psp's
+  # `mipsel-sony-psp-std.json`.
+  '-C', 'link-arg=--emit-relocs',
+  '-C', 'link-arg=--nmagic',
+  # rust-psp's target-spec link script doesn't define `_gp` (the
+  # MIPS global pointer) because rust-lld synthesises it internally
+  # from the small-data layout. psp-ld requires it explicit — the
+  # kernel PRX loader seeds `$gp` from `sceModuleInfo`'s `_gp` slot
+  # on module load, and if that's 0 the first GPREL16 access (from
+  # compiler_builtins or libpsp) dereferences low memory and the
+  # console hard-crashes at boot. Our supplementary link script
+  # synthesises `_gp` via the traditional PSPSDK formula. psp-ld
+  # merges multiple `--script` arguments, so this layers cleanly
+  # on top of the rustc-forwarded target-spec script.
+  '-C', 'link-arg=--script=tools/psp-linkscript.ld',
+  # NOTE: we intentionally do NOT link pspdev's prebuilt `libc.a`,
+  # `libm.a`, or `libcglue.a`. Those archives are compiled as
+  # eabi32 / msingle-float / abicalls, which cannot be merged with
+  # Rust's o32 / mdouble-float / non-abicalls code. All C runtime
+  # symbols that QuickJS-NG references are instead provided in
+  # Rust via `src/quickjs_shim.rs` — see that module for the list
+  # and rationale.
+]
+
+# Route the `cc` crate (used by rquickjs-sys to compile QuickJS-NG's C
+# sources) at the pspdev MIPS cross toolchain. Without these vars, `cc`
+# falls back to the host compiler and the build fails with either
+# "unknown target" or link-time ABI mismatches. Installed via the
+# official pspdev release (see docs/psp-modernization-plan.md).
+[env]
+PSPDEV = "/opt/pspdev"
+# cargo-psp generates a custom target spec at `mipsel-sony-psp-std.json`,
+# so the `cc` crate's per-target env vars use the `_std` suffix too.
+CC_mipsel_sony_psp_std = { value = "tools/psp-gcc-wrap.sh", relative = true }
+CXX_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-g++"
+AR_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-ar"
+CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -msingle-float -fno-stack-protector -fno-function-sections -fno-data-sections -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types -Wno-error=pointer-sign -DCLOCK_MONOTONIC=CLOCK_MONOTONIC_RAW -D__wasi__"
+# bindgen invokes libclang directly, which by default resolves system
+# headers from /usr/include (glibc). Force it to use pspdev's newlib
+# sysroot instead — otherwise rquickjs-sys fails at `#include <stdio.h>`
+# looking for glibc-only `bits/libc-header-start.h`.
+# NOTE: the GCC include path pins pspdev's current version (15.2.0).
+# If pspdev upgrades GCC (e.g. 15.3.0 or 16.x), update the path below.
+# config.toml env vars don't support shell expansion, so we can't glob.
+BINDGEN_EXTRA_CLANG_ARGS = "--target=mipsel-unknown-elf -nostdinc -isystem /opt/pspdev/psp/include -isystem /opt/pspdev/lib/gcc/psp/15.2.0/include -D__PSP__"

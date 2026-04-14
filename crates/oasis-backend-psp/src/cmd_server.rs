@@ -123,13 +123,11 @@ pub fn spawn() {
     if let Ok(handle) = psp::thread::ThreadBuilder::new(b"cmd_srv\0")
         .priority(40)
         // 512 KB is large for a network handler thread, but the `js`
-        // command runs `boa_engine` inline on this thread and the
-        // boa parser builds a sizable AST + interner state on the
-        // stack. Empirically 16 KB (the previous value) crashed the
-        // first `eval` call on real PSP hardware. 512 KB gives the
-        // boa parser room to breathe with plenty of headroom; the
-        // user partition has the slack for it now that the EBOOT
-        // baseline already pays for boa's code section.
+        // command runs QuickJS-NG inline on this thread. QuickJS's
+        // parser + bytecode compiler uses modest stack depth compared
+        // to boa's old AST, but we keep the generous allocation so a
+        // user dropping a megabyte of source into `js <code>` doesn't
+        // trip a guard-page crash. The user partition has slack.
         .stack_size(512 * 1024)
         .spawn(move || {
             // Auto-connect WiFi in background before server starts.
@@ -718,8 +716,8 @@ fn run_instant_timetest(cfd: i32) {
     send_response(cfd, reply.as_bytes());
 }
 
-/// Evaluate a one-shot JavaScript expression on the boa-backed
-/// `oasis_js::BoaJsEngine` and stream the result back over TCP.
+/// Evaluate a one-shot JavaScript expression on the QuickJS-NG-backed
+/// `oasis_js::JsEngine` and stream the result back over TCP.
 ///
 /// Protocol: `js <script>\n` -> `<value>\n` on success or
 /// `js: error: <message>\n` on failure. The engine is created fresh
@@ -745,29 +743,91 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
             return;
         }
     };
-    log_msg(&format!("[js] eval ({} bytes)", script_str.len()));
+    log_msg(&format!("[js] eval ({} bytes) source={:?}", script_str.len(), script_str));
 
-    let mut engine = match oasis_js::BoaJsEngine::new(0) {
-        Ok(e) => e,
-        Err(err) => {
-            log_msg(&format!("[js] engine init failed: {}", err.message));
-            let reply = format!("js: error: engine init: {}\n", err.message);
-            send_response(cfd, reply.as_bytes());
+    // TODO: promote to JsEngine::eval once the PSP QuickJS integration
+    // is stable. Currently bypasses JsEngine to log between every
+    // rquickjs FFI step — lets us pinpoint the exact call that
+    // hard-crashes on real hardware.
+    use oasis_js::rquickjs;
+
+    log_msg("[js] rquickjs::Runtime::new() begin");
+    let runtime = match rquickjs::Runtime::new() {
+        Ok(r) => {
+            log_msg("[js] rquickjs::Runtime::new() ok");
+            r
+        },
+        Err(e) => {
+            log_msg(&format!("[js] Runtime::new() err: {e}"));
+            send_response(cfd, b"js: error: runtime init\n");
             return;
-        }
+        },
     };
 
-    match engine.eval(script_str) {
-        Ok(value) => {
-            log_msg(&format!("[js] ok -> {value}"));
-            let reply = format!("js: {value}\n");
-            send_response(cfd, reply.as_bytes());
+    log_msg("[js] rquickjs::Context::base() begin");
+    let context = match rquickjs::Context::base(&runtime) {
+        Ok(c) => {
+            log_msg("[js] rquickjs::Context::base() ok");
+            c
+        },
+        Err(e) => {
+            log_msg(&format!("[js] Context::base() err: {e}"));
+            send_response(cfd, b"js: error: context init\n");
+            return;
+        },
+    };
+
+    log_msg("[js] context.with(eval) begin");
+    let mut result_msg: Vec<u8> = Vec::new();
+    context.with(|ctx| {
+        log_msg("[js] inside context.with");
+
+        let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
+
+        let mut src_buf = Vec::with_capacity(script_str.len() + 1);
+        src_buf.extend_from_slice(script_str.as_bytes());
+        src_buf.push(0);
+        let fname = b"<tcp>\0".as_ptr() as *const core::ffi::c_char;
+        let val = unsafe {
+            oasis_js::rquickjs::qjs::JS_Eval(
+                raw_ctx,
+                src_buf.as_ptr() as *const core::ffi::c_char,
+                script_str.len() as _,
+                fname,
+                oasis_js::rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32,
+            )
+        };
+        log_msg("[js] JS_Eval returned");
+
+        let is_exc = unsafe { oasis_js::rquickjs::qjs::JS_IsException(val) };
+        if is_exc {
+            log_msg("[js] result: exception");
+            result_msg.extend_from_slice(b"js: error: exception\n");
+            unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
+        } else {
+            let cstr = unsafe {
+                oasis_js::rquickjs::qjs::JS_ToCString(raw_ctx, val)
+            };
+            if cstr.is_null() {
+                result_msg.extend_from_slice(b"js: undefined\n");
+            } else {
+                let s = unsafe { core::ffi::CStr::from_ptr(cstr) };
+                result_msg.extend_from_slice(b"js: ");
+                result_msg.extend_from_slice(s.to_bytes());
+                result_msg.push(b'\n');
+                unsafe {
+                    oasis_js::rquickjs::qjs::JS_FreeCString(raw_ctx, cstr);
+                }
+            }
+            unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
         }
-        Err(err) => {
-            log_msg(&format!("[js] error: {}", err.message));
-            let reply = format!("js: error: {}\n", err.message);
-            send_response(cfd, reply.as_bytes());
-        }
+    });
+    log_msg("[js] context.with returned");
+
+    if result_msg.is_empty() {
+        send_response(cfd, b"js: ok\n");
+    } else {
+        send_response(cfd, &result_msg);
     }
 }
 

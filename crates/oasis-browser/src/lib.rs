@@ -13,18 +13,15 @@
 //!
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
 //!   `<script>` execution, `fetch`, `setTimeout`, event dispatch, and
-//!   DOM bindings. **Currently still disabled on the PSP backend**,
-//!   but for a different reason than the original docstring claimed.
-//!   The PSP backend now depends on `oasis-js` with
-//!   `default-features = false, features = ["boa"]` and gets
-//!   standalone `BoaJsEngine::eval` available through
-//!   `cmd_server.rs`'s `js <code>` TCP command. Wiring
-//!   `oasis-browser`'s `javascript` feature through boa requires
-//!   porting `js_dom.rs` — which is hard-wired to the rquickjs API
-//!   (`Ctx`, `Function`, `Object`) — to a parallel boa impl. That
-//!   porting work is the remaining piece of the "PSP JavaScript
-//!   integration" epic in `docs/browser-backlog.md`. Until then,
-//!   PSP browser scripts still drop at parse time.
+//!   DOM bindings. The PSP backend now compiles the same QuickJS C
+//!   sources via pspdev's `psp-gcc` (wiring in
+//!   `crates/oasis-backend-psp/.cargo/config.toml`), so `oasis-js` and
+//!   its full `JsEngine` API are available on `mipsel-sony-psp` too.
+//!   The `javascript` feature is still off on PSP by default while
+//!   `js_dom.rs` is audited for the mipsel target; once that's done
+//!   the PSP browser will pick up inline `<script>` and DOM bindings
+//!   unchanged from desktop/WASM/UE5. Standalone evaluation is already
+//!   reachable via `cmd_server.rs`'s `js <code>` TCP command.
 //! - `webp` — enables WebP image decoding via the `image` crate.
 //! - `parallel-style` — parallel style cascade via rayon (desktop only).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and

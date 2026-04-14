@@ -1,6 +1,6 @@
 [package]
 name = "oasis-js"
-description = "JavaScript engine for OASIS_OS browser (QuickJS-NG via rquickjs, plus optional pure-Rust boa backend for PSP)"
+description = "JavaScript engine for OASIS_OS browser (QuickJS-NG via rquickjs)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,32 +8,22 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# Default ships the full rquickjs-backed engine (desktop, WASM, UE5).
+# The rquickjs-backed `JsEngine` plus its console / fetch / storage /
+# timer glue is the only supported backend. The feature name is kept
+# for compatibility with callers that previously selected it
+# explicitly (e.g. host-side tests); disabling it is unsupported.
 default = ["rquickjs-engine"]
-
-# rquickjs-backed `JsEngine` plus the console/fetch/storage/timers
-# glue and re-exports the raw `rquickjs` crate for DOM bindings.
-# Disable this on targets that can't compile the QuickJS C sources
-# (e.g. `mipsel-sony-psp` without pspdev installed) — the shared
-# `JsValue` / `JsError` types in `types.rs` stay available either way.
 rquickjs-engine = ["dep:rquickjs"]
 
-# Pure-Rust `BoaJsEngine` for targets where compiling QuickJS-NG (a C
-# library) is impractical — most notably `mipsel-sony-psp`, which
-# would need a full pspdev cross-compiler to build the rquickjs C
-# sources. Enabling `boa` exposes a separate `BoaJsEngine` type that
-# implements a minimal `eval` / value-conversion surface using
-# `boa_engine` and shares the `JsValue` / `JsError` types with the
-# rquickjs-backed engine.
-boa = ["dep:boa_engine"]
+# Ask rquickjs-sys to regenerate C bindings at build time via
+# `bindgen` instead of using the vendored per-target files. Enabled by
+# the PSP backend because `mipsel-sony-psp-std` isn't in the vendored
+# set — see `crates/oasis-backend-psp/Cargo.toml`. Pulls in `libclang`
+# at build time.
+psp-bindgen = ["rquickjs/bindgen"]
 
 [dependencies]
-# Both backends are gated through the feature flags above so a build
-# only pays for what it asks for. Desktop / WASM / UE5 take the
-# default `rquickjs-engine`; PSP takes `default-features = false,
-# features = ["boa"]`.
 rquickjs = { workspace = true, optional = true }
-boa_engine = { version = "0.21", optional = true, default-features = false }
 log = { workspace = true }
 thiserror = { workspace = true }
 
