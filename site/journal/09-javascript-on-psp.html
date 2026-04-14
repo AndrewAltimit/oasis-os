@@ -45,6 +45,10 @@
 
 <article class="article-content">
 
+  <aside style="border-left: 4px solid #5ca; padding: 0.75em 1em; margin: 0 0 1.5em; background: rgba(92, 204, 170, 0.08);">
+    <strong>Update &mdash; 2026-04-14:</strong> the PSP backend has since migrated off <code>boa_engine</code> onto <strong>QuickJS-NG via <code>rquickjs</code></strong>, the same engine used on desktop / WASM / UE5. The historical content below &mdash; the MIPS alignment trap, the orphaned <code>Instant</code> overlay, the 16 KB cmd-server stack &mdash; all still happened and are still the reason <code>1 + 2 + 3</code> returned <code>6</code> on real hardware for the first time. But the current PSP build cross-compiles QuickJS&rsquo;s C sources through the pspdev toolchain (<code>psp-gcc</code> wired into the <code>cc</code> crate) and provides ~40 hand-written libc/libm shim symbols via <code>quickjs_shim.rs</code> instead of linking newlib, which let us wire the DOM bindings in and run <code>document.getElementById(&hellip;).textContent = &hellip;</code> against a real browser DOM on hardware. The bring-up had its own blockers worth writing up &mdash; chiefly a five-day debugging odyssey that ended with a one-character fix: the C side had to be built with <code>-msingle-float</code> to match Rust&rsquo;s target-spec <code>+single-float</code>, because PSP Allegrex has a single-precision FPU only and PPSSPP silently emulates what real hardware traps on. A follow-up journal entry covering the QuickJS-NG migration is planned.
+  </aside>
+
   <h2>The Epic, As It Was Written</h2>
 
   <p>

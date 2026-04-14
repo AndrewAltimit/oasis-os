@@ -416,7 +416,7 @@
       </div>
       <div class="feature-card">
         <h3>JavaScript Engine</h3>
-        <p>Embedded QuickJS-NG runtime (desktop / WASM / UE5) with console API, inline &lt;script&gt; execution, DOM manipulation, full event dispatch (click, keydown/keyup, mousedown/mouseup/mousemove with detail properties), document.cookie, history.pushState/replaceState, and persistent localStorage. PSP gets a pure-Rust <code>boa_engine</code> backend instead &mdash; full ES2023+, no C toolchain, ~10&times; slower but running on 333 MHz MIPS with no native dependencies. See <a href="journal/09-javascript-on-psp.html">journal entry 09</a>.</p>
+        <p>Embedded QuickJS-NG runtime across every backend &mdash; desktop, WASM, UE5, <em>and real PSP hardware</em> &mdash; with console API, inline &lt;script&gt; execution, DOM manipulation, full event dispatch (click, keydown/keyup, mousedown/mouseup/mousemove with detail properties), document.cookie, history.pushState/replaceState, persistent localStorage, and <code>fetch()</code>. The PSP build compiles QuickJS-NG&rsquo;s C sources through the pspdev cross-toolchain (<code>psp-gcc</code> wired into the <code>cc</code> crate) and provides ~40 hand-written libc/libm shim symbols instead of linking newlib. DOM bindings are shared code with the other backends, and the engine is instantiated lazily the first time the user opens the browser app so boot-time cost is zero. See <a href="journal/09-javascript-on-psp.html">journal entry 09</a> for the bring-up story (originally boa_engine, later migrated to QuickJS-NG for the ~10&times; speed-up).</p>
       </div>
       <div class="feature-card">
         <h3>Window Manager</h3>
@@ -491,7 +491,7 @@
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-skin</span>       (TOML skin engine, 18 skins, theme derivation)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, 2D transforms, Canvas 2D paths, SVG groups, light compositor + text batching + sticky scroll, JS bindings)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM, event dispatch; pure-Rust boa backend for PSP)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG via rquickjs across all backends incl. real PSP hardware; console, DOM, event dispatch, fetch)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (MP4/H.264+AAC decode: StreamingBuffer, progressive playback)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-vector</span>     (vector graphics: scene graph, path ops, icons, animations)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-shader</span>     (GPU shader wallpapers: voronoi, city lights, ocean waves)

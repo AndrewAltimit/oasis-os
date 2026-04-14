@@ -8,76 +8,85 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-12 (tracked in `feat/browser-improvements`).
+Last updated: 2026-04-14 (tracked in `feat/psp-quickjs`).
 
 ---
 
-## Epic: PSP JavaScript integration
+## ✅ Done: PSP JavaScript integration (QuickJS-NG + DOM)
 
-**Effort:** 1–3 weeks. **Risk:** medium (revised — see below). **Value:**
-enables a large class of modern sites that use JS for content hydration.
+Completed on `feat/psp-quickjs` (2026-04-14). All PSP targets now share
+the same `rquickjs-engine` backend as desktop/WASM/UE5 — the earlier
+`boa_engine` PSP backend has been removed entirely. Scripts tags,
+`document.getElementById`, `textContent`, event dispatch, `fetch`,
+`localStorage`, and the rest of the DOM surface run against a real DOM
+on real PSP hardware (verified end-to-end with an HTTP-served test
+page mutating three DOM nodes).
 
-PSP has 24MB user RAM + 333MHz MIPS. With the rust-psp std overlay fixed
-on 2026-04-13 (`HashMap`, `Instant::now`, and full `std::sync` all
-verified working on real hardware), every prerequisite for a pure-Rust
-JS engine is in place.
+**Key decisions and fixes, for the historical record:**
 
-### Revised plan: pure-Rust engine (`boa_engine`) instead of QuickJS-NG
+- **Switched PSP from `boa_engine` back to QuickJS-NG via `rquickjs`.**
+  The original "pure-Rust JS on PSP" plan used `boa` to avoid a MIPS
+  C toolchain. Once pspdev was installed (`/opt/pspdev`), wiring the
+  `cc` crate at `psp-gcc` via `CC_mipsel_sony_psp_std` was
+  straightforward, and QuickJS is ~10× faster than boa on Allegrex.
+- **Linker routed through `psp-ld` instead of `rust-lld`.** GCC 15 /
+  binutils 2.43 emit `.symtab` headers with a `sh_info` layout that
+  `rust-lld` strictly rejects (`invalid binding: 0`). Switched the
+  Rust target's linker to `/opt/pspdev/bin/psp-ld` via
+  `linker-flavor=gnu` under `-Z unstable-options`, re-playing the
+  rust-psp target-spec pre-link args (`--emit-relocs`, `--nmagic`,
+  inline PRX link script) under the `gnu` flavor. Added a tiny
+  supplementary link script (`tools/psp-linkscript.ld`) to synthesise
+  `_gp` at ALIGN(16)+0x7ff0; the rust-psp target script omits `_gp`
+  because rust-lld computes it internally.
+- **Plan B shims instead of pspdev's newlib.** To stay dependency-free
+  we don't link `libc.a` / `libm.a` / `libcglue.a` — those archives are
+  compiled as eabi32 / msingle-float / abicalls and can't be merged
+  with Rust's o32 / mdouble-float / non-abicalls code. Instead
+  `src/quickjs_shim.rs` provides the ~40 libc/libm symbols QuickJS
+  references (math via the `libm` crate, string/memory routines,
+  `calloc`/`realloc` forwarding to libpsp's malloc/free with header
+  decoding, non-variadic stdio stubs, a 256-byte `_impure_ptr` static,
+  RTC-backed `clock_gettime` family).
+- **FPU ABI: C must be `-msingle-float`, not `-mdouble-float`.** The
+  real-hardware blocker that ate five days of debugging. PSP Allegrex
+  has a single-precision FPU only; rust-psp's target spec declares
+  `"features": "+single-float"`. We were building QuickJS C with
+  `-mdouble-float`, which PPSSPP silently fixed up but which crashed
+  on real hardware inside `JS_Eval`'s dtoa path on the first double-
+  precision helper call. Fixed by flipping `CFLAGS_mipsel_sony_psp_std`
+  to `-msingle-float`. All six JSTEST probes pass post-fix.
+- **Lazy init.** `BrowserState::widget` in
+  `crates/oasis-backend-psp/src/app_states.rs` stores
+  `Option<BrowserWidget>`; the JS engine is only constructed when the
+  user actually launches the browser app. Boot-time cost is zero.
+- **Binary impact.** EBOOT grew from 6.26 MB (no `javascript` feature)
+  → 6.79 MB (with DOM bindings). Runtime heap drops from 8.76 MB →
+  8.44 MB free after browser open. Both fit comfortably in the PSP's
+  24 MB user partition.
 
-The original three-phase plan called for vendoring QuickJS-NG via the
-`cc` crate and writing a hand-rolled FFI wrapper. The two motivations
-behind that approach have both evaporated:
+**Expected perf ceiling.** QuickJS on Allegrex is still two orders of
+magnitude slower than V8 on desktop — inert pages with small
+bootstrap scripts will work fine; React SPAs will crawl. This is the
+same honest framing as before, just with QuickJS's real numbers
+instead of boa's.
 
-1. **"`rquickjs` uses `std::time::Instant`, which crashes on PSP
-   Allegrex"** — this turned out to be wrong. `Instant::now` was hitting
-   `unsupported::Instant::now` because the rust-psp std overlay had no
-   `target_os = "psp"` arm in the new `sys/time/mod.rs`; it never had
-   anything to do with `rquickjs`. Fixed in rust-psp branch
-   `fix/psp-hardware-std-overlay-alignment-and-time` and verified on
-   hardware.
-2. **"Need a thin FFI wrapper because `rquickjs` is too heavy"** — the
-   real blocker was getting QuickJS's C source to cross-compile for
-   `mipsel-sony-psp`, which requires a MIPS libc / cross-compiler
-   (pspdev) that isn't installed on the dev box. Sidestepped entirely
-   by using `boa_engine`, which is pure Rust with no C dependencies.
+**Follow-up tickets** (filed separately in the launch-polish section
+below):
 
-**Phase 1 — Add `boa_engine` to `oasis-js` behind a feature flag.**
-
-- New `boa` feature on `oasis-js` swaps the `rquickjs`-backed
-  `JsEngine` for a `boa_engine`-backed one with the same public API
-  (`new`, `eval`, `JsValue`, `JsError`).
-- Desktop and WASM keep using `rquickjs` (no behavior change). PSP
-  builds with `--features boa` and gets the pure-Rust engine.
-- Console/fetch/storage/timers stay rquickjs-only for this PR — those
-  glue layers can be ported to boa in a follow-up if PSP needs them.
-
-**Phase 2 — Wire `oasis-js` into the PSP backend.**
-
-- Add `oasis-js = { workspace = true, features = ["boa"] }` to
-  `oasis-backend-psp` so the engine is linked into the EBOOT.
-- Add a `js <code>` command to `cmd_server.rs` that evaluates a
-  one-shot JavaScript expression and returns the result over TCP.
-  Exercises the engine end-to-end on real hardware without needing
-  the full DOM glue.
-
-**Phase 3 — Wire through `oasis-browser` PSP build.**
-
-- DOM bindings (`oasis-browser/src/js_dom.rs`) are heavily tied to
-  `rquickjs::{Ctx, Function, Object}` — porting to boa requires a
-  parallel implementation. Defer this to a follow-up PR; for now the
-  PSP build of `oasis-browser` keeps `javascript = false` and scripts
-  are still dropped at parse time.
-- Update the `# Feature flags` docstring in `src/lib.rs` and the
-  `oasis-backend-psp/Cargo.toml` note to describe the new state.
-
-**Non-goals:** V8-level performance. boa is an interpreted reference
-implementation; expect ~10× slower than QuickJS, which itself is
-~500-1000× slower than V8 on Allegrex. Inert pages with small
-bootstrap scripts will work; React SPAs will be unusable. That's fine
-— degraded is better than dead.
-
-**Testing:** PPSSPP headless for the unit test, real hardware for the
-end-to-end `js` command via TCP cmd_server.
+- Space-collapsing bug: JS-mutated `textContent` containing ASCII
+  spaces renders without visible spaces on PSP (`"hello from QuickJS"`
+  renders as `"hellofromQuickJS"`). Likely a PSP bitmap font / text
+  measurement quirk in the browser paint path, not a JS issue — the
+  same mutation renders correctly on desktop. Scope: investigate
+  whether `glyph_advance(' ')` returns 0 in the PSP font table, or
+  whether the text layout step collapses whitespace after
+  JS-triggered re-layout.
+- `js_dom.rs` bootstrap bloat: two large JS string constants
+  (`JS_DOM_BOOTSTRAP` ~530 lines, `JS_CANVAS_BOOTSTRAP` ~144 lines)
+  eagerly get compiled into `.rodata` even on PSP where canvas is
+  unused. Consider feature-gating the canvas bootstrap behind a
+  separate flag to trim ~20 KB on PSP.
 
 ---
 
@@ -220,6 +229,17 @@ single epic — file as individual issues.
 - **Font rendering quality across skins** — kerning, hinting, subpixel
   positioning. Especially on PSP where we have system TrueType fonts
   via `psp::font`.
+- **PSP space-collapsing in JS-mutated text nodes.** When JavaScript
+  sets `textContent` to a string containing ASCII spaces (e.g.
+  `"hello from QuickJS"`), the PSP browser renders it without any
+  visible spaces (`"hellofromQuickJS"`). The same mutation renders
+  correctly on desktop. Not a JS bug — likely either `glyph_advance`
+  returns 0 for U+0020 in one of the PSP bitmap font tables
+  (`oasis-backend-psp/src/font.rs`), or the text layout step collapses
+  whitespace after JS-triggered re-layout. Reproduce: `browse
+  http://<pc>/test.html` where test.html contains an inline script
+  that assigns a space-containing string to an element's
+  `textContent`. Screencap will show the space-free rendering.
 - **Image decoding error recovery** — corrupt JPEG/PNG currently
   crashes the decode path. Should degrade to a placeholder.
 - **Network error UX** — timeout, DNS fail, TLS error should produce a
@@ -249,9 +269,11 @@ order is:
    architectural change).
 5. **3D transforms** (lower user impact — most real sites degrade
    gracefully without them).
-6. **PSP JS integration** (high effort, high value on PSP specifically,
-   but orthogonal to desktop launch quality).
-7. **Launch polish items** (parallel stream, file individually).
+6. **Launch polish items** (parallel stream, file individually).
+
+PSP JavaScript integration was on this list previously; it shipped
+on `feat/psp-quickjs` (see the Done section at the top) and is no
+longer blocking.
 
 ---
 
@@ -259,8 +281,9 @@ order is:
 
 Document these explicitly so we stop relitigating them:
 
-- **V8-level JS performance on PSP.** Not happening. See PSP JS epic
-  for realistic expectations.
+- **V8-level JS performance on PSP.** Not happening. We ship QuickJS-NG
+  on PSP (see the Done epic at the top); it's two orders of magnitude
+  slower than V8 and that's fine for our target use cases.
 - **Service workers, WebRTC, Web Audio API, IndexedDB.** Too much
   surface area for an embedded engine. If something needs these, it's
   not our target use case.

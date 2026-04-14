@@ -145,7 +145,7 @@
       <a class="journal-card" href="09-javascript-on-psp.html">
         <div class="journal-card-body">
           <h3>JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</h3>
-          <p>Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three bring-up bugs blocked it &mdash; a 4-byte-alignment trap in the std random module, an orphaned time overlay that routed <code>Instant::now</code> into a panicking shim, and a 16 KB cmd-server thread stack too small for boa&rsquo;s parser. None reproduced in PPSSPP. All three fixed; <code>1 + 2 + 3</code> now returns <code>6</code> on real hardware.</p>
+          <p>Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three bring-up bugs blocked it &mdash; a 4-byte-alignment trap in the std random module, an orphaned time overlay that routed <code>Instant::now</code> into a panicking shim, and a 16 KB cmd-server thread stack too small for boa&rsquo;s parser. None reproduced in PPSSPP. All three fixed; <code>1 + 2 + 3</code> now returns <code>6</code> on real hardware. <em>Superseded 2026-04-14:</em> the PSP backend has since migrated to QuickJS-NG via <code>rquickjs</code>, the same engine used on desktop/WASM/UE5, with DOM bindings wired in and <code>&lt;script&gt;</code> tags executing against the browser on real hardware.</p>
           <div class="journal-card-meta">
             <span class="journal-tag">javascript</span>
             <span class="journal-tag">rust-psp</span>

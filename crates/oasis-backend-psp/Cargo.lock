@@ -1009,6 +1009,7 @@ dependencies = [
  "gif",
  "jpeg-decoder",
  "log",
+ "oasis-js",
  "oasis-net",
  "oasis-skin",
  "oasis-types",
