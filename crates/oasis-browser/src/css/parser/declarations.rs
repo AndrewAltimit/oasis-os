@@ -51,7 +51,7 @@ impl CssParser {
         }
     }
 
-    fn try_parse_declaration(&mut self) -> Option<Declaration> {
+    pub(super) fn try_parse_declaration(&mut self) -> Option<Declaration> {
         self.skip_whitespace();
         let property = match self.peek().clone() {
             CssToken::Ident(name) => {

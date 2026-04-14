@@ -150,11 +150,13 @@ impl CssParser {
             if let Some(lc) = self.peek_at_keyword_lc() {
                 if lc == "media" {
                     // Parse @media rules and include matching ones.
-                    let media_rules = self.parse_media_rule();
-                    rules.extend(media_rules);
+                    for r in self.parse_media_rule() {
+                        flatten_nested_rule(None, r, &mut rules);
+                    }
                 } else if lc == "supports" {
-                    let supports_rules = self.parse_supports_rule();
-                    rules.extend(supports_rules);
+                    for r in self.parse_supports_rule() {
+                        flatten_nested_rule(None, r, &mut rules);
+                    }
                 } else if lc == "keyframes" || lc == "-webkit-keyframes" {
                     if let Some(kf) = self.parse_keyframes_rule() {
                         keyframes.push(kf);
@@ -166,7 +168,7 @@ impl CssParser {
                 continue;
             }
             match self.try_parse_rule() {
-                Some(rule) => rules.push(rule),
+                Some(rule) => flatten_nested_rule(None, rule, &mut rules),
                 None => {
                     // Recovery: skip one token and try again.
                     self.advance();
@@ -208,7 +210,7 @@ impl CssParser {
     /// Parse an `@media` rule. Evaluates the media query against the
     /// OASIS viewport (480x272, screen). If it matches, the inner rules
     /// are returned; otherwise they are discarded.
-    fn parse_media_rule(&mut self) -> Vec<Rule> {
+    fn parse_media_rule(&mut self) -> Vec<ParsedRule> {
         self.advance(); // consume @media token
         self.skip_whitespace();
 
@@ -273,7 +275,7 @@ impl CssParser {
     /// Parse an `@supports` rule. Evaluates the feature query by checking
     /// whether the property name is recognized by `apply_declaration`.
     /// If supported, the inner rules are returned; otherwise discarded.
-    fn parse_supports_rule(&mut self) -> Vec<Rule> {
+    fn parse_supports_rule(&mut self) -> Vec<ParsedRule> {
         self.advance(); // consume @supports token
         self.skip_whitespace();
 
@@ -338,7 +340,7 @@ impl CssParser {
         }
     }
 
-    fn try_parse_rule(&mut self) -> Option<Rule> {
+    fn try_parse_rule(&mut self) -> Option<ParsedRule> {
         let selectors = self.parse_selector_list()?;
         self.skip_whitespace();
         if !self.expect(&CssToken::OpenBrace) {
@@ -346,13 +348,139 @@ impl CssParser {
             self.skip_to_close_brace();
             return None;
         }
-        let declarations = self.parse_declaration_list();
+        let (declarations, nested) = self.parse_rule_body();
         self.expect(&CssToken::CloseBrace);
         let declarations = expand_shorthands(declarations);
-        Some(Rule {
+        Some(ParsedRule {
             selectors,
             declarations,
+            nested,
         })
+    }
+
+    /// Parse the body of a style rule — a mixture of declarations and
+    /// nested style rules (CSS Nesting). Uses lookahead to distinguish
+    /// declarations (`prop: value;`) from nested rules (`selector { ... }`).
+    fn parse_rule_body(&mut self) -> (Vec<types::Declaration>, Vec<ParsedRule>) {
+        let mut decls = Vec::new();
+        let mut nested = Vec::new();
+        loop {
+            self.skip_whitespace();
+            match self.peek() {
+                CssToken::CloseBrace | CssToken::Eof => break,
+                CssToken::AtKeyword(_) => {
+                    // Nested at-rules (@media inside a rule). We only
+                    // support @media here; other at-rules are skipped.
+                    let lc = match self.peek_at_keyword_lc() {
+                        Some(s) => s,
+                        None => {
+                            self.advance();
+                            continue;
+                        },
+                    };
+                    if lc == "media" {
+                        nested.extend(self.parse_nested_media_rule());
+                    } else {
+                        self.skip_at_rule();
+                    }
+                    continue;
+                },
+                _ => {},
+            }
+            if self.lookahead_is_nested_rule() {
+                if let Some(rule) = self.try_parse_rule() {
+                    nested.push(rule);
+                } else {
+                    self.advance();
+                }
+            } else if let Some(decl) = self.try_parse_declaration() {
+                decls.push(decl);
+            } else {
+                self.skip_to_semicolon_or_brace_in_body();
+            }
+        }
+        (decls, nested)
+    }
+
+    /// Lookahead: scan forward from `self.pos`, tracking paren/bracket
+    /// depth. Return `true` if the next block-terminating token at depth 0
+    /// is `{` (qualified rule) rather than `;`, `}`, or EOF (declaration).
+    fn lookahead_is_nested_rule(&self) -> bool {
+        let mut i = self.pos;
+        let mut paren = 0i32;
+        let mut bracket = 0i32;
+        while i < self.tokens.len() {
+            match &self.tokens[i] {
+                CssToken::Eof => return false,
+                CssToken::OpenParen => paren += 1,
+                CssToken::CloseParen => paren -= 1,
+                CssToken::OpenBracket => bracket += 1,
+                CssToken::CloseBracket => bracket -= 1,
+                CssToken::OpenBrace if paren == 0 && bracket == 0 => return true,
+                CssToken::Semicolon if paren == 0 && bracket == 0 => return false,
+                CssToken::CloseBrace if paren == 0 && bracket == 0 => return false,
+                _ => {},
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn skip_to_semicolon_or_brace_in_body(&mut self) {
+        loop {
+            match self.peek() {
+                CssToken::Semicolon => {
+                    self.advance();
+                    break;
+                },
+                CssToken::CloseBrace | CssToken::Eof => break,
+                _ => {
+                    self.advance();
+                },
+            }
+        }
+    }
+
+    /// Parse a nested `@media (...) { ... }` rule: returns the inner
+    /// parsed rules (with the enclosing rule's selectors still un-applied)
+    /// if the media query matches; empty otherwise.
+    fn parse_nested_media_rule(&mut self) -> Vec<ParsedRule> {
+        self.advance(); // @media
+        self.skip_whitespace();
+        let mut condition = String::new();
+        loop {
+            match self.peek() {
+                CssToken::OpenBrace | CssToken::Eof => break,
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => condition.push_str(&s),
+                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
+                        CssToken::Dimension(n, unit) => {
+                            condition.push_str(&format!("{n}{unit}"));
+                        },
+                        CssToken::Whitespace => condition.push(' '),
+                        CssToken::OpenParen => condition.push('('),
+                        CssToken::CloseParen => condition.push(')'),
+                        CssToken::Colon => condition.push(':'),
+                        CssToken::Comma => condition.push(','),
+                        CssToken::Delim(c) => condition.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+        if !self.expect(&CssToken::OpenBrace) {
+            return Vec::new();
+        }
+        let (_decls, inner) = self.parse_rule_body();
+        self.expect(&CssToken::CloseBrace);
+        if eval_media_query_with_viewport(&condition, self.viewport) {
+            inner
+        } else {
+            Vec::new()
+        }
     }
 
     /// Parse an `@keyframes name { ... }` rule.
@@ -464,6 +592,145 @@ impl CssParser {
             }
         }
     }
+}
+
+// -------------------------------------------------------------------
+// CSS Nesting: parsed rule tree and flattening
+// -------------------------------------------------------------------
+
+/// A rule as it comes out of the parser, possibly carrying nested child
+/// rules from CSS Nesting. Flattened into concrete [`Rule`]s by
+/// [`flatten_nested_rule`] before the stylesheet is finalised.
+struct ParsedRule {
+    selectors: SelectorList,
+    declarations: Vec<types::Declaration>,
+    nested: Vec<ParsedRule>,
+}
+
+/// Flatten a (possibly-nested) parsed rule into concrete [`Rule`]s,
+/// desugaring the `&` nesting selector using the CSS Nesting semantics.
+///
+/// Parent and child selector lists are combined via a Cartesian product:
+/// for each (parent, child) pair, we substitute `&` with the parent's
+/// compound chain. Child rules without any `&` are treated as
+/// `& <child>` (descendant combinator), matching the spec.
+fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mut Vec<Rule>) {
+    let ParsedRule {
+        selectors,
+        declarations,
+        nested,
+    } = rule;
+
+    let effective = match parent {
+        None => selectors,
+        Some(parent_list) => combine_selector_lists(parent_list, &selectors),
+    };
+
+    // Skip emitting an empty-body parent rule when it exists purely as a
+    // container for nested children. A bare `p {}` with no nested
+    // children is still emitted so that existing behaviour is preserved.
+    if !declarations.is_empty() || nested.is_empty() {
+        out.push(Rule {
+            selectors: effective.clone(),
+            declarations,
+        });
+    }
+
+    for child in nested {
+        flatten_nested_rule(Some(&effective), child, out);
+    }
+}
+
+/// Combine a parent selector list with a child selector list using the
+/// CSS Nesting desugaring rules. Produces the Cartesian product of
+/// (parent × child) with `&` substituted for each parent selector.
+fn combine_selector_lists(parent: &SelectorList, child: &SelectorList) -> SelectorList {
+    let mut out = Vec::with_capacity(parent.selectors.len() * child.selectors.len());
+    for child_sel in &child.selectors {
+        for parent_sel in &parent.selectors {
+            out.push(combine_parent_child(parent_sel, child_sel));
+        }
+    }
+    SelectorList { selectors: out }
+}
+
+/// Combine one parent selector with one child selector. Replaces each
+/// occurrence of the nesting marker `&` in `child` with `parent`'s
+/// compound chain. If `child` does not contain `&`, the result is
+/// `parent <descendant> child`.
+fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
+    let child_has_nest = child.parts.iter().any(|(c, _)| {
+        c.parts
+            .iter()
+            .any(|s| matches!(s, types::SimpleSelector::Nest))
+    });
+
+    if !child_has_nest {
+        // Implicit `& descendant`: prepend parent chain before child,
+        // with a descendant combinator linking them.
+        let mut parts = parent.parts.clone();
+        for (i, (compound, comb)) in child.parts.iter().enumerate() {
+            let effective_comb = if i == 0 {
+                Some(Combinator::Descendant)
+            } else {
+                comb.clone()
+            };
+            parts.push((compound.clone(), effective_comb));
+        }
+        return Selector { parts };
+    }
+
+    // Child contains `&` — splice parent into each occurrence.
+    let mut out: Vec<(CompoundSelector, Option<Combinator>)> = Vec::new();
+    for (compound, combinator) in &child.parts {
+        let has_nest_here = compound
+            .parts
+            .iter()
+            .any(|s| matches!(s, types::SimpleSelector::Nest));
+        if !has_nest_here {
+            let effective_comb = if out.is_empty() {
+                None
+            } else {
+                combinator.clone()
+            };
+            out.push((compound.clone(), effective_comb));
+            continue;
+        }
+
+        // Extract the non-`&` parts of this compound.
+        let extras: Vec<types::SimpleSelector> = compound
+            .parts
+            .iter()
+            .filter(|s| !matches!(s, types::SimpleSelector::Nest))
+            .cloned()
+            .collect();
+
+        if parent.parts.is_empty() {
+            // Shouldn't happen — a parent selector always has parts.
+            continue;
+        }
+        let parent_last_idx = parent.parts.len() - 1;
+        for (pi, (pcomp, pcomb)) in parent.parts.iter().enumerate() {
+            let effective_comb = if pi == 0 {
+                if out.is_empty() {
+                    None
+                } else {
+                    combinator.clone()
+                }
+            } else {
+                pcomb.clone()
+            };
+            if pi == parent_last_idx && !extras.is_empty() {
+                let mut merged = pcomp.parts.clone();
+                merged.extend(extras.iter().cloned());
+                out.push((CompoundSelector { parts: merged }, effective_comb));
+            } else {
+                out.push((pcomp.clone(), effective_comb));
+            }
+        }
+    }
+
+    Selector { parts: out }
 }
 
 // -------------------------------------------------------------------
