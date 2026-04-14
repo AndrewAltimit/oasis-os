@@ -581,14 +581,17 @@ fn gamma_to_linear_srgb(c: f32) -> f32 {
     }
 }
 
-/// Convert `color(display-p3 r g b)` to sRGB bytes. Values are treated
-/// as linear Display-P3 first, converted to linear sRGB via a 3x3
-/// matrix, then gamma-encoded and clamped.
+/// Convert `color(display-p3 r g b)` to sRGB bytes. Inputs are gamma-encoded
+/// (same transfer curve as sRGB per CSS Color 4), so we linearize first,
+/// apply the Display-P3-to-linear-sRGB matrix, then gamma-encode back.
 fn display_p3_to_srgb8(r: f32, g: f32, b: f32) -> (u8, u8, u8) {
+    let lr = gamma_to_linear_srgb(r);
+    let lg = gamma_to_linear_srgb(g);
+    let lb = gamma_to_linear_srgb(b);
     // Display-P3 → linear sRGB matrix (D65).
-    let sr = 1.2249401 * r - 0.2249404 * g + 0.0000000 * b;
-    let sg = -0.0420569 * r + 1.0420571 * g + 0.0000000 * b;
-    let sb = -0.0196376 * r - 0.0786361 * g + 1.0982737 * b;
+    let sr = 1.2249401 * lr - 0.2249404 * lg + 0.0000000 * lb;
+    let sg = -0.0420569 * lr + 1.0420571 * lg + 0.0000000 * lb;
+    let sb = -0.0196376 * lr - 0.0786361 * lg + 1.0982737 * lb;
     (
         (linear_to_gamma_srgb(sr).clamp(0.0, 1.0) * 255.0).round() as u8,
         (linear_to_gamma_srgb(sg).clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -1304,6 +1307,22 @@ mod tests {
         // Display-P3 red is out-of-gamut in sRGB; clamping to the
         // boundary gives pure red.
         assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn color_display_p3_mid_range_gamma_decodes() {
+        // Mid-range values exercise the gamma-decode step before the
+        // P3→sRGB matrix. Without linearizing first, 0.5 would map
+        // to ~201 instead of the correct ~139.
+        let tokens = lex("color(display-p3 0.5 0 0)");
+        let c = try_parse_color(&tokens).expect("display-p3 mid-range");
+        assert!(
+            (130..=148).contains(&c.r),
+            "expected ~139 for display-p3 0.5 red, got {}",
+            c.r
+        );
         assert_eq!(c.g, 0);
         assert_eq!(c.b, 0);
     }
