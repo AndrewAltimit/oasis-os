@@ -398,31 +398,37 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, new_size: usize) -> *mut c_void
 }
 
 // ---------------------------------------------------------------------------
-// stdio — minimal no-op stubs.
+// stdio — minimal no-op stubs, NON-variadic.
 //
-// QuickJS-NG references `printf` / `snprintf` / `vsnprintf` / `fprintf`
-// / `vfprintf` / `puts` / `putchar` / `fputc` / `fwrite` from a few
-// places: atom-to-string conversion (`%u` / `%x`), error message
-// construction, and `JSON.stringify` escape sequences. A
-// Rust-implemented variadic printf would need to walk a C va_list in
-// the exact MIPS o32 layout QuickJS passes, and Rust's `c_variadic`
-// feature doesn't produce a compatible dispatch on that target — an
-// earlier attempt corrupted the stack on the very first `JS_Eval`
-// call on real hardware.
+// QuickJS-NG references `printf` / `snprintf` / `vsnprintf` /
+// `fprintf` / `vfprintf` / `puts` / `putchar` / `fputc` / `fwrite`
+// from a few places: atom-to-string conversion (`%u` / `%x`),
+// error message construction, and `JSON.stringify` escape
+// sequences.
 //
-// The pragmatic fix: provide no-op stubs that accept the variadic
-// signature but never touch `args`. Rust's `args: ...` parameter is
-// effectively a token for "the C ABI places the rest of the
-// arguments somewhere" — as long as we don't try to read it, the
-// call is safe regardless of platform conventions. Output buffers
-// get a single NUL so `strlen` on them returns 0, and return codes
-// claim full success so QuickJS's length-checking loops terminate
-// the first time through.
+// An earlier attempt used Rust's unstable `c_variadic` feature
+// with `args: ...` parameters so the signatures would "match" the
+// C varargs ABI. That version crashed the console on the very
+// first call into `JS_ThrowInternalError` on real hardware, which
+// strongly suggests Rust's `c_variadic` codegen on the
+// `mipsel-sony-psp-std` target emits a function prologue that's
+// ABI-incompatible with what `psp-gcc` expects. Because
+// `c_variadic` is experimental and MIPS o32 support in rustc is
+// tier-3, that is plausible.
 //
-// The practical consequence: error messages from QuickJS appear as
-// empty strings, and debug output (`bc_read_trace` etc.) silently
-// drops. For a non-pathological `JS_Eval`, neither path is
-// reachable.
+// The workaround: declare each stub as a NON-variadic function
+// with only the fixed positional arguments it cares about. C
+// callers passing extra varargs still go through the normal
+// o32 calling convention — the extra values end up in `$a2`/`$a3`
+// or on the stack and the callee simply ignores them. That avoids
+// the c_variadic codegen path entirely.
+//
+// Output buffers receive a single NUL so `strlen` on them returns
+// 0; return codes claim full success so QuickJS's length-checking
+// loops terminate on the first iteration. Error messages from
+// QuickJS become empty strings, and `bc_read_trace` silently
+// drops. For any non-pathological `JS_Eval` neither path is
+// actually reached, but they still need to link.
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
@@ -430,7 +436,6 @@ pub unsafe extern "C" fn snprintf(
     buf: *mut c_char,
     size: usize,
     _fmt: *const c_char,
-    _args: ...
 ) -> c_int {
     if !buf.is_null() && size > 0 {
         unsafe { buf.write(0) };
@@ -452,7 +457,7 @@ pub unsafe extern "C" fn vsnprintf(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn printf(_fmt: *const c_char, _args: ...) -> c_int {
+pub unsafe extern "C" fn printf(_fmt: *const c_char) -> c_int {
     0
 }
 
@@ -460,7 +465,6 @@ pub unsafe extern "C" fn printf(_fmt: *const c_char, _args: ...) -> c_int {
 pub unsafe extern "C" fn fprintf(
     _stream: *mut c_void,
     _fmt: *const c_char,
-    _args: ...
 ) -> c_int {
     0
 }

@@ -12,7 +12,6 @@
 
 #![feature(restricted_std)]
 #![feature(asm_experimental_arch)]
-#![feature(c_variadic)]
 
 // ---------------------------------------------------------------------------
 // Module declarations
