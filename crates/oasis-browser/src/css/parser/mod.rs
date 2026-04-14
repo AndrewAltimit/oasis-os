@@ -70,6 +70,12 @@ struct CssParser {
     tokens: Vec<CssToken>,
     pos: usize,
     viewport: MediaViewport,
+    /// Declared cascade layers in order of first appearance.
+    /// Synthetic `__anon_N` names are used for `@layer { ... }` blocks.
+    layers: Vec<String>,
+    /// If we're currently inside a `@layer name { ... }` block, this
+    /// is the layer's index in `layers`; otherwise `None`.
+    current_layer: Option<u16>,
 }
 
 impl CssParser {
@@ -78,6 +84,8 @@ impl CssParser {
             tokens,
             pos: 0,
             viewport,
+            layers: Vec::new(),
+            current_layer: None,
         }
     }
 
@@ -161,6 +169,10 @@ impl CssParser {
                     if let Some(kf) = self.parse_keyframes_rule() {
                         keyframes.push(kf);
                     }
+                } else if lc == "layer" {
+                    for r in self.parse_layer_rule() {
+                        flatten_nested_rule(None, r, &mut rules);
+                    }
                 } else {
                     // Other at-rules: skip.
                     self.skip_at_rule();
@@ -175,7 +187,11 @@ impl CssParser {
                 },
             }
         }
-        Stylesheet { rules, keyframes }
+        Stylesheet {
+            rules,
+            keyframes,
+            layers: std::mem::take(&mut self.layers),
+        }
     }
 
     fn skip_at_rule(&mut self) {
@@ -340,6 +356,180 @@ impl CssParser {
         }
     }
 
+    /// Parse an `@layer` rule. Supports three forms:
+    ///
+    /// 1. `@layer foo;` — statement form, registers `foo` so its
+    ///    position in the layer order is fixed even before any rules
+    ///    are declared inside it.
+    /// 2. `@layer foo, bar, baz;` — multi-name statement form, same
+    ///    as above but registers several layers at once.
+    /// 3. `@layer foo { ... }` — block form, registers `foo` (if not
+    ///    already registered) and tags every rule inside with it.
+    /// 4. `@layer { ... }` — anonymous block form, generates a
+    ///    synthetic name so the layer remains distinct.
+    ///
+    /// Nested layer names like `foo.bar` are parsed as a single name
+    /// string (`"foo.bar"`); we don't currently model hierarchical
+    /// layer nesting, so each dotted name is just an opaque identifier.
+    fn parse_layer_rule(&mut self) -> Vec<ParsedRule> {
+        self.advance(); // consume @layer token
+        self.skip_whitespace();
+
+        // Collect the first layer name (if any).
+        let mut names: Vec<String> = Vec::new();
+        if let Some(first) = self.parse_layer_name() {
+            names.push(first);
+            loop {
+                self.skip_whitespace();
+                if self.peek() == &CssToken::Comma {
+                    self.advance();
+                    self.skip_whitespace();
+                    if let Some(n) = self.parse_layer_name() {
+                        names.push(n);
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.skip_whitespace();
+        match self.peek() {
+            CssToken::Semicolon => {
+                self.advance();
+                // Statement form: just register the names in order.
+                for n in &names {
+                    self.register_layer(n);
+                }
+                Vec::new()
+            },
+            CssToken::OpenBrace => {
+                self.advance();
+                // Block form. Multi-name block (`@layer a, b { ... }`)
+                // isn't allowed by the spec; treat it as using the
+                // first name and register the rest as empty layers.
+                let name = if names.is_empty() {
+                    self.synthesise_anonymous_layer_name()
+                } else {
+                    names[0].clone()
+                };
+                let layer_idx = self.register_layer(&name);
+                for extra in names.iter().skip(1) {
+                    self.register_layer(extra);
+                }
+
+                let previous = self.current_layer;
+                self.current_layer = Some(layer_idx);
+                let inner_rules = self.parse_at_rule_block();
+                self.current_layer = previous;
+                inner_rules
+            },
+            _ => {
+                // Malformed; skip until we reach `;` or a closing brace.
+                self.skip_to_semicolon_or_close_brace();
+                Vec::new()
+            },
+        }
+    }
+
+    /// Parse a single layer name: an identifier optionally followed by
+    /// `.ident` segments (e.g. `framework.theme`). Returns `None` if
+    /// no identifier is present.
+    fn parse_layer_name(&mut self) -> Option<String> {
+        let mut out = String::new();
+        let CssToken::Ident(first) = self.peek().clone() else {
+            return None;
+        };
+        self.advance();
+        out.push_str(&first);
+        loop {
+            if self.peek() == &CssToken::Delim('.') {
+                self.advance();
+                if let CssToken::Ident(next) = self.peek().clone() {
+                    self.advance();
+                    out.push('.');
+                    out.push_str(&next);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        Some(out)
+    }
+
+    /// Register a layer by name if it isn't already registered.
+    /// Returns the layer's index in `self.layers`.
+    fn register_layer(&mut self, name: &str) -> u16 {
+        if let Some(idx) = self.layers.iter().position(|n| n == name) {
+            return idx as u16;
+        }
+        let idx = self.layers.len();
+        self.layers.push(name.to_string());
+        idx as u16
+    }
+
+    /// Generate a unique synthetic name for an anonymous `@layer { ... }`.
+    fn synthesise_anonymous_layer_name(&self) -> String {
+        format!("__anon_{}", self.layers.len())
+    }
+
+    /// Parse the body of an at-rule that wraps style rules (like
+    /// `@layer foo { ... }`). Consumes the closing `}`.
+    fn parse_at_rule_block(&mut self) -> Vec<ParsedRule> {
+        let mut inner_rules = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            if let Some(lc) = self.peek_at_keyword_lc() {
+                if lc == "layer" {
+                    // Nested @layer (e.g. @layer framework { @layer
+                    // base { ... } }). For now, skip the nested block
+                    // but still register its name so the statement
+                    // form can be tracked.
+                    inner_rules.extend(self.parse_layer_rule());
+                    continue;
+                }
+                if lc == "media" {
+                    inner_rules.extend(self.parse_media_rule());
+                    continue;
+                }
+                if lc == "supports" {
+                    inner_rules.extend(self.parse_supports_rule());
+                    continue;
+                }
+                self.skip_at_rule();
+                continue;
+            }
+            if let Some(rule) = self.try_parse_rule() {
+                inner_rules.push(rule);
+            } else {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+        inner_rules
+    }
+
+    /// Recovery helper for malformed `@layer` statements.
+    fn skip_to_semicolon_or_close_brace(&mut self) {
+        loop {
+            match self.peek() {
+                CssToken::Semicolon => {
+                    self.advance();
+                    break;
+                },
+                CssToken::CloseBrace | CssToken::Eof => break,
+                _ => {
+                    self.advance();
+                },
+            }
+        }
+    }
+
     fn try_parse_rule(&mut self) -> Option<ParsedRule> {
         let selectors = self.parse_selector_list()?;
         self.skip_whitespace();
@@ -355,6 +545,7 @@ impl CssParser {
             selectors,
             declarations,
             nested,
+            layer: self.current_layer,
         })
     }
 
@@ -605,6 +796,8 @@ struct ParsedRule {
     selectors: SelectorList,
     declarations: Vec<types::Declaration>,
     nested: Vec<ParsedRule>,
+    /// Cascade layer the rule belongs to, or `None` if unlayered.
+    layer: Option<u16>,
 }
 
 /// Flatten a (possibly-nested) parsed rule into concrete [`Rule`]s,
@@ -619,6 +812,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
         selectors,
         declarations,
         nested,
+        layer,
     } = rule;
 
     let effective = match parent {
@@ -633,6 +827,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
         out.push(Rule {
             selectors: effective.clone(),
             declarations,
+            layer,
         });
     }
 

@@ -146,15 +146,15 @@ impl CssParser {
                             self.advance();
                             let lc = name.to_ascii_lowercase();
                             if lc == "not" {
-                                // Parse :not(compound)
-                                self.skip_whitespace();
-                                if let Some(inner) = self.parse_compound_selector() {
-                                    parts.push(SimpleSelector::Not(Box::new(inner)));
-                                }
+                                // Parse :not(selector-list). Selectors
+                                // Level 4 allows a comma-separated list
+                                // of compound selectors here.
+                                let inner_list = self.parse_compound_selector_list();
                                 self.skip_whitespace();
                                 if self.peek() == &CssToken::CloseParen {
                                     self.advance();
                                 }
+                                parts.push(SimpleSelector::Not(inner_list));
                             } else if lc == "is" || lc == "where" {
                                 // Parse :is(selector-list) / :where(selector-list)
                                 let inner_list = self.parse_compound_selector_list();

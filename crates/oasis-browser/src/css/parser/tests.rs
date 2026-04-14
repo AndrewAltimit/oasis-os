@@ -886,6 +886,58 @@ fn linear_gradient_default_direction() {
 
 // -- :has() relational pseudo-class ------------------------------
 
+// -- @layer cascade layers --------------------------------------
+
+#[test]
+fn layer_statement_form_registers_names_in_order() {
+    let sheet = parse("@layer reset, framework, overrides;");
+    assert_eq!(
+        sheet.layers,
+        vec![
+            "reset".to_string(),
+            "framework".to_string(),
+            "overrides".to_string(),
+        ]
+    );
+    // No rules emitted for statement form.
+    assert!(sheet.rules.is_empty());
+}
+
+#[test]
+fn layer_block_tags_inner_rules() {
+    let sheet = parse("@layer framework { p { color: red; } } p { color: blue; }");
+    assert_eq!(sheet.layers, vec!["framework".to_string()]);
+    assert_eq!(sheet.rules.len(), 2);
+    // The first rule (from the layer block) is tagged.
+    assert_eq!(sheet.rules[0].layer, Some(0));
+    // The second rule (outside the layer) is unlayered.
+    assert_eq!(sheet.rules[1].layer, None);
+}
+
+#[test]
+fn layer_statement_fixes_order_before_blocks() {
+    // `@layer a, b;` should freeze the order so that a later
+    // `@layer b { ... }` block followed by a `@layer a { ... }` block
+    // still reports `a` as index 0 and `b` as index 1.
+    let sheet = parse(
+        "@layer a, b; \
+         @layer b { p { color: red; } } \
+         @layer a { p { color: blue; } }",
+    );
+    assert_eq!(sheet.layers, vec!["a".to_string(), "b".to_string()]);
+    // Rule order mirrors source order (b then a).
+    assert_eq!(sheet.rules[0].layer, Some(1)); // b
+    assert_eq!(sheet.rules[1].layer, Some(0)); // a
+}
+
+#[test]
+fn layer_anonymous_block_gets_synthetic_name() {
+    let sheet = parse("@layer { p { color: red; } }");
+    assert_eq!(sheet.layers.len(), 1);
+    assert!(sheet.layers[0].starts_with("__anon_"));
+    assert_eq!(sheet.rules[0].layer, Some(0));
+}
+
 #[test]
 fn has_descendant_selector() {
     let sels = first_selectors("article:has(img) { color: red; }");

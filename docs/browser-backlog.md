@@ -191,13 +191,18 @@ that cause real breakage on modern sites:
 - ~~`:has()` selector~~ — shipped on `feat/browser-has-selector`. Parses
   relative-selector lists (`> child`, `+ sib`, `~ sib`, descendant),
   matches candidates against each relative selector, specificity takes
-  the max of the inner selectors. Known limitation: inner selectors
-  containing combinators (`:has(.a .b)`) aren't scope-bounded to the
-  subject element's subtree, so an ancestor match may drift above the
-  subject — real-world usage overwhelmingly uses single-compound inner
-  selectors, so this is acceptable for now.
+  the max of the inner selectors. Ancestor-walking combinators inside
+  the inner selector are scope-bounded to the subject's subtree, so
+  `article:has(.a .b)` can't match via an `.a` that lives above the
+  article.
 - `@container` queries — most new responsive sites use these.
-- `@layer` — cascade layers, used by design systems (Tailwind, etc.).
+- ~~`@layer`~~ — shipped on `feat/browser-has-selector`. Supports
+  statement form (`@layer a, b, c;`), named block form
+  (`@layer a { ... }`), and anonymous block form (`@layer { ... }`).
+  Cascade sort factors layer order between origin and specificity;
+  `!important` reverses layer priority per spec. Known limitation:
+  layer names are sheet-local (not merged across multiple stylesheets)
+  — cross-stylesheet ordering still falls through to source order.
 - ~~CSS nesting (`& .foo { }`)~~ — shipped on `feat/css-nesting` (parse-time
   desugaring: Cartesian-expands parent × child selector lists, substitutes
   `&` inline, supports nested `@media`, no compositor/matcher changes).
@@ -271,10 +276,10 @@ order is:
    smallest risk). Catches regressions automatically forever.
 2. **`html5lib-tests` integration** (catches tree-builder weirdness in
    one shot, no speculative design needed).
-3. **CSS long-tail subset: ~~`:has()`~~ + `@container` + ~~CSS nesting~~**
-   (real-world breakage on modern sites). `:has()` shipped on
-   `feat/browser-has-selector`; CSS nesting shipped on `feat/css-nesting`.
-   `@container` queries remain.
+3. **CSS long-tail subset: ~~`:has()`~~ + ~~`@layer`~~ + `@container` +
+   ~~CSS nesting~~** (real-world breakage on modern sites). `:has()`
+   and `@layer` shipped on `feat/browser-has-selector`; CSS nesting
+   shipped on `feat/css-nesting`. `@container` queries remain.
 4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
    backdrop-filter, mask, isolation, filter, will-change in one
    architectural change).
