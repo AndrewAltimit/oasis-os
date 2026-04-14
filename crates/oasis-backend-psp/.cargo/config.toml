@@ -59,7 +59,7 @@ PSPDEV = "/opt/pspdev"
 CC_mipsel_sony_psp_std = { value = "tools/psp-gcc-wrap.sh", relative = true }
 CXX_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-g++"
 AR_mipsel_sony_psp_std = "/opt/pspdev/bin/psp-ar"
-CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -mdouble-float -fno-stack-protector -fno-function-sections -fno-data-sections -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types -Wno-error=pointer-sign -DCLOCK_MONOTONIC=CLOCK_MONOTONIC_RAW -D__wasi__ -isystem/home/mikunpc/Documents/repos/oasis-os/crates/oasis-backend-psp/tools/newlib-shim"
+CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -msingle-float -fno-stack-protector -fno-function-sections -fno-data-sections -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types -Wno-error=pointer-sign -DCLOCK_MONOTONIC=CLOCK_MONOTONIC_RAW -D__wasi__ -isystem/home/mikunpc/Documents/repos/oasis-os/crates/oasis-backend-psp/tools/newlib-shim"
 # bindgen invokes libclang directly, which by default resolves system
 # headers from /usr/include (glibc). Force it to use pspdev's newlib
 # sysroot instead — otherwise rquickjs-sys fails at `#include <stdio.h>`
