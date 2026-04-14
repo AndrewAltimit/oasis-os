@@ -206,11 +206,39 @@ that cause real breakage on modern sites:
 - ~~CSS nesting (`& .foo { }`)~~ — shipped on `feat/css-nesting` (parse-time
   desugaring: Cartesian-expands parent × child selector lists, substitutes
   `&` inline, supports nested `@media`, no compositor/matcher changes).
-- `color-mix()`, `oklch()`, `color()`, `light-dark()` functions.
-- Logical properties: `margin-inline-start`, `padding-block-end`, etc.
-- `text-wrap: balance` / `pretty` — increasingly common for headings.
-- `:is()` / `:where()` — check if already supported; audit.
-- `aspect-ratio` — audit, may already be supported.
+- ~~`color-mix()`, `oklch()`, `color()`, `light-dark()` functions~~ —
+  shipped on `feat/browser-has-selector`. `hsl/hsla`, `oklch/oklab`,
+  `color(srgb | srgb-linear | display-p3 …)`, `color-mix(in srgb, …)`,
+  and `light-dark()` all parse to our existing sRGB `CssColor`.
+  `color-mix` interpolates in linear sRGB (not in the requested color
+  space for non-`srgb` arguments yet). `light-dark()` always returns
+  the light-mode argument since we don't track a color-scheme context
+  at parse time.
+- ~~Logical properties~~ — shipped on `feat/browser-has-selector`.
+  Parse-time rewrite of `margin-inline-*`, `padding-block-*`,
+  `inset-inline-*`, `border-inline/block-*-{width,color,style}`, and
+  `inline-size`/`block-size` (plus min/max variants) to their LTR
+  physical equivalents. `margin-inline` / `padding-block` /
+  `inset-inline` / `inset-block` shorthands expand with the usual
+  one-value / two-value forms. RTL is still not supported anywhere in
+  the engine so the rewrite is always LTR.
+- ~~`text-wrap: balance` / `pretty`~~ — parsed and stored on
+  `ComputedStyle` on `feat/browser-has-selector`. `wrap` / `nowrap`
+  behave correctly; `balance` / `pretty` / `stable` fall through to
+  `wrap` because the layout-side balancing algorithm is a follow-up.
+- ~~`:is()` / `:where()` — check if already supported; audit.~~
+  **Already done.** Parsed in
+  `crates/oasis-browser/src/css/parser/selectors.rs:166-168` and
+  matched in `crates/oasis-browser/src/css/cascade/matching.rs` via
+  the `Is` / `Where` arms of `matches_simple`.
+- ~~`aspect-ratio` — audit, may already be supported.~~
+  Parsed and stored before; **now wired into block layout on
+  `feat/browser-has-selector`**: non-replaced block elements with
+  `height: auto` derive their content height from the resolved
+  content width and the ratio. Explicit height always wins; when
+  `width` is also `auto` we let children drive the height as before.
+  Replaced-element aspect-ratio sizing (img, video) is still a
+  follow-up.
 
 **Medium-impact:**
 

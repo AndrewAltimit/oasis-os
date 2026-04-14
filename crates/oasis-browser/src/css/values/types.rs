@@ -270,6 +270,26 @@ pub enum WhiteSpace {
     PreLine,
 }
 
+/// CSS `text-wrap` property. Controls how text flows to new lines.
+/// `balance` and `pretty` are recognised as hints but not yet
+/// implemented in layout — they fall through to `wrap` behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrap {
+    /// Default. Lines wrap on soft line-break opportunities.
+    Wrap,
+    /// No line wrapping. Equivalent to `white-space: nowrap`.
+    Nowrap,
+    /// Layout should minimise the difference in line widths.
+    /// Currently parsed and stored but not applied.
+    Balance,
+    /// Layout should avoid orphans / short last lines.
+    /// Currently parsed and stored but not applied.
+    Pretty,
+    /// Like `wrap` but line breaks remain stable as the element
+    /// resizes. Currently parsed and stored but not applied.
+    Stable,
+}
+
 /// CSS `object-fit` property for replaced elements (images, video).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectFit {

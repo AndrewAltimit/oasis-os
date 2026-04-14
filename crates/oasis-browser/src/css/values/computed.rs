@@ -14,9 +14,9 @@ use super::types::{
     ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
     PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign,
     ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection, TextJustify,
-    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TouchAction,
-    TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap,
+    TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
+    Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -80,6 +80,10 @@ pub struct ComputedStyle {
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
+    /// CSS `text-wrap` property. Stored but not yet applied during
+    /// line breaking — `Balance` / `Pretty` / `Stable` currently fall
+    /// through to the default `Wrap` behaviour.
+    pub text_wrap: TextWrap,
 
     // -- Background -------------------------------------------------
     pub background_color: Color,
@@ -389,6 +393,7 @@ impl Default for ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
+            text_wrap: TextWrap::Wrap,
 
             // Background -- transparent
             background_color: Color::rgba(0, 0, 0, 0),
@@ -775,6 +780,7 @@ impl ComputedStyle {
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             white_space: parent.white_space,
+            text_wrap: parent.text_wrap,
             // Inherited text shadow.
             text_shadow: parent.text_shadow,
             // Inherited visibility.

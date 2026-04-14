@@ -861,6 +861,59 @@ fn deeply_nested_blocks_with_margins() {
     );
 }
 
+// -- aspect-ratio --------------------------------------------------
+
+#[test]
+fn aspect_ratio_derives_height_from_explicit_width() {
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.width = Dimension::Px(200.0);
+    // 2:1 aspect ratio stored as width/height = 2.0.
+    style.aspect_ratio = Some(2.0);
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.dimensions.content.x = 0.0;
+    lb.dimensions.content.y = 0.0;
+    layout_block(&mut lb, 480.0, &m);
+    assert_eq!(lb.dimensions.content.width, 200.0);
+    // 200 / 2 = 100.
+    assert!(
+        (lb.dimensions.content.height - 100.0).abs() < 0.01,
+        "expected derived height 100, got {}",
+        lb.dimensions.content.height,
+    );
+}
+
+#[test]
+fn aspect_ratio_ignored_when_height_is_explicit() {
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.width = Dimension::Px(200.0);
+    style.height = Dimension::Px(50.0);
+    style.aspect_ratio = Some(2.0);
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.dimensions.content.x = 0.0;
+    lb.dimensions.content.y = 0.0;
+    layout_block(&mut lb, 480.0, &m);
+    // Explicit height wins; aspect-ratio would've said 100.
+    assert_eq!(lb.dimensions.content.height, 50.0);
+}
+
+#[test]
+fn aspect_ratio_ignored_when_width_is_auto() {
+    // We only honour aspect-ratio when the author has set width
+    // explicitly — with `width: auto`, the block fills its container
+    // and we want content to drive the height as normal.
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.aspect_ratio = Some(2.0);
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.dimensions.content.x = 0.0;
+    lb.dimensions.content.y = 0.0;
+    layout_block(&mut lb, 480.0, &m);
+    // No children, auto height → content.height = 0.
+    assert_eq!(lb.dimensions.content.height, 0.0);
+}
+
 #[test]
 fn parent_child_bottom_margin_collapsing() {
     let m = FixedMeasurer;

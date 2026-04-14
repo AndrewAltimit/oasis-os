@@ -100,15 +100,507 @@ pub(crate) fn try_parse_color(tokens: &[CssToken]) -> Option<CssColor> {
         }
     }
 
-    // rgb() / rgba().
+    // Functional color notations.
     if let CssToken::Function(name) = non_ws[0] {
         let lower = name.to_ascii_lowercase();
-        if lower == "rgb" || lower == "rgba" {
-            return parse_rgb_function(&non_ws[1..]);
-        }
+        let body = function_body(&non_ws[1..]);
+        return match lower.as_str() {
+            "rgb" | "rgba" => parse_rgb_function(&body),
+            "hsl" | "hsla" => parse_hsl_function(&body),
+            "oklch" => parse_oklch_function(&body),
+            "oklab" => parse_oklab_function(&body),
+            "color" => parse_color_function(&body),
+            "color-mix" => parse_color_mix_function(&body),
+            "light-dark" => parse_light_dark_function(&body),
+            _ => None,
+        };
     }
 
     None
+}
+
+/// Extract the token slice up to (but not including) the top-level
+/// `)` that closes the current function. Nested parens are respected.
+fn function_body<'a>(tokens: &[&'a CssToken]) -> Vec<&'a CssToken> {
+    let mut out = Vec::new();
+    let mut depth: i32 = 0;
+    for &t in tokens {
+        match t {
+            CssToken::OpenParen => {
+                depth += 1;
+                out.push(t);
+            },
+            CssToken::CloseParen => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+                out.push(t);
+            },
+            _ => out.push(t),
+        }
+    }
+    out
+}
+
+/// Split a function body by top-level commas, respecting nested parens.
+fn split_top_level_commas<'a>(tokens: &[&'a CssToken]) -> Vec<Vec<&'a CssToken>> {
+    let mut out: Vec<Vec<&CssToken>> = vec![Vec::new()];
+    let mut depth: i32 = 0;
+    for &t in tokens {
+        match t {
+            CssToken::OpenParen => {
+                depth += 1;
+                out.last_mut().expect("at least one").push(t);
+            },
+            CssToken::CloseParen => {
+                depth -= 1;
+                out.last_mut().expect("at least one").push(t);
+            },
+            CssToken::Comma if depth == 0 => {
+                out.push(Vec::new());
+            },
+            _ => out.last_mut().expect("at least one").push(t),
+        }
+    }
+    out
+}
+
+/// Split a function body by the top-level `/` (alpha separator used
+/// by modern CSS color syntax like `rgb(255 0 0 / 50%)`).
+fn split_top_level_slash<'a>(
+    tokens: &[&'a CssToken],
+) -> (Vec<&'a CssToken>, Option<Vec<&'a CssToken>>) {
+    let mut depth: i32 = 0;
+    for (i, &t) in tokens.iter().enumerate() {
+        match t {
+            CssToken::OpenParen => depth += 1,
+            CssToken::CloseParen => depth -= 1,
+            CssToken::Slash if depth == 0 => {
+                let before: Vec<&CssToken> = tokens[..i].to_vec();
+                let after: Vec<&CssToken> = tokens[i + 1..].to_vec();
+                return (before, Some(after));
+            },
+            _ => {},
+        }
+    }
+    (tokens.to_vec(), None)
+}
+
+/// Parse an alpha token group (the RHS of a `/`). Accepts a single
+/// number (0–1) or a percentage.
+fn parse_alpha_component(tokens: &[&CssToken]) -> Option<u8> {
+    for t in tokens {
+        match t {
+            CssToken::Number(n) => return Some((n.clamp(0.0, 1.0) * 255.0).round() as u8),
+            CssToken::Percentage(p) => {
+                return Some(((p / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8);
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+/// Parse an HSL / HSLA function. Accepts both modern
+/// (`hsl(120 50% 50%)`) and legacy (`hsl(120, 50%, 50%)`) syntax,
+/// with optional alpha via `/` or a trailing comma value.
+fn parse_hsl_function(body: &[&CssToken]) -> Option<CssColor> {
+    let (main, alpha_tokens) = split_top_level_slash(body);
+    let groups = split_top_level_commas(&main);
+    // Flatten into a sequence of non-comma components.
+    let components: Vec<&CssToken> = if groups.len() > 1 {
+        groups.into_iter().flatten().collect()
+    } else {
+        main
+    };
+    let mut nums = Vec::new();
+    for t in components {
+        match t {
+            CssToken::Number(n) => nums.push(*n),
+            CssToken::Percentage(p) => nums.push(*p),
+            CssToken::Dimension(n, unit) => {
+                // Hue in degrees/radians/gradians/turns.
+                nums.push(hue_to_degrees(*n, unit));
+            },
+            _ => {},
+        }
+    }
+    if nums.len() < 3 {
+        return None;
+    }
+    // `hsl(120, 50%, 50%, 0.4)` -- legacy trailing alpha.
+    let alpha = if let Some(ref tokens) = alpha_tokens {
+        parse_alpha_component(tokens).unwrap_or(255)
+    } else if nums.len() >= 4 {
+        ((nums[3].clamp(0.0, 1.0)) * 255.0).round() as u8
+    } else {
+        255
+    };
+    let (r, g, b) = hsl_to_rgb(nums[0], nums[1], nums[2]);
+    Some(CssColor::new(r, g, b, alpha))
+}
+
+/// Parse an `oklch(L C H [/ A])` function.
+fn parse_oklch_function(body: &[&CssToken]) -> Option<CssColor> {
+    let (main, alpha_tokens) = split_top_level_slash(body);
+    let mut nums: [f32; 3] = [0.0; 3];
+    let mut idx = 0;
+    for t in &main {
+        if idx >= 3 {
+            break;
+        }
+        match t {
+            CssToken::Number(n) => {
+                nums[idx] = *n;
+                idx += 1;
+            },
+            CssToken::Percentage(p) => {
+                // L: 0% = 0.0, 100% = 1.0. C: 0% = 0.0, 100% = 0.4.
+                nums[idx] = if idx == 0 { p / 100.0 } else { p / 100.0 * 0.4 };
+                idx += 1;
+            },
+            CssToken::Dimension(n, unit) => {
+                if idx == 2 {
+                    nums[idx] = hue_to_degrees(*n, unit);
+                    idx += 1;
+                }
+            },
+            _ => {},
+        }
+    }
+    if idx < 3 {
+        return None;
+    }
+    let alpha = alpha_tokens
+        .as_ref()
+        .and_then(|t| parse_alpha_component(t))
+        .unwrap_or(255);
+    let (r, g, b) = oklch_to_srgb(nums[0], nums[1], nums[2]);
+    Some(CssColor::new(r, g, b, alpha))
+}
+
+/// Parse an `oklab(L a b [/ A])` function.
+fn parse_oklab_function(body: &[&CssToken]) -> Option<CssColor> {
+    let (main, alpha_tokens) = split_top_level_slash(body);
+    let mut nums: [f32; 3] = [0.0; 3];
+    let mut idx = 0;
+    for t in &main {
+        if idx >= 3 {
+            break;
+        }
+        match t {
+            CssToken::Number(n) => {
+                nums[idx] = *n;
+                idx += 1;
+            },
+            CssToken::Percentage(p) => {
+                // L: 0-100% maps to 0-1. a,b: ±100% maps to ±0.4.
+                nums[idx] = if idx == 0 { p / 100.0 } else { p / 100.0 * 0.4 };
+                idx += 1;
+            },
+            _ => {},
+        }
+    }
+    if idx < 3 {
+        return None;
+    }
+    let alpha = alpha_tokens
+        .as_ref()
+        .and_then(|t| parse_alpha_component(t))
+        .unwrap_or(255);
+    let (r, g, b) = oklab_to_srgb(nums[0], nums[1], nums[2]);
+    Some(CssColor::new(r, g, b, alpha))
+}
+
+/// Parse `color(<colorspace> r g b [/ a])`. Supported spaces: `srgb`,
+/// `srgb-linear`, `display-p3`. Other spaces fall back to `srgb`
+/// interpretation.
+fn parse_color_function(body: &[&CssToken]) -> Option<CssColor> {
+    // First token should be a color space ident.
+    let mut iter = body.iter();
+    let space = loop {
+        match iter.next()? {
+            CssToken::Ident(s) => break s.to_ascii_lowercase(),
+            CssToken::Whitespace => continue,
+            _ => return None,
+        }
+    };
+    // The rest of the tokens are the components + optional alpha.
+    let rest: Vec<&CssToken> = iter.copied().collect();
+    let (main, alpha_tokens) = split_top_level_slash(&rest);
+    let mut nums: [f32; 3] = [0.0; 3];
+    let mut idx = 0;
+    for t in &main {
+        if idx >= 3 {
+            break;
+        }
+        match t {
+            CssToken::Number(n) => {
+                nums[idx] = *n;
+                idx += 1;
+            },
+            CssToken::Percentage(p) => {
+                nums[idx] = p / 100.0;
+                idx += 1;
+            },
+            _ => {},
+        }
+    }
+    if idx < 3 {
+        return None;
+    }
+    let alpha = alpha_tokens
+        .as_ref()
+        .and_then(|t| parse_alpha_component(t))
+        .unwrap_or(255);
+    let (r, g, b) = match space.as_str() {
+        "srgb" => (
+            (nums[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (nums[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (nums[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+        ),
+        "srgb-linear" => (
+            (linear_to_gamma_srgb(nums[0]).clamp(0.0, 1.0) * 255.0).round() as u8,
+            (linear_to_gamma_srgb(nums[1]).clamp(0.0, 1.0) * 255.0).round() as u8,
+            (linear_to_gamma_srgb(nums[2]).clamp(0.0, 1.0) * 255.0).round() as u8,
+        ),
+        "display-p3" => display_p3_to_srgb8(nums[0], nums[1], nums[2]),
+        _ => (
+            (nums[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (nums[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (nums[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+        ),
+    };
+    Some(CssColor::new(r, g, b, alpha))
+}
+
+/// Parse `color-mix(in <space>, c1 [<pct>]?, c2 [<pct>]?)`. Only sRGB
+/// interpolation is implemented; other color spaces fall back to sRGB
+/// linear interpolation.
+fn parse_color_mix_function(body: &[&CssToken]) -> Option<CssColor> {
+    let args = split_top_level_commas(body);
+    if args.len() < 3 {
+        return None;
+    }
+    // First arg: `in <space>`.
+    let space_arg = &args[0];
+    let mut seen_in = false;
+    let mut space = "srgb".to_string();
+    for t in space_arg {
+        match t {
+            CssToken::Ident(s) if s.eq_ignore_ascii_case("in") => seen_in = true,
+            CssToken::Ident(s) if seen_in => {
+                space = s.to_ascii_lowercase();
+                break;
+            },
+            _ => {},
+        }
+    }
+    if !seen_in {
+        return None;
+    }
+    let (c1, p1) = parse_color_mix_arg(&args[1])?;
+    let (c2, p2) = parse_color_mix_arg(&args[2])?;
+    // Normalise percentages. If neither has a percentage, 50/50.
+    // If only one is given, the other is `100 - p`. If both are given,
+    // normalise so they sum to 100 (spec says the result is scaled by
+    // the sum when it's < 100, but we ignore that for simplicity).
+    let (w1, w2) = match (p1, p2) {
+        (None, None) => (0.5, 0.5),
+        (Some(p), None) => (p / 100.0, 1.0 - p / 100.0),
+        (None, Some(p)) => (1.0 - p / 100.0, p / 100.0),
+        (Some(a), Some(b)) => {
+            let sum = a + b;
+            if sum == 0.0 {
+                (0.5, 0.5)
+            } else {
+                (a / sum, b / sum)
+            }
+        },
+    };
+    // Interpolate in linear-sRGB for correctness (applies to both
+    // `in srgb` and as a sensible fallback for `in oklch` etc.).
+    let _ = space; // recorded but not yet used for space-specific mixing
+    let (r, g, b, a) = mix_srgb_linear(c1, c2, w1, w2);
+    Some(CssColor::new(r, g, b, a))
+}
+
+/// Parse a single color argument inside `color-mix()`, which is a
+/// color possibly followed by a percentage.
+fn parse_color_mix_arg(tokens: &[&CssToken]) -> Option<(CssColor, Option<f32>)> {
+    // Find a trailing percentage, if any.
+    let mut pct: Option<f32> = None;
+    let mut color_tokens: Vec<&CssToken> = Vec::new();
+    for t in tokens {
+        if let CssToken::Percentage(p) = t {
+            pct = Some(*p);
+            continue;
+        }
+        color_tokens.push(t);
+    }
+    // Reconstitute a CssToken slice for try_parse_color. Since
+    // `try_parse_color` takes `&[CssToken]` rather than
+    // `&[&CssToken]`, we clone into a local vec.
+    let owned: Vec<CssToken> = color_tokens.into_iter().cloned().collect();
+    let color = try_parse_color(&owned)?;
+    Some((color, pct))
+}
+
+/// Parse `light-dark(light-color, dark-color)`. We always resolve to
+/// the light-mode color since we don't yet track a color-scheme
+/// context at parse time.
+fn parse_light_dark_function(body: &[&CssToken]) -> Option<CssColor> {
+    let args = split_top_level_commas(body);
+    let first = args.first()?;
+    let owned: Vec<CssToken> = first.iter().copied().cloned().collect();
+    try_parse_color(&owned)
+}
+
+// -------------------------------------------------------------------
+// Color-space conversions
+// -------------------------------------------------------------------
+
+/// Convert a hue expressed in the given unit to degrees in [0, 360).
+fn hue_to_degrees(n: f32, unit: &str) -> f32 {
+    let d = match unit.to_ascii_lowercase().as_str() {
+        "deg" => n,
+        "rad" => n.to_degrees(),
+        "grad" => n * 0.9,
+        "turn" => n * 360.0,
+        _ => n,
+    };
+    let m = d % 360.0;
+    if m < 0.0 { m + 360.0 } else { m }
+}
+
+/// Convert HSL (h in degrees, s/l in percent 0..100) to sRGB bytes.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let h = ((h % 360.0) + 360.0) % 360.0 / 360.0;
+    let s = (s / 100.0).clamp(0.0, 1.0);
+    let l = (l / 100.0).clamp(0.0, 1.0);
+
+    fn hue_to_channel(p: f32, q: f32, mut t: f32) -> f32 {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            return p + (q - p) * 6.0 * t;
+        }
+        if t < 1.0 / 2.0 {
+            return q;
+        }
+        if t < 2.0 / 3.0 {
+            return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+        }
+        p
+    }
+
+    let (r, g, b) = if s == 0.0 {
+        (l, l, l)
+    } else {
+        let q = if l < 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
+        let p = 2.0 * l - q;
+        (
+            hue_to_channel(p, q, h + 1.0 / 3.0),
+            hue_to_channel(p, q, h),
+            hue_to_channel(p, q, h - 1.0 / 3.0),
+        )
+    };
+    (
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// Convert OKLCH (L in 0..1, C >= 0, H in degrees) to gamma-encoded
+/// sRGB bytes. Out-of-gamut results are clamped per-channel.
+fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
+    let h = h_deg.to_radians();
+    let a = c * h.cos();
+    let b = c * h.sin();
+    oklab_to_srgb(l, a, b)
+}
+
+/// Convert OKLab (L in 0..1, a,b around 0) to gamma-encoded sRGB bytes.
+/// See <https://bottosson.github.io/posts/oklab/>.
+fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    // OKLab -> LMS'. Coefficients are truncated to f32 precision
+    // (see <https://bottosson.github.io/posts/oklab/> for the full
+    // double-precision values).
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    // LMS' -> LMS (cube).
+    let lms_l = l_ * l_ * l_;
+    let lms_m = m_ * m_ * m_;
+    let lms_s = s_ * s_ * s_;
+    // LMS -> linear sRGB.
+    let r_lin = 4.076_742 * lms_l - 3.307_711_6 * lms_m + 0.230_969_94 * lms_s;
+    let g_lin = -1.268_438 * lms_l + 2.609_757_4 * lms_m - 0.341_319_38 * lms_s;
+    let b_lin = -0.004_196_086_5 * lms_l - 0.703_418_6 * lms_m + 1.707_614_7 * lms_s;
+    (
+        (linear_to_gamma_srgb(r_lin).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(g_lin).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(b_lin).clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// Convert linear-light sRGB in [0, 1] to gamma-encoded sRGB in [0, 1].
+fn linear_to_gamma_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.abs().powf(1.0 / 2.4) * c.signum() - 0.055 * c.signum()
+    }
+}
+
+/// Convert gamma-encoded sRGB in [0, 1] to linear-light sRGB.
+fn gamma_to_linear_srgb(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Convert `color(display-p3 r g b)` to sRGB bytes. Values are treated
+/// as linear Display-P3 first, converted to linear sRGB via a 3x3
+/// matrix, then gamma-encoded and clamped.
+fn display_p3_to_srgb8(r: f32, g: f32, b: f32) -> (u8, u8, u8) {
+    // Display-P3 → linear sRGB matrix (D65).
+    let sr = 1.2249401 * r - 0.2249404 * g + 0.0000000 * b;
+    let sg = -0.0420569 * r + 1.0420571 * g + 0.0000000 * b;
+    let sb = -0.0196376 * r - 0.0786361 * g + 1.0982737 * b;
+    (
+        (linear_to_gamma_srgb(sr).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(sg).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(sb).clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// Interpolate two CssColors in linear sRGB with the given weights,
+/// then gamma-encode back.
+fn mix_srgb_linear(c1: CssColor, c2: CssColor, w1: f32, w2: f32) -> (u8, u8, u8, u8) {
+    let lin = |v: u8| gamma_to_linear_srgb(v as f32 / 255.0);
+    let r = lin(c1.r) * w1 + lin(c2.r) * w2;
+    let g = lin(c1.g) * w1 + lin(c2.g) * w2;
+    let b = lin(c1.b) * w1 + lin(c2.b) * w2;
+    let a = (c1.a as f32 / 255.0) * w1 + (c2.a as f32 / 255.0) * w2;
+    (
+        (linear_to_gamma_srgb(r).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(g).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (linear_to_gamma_srgb(b).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
 }
 
 pub(crate) fn parse_hex_color(hex: &str) -> Option<CssColor> {
@@ -721,11 +1213,120 @@ mod tests {
     #[test]
     fn try_parse_color_unknown_function() {
         let tokens = [
-            CssToken::Function("hsl".into()),
+            CssToken::Function("cmyk".into()),
             CssToken::Number(0.0),
             CssToken::CloseParen,
         ];
         assert!(try_parse_color(&tokens).is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // Color functions (hsl/oklch/oklab/color/color-mix/light-dark)
+    // ---------------------------------------------------------------
+
+    /// Lex a CSS value string to a token slice suitable for
+    /// `try_parse_color`. Keeps whitespace out to match how the
+    /// parser feeds us arguments.
+    fn lex(css: &str) -> Vec<CssToken> {
+        super::super::tokenizer::CssTokenizer::new(css).tokenize()
+    }
+
+    #[test]
+    fn hsl_basic_red() {
+        let tokens = lex("hsl(0, 100%, 50%)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c, CssColor::new(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn hsl_modern_syntax_green() {
+        let tokens = lex("hsl(120 100% 50%)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c, CssColor::new(0, 255, 0, 255));
+    }
+
+    #[test]
+    fn hsla_with_slash_alpha() {
+        let tokens = lex("hsl(240 100% 50% / 50%)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c, CssColor::new(0, 0, 255, 128));
+    }
+
+    #[test]
+    fn oklch_red_approx() {
+        // `oklch(62.8% 0.258 29.23)` is approximately CSS `red`.
+        let tokens = lex("oklch(62.8% 0.258 29.23)");
+        let c = try_parse_color(&tokens).expect("oklch red parses");
+        // Allow a small tolerance — the conversion and rounding can
+        // drift by a few least-significant bits.
+        assert!(
+            (c.r as i16 - 255).abs() <= 2,
+            "red channel should be near 255, got {}",
+            c.r
+        );
+        assert!(c.g <= 10, "green channel should be near 0, got {}", c.g);
+        assert!(c.b <= 10, "blue channel should be near 0, got {}", c.b);
+    }
+
+    #[test]
+    fn oklch_preserves_alpha() {
+        let tokens = lex("oklch(0.5 0.1 180 / 0.5)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn oklab_parses() {
+        let tokens = lex("oklab(0.5 0.1 -0.1)");
+        assert!(try_parse_color(&tokens).is_some());
+    }
+
+    #[test]
+    fn color_srgb_function() {
+        let tokens = lex("color(srgb 1 0 0)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c, CssColor::new(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn color_display_p3_parses() {
+        let tokens = lex("color(display-p3 1 0 0)");
+        let c = try_parse_color(&tokens).expect("display-p3 parses");
+        // Display-P3 red is out-of-gamut in sRGB; clamping to the
+        // boundary gives pure red.
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn color_mix_srgb_50_50() {
+        // Mix red and blue 50/50 in sRGB; linear-space interpolation
+        // gives roughly (128, 0, 128) after gamma encoding.
+        let tokens = lex("color-mix(in srgb, red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        // Linear midpoint of gamma-red and gamma-blue is approximately
+        // 188 (not 128 which would be a naive gamma-space midpoint).
+        assert!((c.r as i16 - 188).abs() <= 5, "red ~188, got {}", c.r);
+        assert_eq!(c.g, 0);
+        assert!((c.b as i16 - 188).abs() <= 5, "blue ~188, got {}", c.b);
+    }
+
+    #[test]
+    fn color_mix_srgb_weighted() {
+        // Red 20% + blue 80% → mostly blue.
+        let tokens = lex("color-mix(in srgb, red 20%, blue 80%)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert!(c.b > c.r, "blue should dominate, got r={} b={}", c.r, c.b);
+    }
+
+    #[test]
+    fn light_dark_picks_light() {
+        // We don't yet track a color-scheme context, so light-dark()
+        // resolves to its first argument.
+        let tokens = lex("light-dark(red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert_eq!(c, CssColor::new(255, 0, 0, 255));
     }
 
     // ---------------------------------------------------------------

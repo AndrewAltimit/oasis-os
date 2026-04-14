@@ -1463,6 +1463,38 @@ fn layer_does_not_override_specificity_within_layer() {
     assert_eq!(style.color, Color::rgb(0, 0, 255));
 }
 
+// -- text-wrap parsing ---------------------------------------------
+
+#[test]
+fn text_wrap_balance_parses_and_applies() {
+    use super::super::values::TextWrap;
+    let sheet = Stylesheet::parse("h1 { text-wrap: balance; }");
+    let doc = make_doc(vec![(TagName::H1, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("h1 has style");
+    assert_eq!(style.text_wrap, TextWrap::Balance);
+}
+
+#[test]
+fn text_wrap_pretty_parses_and_applies() {
+    use super::super::values::TextWrap;
+    let sheet = Stylesheet::parse("p { text-wrap: pretty; }");
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.text_wrap, TextWrap::Pretty);
+}
+
+#[test]
+fn text_wrap_defaults_to_wrap() {
+    use super::super::values::TextWrap;
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let sheet = Stylesheet::parse("");
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.text_wrap, TextWrap::Wrap);
+}
+
 #[test]
 fn has_descendant_matches_article_with_img() {
     let doc = make_has_doc();
