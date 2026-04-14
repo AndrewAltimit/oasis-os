@@ -635,6 +635,7 @@ fn matches_simple(
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
             .any(|compound| matches_compound(doc, node_id, compound, ctx)),
+        SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx),
         SimpleSelector::Attribute { name, op, value } => {
             match_attribute(elem, name, op, value.as_deref())
         },
@@ -763,6 +764,72 @@ fn parent_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
             return Some(pid);
         }
         current = doc.nodes[pid].parent;
+    }
+    None
+}
+
+/// Match the `:has(relative-selector-list)` relational pseudo-class.
+///
+/// For each relative selector, collect candidate elements based on the
+/// leading combinator (descendants for descendant, direct children for
+/// `>`, the next element sibling for `+`, following element siblings
+/// for `~`) and succeed if any candidate matches the inner selector.
+///
+/// Note: inner selectors containing their own combinators
+/// (e.g. `:has(.a .b)`) are not currently scope-bounded to the subject
+/// element's subtree — an ancestor match may drift above the subject.
+/// Real-world `:has()` usage overwhelmingly uses single-compound inner
+/// selectors, so this is an acceptable imprecision for now.
+fn matches_has(
+    doc: &Document,
+    node_id: NodeId,
+    list: &[(Combinator, super::super::parser::Selector)],
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    list.iter().any(|(combinator, sel)| {
+        let matched = |cand: NodeId| matches_selector(doc, cand, sel, ctx);
+        match combinator {
+            Combinator::Descendant => {
+                let mut stack: Vec<NodeId> = doc.nodes[node_id].children.clone();
+                while let Some(nid) = stack.pop() {
+                    if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                        return true;
+                    }
+                    stack.extend(doc.nodes[nid].children.iter().copied());
+                }
+                false
+            },
+            Combinator::Child => doc.nodes[node_id]
+                .children
+                .iter()
+                .any(|&c| matches!(doc.nodes[c].kind, NodeKind::Element(_)) && matched(c)),
+            Combinator::AdjacentSibling => next_sibling_element(doc, node_id).is_some_and(matched),
+            Combinator::GeneralSibling => {
+                let mut sib = next_sibling_element(doc, node_id);
+                while let Some(sid) = sib {
+                    if matched(sid) {
+                        return true;
+                    }
+                    sib = next_sibling_element(doc, sid);
+                }
+                false
+            },
+        }
+    })
+}
+
+/// Find the next sibling that is an element node.
+fn next_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
+    let parent = doc.nodes[node_id].parent?;
+    let siblings = &doc.nodes[parent].children;
+    let mut seen = false;
+    for &sid in siblings {
+        if seen && matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+            return Some(sid);
+        }
+        if sid == node_id {
+            seen = true;
+        }
     }
     None
 }

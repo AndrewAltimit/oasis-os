@@ -884,6 +884,71 @@ fn linear_gradient_default_direction() {
     assert_eq!(g.stops.len(), 2);
 }
 
+// -- :has() relational pseudo-class ------------------------------
+
+#[test]
+fn has_descendant_selector() {
+    let sels = first_selectors("article:has(img) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], SimpleSelector::Type("article".into()));
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant, got {:?}", parts[1]);
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(
+        inner[0].1.parts[0].0.parts,
+        vec![SimpleSelector::Type("img".into())]
+    );
+}
+
+#[test]
+fn has_direct_child_selector() {
+    let sels = first_selectors("ul:has(> li.active) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Child);
+}
+
+#[test]
+fn has_next_sibling_selector() {
+    let sels = first_selectors("h1:has(+ p) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner[0].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_selector_list() {
+    // Comma-separated relative selectors are ORed.
+    let sels = first_selectors("div:has(.a, > .b, + .c) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 3);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(inner[1].0, Combinator::Child);
+    assert_eq!(inner[2].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_specificity_takes_max_of_inner() {
+    // `:has(.a)` should contribute one class-level specificity unit.
+    let sels = first_selectors("div:has(.a) { color: red; }");
+    let spec = sels.selectors[0].specificity();
+    // 1 type (div) + 1 class (.a) = (0, 0, 1, 1)
+    assert_eq!(spec.ids, 0);
+    assert_eq!(spec.classes, 1);
+    assert_eq!(spec.types, 1);
+}
+
 mod prop {
     use super::*;
     use crate::css::helpers::named_color;
@@ -1114,6 +1179,7 @@ mod nesting_tests {
                     SimpleSelector::Not(_) => out.push_str(":not(…)"),
                     SimpleSelector::Is(_) => out.push_str(":is(…)"),
                     SimpleSelector::Where(_) => out.push_str(":where(…)"),
+                    SimpleSelector::Has(_) => out.push_str(":has(…)"),
                     SimpleSelector::Attribute { name, .. } => {
                         out.push('[');
                         out.push_str(name);

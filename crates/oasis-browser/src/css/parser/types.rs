@@ -49,6 +49,10 @@ pub enum SimpleSelector {
     Is(Vec<CompoundSelector>),
     /// `:where(selector-list)` -- like `:is()` but zero specificity.
     Where(Vec<CompoundSelector>),
+    /// `:has(relative-selector-list)` -- the relational pseudo-class.
+    /// Each entry is a leading combinator (default [`Combinator::Descendant`])
+    /// and a full selector evaluated relative to the subject element.
+    Has(Vec<(Combinator, Selector)>),
     /// Nesting selector `&` — a parser-time marker that refers to the
     /// enclosing rule's selector. Desugared into concrete selectors at
     /// parse time; should not appear in the final AST.
@@ -153,6 +157,24 @@ impl Selector {
                         classes = classes.saturating_add(max_spec.classes);
                         types = types.saturating_add(max_spec.types);
                     },
+                    SimpleSelector::Has(inner_list) => {
+                        // :has() takes the max specificity across the
+                        // relative selectors it contains, the same rule
+                        // as :is().
+                        let max_spec = inner_list
+                            .iter()
+                            .map(|(_, sel)| sel.specificity())
+                            .max()
+                            .unwrap_or(Specificity {
+                                inline: 0,
+                                ids: 0,
+                                classes: 0,
+                                types: 0,
+                            });
+                        ids = ids.saturating_add(max_spec.ids);
+                        classes = classes.saturating_add(max_spec.classes);
+                        types = types.saturating_add(max_spec.types);
+                    },
                     SimpleSelector::Where(_) => {
                         // :where() contributes zero specificity.
                     },
@@ -213,6 +235,21 @@ fn compound_specificity(compound: &CompoundSelector) -> Specificity {
                             classes: 0,
                             types: 0,
                         });
+                ids = ids.saturating_add(max_spec.ids);
+                classes = classes.saturating_add(max_spec.classes);
+                types = types.saturating_add(max_spec.types);
+            },
+            SimpleSelector::Has(inner_list) => {
+                let max_spec = inner_list
+                    .iter()
+                    .map(|(_, sel)| sel.specificity())
+                    .max()
+                    .unwrap_or(Specificity {
+                        inline: 0,
+                        ids: 0,
+                        classes: 0,
+                        types: 0,
+                    });
                 ids = ids.saturating_add(max_spec.ids);
                 classes = classes.saturating_add(max_spec.classes);
                 types = types.saturating_add(max_spec.types);

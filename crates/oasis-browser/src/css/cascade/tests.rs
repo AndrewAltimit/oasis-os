@@ -1237,6 +1237,169 @@ fn test_body_has_default_margin() {
     );
 }
 
+// -- :has() relational pseudo-class ---------------------------------
+
+/// Build a document with an <article> body child that contains an <img>
+/// descendant (nested inside a <div>) plus a trailing <p> sibling.
+///
+/// Layout:
+///   0 Document
+///   1 <html>
+///   2 <body>
+///   3   <article>
+///   4     <div>
+///   5       <img>
+///   6   <p>
+///   7   <section>
+///   8     <span>  (plain span, no img)
+fn make_has_doc() -> Document {
+    let mut nodes = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![],
+            }),
+            parent: Some(1),
+            children: vec![3, 6, 7],
+        },
+        // 3: <article> with <div><img></div>
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Article,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Div,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![5],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Img,
+                attributes: vec![],
+            }),
+            parent: Some(4),
+            children: vec![],
+        },
+        // 6: <p>, sibling of <article>
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![],
+        },
+        // 7: <section> with a <span>, no <img> anywhere inside
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Section,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![8],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Span,
+                attributes: vec![],
+            }),
+            parent: Some(7),
+            children: vec![],
+        },
+    ];
+    // Silence unused mut warning if no further pushes.
+    let _ = &mut nodes;
+    Document::from_nodes(nodes, 0)
+}
+
+/// Parse a CSS selector from source like `"article:has(img)"`.
+fn parse_selector(src: &str) -> Selector {
+    let full = format!("{src} {{ color: red; }}");
+    let sheet = Stylesheet::parse(&full);
+    sheet.rules[0].selectors.selectors[0].clone()
+}
+
+#[test]
+fn has_descendant_matches_article_with_img() {
+    let doc = make_has_doc();
+    let sel = parse_selector("article:has(img)");
+    // <article> (node 3) has a nested <img> → match.
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // <section> (node 7) has no <img> → no match.
+    let sel2 = parse_selector("section:has(img)");
+    assert!(!matching::matches_selector(&doc, 7, &sel2, &ctx()));
+}
+
+#[test]
+fn has_direct_child_distinguishes_depth() {
+    let doc = make_has_doc();
+    // :has(> img) requires an *immediate* <img> child.
+    let sel = parse_selector("article:has(> img)");
+    // <article>'s direct children are just <div>, not <img>.
+    assert!(!matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // But <div> (node 4) does have <img> as a direct child.
+    let sel2 = parse_selector("div:has(> img)");
+    assert!(matching::matches_selector(&doc, 4, &sel2, &ctx()));
+}
+
+#[test]
+fn has_next_sibling_matches() {
+    let doc = make_has_doc();
+    // <article>'s next element sibling is <p>.
+    let sel = parse_selector("article:has(+ p)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // No + img sibling.
+    let sel2 = parse_selector("article:has(+ img)");
+    assert!(!matching::matches_selector(&doc, 3, &sel2, &ctx()));
+}
+
+#[test]
+fn has_general_sibling_matches() {
+    let doc = make_has_doc();
+    // <article> ~ <section> — section follows later.
+    let sel = parse_selector("article:has(~ section)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+}
+
+#[test]
+fn has_selector_list_any_matches() {
+    let doc = make_has_doc();
+    // Comma list: match if any relative selector matches.
+    // <article> has no direct <img> child, but does have a nested <img>.
+    let sel = parse_selector("article:has(> img, img)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+}
+
+#[test]
+fn has_non_element_node_is_ignored() {
+    // :has() against a non-element should be false (matches_simple
+    // already guards on ElementData).
+    let doc = make_has_doc();
+    let sel = parse_selector("*:has(img)");
+    // Node 0 is the Document, not an element.
+    assert!(!matching::matches_selector(&doc, 0, &sel, &ctx()));
+}
+
 mod prop {
     use proptest::prelude::*;
 
