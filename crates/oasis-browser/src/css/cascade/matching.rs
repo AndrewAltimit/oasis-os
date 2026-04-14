@@ -949,12 +949,14 @@ fn matches_has(
                     if matched(sib) {
                         return true;
                     }
-                    let mut stack: Vec<NodeId> = doc.nodes[sib].children.clone();
-                    while let Some(nid) = stack.pop() {
-                        if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
-                            return true;
+                    if sel.parts.len() > 1 {
+                        let mut stack: Vec<NodeId> = doc.nodes[sib].children.clone();
+                        while let Some(nid) = stack.pop() {
+                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                                return true;
+                            }
+                            stack.extend(doc.nodes[nid].children.iter().copied());
                         }
-                        stack.extend(doc.nodes[nid].children.iter().copied());
                     }
                 }
                 false
@@ -965,12 +967,14 @@ fn matches_has(
                     if matched(sid) {
                         return true;
                     }
-                    let mut stack: Vec<NodeId> = doc.nodes[sid].children.clone();
-                    while let Some(nid) = stack.pop() {
-                        if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
-                            return true;
+                    if sel.parts.len() > 1 {
+                        let mut stack: Vec<NodeId> = doc.nodes[sid].children.clone();
+                        while let Some(nid) = stack.pop() {
+                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                                return true;
+                            }
+                            stack.extend(doc.nodes[nid].children.iter().copied());
                         }
-                        stack.extend(doc.nodes[nid].children.iter().copied());
                     }
                     sib = next_sibling_element(doc, sid);
                 }

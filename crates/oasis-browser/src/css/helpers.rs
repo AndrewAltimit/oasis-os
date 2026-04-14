@@ -266,6 +266,8 @@ fn parse_oklch_function(body: &[&CssToken]) -> Option<CssColor> {
                 if idx == 2 {
                     nums[idx] = hue_to_degrees(*n, unit);
                     idx += 1;
+                } else {
+                    return None;
                 }
             },
             _ => {},
@@ -1285,6 +1287,12 @@ mod tests {
         let tokens = lex("oklch(0.5 0.1 180 / 0.5)");
         let c = try_parse_color(&tokens).unwrap();
         assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn oklch_rejects_dimension_at_wrong_position() {
+        assert!(try_parse_color(&lex("oklch(10deg 50% 50%)")).is_none());
+        assert!(try_parse_color(&lex("oklch(0.5 10deg 180)")).is_none());
     }
 
     #[test]
