@@ -928,8 +928,7 @@ fn matches_has(
     list.iter().any(|(combinator, sel)| {
         let scope = Some(node_id);
         let sc = Some(combinator);
-        let matched =
-            |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc);
+        let matched = |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc);
         match combinator {
             Combinator::Descendant | Combinator::Child => {
                 // DFS the subject's subtree. For Descendant the scope
