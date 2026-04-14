@@ -743,30 +743,83 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
             return;
         }
     };
-    log_msg(&format!("[js] eval ({} bytes)", script_str.len()));
+    log_msg(&format!("[js] eval ({} bytes) source={:?}", script_str.len(), script_str));
 
-    let engine = match oasis_js::JsEngine::new(0) {
-        Ok(e) => e,
-        Err(err) => {
-            log_msg(&format!("[js] engine init failed: {}", err.message));
-            let reply = format!("js: error: engine init: {}\n", err.message);
-            send_response(cfd, reply.as_bytes());
+    // Construct QuickJS without going through `oasis_js::JsEngine` so
+    // we can log between every rquickjs step. This lets us pinpoint
+    // the exact call that hard-crashes the console on real hardware
+    // — the higher-level wrapper would hide where in the init chain
+    // we died.
+    use oasis_js::rquickjs;
+
+    log_msg("[js] rquickjs::Runtime::new() begin");
+    let runtime = match rquickjs::Runtime::new() {
+        Ok(r) => {
+            log_msg("[js] rquickjs::Runtime::new() ok");
+            r
+        },
+        Err(e) => {
+            log_msg(&format!("[js] Runtime::new() err: {e}"));
+            send_response(cfd, b"js: error: runtime init\n");
             return;
-        }
+        },
     };
 
-    match engine.eval(script_str) {
-        Ok(value) => {
-            log_msg(&format!("[js] ok -> {value}"));
-            let reply = format!("js: {value}\n");
-            send_response(cfd, reply.as_bytes());
-        }
-        Err(err) => {
-            log_msg(&format!("[js] error: {}", err.message));
-            let reply = format!("js: error: {}\n", err.message);
-            send_response(cfd, reply.as_bytes());
-        }
-    }
+    log_msg("[js] rquickjs::Context::base() begin");
+    let context = match rquickjs::Context::base(&runtime) {
+        Ok(c) => {
+            log_msg("[js] rquickjs::Context::base() ok");
+            c
+        },
+        Err(e) => {
+            log_msg(&format!("[js] Context::base() err: {e}"));
+            send_response(cfd, b"js: error: context init\n");
+            return;
+        },
+    };
+
+    log_msg("[js] context.with(eval) begin");
+    context.with(|ctx| {
+        log_msg("[js] inside context.with");
+
+        log_msg("[js] probe 1: grabbing raw ctx ptr");
+        let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
+        log_msg(&format!("[js] probe 1 ctx ptr = {:?}", raw_ctx));
+
+        // Probe 2: get the global object. No parsing, no allocation
+        // beyond a refcount bump. If this crashes, the JSContext
+        // itself is corrupt. If it survives, ctx is fine and the
+        // crash is parser/eval-specific.
+        log_msg("[js] probe 2: JS_GetGlobalObject");
+        let gval = unsafe {
+            oasis_js::rquickjs::qjs::JS_GetGlobalObject(raw_ctx)
+        };
+        log_msg("[js] probe 2: JS_GetGlobalObject returned");
+        unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, gval) };
+        log_msg("[js] probe 2: JS_FreeValue done");
+
+        // Probe 3: raw JS_Eval of "0" — shortest legal program.
+        // Isolates whether it's the parser, the codegen, or the
+        // interpreter that faults.
+        log_msg("[js] probe 3: raw JS_Eval \"0\"");
+        let src = b"0\0".as_ptr() as *const core::ffi::c_char;
+        let fname = b"<probe>\0".as_ptr() as *const core::ffi::c_char;
+        let val = unsafe {
+            oasis_js::rquickjs::qjs::JS_Eval(
+                raw_ctx,
+                src,
+                1,
+                fname,
+                oasis_js::rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32,
+            )
+        };
+        log_msg("[js] probe 3: JS_Eval returned");
+        unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
+        log_msg("[js] probe 3: JS_FreeValue done");
+    });
+    log_msg("[js] context.with returned");
+
+    send_response(cfd, b"js: ok (see log for details)\n");
 }
 
 fn send_response(cfd: i32, data: &[u8]) {

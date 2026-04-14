@@ -22,11 +22,20 @@
 //! entry points:
 //!
 //! - **Math functions** wrap the `libm` crate, which is pure Rust.
-//! - **Allocation** (`calloc`, `realloc`) goes through Rust's global
-//!   allocator by prefixing every block with its size, the same
-//!   trick `rust_alloc_shim` uses on bare-metal targets. `malloc`
-//!   and `free` are already exported by `rust-psp`, so we share its
-//!   size header layout.
+//! - **Allocation** (`calloc`, `realloc`): `malloc` and `free` are
+//!   owned by rust-psp's `libpsp` rlib (see
+//!   `psp/src/panic.rs::libunwind_shims`) and use a
+//!   `size_of::<usize>()`-byte header that stores `total =
+//!   user_size + 4`. We do *not* shadow those symbols — shadowing
+//!   broke the early-boot path on real hardware. Instead our
+//!   `calloc` forwards to libpsp's `malloc` and zeroes the block,
+//!   and `realloc` reads the libpsp header back out of the
+//!   incoming pointer to recover `old_size`, then `malloc`s a new
+//!   block, copies, and `free`s the old. That keeps every C-side
+//!   alloc in QuickJS-NG (and any stray newlib call from the
+//!   rquickjs C sources) consistent with libpsp's layout, so
+//!   cross-routine patterns like `dbuf_default_realloc`'s
+//!   `free(ptr)` on a `realloc`'d buffer are always safe.
 //! - **String / memory** routines (`strchr`, `strcmp`, `memchr`, …)
 //!   are straightforward byte loops — most live on the order of
 //!   5-10 lines each.
@@ -61,9 +70,9 @@
 //!   `js_thread_*` never get emitted. PSP is single-threaded for
 //!   the JS engine; the `Atomics` global is gone and that's fine.
 //! - **malloc/free/memcpy/memset/memmove/memcmp/strlen/fflush/abort**
-//!   — already exported by `rust-psp` (`libpsp-*.rlib`). Double
-//!   definitions would break the link even with
-//!   `--allow-multiple-definition`, so we skip them here.
+//!   — all exported by rust-psp's `libpsp` rlib and used directly.
+//!   See the allocation bullet above for how `calloc`/`realloc`
+//!   cooperate with libpsp's `malloc`/`free` layout.
 //! - **compiler_builtins intrinsics** (`__divdi3`, `__udivdi3`,
 //!   `__moddi3`, `__clzdi2`, `__fixdfdi`, …). Rust's
 //!   `compiler_builtins` rlib provides them.
@@ -316,49 +325,35 @@ pub unsafe extern "C" fn strtod(nptr: *const c_char, endptr: *mut *mut c_char) -
 }
 
 // ---------------------------------------------------------------------------
-// Allocation — calloc and realloc on top of Rust's global allocator.
+// Allocation — `calloc` and `realloc` on top of libpsp's
+// `malloc` / `free`.
 //
-// rust-psp's libpsp already exports `malloc`/`free` via a shim that
-// prefixes every block with the allocation size. We match that layout
-// so `realloc` and `calloc` interoperate cleanly: the first
-// `size_of::<usize>()` bytes before the returned pointer hold the
-// user-visible length.
+// libpsp stores a `size_of::<usize>()`-byte header immediately
+// before every returned pointer. The header holds `total =
+// user_size + size_of::<usize>()`. We decode that header in
+// `realloc` so we can determine `old_size` without maintaining a
+// side table, which keeps the shim fully stateless and means
+// `free(p)` after our `realloc(p, ...)` stays consistent with
+// every other allocation path in the crate — including rust-psp's
+// internal usage.
 // ---------------------------------------------------------------------------
 
-const ALLOC_ALIGN: usize = 16;
-const ALLOC_HEADER: usize = mem::size_of::<usize>();
-
-unsafe fn rust_alloc_block(n: usize) -> *mut u8 {
-    use std::alloc::{Layout, alloc};
-    let layout = match Layout::from_size_align(n + ALLOC_HEADER, ALLOC_ALIGN) {
-        Ok(l) => l,
-        Err(_) => return ptr::null_mut(),
-    };
-    unsafe {
-        let raw = alloc(layout);
-        if raw.is_null() {
-            return ptr::null_mut();
-        }
-        (raw as *mut usize).write(n);
-        raw.add(ALLOC_HEADER)
-    }
+unsafe extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(p: *mut c_void);
 }
 
-unsafe fn rust_dealloc_block(p: *mut u8) {
-    use std::alloc::{Layout, dealloc};
-    if p.is_null() {
-        return;
-    }
-    unsafe {
-        let raw = p.sub(ALLOC_HEADER);
-        let n = (raw as *const usize).read();
-        let layout = Layout::from_size_align_unchecked(n + ALLOC_HEADER, ALLOC_ALIGN);
-        dealloc(raw, layout);
-    }
-}
-
-unsafe fn rust_block_size(p: *const u8) -> usize {
-    unsafe { (p.sub(ALLOC_HEADER) as *const usize).read() }
+/// Peek libpsp's per-block header to read `total` out of a
+/// pointer returned by its `malloc`. The user-visible size is
+/// `total - size_of::<usize>()`.
+///
+/// # Safety
+/// `p` must be a non-null pointer returned by libpsp's `malloc`
+/// (directly or transitively via our `calloc`/`realloc`).
+unsafe fn libpsp_user_size(p: *const c_void) -> usize {
+    let header = unsafe { (p as *const u8).sub(mem::size_of::<usize>()) as *const usize };
+    let total = unsafe { header.read() };
+    total.saturating_sub(mem::size_of::<usize>())
 }
 
 #[unsafe(no_mangle)]
@@ -371,743 +366,117 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
         return ptr::null_mut();
     }
     unsafe {
-        let p = rust_alloc_block(total);
+        let p = malloc(total);
         if p.is_null() {
             return ptr::null_mut();
         }
-        ptr::write_bytes(p, 0, total);
-        p as *mut c_void
+        ptr::write_bytes(p as *mut u8, 0, total);
+        p
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn realloc(p: *mut c_void, new_size: usize) -> *mut c_void {
     if p.is_null() {
-        return unsafe { rust_alloc_block(new_size) as *mut c_void };
+        return unsafe { malloc(new_size) };
     }
     if new_size == 0 {
-        unsafe { rust_dealloc_block(p as *mut u8) };
+        unsafe { free(p) };
         return ptr::null_mut();
     }
     unsafe {
-        let old_size = rust_block_size(p as *const u8);
-        let new_p = rust_alloc_block(new_size);
+        let old_size = libpsp_user_size(p);
+        let new_p = malloc(new_size);
         if new_p.is_null() {
             return ptr::null_mut();
         }
         let copy = core::cmp::min(old_size, new_size);
-        ptr::copy_nonoverlapping(p as *const u8, new_p, copy);
-        rust_dealloc_block(p as *mut u8);
-        new_p as *mut c_void
+        ptr::copy_nonoverlapping(p as *const u8, new_p as *mut u8, copy);
+        free(p);
+        new_p
     }
 }
 
 // ---------------------------------------------------------------------------
-// stdio — minimal printf/snprintf family.
+// stdio — minimal no-op stubs.
 //
-// Only the conversions QuickJS-NG actually uses are implemented. The
-// rendering logic is shared between snprintf/vsnprintf (caller-owned
-// buffer) and printf/fprintf/puts/etc. (discarded or logged). See
-// `FormatSink` for the backing-store abstraction.
+// QuickJS-NG references `printf` / `snprintf` / `vsnprintf` / `fprintf`
+// / `vfprintf` / `puts` / `putchar` / `fputc` / `fwrite` from a few
+// places: atom-to-string conversion (`%u` / `%x`), error message
+// construction, and `JSON.stringify` escape sequences. A
+// Rust-implemented variadic printf would need to walk a C va_list in
+// the exact MIPS o32 layout QuickJS passes, and Rust's `c_variadic`
+// feature doesn't produce a compatible dispatch on that target — an
+// earlier attempt corrupted the stack on the very first `JS_Eval`
+// call on real hardware.
+//
+// The pragmatic fix: provide no-op stubs that accept the variadic
+// signature but never touch `args`. Rust's `args: ...` parameter is
+// effectively a token for "the C ABI places the rest of the
+// arguments somewhere" — as long as we don't try to read it, the
+// call is safe regardless of platform conventions. Output buffers
+// get a single NUL so `strlen` on them returns 0, and return codes
+// claim full success so QuickJS's length-checking loops terminate
+// the first time through.
+//
+// The practical consequence: error messages from QuickJS appear as
+// empty strings, and debug output (`bc_read_trace` etc.) silently
+// drops. For a non-pathological `JS_Eval`, neither path is
+// reachable.
 // ---------------------------------------------------------------------------
-
-/// Destination for a formatted-output operation.
-///
-/// `Buffer` is used by `snprintf` / `vsnprintf` (caller supplies the
-/// backing store). `Discard` is used by `printf` / `fprintf` /
-/// `puts` / `putchar` / `fputc` / `fwrite` — QuickJS only emits text
-/// through those for debug/error logging and we don't have a
-/// meaningful stdout on the PSP EBOOT anyway, so we count bytes but
-/// don't store anything. `Counting` is used to ask how many bytes a
-/// render *would* produce (pre-allocation pattern).
-enum FormatSink {
-    Buffer { buf: *mut u8, cap: usize, pos: usize, written: usize },
-    Discard { written: usize },
-}
-
-impl FormatSink {
-    fn push_byte(&mut self, b: u8) {
-        match self {
-            Self::Buffer { buf, cap, pos, written } => {
-                if !buf.is_null() && *pos + 1 < *cap {
-                    unsafe { buf.add(*pos).write(b) };
-                    *pos += 1;
-                }
-                *written += 1;
-            },
-            Self::Discard { written } => {
-                *written += 1;
-            },
-        }
-    }
-
-    fn push_bytes(&mut self, src: &[u8]) {
-        for &b in src {
-            self.push_byte(b);
-        }
-    }
-
-    fn finish(self) -> usize {
-        match self {
-            Self::Buffer { buf, cap, pos, written } => {
-                if !buf.is_null() && cap > 0 {
-                    let term = pos.min(cap - 1);
-                    unsafe { buf.add(term).write(0) };
-                }
-                written
-            },
-            Self::Discard { written } => written,
-        }
-    }
-}
-
-/// Parsed conversion specifier — only the fields QuickJS-NG uses.
-#[derive(Default)]
-struct Spec {
-    left_align: bool,
-    zero_pad: bool,
-    plus_sign: bool,
-    space_sign: bool,
-    alt_form: bool,
-    width: usize,
-    precision: Option<usize>,
-    length: Length,
-    conversion: u8,
-}
-
-#[derive(Default, PartialEq, Clone, Copy)]
-enum Length {
-    #[default]
-    Int,
-    Long,
-    LongLong,
-    SizeT,
-}
-
-/// C va_list abstraction — we accept a raw pointer and walk it
-/// stride-by-stride. On o32 MIPS, varargs are promoted to at least
-/// 32-bit integers; `long long` and `double` are 8-byte and
-/// 8-aligned; pointers are 32-bit. This matches the layout QuickJS's
-/// `cc`-compiled code pushes onto the stack.
-struct VaList {
-    cursor: *const u8,
-}
-
-impl VaList {
-    unsafe fn new(p: *const c_void) -> Self {
-        Self { cursor: p as *const u8 }
-    }
-
-    unsafe fn align_to(&mut self, n: usize) {
-        let addr = self.cursor as usize;
-        let aligned = (addr + n - 1) & !(n - 1);
-        self.cursor = aligned as *const u8;
-    }
-
-    unsafe fn read_i32(&mut self) -> i32 {
-        unsafe {
-            self.align_to(4);
-            let v = (self.cursor as *const i32).read_unaligned();
-            self.cursor = self.cursor.add(4);
-            v
-        }
-    }
-
-    unsafe fn read_u32(&mut self) -> u32 {
-        unsafe { self.read_i32() as u32 }
-    }
-
-    unsafe fn read_i64(&mut self) -> i64 {
-        unsafe {
-            self.align_to(8);
-            let v = (self.cursor as *const i64).read_unaligned();
-            self.cursor = self.cursor.add(8);
-            v
-        }
-    }
-
-    unsafe fn read_u64(&mut self) -> u64 {
-        unsafe { self.read_i64() as u64 }
-    }
-
-    unsafe fn read_ptr(&mut self) -> *const c_void {
-        unsafe {
-            self.align_to(4);
-            let v = (self.cursor as *const *const c_void).read_unaligned();
-            self.cursor = self.cursor.add(4);
-            v
-        }
-    }
-
-    unsafe fn read_f64(&mut self) -> f64 {
-        unsafe {
-            self.align_to(8);
-            let v = (self.cursor as *const f64).read_unaligned();
-            self.cursor = self.cursor.add(8);
-            v
-        }
-    }
-}
-
-/// Render a format string into `sink`, consuming arguments from `va`.
-///
-/// The caller has already validated `fmt` is a NUL-terminated C string.
-unsafe fn format_into(sink: &mut FormatSink, fmt: *const c_char, mut va: VaList) -> usize {
-    let bytes = unsafe { cstr_bytes(fmt) };
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c != b'%' {
-            sink.push_byte(c);
-            i += 1;
-            continue;
-        }
-        i += 1;
-        if i >= bytes.len() {
-            sink.push_byte(b'%');
-            break;
-        }
-        if bytes[i] == b'%' {
-            sink.push_byte(b'%');
-            i += 1;
-            continue;
-        }
-        let mut spec = Spec::default();
-        // Flags
-        loop {
-            match bytes.get(i).copied() {
-                Some(b'-') => {
-                    spec.left_align = true;
-                    i += 1;
-                },
-                Some(b'+') => {
-                    spec.plus_sign = true;
-                    i += 1;
-                },
-                Some(b' ') => {
-                    spec.space_sign = true;
-                    i += 1;
-                },
-                Some(b'#') => {
-                    spec.alt_form = true;
-                    i += 1;
-                },
-                Some(b'0') => {
-                    spec.zero_pad = true;
-                    i += 1;
-                },
-                _ => break,
-            }
-        }
-        // Width
-        if bytes.get(i) == Some(&b'*') {
-            let w = unsafe { va.read_i32() };
-            if w < 0 {
-                spec.left_align = true;
-                spec.width = (-w) as usize;
-            } else {
-                spec.width = w as usize;
-            }
-            i += 1;
-        } else {
-            while let Some(&d) = bytes.get(i) {
-                if !d.is_ascii_digit() {
-                    break;
-                }
-                spec.width = spec.width * 10 + (d - b'0') as usize;
-                i += 1;
-            }
-        }
-        // Precision
-        if bytes.get(i) == Some(&b'.') {
-            i += 1;
-            let mut p = 0usize;
-            if bytes.get(i) == Some(&b'*') {
-                let v = unsafe { va.read_i32() };
-                p = v.max(0) as usize;
-                i += 1;
-            } else {
-                while let Some(&d) = bytes.get(i) {
-                    if !d.is_ascii_digit() {
-                        break;
-                    }
-                    p = p * 10 + (d - b'0') as usize;
-                    i += 1;
-                }
-            }
-            spec.precision = Some(p);
-        }
-        // Length modifier
-        match bytes.get(i).copied() {
-            Some(b'l') => {
-                i += 1;
-                if bytes.get(i) == Some(&b'l') {
-                    spec.length = Length::LongLong;
-                    i += 1;
-                } else {
-                    spec.length = Length::Long;
-                }
-            },
-            Some(b'z') => {
-                spec.length = Length::SizeT;
-                i += 1;
-            },
-            Some(b'h') => {
-                // h / hh collapse back to int after promotion.
-                i += 1;
-                if bytes.get(i) == Some(&b'h') {
-                    i += 1;
-                }
-            },
-            _ => {},
-        }
-        let conv = match bytes.get(i).copied() {
-            Some(c) => c,
-            None => break,
-        };
-        spec.conversion = conv;
-        i += 1;
-        unsafe { render_conv(sink, &spec, &mut va) };
-    }
-    sink.push_byte(0);
-    // push_byte incremented `written` for the NUL too — take it back
-    // since C callers don't count the terminator.
-    match sink {
-        FormatSink::Buffer { written, pos, .. } => {
-            *written -= 1;
-            if *pos > 0 {
-                *pos -= 1;
-            }
-            *written
-        },
-        FormatSink::Discard { written } => {
-            *written -= 1;
-            *written
-        },
-    }
-}
-
-unsafe fn render_conv(sink: &mut FormatSink, spec: &Spec, va: &mut VaList) {
-    let mut buf = [0u8; 64];
-    match spec.conversion {
-        b'c' => {
-            let ch = unsafe { va.read_i32() } as u8;
-            render_padded(sink, &[ch], spec, false);
-        },
-        b's' => {
-            let ptr = unsafe { va.read_ptr() } as *const c_char;
-            let s = if ptr.is_null() { &b"(null)"[..] } else { unsafe { cstr_bytes(ptr) } };
-            let trimmed = match spec.precision {
-                Some(p) if p < s.len() => &s[..p],
-                _ => s,
-            };
-            render_padded(sink, trimmed, spec, false);
-        },
-        b'd' | b'i' => {
-            let v = match spec.length {
-                Length::LongLong => unsafe { va.read_i64() },
-                _ => unsafe { va.read_i32() as i64 },
-            };
-            let (digits, len) = render_signed(&mut buf, v);
-            render_integer(sink, &digits[..len], v < 0, 10, spec, false);
-        },
-        b'u' => {
-            let v = match spec.length {
-                Length::LongLong => unsafe { va.read_u64() },
-                _ => unsafe { va.read_u32() as u64 },
-            };
-            let (digits, len) = render_unsigned(&mut buf, v, 10, false);
-            render_integer(sink, &digits[..len], false, 10, spec, false);
-        },
-        b'x' | b'X' => {
-            let v = match spec.length {
-                Length::LongLong => unsafe { va.read_u64() },
-                _ => unsafe { va.read_u32() as u64 },
-            };
-            let upper = spec.conversion == b'X';
-            let (digits, len) = render_unsigned(&mut buf, v, 16, upper);
-            render_integer(sink, &digits[..len], false, 16, spec, upper);
-        },
-        b'o' => {
-            let v = match spec.length {
-                Length::LongLong => unsafe { va.read_u64() },
-                _ => unsafe { va.read_u32() as u64 },
-            };
-            let (digits, len) = render_unsigned(&mut buf, v, 8, false);
-            render_integer(sink, &digits[..len], false, 8, spec, false);
-        },
-        b'p' => {
-            let ptr = unsafe { va.read_ptr() };
-            sink.push_bytes(b"0x");
-            let (digits, len) = render_unsigned(&mut buf, ptr as u64, 16, false);
-            sink.push_bytes(&digits[..len]);
-        },
-        b'f' | b'F' => {
-            let v = unsafe { va.read_f64() };
-            render_float_fixed(sink, v, spec);
-        },
-        b'e' | b'E' => {
-            let v = unsafe { va.read_f64() };
-            render_float_exp(sink, v, spec, spec.conversion == b'E');
-        },
-        b'g' | b'G' => {
-            let v = unsafe { va.read_f64() };
-            render_float_general(sink, v, spec, spec.conversion == b'G');
-        },
-        b'n' => {
-            // Not supported — consume the pointer and drop.
-            let _ = unsafe { va.read_ptr() };
-        },
-        other => {
-            sink.push_byte(b'%');
-            sink.push_byte(other);
-        },
-    }
-}
-
-fn render_signed(buf: &mut [u8], v: i64) -> (&[u8], usize) {
-    let mut n = if v < 0 { (v as i128).unsigned_abs() as u64 } else { v as u64 };
-    let mut idx = buf.len();
-    if n == 0 {
-        idx -= 1;
-        buf[idx] = b'0';
-    }
-    while n > 0 {
-        idx -= 1;
-        buf[idx] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    (&buf[idx..], buf.len() - idx)
-}
-
-fn render_unsigned(buf: &mut [u8], mut v: u64, base: u32, upper: bool) -> (&[u8], usize) {
-    let mut idx = buf.len();
-    if v == 0 {
-        idx -= 1;
-        buf[idx] = b'0';
-    }
-    while v > 0 {
-        let digit = (v % base as u64) as u8;
-        let ch = if digit < 10 {
-            b'0' + digit
-        } else if upper {
-            b'A' + (digit - 10)
-        } else {
-            b'a' + (digit - 10)
-        };
-        idx -= 1;
-        buf[idx] = ch;
-        v /= base as u64;
-    }
-    (&buf[idx..], buf.len() - idx)
-}
-
-fn render_padded(sink: &mut FormatSink, bytes: &[u8], spec: &Spec, upper: bool) {
-    let _ = upper;
-    let width = spec.width;
-    let pad = if width > bytes.len() { width - bytes.len() } else { 0 };
-    if !spec.left_align {
-        for _ in 0..pad {
-            sink.push_byte(b' ');
-        }
-    }
-    sink.push_bytes(bytes);
-    if spec.left_align {
-        for _ in 0..pad {
-            sink.push_byte(b' ');
-        }
-    }
-}
-
-fn render_integer(
-    sink: &mut FormatSink,
-    digits: &[u8],
-    negative: bool,
-    base: u32,
-    spec: &Spec,
-    upper: bool,
-) {
-    let sign_bytes: &[u8] = if negative {
-        b"-"
-    } else if spec.plus_sign {
-        b"+"
-    } else if spec.space_sign {
-        b" "
-    } else {
-        b""
-    };
-    let prefix_bytes: &[u8] = if spec.alt_form && base == 16 {
-        if upper { b"0X" } else { b"0x" }
-    } else if spec.alt_form && base == 8 && digits.first() != Some(&b'0') {
-        b"0"
-    } else {
-        b""
-    };
-    let mut core_len = digits.len();
-    // Precision padding: integer conversions use `precision` as a
-    // minimum digit count, not a trailing-fraction length.
-    let mut zero_prefix = 0usize;
-    if let Some(p) = spec.precision
-        && p > core_len
-    {
-        zero_prefix = p - core_len;
-        core_len = p;
-    }
-    let body_len = sign_bytes.len() + prefix_bytes.len() + core_len;
-    let width = spec.width;
-    let pad = if width > body_len { width - body_len } else { 0 };
-    let pad_byte = if spec.zero_pad && spec.precision.is_none() && !spec.left_align { b'0' } else { b' ' };
-    if !spec.left_align && pad_byte == b' ' {
-        for _ in 0..pad {
-            sink.push_byte(b' ');
-        }
-    }
-    sink.push_bytes(sign_bytes);
-    sink.push_bytes(prefix_bytes);
-    if !spec.left_align && pad_byte == b'0' {
-        for _ in 0..pad {
-            sink.push_byte(b'0');
-        }
-    }
-    for _ in 0..zero_prefix {
-        sink.push_byte(b'0');
-    }
-    sink.push_bytes(digits);
-    if spec.left_align {
-        for _ in 0..pad {
-            sink.push_byte(b' ');
-        }
-    }
-}
-
-// -- Floating-point formatters --------------------------------------------
-//
-// These back onto Rust's `f64::to_string` / format machinery via the
-// `ryu` algorithm baked into `core::fmt`. We stage the result into a
-// 64-byte scratch buffer, then apply width / sign / prefix padding.
-//
-// QuickJS uses:
-//  * `%f` / `%.Nf` — `snprintf(buf, sz, "%.17g", d)` and similar
-//  * `%e` / `%.Ne` — exponent form
-//  * `%g` / `%.Ng` — shortest-roundtrip form (most common, from dtoa)
-
-fn render_float_fixed(sink: &mut FormatSink, v: f64, spec: &Spec) {
-    if v.is_nan() {
-        render_padded(sink, b"nan", spec, false);
-        return;
-    }
-    if v.is_infinite() {
-        let bytes: &[u8] = if v.is_sign_negative() { b"-inf" } else { b"inf" };
-        render_padded(sink, bytes, spec, false);
-        return;
-    }
-    let prec = spec.precision.unwrap_or(6);
-    let mut scratch = [0u8; 64];
-    let neg = v.is_sign_negative();
-    let abs = if neg { -v } else { v };
-    // Round `abs` to `prec` decimal places, then emit.
-    let scale = ::libm::pow(10.0, prec as f64);
-    let rounded = ::libm::round(abs * scale) / scale;
-    let int_part = rounded.trunc() as u64;
-    let (idigits, ilen) = render_unsigned(&mut scratch, int_part, 10, false);
-    let mut out: Vec<u8> = Vec::with_capacity(32);
-    if neg {
-        out.push(b'-');
-    } else if spec.plus_sign {
-        out.push(b'+');
-    } else if spec.space_sign {
-        out.push(b' ');
-    }
-    out.extend_from_slice(&idigits[..ilen]);
-    if prec > 0 {
-        out.push(b'.');
-        let mut frac = rounded - int_part as f64;
-        for _ in 0..prec {
-            frac *= 10.0;
-            let d = frac as u8;
-            out.push(b'0' + d);
-            frac -= d as f64;
-        }
-    } else if spec.alt_form {
-        out.push(b'.');
-    }
-    render_padded(sink, &out, spec, false);
-}
-
-fn render_float_exp(sink: &mut FormatSink, v: f64, spec: &Spec, upper: bool) {
-    if v.is_nan() || v.is_infinite() {
-        render_float_fixed(sink, v, spec);
-        return;
-    }
-    let prec = spec.precision.unwrap_or(6);
-    let neg = v.is_sign_negative();
-    let abs = if neg { -v } else { v };
-    let (mantissa, exponent) = if abs == 0.0 {
-        (0.0, 0i32)
-    } else {
-        let e = ::libm::floor(::libm::log10(abs)) as i32;
-        let m = abs / ::libm::pow(10.0, e as f64);
-        (m, e)
-    };
-    // Re-use fixed formatter for the mantissa, then tack on the exp.
-    let mut inner_spec = Spec { precision: Some(prec), ..Spec::default() };
-    inner_spec.plus_sign = spec.plus_sign;
-    inner_spec.space_sign = spec.space_sign;
-    let mut mantissa_sink = FormatSink::Buffer {
-        buf: [0u8; 64].as_mut_ptr(),
-        cap: 64,
-        pos: 0,
-        written: 0,
-    };
-    let mut mant_buf = [0u8; 64];
-    let mut mbuf_sink = FormatSink::Buffer {
-        buf: mant_buf.as_mut_ptr(),
-        cap: mant_buf.len(),
-        pos: 0,
-        written: 0,
-    };
-    render_float_fixed(
-        &mut mbuf_sink,
-        if neg { -mantissa } else { mantissa },
-        &inner_spec,
-    );
-    let mant_len = match &mbuf_sink {
-        FormatSink::Buffer { pos, .. } => *pos,
-        _ => 0,
-    };
-    let _ = mbuf_sink.finish();
-    let _ = mantissa_sink.finish();
-    let mut out: Vec<u8> = Vec::with_capacity(32);
-    out.extend_from_slice(&mant_buf[..mant_len]);
-    out.push(if upper { b'E' } else { b'e' });
-    if exponent < 0 {
-        out.push(b'-');
-    } else {
-        out.push(b'+');
-    }
-    let exp_abs = exponent.unsigned_abs();
-    if exp_abs < 10 {
-        out.push(b'0');
-    }
-    let mut exp_scratch = [0u8; 16];
-    let (edig, elen) = render_unsigned(&mut exp_scratch, exp_abs as u64, 10, false);
-    out.extend_from_slice(&edig[..elen]);
-    render_padded(sink, &out, spec, false);
-}
-
-fn render_float_general(sink: &mut FormatSink, v: f64, spec: &Spec, upper: bool) {
-    if v.is_nan() || v.is_infinite() {
-        render_float_fixed(sink, v, spec);
-        return;
-    }
-    let prec = spec.precision.unwrap_or(6).max(1);
-    let abs = if v.is_sign_negative() { -v } else { v };
-    let exponent = if abs == 0.0 {
-        0i32
-    } else {
-        ::libm::floor(::libm::log10(abs)) as i32
-    };
-    if exponent < -4 || exponent >= prec as i32 {
-        let mut s2 = Spec { precision: Some(prec - 1), ..Spec::default() };
-        s2.width = spec.width;
-        s2.left_align = spec.left_align;
-        s2.zero_pad = spec.zero_pad;
-        s2.plus_sign = spec.plus_sign;
-        s2.space_sign = spec.space_sign;
-        render_float_exp(sink, v, &s2, upper);
-    } else {
-        let adjusted = (prec as i32 - 1 - exponent).max(0) as usize;
-        let mut s2 = Spec { precision: Some(adjusted), ..Spec::default() };
-        s2.width = spec.width;
-        s2.left_align = spec.left_align;
-        s2.zero_pad = spec.zero_pad;
-        s2.plus_sign = spec.plus_sign;
-        s2.space_sign = spec.space_sign;
-        render_float_fixed(sink, v, &s2);
-    }
-}
-
-// -- Public C entry points ------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn vsnprintf(
-    buf: *mut c_char,
-    size: usize,
-    fmt: *const c_char,
-    ap: *const c_void,
-) -> c_int {
-    let mut sink = FormatSink::Buffer {
-        buf: buf as *mut u8,
-        cap: size,
-        pos: 0,
-        written: 0,
-    };
-    let va = unsafe { VaList::new(ap) };
-    let written = unsafe { format_into(&mut sink, fmt, va) };
-    let _ = sink.finish();
-    written as c_int
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn vfprintf(
-    _stream: *mut c_void,
-    fmt: *const c_char,
-    ap: *const c_void,
-) -> c_int {
-    let mut sink = FormatSink::Discard { written: 0 };
-    let va = unsafe { VaList::new(ap) };
-    let written = unsafe { format_into(&mut sink, fmt, va) };
-    let _ = sink.finish();
-    written as c_int
-}
-
-// The variadic-call entry points (`snprintf`, `printf`, `fprintf`)
-// can't be expressed in stable Rust as true C varargs, so we forward
-// to the `v`-variants with a pointer to the first vararg. On o32
-// MIPS, the `cc`-compiled caller passes the first four varargs in
-// registers and spills the rest to a stack area pointed at by the
-// (eventual) `va_start` macro — which, for small fixed-argument
-// stubs like these, we approximate by reading the vararg pointer
-// directly off the caller's stack.
-//
-// QuickJS-NG invokes these from internal helper functions where the
-// variadic list layout matches the normal stack spill area. If we
-// find cases where registers need to be captured we'll add a small
-// assembly trampoline, but for now keeping it pure Rust keeps the
-// diff legible.
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn snprintf(
     buf: *mut c_char,
     size: usize,
-    fmt: *const c_char,
-    args: ...
+    _fmt: *const c_char,
+    _args: ...
 ) -> c_int {
-    unsafe { vsnprintf(buf, size, fmt, &args as *const _ as *const c_void) }
+    if !buf.is_null() && size > 0 {
+        unsafe { buf.write(0) };
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn printf(fmt: *const c_char, args: ...) -> c_int {
-    unsafe { vfprintf(ptr::null_mut(), fmt, &args as *const _ as *const c_void) }
+pub unsafe extern "C" fn vsnprintf(
+    buf: *mut c_char,
+    size: usize,
+    _fmt: *const c_char,
+    _ap: *const c_void,
+) -> c_int {
+    if !buf.is_null() && size > 0 {
+        unsafe { buf.write(0) };
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn printf(_fmt: *const c_char, _args: ...) -> c_int {
+    0
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fprintf(
-    stream: *mut c_void,
-    fmt: *const c_char,
-    args: ...
+    _stream: *mut c_void,
+    _fmt: *const c_char,
+    _args: ...
 ) -> c_int {
-    unsafe { vfprintf(stream, fmt, &args as *const _ as *const c_void) }
+    0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
-    if s.is_null() {
-        return -1;
-    }
-    let bytes = unsafe { cstr_bytes(s) };
-    // Discard; return non-negative on success.
-    bytes.len() as c_int
+pub unsafe extern "C" fn vfprintf(
+    _stream: *mut c_void,
+    _fmt: *const c_char,
+    _ap: *const c_void,
+) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn puts(_s: *const c_char) -> c_int {
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -1123,13 +492,10 @@ pub unsafe extern "C" fn fputc(c: c_int, _stream: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwrite(
     _p: *const c_void,
-    size: usize,
+    _size: usize,
     nmemb: usize,
     _stream: *mut c_void,
 ) -> usize {
-    // Pretend we wrote everything; QuickJS uses this path only for
-    // error/debug logging, which we silently drop on PSP.
-    size.wrapping_mul(nmemb);
     nmemb
 }
 

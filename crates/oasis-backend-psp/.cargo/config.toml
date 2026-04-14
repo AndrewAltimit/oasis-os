@@ -28,13 +28,16 @@ rustflags = [
   '-C', 'link-arg=--emit-relocs',
   '-C', 'link-arg=--nmagic',
   # rust-psp's target-spec link script doesn't define `_gp` (the
-  # MIPS global pointer) because rust-lld normally synthesises it
-  # from the small-data layout. psp-ld wants it explicit or the
-  # `.rodata.sceModuleInfo` descriptor's `_gp` slot relocation
-  # fails. Point it at 0 — with `-G0` nothing lands in small-data
-  # for our objects and rust-psp's own objects don't reference
-  # _gp either.
-  '-C', 'link-arg=--defsym=_gp=0',
+  # MIPS global pointer) because rust-lld synthesises it internally
+  # from the small-data layout. psp-ld requires it explicit — the
+  # kernel PRX loader seeds `$gp` from `sceModuleInfo`'s `_gp` slot
+  # on module load, and if that's 0 the first GPREL16 access (from
+  # compiler_builtins or libpsp) dereferences low memory and the
+  # console hard-crashes at boot. Our supplementary link script
+  # synthesises `_gp` via the traditional PSPSDK formula. psp-ld
+  # merges multiple `--script` arguments, so this layers cleanly
+  # on top of the rustc-forwarded target-spec script.
+  '-C', 'link-arg=--script=tools/psp-linkscript.ld',
   # NOTE: we intentionally do NOT link pspdev's prebuilt `libc.a`,
   # `libm.a`, or `libcglue.a`. Those archives are compiled as
   # eabi32 / msingle-float / abicalls, which cannot be merged with
