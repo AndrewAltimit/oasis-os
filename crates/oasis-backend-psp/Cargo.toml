@@ -49,14 +49,13 @@ auto-browse-wiki = []
 [dependencies]
 psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
-# NOTE: the `javascript` feature on `oasis-browser` is intentionally
-# NOT enabled on PSP yet — the DOM binding layer in
-# `oasis-browser/src/js_dom.rs` needs a pass for mipsel before it's
-# safe to flip on. Standalone JavaScript evaluation (no DOM) is
-# available via `oasis-js` with its default `rquickjs-engine` feature.
-# QuickJS-NG is compiled from its C sources by the `cc` crate using
-# pspdev's psp-gcc — see `.cargo/config.toml` for the CC/AR wiring.
-oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp"] }
+# QuickJS-NG is compiled from C via pspdev's psp-gcc (see .cargo/
+# config.toml) and the `javascript` feature is enabled here so that
+# oasis-browser can wire `<script>` tags / DOM bindings into the
+# shared rquickjs engine. The engine itself is instantiated lazily
+# the first time the browser app is opened — see `BrowserState` in
+# `src/app_states.rs`, which stores `widget: Option<BrowserWidget>`.
+oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp", "javascript"] }
 oasis-js = { path = "../oasis-js", features = ["psp-bindgen"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }
