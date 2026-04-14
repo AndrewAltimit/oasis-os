@@ -20,7 +20,8 @@ set -euo pipefail
 PSP_GCC="${PSP_GCC_REAL:-/opt/pspdev/bin/psp-gcc}"
 PSP_LD="${PSP_LD_REAL:-/opt/pspdev/bin/psp-ld}"
 
-"$PSP_GCC" "$@"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+"$PSP_GCC" "-isystem${HERE}/newlib-shim" "$@"
 
 # Scan args for the output path (`-o <path>`), if any, and rewrite it.
 prev=""
@@ -42,7 +43,6 @@ if [ -n "$out" ] && [ "${out##*.}" = "o" ] && [ -f "$out" ]; then
   tmp="${out}.reorder.o"
   "$PSP_LD" -r "$out" -o "$tmp"
   mv "$tmp" "$out"
-  HERE="$(cd "$(dirname "$0")" && pwd)"
   python3 "$HERE/fix-symtab-shinfo.py" "$out"
 fi
 

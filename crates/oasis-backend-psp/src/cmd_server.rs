@@ -779,47 +779,57 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
     };
 
     log_msg("[js] context.with(eval) begin");
+    let mut result_msg: Vec<u8> = Vec::new();
     context.with(|ctx| {
         log_msg("[js] inside context.with");
 
-        log_msg("[js] probe 1: grabbing raw ctx ptr");
         let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
-        log_msg(&format!("[js] probe 1 ctx ptr = {:?}", raw_ctx));
 
-        // Probe 2: get the global object. No parsing, no allocation
-        // beyond a refcount bump. If this crashes, the JSContext
-        // itself is corrupt. If it survives, ctx is fine and the
-        // crash is parser/eval-specific.
-        log_msg("[js] probe 2: JS_GetGlobalObject");
-        let gval = unsafe {
-            oasis_js::rquickjs::qjs::JS_GetGlobalObject(raw_ctx)
-        };
-        log_msg("[js] probe 2: JS_GetGlobalObject returned");
-        unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, gval) };
-        log_msg("[js] probe 2: JS_FreeValue done");
-
-        // Probe 3: raw JS_Eval of "0" — shortest legal program.
-        // Isolates whether it's the parser, the codegen, or the
-        // interpreter that faults.
-        log_msg("[js] probe 3: raw JS_Eval \"0\"");
-        let src = b"0\0".as_ptr() as *const core::ffi::c_char;
-        let fname = b"<probe>\0".as_ptr() as *const core::ffi::c_char;
+        let mut src_buf = Vec::with_capacity(script_str.len() + 1);
+        src_buf.extend_from_slice(script_str.as_bytes());
+        src_buf.push(0);
+        let fname = b"<tcp>\0".as_ptr() as *const core::ffi::c_char;
         let val = unsafe {
             oasis_js::rquickjs::qjs::JS_Eval(
                 raw_ctx,
-                src,
-                1,
+                src_buf.as_ptr() as *const core::ffi::c_char,
+                script_str.len(),
                 fname,
                 oasis_js::rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32,
             )
         };
-        log_msg("[js] probe 3: JS_Eval returned");
-        unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
-        log_msg("[js] probe 3: JS_FreeValue done");
+        log_msg("[js] JS_Eval returned");
+
+        let is_exc = unsafe { oasis_js::rquickjs::qjs::JS_IsException(val) };
+        if is_exc != 0 {
+            log_msg("[js] result: exception");
+            result_msg.extend_from_slice(b"js: error: exception\n");
+            unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
+        } else {
+            let cstr = unsafe {
+                oasis_js::rquickjs::qjs::JS_ToCString(raw_ctx, val)
+            };
+            if cstr.is_null() {
+                result_msg.extend_from_slice(b"js: undefined\n");
+            } else {
+                let s = unsafe { core::ffi::CStr::from_ptr(cstr) };
+                result_msg.extend_from_slice(b"js: ");
+                result_msg.extend_from_slice(s.to_bytes());
+                result_msg.push(b'\n');
+                unsafe {
+                    oasis_js::rquickjs::qjs::JS_FreeCString(raw_ctx, cstr);
+                }
+            }
+            unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
+        }
     });
     log_msg("[js] context.with returned");
 
-    send_response(cfd, b"js: ok (see log for details)\n");
+    if result_msg.is_empty() {
+        send_response(cfd, b"js: ok\n");
+    } else {
+        send_response(cfd, &result_msg);
+    }
 }
 
 fn send_response(cfd: i32, data: &[u8]) {

@@ -351,7 +351,11 @@ unsafe extern "C" {
 /// `p` must be a non-null pointer returned by libpsp's `malloc`
 /// (directly or transitively via our `calloc`/`realloc`).
 unsafe fn libpsp_user_size(p: *const c_void) -> usize {
+    // SAFETY: libpsp's malloc stores `total = user_size + sizeof(usize)` in
+    // the usize immediately before the returned pointer. Caller guarantees
+    // `p` came from libpsp's malloc.
     let header = unsafe { (p as *const u8).sub(mem::size_of::<usize>()) as *const usize };
+    // SAFETY: header points to the size word written by libpsp's malloc.
     let total = unsafe { header.read() };
     total.saturating_sub(mem::size_of::<usize>())
 }
@@ -595,8 +599,10 @@ fn is_leap(year: i32) -> bool {
 }
 
 fn unix_to_tm(t: i64, out: &mut Tm) {
-    let mut days = t.div_euclid(86_400) as i32;
-    let secs_of_day = t.rem_euclid(86_400) as i32;
+    const MAX_SECS: i64 = i32::MAX as i64 * 86_400;
+    let clamped = t.clamp(-MAX_SECS, MAX_SECS);
+    let mut days = clamped.div_euclid(86_400) as i32;
+    let secs_of_day = clamped.rem_euclid(86_400) as i32;
     out.tm_sec = secs_of_day % 60;
     out.tm_min = (secs_of_day / 60) % 60;
     out.tm_hour = secs_of_day / 3600;
