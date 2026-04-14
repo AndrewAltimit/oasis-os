@@ -593,7 +593,7 @@ pub(crate) fn matches_selector(
     selector: &super::super::parser::Selector,
     ctx: &CascadeContext<'_>,
 ) -> bool {
-    matches_selector_scoped(doc, node_id, selector, ctx, None)
+    matches_selector_scoped(doc, node_id, selector, ctx, None, None)
 }
 
 /// Like [`matches_selector`] but with an optional `scope` ancestor
@@ -612,6 +612,7 @@ fn matches_selector_scoped(
     selector: &super::super::parser::Selector,
     ctx: &CascadeContext<'_>,
     scope: Option<NodeId>,
+    scope_combinator: Option<&Combinator>,
 ) -> bool {
     let parts = &selector.parts;
     if parts.is_empty() {
@@ -685,6 +686,40 @@ fn matches_selector_scoped(
                     return false;
                 }
             },
+        }
+    }
+
+    // Enforce the leading combinator from :has(). After the right-to-left
+    // walk, `current` is the node that matched the leftmost compound.
+    // scope_combinator specifies the required relationship between that
+    // node and the scope element.
+    if let (Some(sc), Some(sid)) = (scope_combinator, scope) {
+        match sc {
+            Combinator::Child => {
+                if parent_element(doc, current) != Some(sid) {
+                    return false;
+                }
+            },
+            Combinator::AdjacentSibling => {
+                if previous_sibling_element(doc, current) != Some(sid) {
+                    return false;
+                }
+            },
+            Combinator::GeneralSibling => {
+                let mut sib = next_sibling_element(doc, sid);
+                let mut found = false;
+                while let Some(s) = sib {
+                    if s == current {
+                        found = true;
+                        break;
+                    }
+                    sib = next_sibling_element(doc, s);
+                }
+                if !found {
+                    return false;
+                }
+            },
+            Combinator::Descendant => {},
         }
     }
 
@@ -892,9 +927,15 @@ fn matches_has(
 ) -> bool {
     list.iter().any(|(combinator, sel)| {
         let scope = Some(node_id);
-        let matched = |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope);
+        let sc = Some(combinator);
+        let matched =
+            |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc);
         match combinator {
-            Combinator::Descendant => {
+            Combinator::Descendant | Combinator::Child => {
+                // DFS the subject's subtree. For Descendant the scope
+                // bounding is sufficient; for Child the scope_combinator
+                // check in matches_selector_scoped verifies the leftmost
+                // matched compound is a direct child of the subject.
                 let mut stack: Vec<NodeId> = doc.nodes[node_id].children.clone();
                 while let Some(nid) = stack.pop() {
                     if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
@@ -904,16 +945,33 @@ fn matches_has(
                 }
                 false
             },
-            Combinator::Child => doc.nodes[node_id]
-                .children
-                .iter()
-                .any(|&c| matches!(doc.nodes[c].kind, NodeKind::Element(_)) && matched(c)),
-            Combinator::AdjacentSibling => next_sibling_element(doc, node_id).is_some_and(matched),
+            Combinator::AdjacentSibling => {
+                if let Some(sib) = next_sibling_element(doc, node_id) {
+                    if matched(sib) {
+                        return true;
+                    }
+                    let mut stack: Vec<NodeId> = doc.nodes[sib].children.clone();
+                    while let Some(nid) = stack.pop() {
+                        if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                            return true;
+                        }
+                        stack.extend(doc.nodes[nid].children.iter().copied());
+                    }
+                }
+                false
+            },
             Combinator::GeneralSibling => {
                 let mut sib = next_sibling_element(doc, node_id);
                 while let Some(sid) = sib {
                     if matched(sid) {
                         return true;
+                    }
+                    let mut stack: Vec<NodeId> = doc.nodes[sid].children.clone();
+                    while let Some(nid) = stack.pop() {
+                        if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                            return true;
+                        }
+                        stack.extend(doc.nodes[nid].children.iter().copied());
                     }
                     sib = next_sibling_element(doc, sid);
                 }

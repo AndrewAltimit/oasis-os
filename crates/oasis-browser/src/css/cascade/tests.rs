@@ -1665,6 +1665,27 @@ fn has_inner_combinator_is_scope_bounded() {
 }
 
 #[test]
+fn has_child_multi_compound_anchors_on_first_compound() {
+    // `:has(> div img)` means "has a direct child `div` containing an
+    // `img`". The inner selector is multi-compound; the first compound
+    // must match a direct child of the subject, not an arbitrary
+    // descendant.
+    let doc = make_has_doc();
+    // article (3) → div (4) → img (5).
+    // Direct child div contains img → match.
+    let sel = parse_selector("article:has(> div img)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // article has no direct child span → must not match.
+    let sel2 = parse_selector("article:has(> span img)");
+    assert!(
+        !matching::matches_selector(&doc, 3, &sel2, &ctx()),
+        "first compound must match a direct child, not a deeper descendant"
+    );
+    // section (7) → span (8), no div child → must not match.
+    assert!(!matching::matches_selector(&doc, 7, &sel, &ctx()));
+}
+
+#[test]
 fn has_non_element_node_is_ignored() {
     // :has() against a non-element should be false (matches_simple
     // already guards on ElementData).

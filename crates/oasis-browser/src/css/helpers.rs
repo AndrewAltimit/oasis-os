@@ -410,8 +410,14 @@ fn parse_color_mix_function(body: &[&CssToken]) -> Option<CssColor> {
     // the sum when it's < 100, but we ignore that for simplicity).
     let (w1, w2) = match (p1, p2) {
         (None, None) => (0.5, 0.5),
-        (Some(p), None) => (p / 100.0, 1.0 - p / 100.0),
-        (None, Some(p)) => (1.0 - p / 100.0, p / 100.0),
+        (Some(p), None) => {
+            let w = (p / 100.0).clamp(0.0, 1.0);
+            (w, 1.0 - w)
+        },
+        (None, Some(p)) => {
+            let w = (p / 100.0).clamp(0.0, 1.0);
+            (1.0 - w, w)
+        },
         (Some(a), Some(b)) => {
             let sum = a + b;
             if sum == 0.0 {
@@ -1321,6 +1327,16 @@ mod tests {
         let tokens = lex("color-mix(in srgb, red 20%, blue 80%)");
         let c = try_parse_color(&tokens).unwrap();
         assert!(c.b > c.r, "blue should dominate, got r={} b={}", c.r, c.b);
+    }
+
+    #[test]
+    fn color_mix_clamps_out_of_range_percentage() {
+        let tokens = lex("color-mix(in srgb, red 150%, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        // 150% is clamped to 100%, so result should be pure red.
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
     }
 
     #[test]
