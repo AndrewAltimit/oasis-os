@@ -745,11 +745,10 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
     };
     log_msg(&format!("[js] eval ({} bytes) source={:?}", script_str.len(), script_str));
 
-    // Construct QuickJS without going through `oasis_js::JsEngine` so
-    // we can log between every rquickjs step. This lets us pinpoint
-    // the exact call that hard-crashes the console on real hardware
-    // — the higher-level wrapper would hide where in the init chain
-    // we died.
+    // TODO: promote to JsEngine::eval once the PSP QuickJS integration
+    // is stable. Currently bypasses JsEngine to log between every
+    // rquickjs FFI step — lets us pinpoint the exact call that
+    // hard-crashes on real hardware.
     use oasis_js::rquickjs;
 
     log_msg("[js] rquickjs::Runtime::new() begin");

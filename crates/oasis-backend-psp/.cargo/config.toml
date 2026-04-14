@@ -64,4 +64,7 @@ CFLAGS_mipsel_sony_psp_std = "-G0 -fno-pic -mno-abicalls -mabi=32 -march=mips2 -
 # headers from /usr/include (glibc). Force it to use pspdev's newlib
 # sysroot instead — otherwise rquickjs-sys fails at `#include <stdio.h>`
 # looking for glibc-only `bits/libc-header-start.h`.
+# NOTE: the GCC include path pins pspdev's current version (15.2.0).
+# If pspdev upgrades GCC (e.g. 15.3.0 or 16.x), update the path below.
+# config.toml env vars don't support shell expansion, so we can't glob.
 BINDGEN_EXTRA_CLANG_ARGS = "--target=mipsel-unknown-elf -nostdinc -isystem /opt/pspdev/psp/include -isystem /opt/pspdev/lib/gcc/psp/15.2.0/include -D__PSP__"
