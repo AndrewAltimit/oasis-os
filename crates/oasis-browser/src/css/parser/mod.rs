@@ -487,9 +487,7 @@ impl CssParser {
             if let Some(lc) = self.peek_at_keyword_lc() {
                 if lc == "layer" {
                     // Nested @layer (e.g. @layer framework { @layer
-                    // base { ... } }). For now, skip the nested block
-                    // but still register its name so the statement
-                    // form can be tracked.
+                    // base { ... } }). Recursively parsed and registered.
                     inner_rules.extend(self.parse_layer_rule());
                     continue;
                 }

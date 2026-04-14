@@ -126,7 +126,7 @@ fn function_body<'a>(tokens: &[&'a CssToken]) -> Vec<&'a CssToken> {
     let mut depth: i32 = 0;
     for &t in tokens {
         match t {
-            CssToken::OpenParen => {
+            CssToken::OpenParen | CssToken::Function(_) => {
                 depth += 1;
                 out.push(t);
             },
@@ -149,7 +149,7 @@ fn split_top_level_commas<'a>(tokens: &[&'a CssToken]) -> Vec<Vec<&'a CssToken>>
     let mut depth: i32 = 0;
     for &t in tokens {
         match t {
-            CssToken::OpenParen => {
+            CssToken::OpenParen | CssToken::Function(_) => {
                 depth += 1;
                 out.last_mut().expect("at least one").push(t);
             },
@@ -174,7 +174,7 @@ fn split_top_level_slash<'a>(
     let mut depth: i32 = 0;
     for (i, &t) in tokens.iter().enumerate() {
         match t {
-            CssToken::OpenParen => depth += 1,
+            CssToken::OpenParen | CssToken::Function(_) => depth += 1,
             CssToken::CloseParen => depth -= 1,
             CssToken::Slash if depth == 0 => {
                 let before: Vec<&CssToken> = tokens[..i].to_vec();
@@ -208,9 +208,15 @@ fn parse_alpha_component(tokens: &[&CssToken]) -> Option<u8> {
 fn parse_hsl_function(body: &[&CssToken]) -> Option<CssColor> {
     let (main, alpha_tokens) = split_top_level_slash(body);
     let groups = split_top_level_commas(&main);
-    // Flatten into a sequence of non-comma components.
+    // Extract legacy trailing alpha (4th comma group) before flattening.
+    let legacy_alpha = if groups.len() >= 4 {
+        parse_alpha_component(&groups[3])
+    } else {
+        None
+    };
+    // Flatten the first 3 groups into a sequence of non-comma components.
     let components: Vec<&CssToken> = if groups.len() > 1 {
-        groups.into_iter().flatten().collect()
+        groups.into_iter().take(3).flatten().collect()
     } else {
         main
     };
@@ -220,7 +226,6 @@ fn parse_hsl_function(body: &[&CssToken]) -> Option<CssColor> {
             CssToken::Number(n) => nums.push(*n),
             CssToken::Percentage(p) => nums.push(*p),
             CssToken::Dimension(n, unit) => {
-                // Hue in degrees/radians/gradians/turns.
                 nums.push(hue_to_degrees(*n, unit));
             },
             _ => {},
@@ -229,13 +234,10 @@ fn parse_hsl_function(body: &[&CssToken]) -> Option<CssColor> {
     if nums.len() < 3 {
         return None;
     }
-    // `hsl(120, 50%, 50%, 0.4)` -- legacy trailing alpha.
     let alpha = if let Some(ref tokens) = alpha_tokens {
         parse_alpha_component(tokens).unwrap_or(255)
-    } else if nums.len() >= 4 {
-        ((nums[3].clamp(0.0, 1.0)) * 255.0).round() as u8
     } else {
-        255
+        legacy_alpha.unwrap_or(255)
     };
     let (r, g, b) = hsl_to_rgb(nums[0], nums[1], nums[2]);
     Some(CssColor::new(r, g, b, alpha))
@@ -429,20 +431,21 @@ fn parse_color_mix_function(body: &[&CssToken]) -> Option<CssColor> {
 /// Parse a single color argument inside `color-mix()`, which is a
 /// color possibly followed by a percentage.
 fn parse_color_mix_arg(tokens: &[&CssToken]) -> Option<(CssColor, Option<f32>)> {
-    // Find a trailing percentage, if any.
+    // Only strip a trailing top-level percentage (not one nested inside
+    // a function like `hsl(120, 50%, 50%)`).
     let mut pct: Option<f32> = None;
-    let mut color_tokens: Vec<&CssToken> = Vec::new();
-    for t in tokens {
-        if let CssToken::Percentage(p) = t {
-            pct = Some(*p);
-            continue;
-        }
-        color_tokens.push(t);
-    }
-    // Reconstitute a CssToken slice for try_parse_color. Since
-    // `try_parse_color` takes `&[CssToken]` rather than
-    // `&[&CssToken]`, we clone into a local vec.
-    let owned: Vec<CssToken> = color_tokens.into_iter().cloned().collect();
+    let last_non_ws = tokens
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, t)| !matches!(t, CssToken::Whitespace));
+    let end = if let Some((i, CssToken::Percentage(p))) = last_non_ws {
+        pct = Some(*p);
+        i
+    } else {
+        tokens.len()
+    };
+    let owned: Vec<CssToken> = tokens[..end].iter().copied().cloned().collect();
     let color = try_parse_color(&owned)?;
     Some((color, pct))
 }
