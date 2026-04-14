@@ -88,6 +88,7 @@ impl CssParser {
                 | CssToken::Dot
                 | CssToken::Star
                 | CssToken::Colon
+                | CssToken::Delim('&')
         )
     }
 
@@ -113,6 +114,10 @@ impl CssParser {
                 CssToken::Star => {
                     self.advance();
                     parts.push(SimpleSelector::Universal);
+                },
+                CssToken::Delim('&') => {
+                    self.advance();
+                    parts.push(SimpleSelector::Nest);
                 },
                 CssToken::Colon => {
                     self.advance();

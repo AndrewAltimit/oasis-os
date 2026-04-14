@@ -49,6 +49,10 @@ pub enum SimpleSelector {
     Is(Vec<CompoundSelector>),
     /// `:where(selector-list)` -- like `:is()` but zero specificity.
     Where(Vec<CompoundSelector>),
+    /// Nesting selector `&` — a parser-time marker that refers to the
+    /// enclosing rule's selector. Desugared into concrete selectors at
+    /// parse time; should not appear in the final AST.
+    Nest,
     /// Attribute selector: `[attr]`, `[attr=val]`, etc.
     Attribute {
         name: String,
@@ -152,6 +156,10 @@ impl Selector {
                     SimpleSelector::Where(_) => {
                         // :where() contributes zero specificity.
                     },
+                    SimpleSelector::Nest => {
+                        // Nest is desugared at parse time; any residual
+                        // marker contributes zero.
+                    },
                     SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                         types = types.saturating_add(1);
                     },
@@ -210,6 +218,7 @@ fn compound_specificity(compound: &CompoundSelector) -> Specificity {
                 types = types.saturating_add(max_spec.types);
             },
             SimpleSelector::Where(_) => {},
+            SimpleSelector::Nest => {},
             SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                 types = types.saturating_add(1);
             },

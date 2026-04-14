@@ -1046,3 +1046,216 @@ mod prop {
         assert_eq!(sheet.rules.len(), 1, "transition should be recognized");
     }
 }
+
+// -------------------------------------------------------------------
+// CSS Nesting
+// -------------------------------------------------------------------
+//
+// Checks the desugaring rules of CSS Nesting Module Level 1:
+// - `&` is replaced by the enclosing parent selector
+// - no `&` at all => implicit `& descendant`
+// - parent/child selector lists Cartesian-expand
+// - nested `@media` inherits the outer selector
+// - nested rules recurse (child becomes parent for its own children)
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::*;
+
+    /// Render a flattened selector list back to a canonical string so
+    /// tests can assert on it without introspecting AST shape.
+    fn sel_str(sl: &SelectorList) -> String {
+        sl.selectors
+            .iter()
+            .map(selector_to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn selector_to_string(sel: &Selector) -> String {
+        let mut out = String::new();
+        for (i, (compound, comb)) in sel.parts.iter().enumerate() {
+            if i > 0 {
+                match comb {
+                    Some(Combinator::Descendant) | None => out.push(' '),
+                    Some(Combinator::Child) => out.push_str(" > "),
+                    Some(Combinator::AdjacentSibling) => out.push_str(" + "),
+                    Some(Combinator::GeneralSibling) => out.push_str(" ~ "),
+                }
+            }
+            for simple in &compound.parts {
+                match simple {
+                    SimpleSelector::Type(n) => out.push_str(n),
+                    SimpleSelector::Class(n) => {
+                        out.push('.');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Id(n) => {
+                        out.push('#');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Universal => out.push('*'),
+                    SimpleSelector::PseudoClass(n) => {
+                        out.push(':');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::PseudoClassFn(n, arg) => {
+                        out.push(':');
+                        out.push_str(n);
+                        out.push('(');
+                        out.push_str(arg);
+                        out.push(')');
+                    },
+                    SimpleSelector::PseudoElement(n) => {
+                        out.push_str("::");
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Nest => out.push('&'),
+                    SimpleSelector::Not(_) => out.push_str(":not(…)"),
+                    SimpleSelector::Is(_) => out.push_str(":is(…)"),
+                    SimpleSelector::Where(_) => out.push_str(":where(…)"),
+                    SimpleSelector::Attribute { name, .. } => {
+                        out.push('[');
+                        out.push_str(name);
+                        out.push(']');
+                    },
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn nest_explicit_descendant() {
+        let sheet = parse(".parent { & .foo { color: red; } }");
+        // Two rules: the parent's own (empty decls => skipped) and the
+        // flattened nested rule.
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_compound_merge() {
+        let sheet = parse(".parent { &.active { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent.active");
+    }
+
+    #[test]
+    fn nest_pseudo_class() {
+        let sheet = parse("a { &:hover { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), "a:hover");
+    }
+
+    #[test]
+    fn nest_implicit_descendant() {
+        // No `&` — child inherits implicit descendant combinator.
+        let sheet = parse(".parent { .foo { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_parent_with_own_decls() {
+        // Parent has its own declarations AND a nested rule.
+        let sheet = parse(".parent { color: red; & .foo { color: blue; } }");
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent");
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[1].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_selector_list_cartesian() {
+        // 2 parents × 2 children = 4 flattened rules.
+        let sheet = parse("a, b { &.x, &.y { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        let s = sel_str(&sheet.rules[0].selectors);
+        assert!(s.contains("a.x"), "{s}");
+        assert!(s.contains("a.y"), "{s}");
+        assert!(s.contains("b.x"), "{s}");
+        assert!(s.contains("b.y"), "{s}");
+        assert_eq!(sheet.rules[0].selectors.selectors.len(), 4);
+    }
+
+    #[test]
+    fn nest_recursive() {
+        let css = ".a { & .b { & .c { color: red; } } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".a .b .c");
+    }
+
+    #[test]
+    fn nest_parent_chain_with_combinator() {
+        // Parent has a child combinator. `&.active` should merge into
+        // the last compound of the parent chain.
+        let sheet = parse("nav > a { &.active { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), "nav > a.active");
+    }
+
+    #[test]
+    fn nest_child_combinator() {
+        let sheet = parse(".parent { & > .foo { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent > .foo");
+    }
+
+    #[test]
+    fn nest_at_media_inside() {
+        let css = ".widget { color: red; @media (min-width: 100px) { & .inner { color: blue; } } }";
+        let sheet = parse(css);
+        // One rule for the parent decls + one flattened for the media-inner.
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".widget");
+        assert_eq!(sel_str(&sheet.rules[1].selectors), ".widget .inner");
+    }
+
+    #[test]
+    fn nest_at_media_dropped_when_query_fails() {
+        // Viewport defaults to 480x272 — a min-width: 9999px query fails,
+        // so the nested `& .inner` rule disappears while the parent's own
+        // `color: red` is preserved.
+        let css =
+            ".widget { color: red; @media (min-width: 9999px) { & .inner { color: blue; } } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".widget");
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+    }
+
+    #[test]
+    fn nest_preserves_sibling_selector() {
+        let sheet = parse(".parent { & + .sibling { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent + .sibling");
+    }
+
+    #[test]
+    fn nest_ampersand_after_child() {
+        // `.foo &` means ".foo .parent" — parent spliced in at nest position.
+        let sheet = parse(".parent { .foo & { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".foo .parent");
+    }
+
+    #[test]
+    fn nest_does_not_leak_nest_marker() {
+        // Confirm that no SimpleSelector::Nest appears in the flattened AST.
+        let sheet = parse(".parent { &.active { color: red; } & .foo { color: blue; } }");
+        for rule in &sheet.rules {
+            for sel in &rule.selectors.selectors {
+                for (compound, _) in &sel.parts {
+                    for simple in &compound.parts {
+                        assert!(
+                            !matches!(simple, SimpleSelector::Nest),
+                            "Nest marker leaked into AST"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

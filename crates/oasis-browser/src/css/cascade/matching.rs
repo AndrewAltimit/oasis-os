@@ -643,6 +643,11 @@ fn matches_simple(
             // They are handled separately by resolve_pseudo_content.
             false
         },
+        SimpleSelector::Nest => {
+            // Nesting selector is desugared at parse time and should
+            // not survive into matching. Treat any residual as non-matching.
+            false
+        },
     }
 }
 

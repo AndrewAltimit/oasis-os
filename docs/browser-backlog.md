@@ -191,7 +191,9 @@ that cause real breakage on modern sites:
 - `:has()` selector — shows up in modern sites constantly.
 - `@container` queries — most new responsive sites use these.
 - `@layer` — cascade layers, used by design systems (Tailwind, etc.).
-- CSS nesting (`& .foo { }`) — shipping in Chrome/Firefox.
+- ~~CSS nesting (`& .foo { }`)~~ — shipped on `feat/css-nesting` (parse-time
+  desugaring: Cartesian-expands parent × child selector lists, substitutes
+  `&` inline, supports nested `@media`, no compositor/matcher changes).
 - `color-mix()`, `oklch()`, `color()`, `light-dark()` functions.
 - Logical properties: `margin-inline-start`, `padding-block-end`, etc.
 - `text-wrap: balance` / `pretty` — increasingly common for headings.
