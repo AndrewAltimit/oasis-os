@@ -120,7 +120,14 @@ impl TreeBuilder {
                 let prev_text_id = {
                     let children = &self.doc.nodes[foster_target].children;
                     let target_pos = match before_ref {
-                        Some(reference) => children.iter().position(|&id| id == reference),
+                        Some(reference) => {
+                            let pos = children.iter().position(|&id| id == reference);
+                            debug_assert!(
+                                pos.is_some(),
+                                "foster parent: before_ref not in parent children"
+                            );
+                            pos
+                        },
                         None => Some(children.len()),
                     };
                     target_pos.and_then(|pos| {
