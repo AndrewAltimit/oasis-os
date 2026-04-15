@@ -63,6 +63,21 @@ impl TreeBuilder {
                 self.head_element = Some(id);
                 self.mode = InsertionMode::InHead;
             },
+            // Per WHATWG §13.2.6.4.3, any head-content tag before
+            // the explicit <head> (template, title, meta, link,
+            // style, script, noscript, base) triggers an implicit
+            // <head> and moves to InHead for reprocessing. We
+            // special-case `<template>` here because it's the one
+            // head-content tag that carries non-trivial children and
+            // therefore needs to be parsed in InHead rather than
+            // dropped into an implicit body.
+            Token::StartTag(tag) if tag.name == "template" => {
+                let head = self.create_element(TagName::Head);
+                self.insert_element(head);
+                self.head_element = Some(head);
+                self.mode = InsertionMode::InHead;
+                self.process_token(token);
+            },
             Token::StartTag(tag) if tag.name == "body" => {
                 // Implicitly create <head>, then reprocess.
                 let head = self.create_element(TagName::Head);
@@ -118,20 +133,22 @@ impl TreeBuilder {
                 // Void elements: do not push onto open stack.
             },
             Token::StartTag(tag) if tag.name == "template" => {
-                // Simplified template handling: insert as a regular
-                // element. The UA stylesheet hides `template` via
-                // `display: none`, so the contents won't paint. Per
-                // WHATWG spec the contents should live in a separate
-                // DocumentFragment that is unaffected by the enclosing
-                // form/scope; we don't model that here.
-                // SECURITY: children share enclosing scope; <script>
-                // inside a moved template can execute.
+                // Template contents live in a notional DocumentFragment
+                // — any enclosing form pointer is hidden from them.
+                // Save+clear on entry, restore on exit (see the
+                // matching </template> arm below and
+                // `handle_start_tag_in_body`'s Template branch).
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
+                self.template_form_stack.push(self.form_element);
+                self.form_element = None;
             },
             Token::EndTag(tag) if tag.name == "template" => {
                 if self.has_in_scope(&TagName::Template) {
                     self.close_to_tag_any_scope(&TagName::Template);
+                    if let Some(saved) = self.template_form_stack.pop() {
+                        self.form_element = saved;
+                    }
                 } else {
                     log::trace!("html parse error: stray </template>");
                 }
@@ -147,14 +164,19 @@ impl TreeBuilder {
                 self.process_token(token);
             },
             _ => {
-                // If a `<template>` is currently the open element on
-                // top of the stack, dispatch the token via the InBody
-                // rules so its children parse normally instead of
-                // implicitly closing `<head>`.
-                if self
-                    .tag_of(self.current_node())
-                    .is_some_and(|t| matches!(t, TagName::Template))
-                {
+                // If a `<template>` is open anywhere on the stack,
+                // dispatch the token via the InBody rules so its
+                // children parse normally instead of implicitly
+                // closing `<head>`. Checking the entire stack (not
+                // just the top) matters when the current node is a
+                // descendant of the template — e.g. a `<p>` opened
+                // inside `<template>` whose `</p>` end tag arrives
+                // while we're still in InHead.
+                let in_template = self
+                    .open_elements
+                    .iter()
+                    .any(|&id| matches!(self.tag_of(id), Some(TagName::Template)));
+                if in_template {
                     self.handle_in_body(token);
                     return;
                 }
@@ -346,11 +368,19 @@ impl TreeBuilder {
                 self.mode = InsertionMode::Text;
             },
             TagName::Template => {
-                // Simplified: insert as a plain element. The UA
-                // stylesheet hides `template { display: none }` so its
-                // contents never paint. Children parse in InBody mode.
+                // See InHead `<template>` for isolation notes.
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
+                self.template_form_stack.push(self.form_element);
+                self.form_element = None;
+            },
+            TagName::Svg => {
+                self.reconstruct_formatting();
+                self.enter_foreign_root(tag, TagName::Svg);
+            },
+            TagName::Math => {
+                self.reconstruct_formatting();
+                self.enter_foreign_root(tag, TagName::Math);
             },
             TagName::A => {
                 // Close existing <a> in active formatting first.
@@ -428,6 +458,9 @@ impl TreeBuilder {
             TagName::Template => {
                 if self.has_in_scope(&TagName::Template) {
                     self.close_to_tag_any_scope(&TagName::Template);
+                    if let Some(saved) = self.template_form_stack.pop() {
+                        self.form_element = saved;
+                    }
                 } else {
                     log::trace!("html parse error: stray </template>");
                 }

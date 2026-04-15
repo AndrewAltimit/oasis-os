@@ -142,6 +142,7 @@ pub enum TagName {
     Section,
     Article,
     Aside,
+    Address,
     // Interactive
     Details,
     Summary,
@@ -156,8 +157,9 @@ pub enum TagName {
     Template,
     // Deprecated but still common
     Center,
-    // SVG
+    // SVG / MathML (foreign content roots)
     Svg,
+    Math,
     // Anything else
     Unknown(String),
 }
@@ -245,6 +247,8 @@ impl TagName {
             "template" => Self::Template,
             "center" => Self::Center,
             "svg" => Self::Svg,
+            "math" => Self::Math,
+            "address" => Self::Address,
             other => Self::Unknown(other.to_string()),
         }
     }
@@ -330,6 +334,8 @@ impl TagName {
             Self::Template => "template",
             Self::Center => "center",
             Self::Svg => "svg",
+            Self::Math => "math",
+            Self::Address => "address",
             Self::Unknown(s) => s.as_str(),
         }
     }
@@ -421,6 +427,79 @@ impl TagName {
     /// (`title`, `textarea`).
     pub fn is_rcdata(&self) -> bool {
         matches!(self, Self::Title | Self::Textarea)
+    }
+
+    /// Returns `true` if this tag is in the "special" category per
+    /// WHATWG HTML §13.2.4.2. The special category gates which elements
+    /// can appear as the "furthest block" in the adoption agency
+    /// algorithm. This is a subset of the full spec list covering the
+    /// tags we actually model — anything we don't recognise falls into
+    /// `Unknown` and is not considered special.
+    pub fn is_special(&self) -> bool {
+        matches!(
+            self,
+            Self::Address
+                | Self::Article
+                | Self::Aside
+                | Self::Blockquote
+                | Self::Body
+                | Self::Br
+                | Self::Button
+                | Self::Caption
+                | Self::Center
+                | Self::Col
+                | Self::Colgroup
+                | Self::Dd
+                | Self::Details
+                | Self::Div
+                | Self::Dl
+                | Self::Dt
+                | Self::Figcaption
+                | Self::Figure
+                | Self::Footer
+                | Self::Form
+                | Self::H1
+                | Self::H2
+                | Self::H3
+                | Self::H4
+                | Self::H5
+                | Self::H6
+                | Self::Head
+                | Self::Header
+                | Self::Hr
+                | Self::Html
+                | Self::Iframe
+                | Self::Img
+                | Self::Input
+                | Self::Li
+                | Self::Link
+                | Self::Main
+                | Self::Meta
+                | Self::Nav
+                | Self::Noscript
+                | Self::Ol
+                | Self::P
+                | Self::Pre
+                | Self::Script
+                | Self::Section
+                | Self::Select
+                | Self::Source
+                | Self::Style
+                | Self::Summary
+                | Self::Table
+                | Self::Tbody
+                | Self::Td
+                | Self::Template
+                | Self::Textarea
+                | Self::Tfoot
+                | Self::Th
+                | Self::Thead
+                | Self::Title
+                | Self::Tr
+                | Self::Ul
+                | Self::Math
+                | Self::Svg
+        )
     }
 }
 
@@ -591,6 +670,16 @@ impl Document {
     pub fn append_child(&mut self, parent_id: NodeId, child_id: NodeId) {
         self.nodes[parent_id].children.push(child_id);
         self.nodes[child_id].parent = Some(parent_id);
+    }
+
+    /// Unlink `child_id` from its current parent without freeing the
+    /// subtree. Used by the HTML tree builder's adoption agency
+    /// algorithm, which reparents nodes rather than destroying them.
+    /// Returns the former parent if one existed.
+    pub fn detach_node(&mut self, child_id: NodeId) -> Option<NodeId> {
+        let parent_id = self.nodes[child_id].parent.take()?;
+        self.nodes[parent_id].children.retain(|&c| c != child_id);
+        Some(parent_id)
     }
 
     /// Insert `child_id` into `parent_id`'s child list immediately

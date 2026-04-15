@@ -5,6 +5,7 @@
 //! with implicit element insertion, auto-closing, formatting elements,
 //! and basic table handling.
 
+mod foreign;
 mod formatting;
 mod helpers;
 mod insertion_modes;
@@ -124,6 +125,24 @@ pub struct TreeBuilder {
     pub(crate) frameset_ok: bool,
     /// Saved mode for returning from `Text` insertion mode.
     pub(crate) original_mode: InsertionMode,
+    /// Saved `form_element` pointers captured when a `<template>`
+    /// start tag is processed. The spec puts template contents into a
+    /// separate "template contents owner" DocumentFragment; any
+    /// `form_element` pointer visible outside the template does not
+    /// leak in, and forms opened inside the template do not leak out.
+    /// We mimic that isolation by saving and restoring the pointer on
+    /// `<template>` / `</template>` instead of introducing a real
+    /// DocumentFragment node kind.
+    pub(crate) template_form_stack: Vec<Option<NodeId>>,
+    /// Count of open foreign-content elements (svg / math subtree
+    /// descendants) on the open elements stack. When non-zero, the
+    /// tree builder dispatches incoming tokens through the simplified
+    /// foreign-content path instead of the HTML insertion modes. This
+    /// is a minimal version of WHATWG §13.2.6.5 "tokens in foreign
+    /// content" sufficient to parse inline `<svg>` / `<math>` blocks
+    /// without mis-auto-closing their children or triggering HTML
+    /// block-level auto-close rules.
+    pub(crate) foreign_depth: u32,
 }
 
 impl TreeBuilder {
@@ -138,6 +157,8 @@ impl TreeBuilder {
             form_element: None,
             frameset_ok: true,
             original_mode: InsertionMode::InBody,
+            template_form_stack: Vec::new(),
+            foreign_depth: 0,
         }
     }
 
@@ -177,6 +198,8 @@ impl TreeBuilder {
             form_element: None,
             frameset_ok: true,
             original_mode: InsertionMode::InBody,
+            template_form_stack: Vec::new(),
+            foreign_depth: 0,
         };
         let total = tokens.len();
         for (idx, token) in tokens.into_iter().enumerate() {
@@ -199,6 +222,10 @@ impl TreeBuilder {
     // =============================================================
 
     pub(crate) fn process_token(&mut self, token: Token) {
+        if self.foreign_depth > 0 {
+            self.handle_foreign_content(token);
+            return;
+        }
         match self.mode {
             InsertionMode::Initial => {
                 self.handle_initial(token);
