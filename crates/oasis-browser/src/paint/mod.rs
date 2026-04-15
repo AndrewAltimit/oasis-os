@@ -1701,6 +1701,35 @@ mod tests {
     }
 
     #[test]
+    fn backface_hidden_child_culled_by_inherited_preserve_3d() {
+        // Parent: rotateY(180deg) + preserve-3d
+        // Child:  backface-visibility: hidden, no own transforms
+        // The child faces away via the inherited matrix and must be culled.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(255, 0, 0);
+        child_style.backface_visibility = BackfaceVisibility::Hidden;
+        let child = make_block(0.0, 0.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(180.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.perspective = Some(800.0);
+        let mut gparent = make_block(0.0, 0.0, 200.0, 200.0, gparent_style);
+        gparent.children.push(parent);
+
+        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 0);
+        assert_eq!(backend.fill_polygon_count(), 0);
+    }
+
+    #[test]
     fn preserve_3d_propagates_parent_matrix_to_children() {
         // Four-level structure:
         //   ggparent  – perspective: 800px
