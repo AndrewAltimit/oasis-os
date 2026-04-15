@@ -52,6 +52,7 @@ enum Bucket {
     Ok,
     Panic,
     PaintError,
+    IoError,
     Slow,
     EmptyLayout,
     NoDrawCalls,
@@ -63,6 +64,7 @@ impl Bucket {
             Bucket::Ok => "ok",
             Bucket::Panic => "panic",
             Bucket::PaintError => "paint-error",
+            Bucket::IoError => "io-error",
             Bucket::Slow => "slow",
             Bucket::EmptyLayout => "empty-layout",
             Bucket::NoDrawCalls => "no-draw-calls",
@@ -193,7 +195,7 @@ fn triage_one(path: &Path, w: f32, h: f32, slow_budget: Duration) -> Outcome {
         Err(e) => {
             return Outcome {
                 path: path.to_path_buf(),
-                bucket: Bucket::Panic,
+                bucket: Bucket::IoError,
                 duration: Duration::ZERO,
                 notes: format!("read error: {e}"),
             };
@@ -341,6 +343,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     for label in [
         "panic",
         "paint-error",
+        "io-error",
         "slow",
         "empty-layout",
         "no-draw-calls",
