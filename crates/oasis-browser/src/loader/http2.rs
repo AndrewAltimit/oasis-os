@@ -437,6 +437,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
 
         let fh = read_frame_header(stream)?;
         if waiting_continuation && fh.frame_type != FRAME_CONTINUATION {
+            let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
             return Err(OasisError::Backend(
                 "HTTP/2: expected CONTINUATION frame".into(),
             ));
@@ -537,6 +538,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
             },
             FRAME_CONTINUATION => {
                 if fh.stream_id != 1 || !waiting_continuation {
+                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
                     return Err(OasisError::Backend(
                         "HTTP/2: unexpected CONTINUATION".into(),
                     ));
@@ -649,6 +651,12 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         body_slice[2],
                         body_slice[3],
                     ]);
+                    if promised == 0 {
+                        send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR)?;
+                        return Err(OasisError::Backend(
+                            "HTTP/2: PUSH_PROMISE with promised stream 0".into(),
+                        ));
+                    }
                     send_rst_stream(stream, promised, ERROR_CODE_REFUSED_STREAM)?;
                 }
             },
