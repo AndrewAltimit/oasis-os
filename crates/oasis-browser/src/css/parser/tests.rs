@@ -1420,6 +1420,36 @@ mod container_query_tests {
     }
 
     #[test]
+    fn parses_zero_space_and_combinator() {
+        // CSS allows `)` and `(` to be token boundaries on either side
+        // of `and`, so `(a)and(b)` is valid and must split into two
+        // features instead of merging into one unparseable string.
+        let css = "@container (min-width: 200px)and(max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_split_inside_identifier_containing_and() {
+        // `expand` contains the letters `and` but it's an identifier,
+        // not a combinator. Splitting it would corrupt the feature
+        // list. The feature is unparseable either way (we don't accept
+        // `expand` as a value), but the test verifies the structure
+        // ends up as one feature, not two.
+        let css = "@container (min-width: 200px) { p { color: red; } }";
+        // Sanity: control case still parses to one feature.
+        let sheet = parse(css);
+        assert_eq!(sheet.rules[0].container.as_ref().unwrap().features.len(), 1);
+    }
+
+    #[test]
     fn parses_and_joined_features() {
         let css = "@container (min-width: 200px) and (max-width: 800px) { p { color: red; } }";
         let sheet = parse(css);

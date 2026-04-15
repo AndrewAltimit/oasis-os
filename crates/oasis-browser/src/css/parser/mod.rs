@@ -268,6 +268,15 @@ impl CssParser {
                         CssToken::Whitespace => condition.push(' '),
                         CssToken::OpenParen => condition.push('('),
                         CssToken::CloseParen => condition.push(')'),
+                        // The CSS tokenizer collapses `<ident>(` into a
+                        // single Function token, which would otherwise
+                        // be silently dropped from the condition string
+                        // (breaking e.g. zero-space `@container (a)and(b)`
+                        // where `and(` tokenizes as Function("and")).
+                        CssToken::Function(ref s) => {
+                            condition.push_str(s);
+                            condition.push('(');
+                        },
                         CssToken::Colon => condition.push(':'),
                         CssToken::Comma => condition.push(','),
                         CssToken::Delim(c) => condition.push(c),
@@ -333,6 +342,15 @@ impl CssParser {
                         CssToken::Whitespace => condition.push(' '),
                         CssToken::OpenParen => condition.push('('),
                         CssToken::CloseParen => condition.push(')'),
+                        // The CSS tokenizer collapses `<ident>(` into a
+                        // single Function token, which would otherwise
+                        // be silently dropped from the condition string
+                        // (breaking e.g. zero-space `@container (a)and(b)`
+                        // where `and(` tokenizes as Function("and")).
+                        CssToken::Function(ref s) => {
+                            condition.push_str(s);
+                            condition.push('(');
+                        },
                         CssToken::Colon => condition.push(':'),
                         CssToken::Comma => condition.push(','),
                         CssToken::Hash(h) => {
@@ -492,6 +510,15 @@ impl CssParser {
                         CssToken::Whitespace => condition.push(' '),
                         CssToken::OpenParen => condition.push('('),
                         CssToken::CloseParen => condition.push(')'),
+                        // The CSS tokenizer collapses `<ident>(` into a
+                        // single Function token, which would otherwise
+                        // be silently dropped from the condition string
+                        // (breaking e.g. zero-space `@container (a)and(b)`
+                        // where `and(` tokenizes as Function("and")).
+                        CssToken::Function(ref s) => {
+                            condition.push_str(s);
+                            condition.push('(');
+                        },
                         CssToken::Colon => condition.push(':'),
                         CssToken::Comma => condition.push(','),
                         CssToken::Delim(c) => condition.push(c),
@@ -1061,6 +1088,15 @@ impl CssParser {
                         CssToken::Whitespace => condition.push(' '),
                         CssToken::OpenParen => condition.push('('),
                         CssToken::CloseParen => condition.push(')'),
+                        // The CSS tokenizer collapses `<ident>(` into a
+                        // single Function token, which would otherwise
+                        // be silently dropped from the condition string
+                        // (breaking e.g. zero-space `@container (a)and(b)`
+                        // where `and(` tokenizes as Function("and")).
+                        CssToken::Function(ref s) => {
+                            condition.push_str(s);
+                            condition.push('(');
+                        },
                         CssToken::Colon => condition.push(':'),
                         CssToken::Comma => condition.push(','),
                         CssToken::Delim(c) => condition.push(c),
@@ -1347,15 +1383,43 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
 // @container condition parsing
 // -------------------------------------------------------------------
 
-/// Case-insensitive split on ` and ` (CSS combinators are ASCII
-/// case-insensitive).
+/// Case-insensitive split on the `and` combinator from CSS conditional
+/// rules. Matches the `and` keyword wherever its left and right sides
+/// are token boundaries — whitespace, `)` on the left, `(` on the
+/// right, or the start/end of the input. This correctly handles the
+/// zero-whitespace case `(a)and(b)` that the spec allows but which a
+/// naive `" and "` substring search misses.
+///
+/// Identifiers that happen to contain the letters `and` (e.g.
+/// `expand`, `andante`) are not split because either side would be an
+/// alphanumeric / `-` / `_` continuation, not a token boundary.
 fn split_css_and(s: &str) -> Vec<&str> {
-    let lower = s.to_ascii_lowercase();
+    fn is_left_boundary(b: u8) -> bool {
+        b.is_ascii_whitespace() || b == b')'
+    }
+    fn is_right_boundary(b: u8) -> bool {
+        b.is_ascii_whitespace() || b == b'('
+    }
+    let bytes = s.as_bytes();
+    let len = bytes.len();
     let mut result = Vec::new();
     let mut start = 0;
-    while let Some(pos) = lower[start..].find(" and ") {
-        result.push(s[start..start + pos].trim());
-        start += pos + 5;
+    let mut i = 0;
+    while i + 3 <= len {
+        let is_and = matches!(bytes[i], b'a' | b'A')
+            && matches!(bytes[i + 1], b'n' | b'N')
+            && matches!(bytes[i + 2], b'd' | b'D');
+        if is_and {
+            let left_ok = i == 0 || is_left_boundary(bytes[i - 1]);
+            let right_ok = i + 3 == len || is_right_boundary(bytes[i + 3]);
+            if left_ok && right_ok {
+                result.push(s[start..i].trim());
+                start = i + 3;
+                i = start;
+                continue;
+            }
+        }
+        i += 1;
     }
     result.push(s[start..].trim());
     result
