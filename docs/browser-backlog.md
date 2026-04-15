@@ -164,17 +164,37 @@ Strip each to a reasonable size and check in under `tests/fixtures/`.
   working group). Add as `tests/html5lib.rs`, allowlist failures we
   can't fix, gate CI on no-regression.
 - **Known gaps worth fixing:**
-  - Foster parenting is subtly wrong — inserts at the wrong position.
-    Should be immediately before the table, not at end of the table's
-    parent. See `crates/oasis-browser/src/html/tree_builder/formatting.rs:80`.
+  - ~~Foster parenting is subtly wrong — inserts at the wrong position.~~
+    Fixed on `feat/browser-whatwg-conformance`. `foster_parent` now
+    uses the new `Document::insert_before` helper to place the new
+    node immediately before the foster-parented `<table>` in the
+    table's parent (per WHATWG §13.2.6.1). The InTable "anything else"
+    branch also defers to InBody when the current open element is no
+    longer in a table context, so a foster-parented `<div>` correctly
+    receives its own children instead of foster-parenting them too.
   - Adoption agency algorithm is simplified. Handles common formatting
     cases; fails on the adversarial `<b><p></b></p>` reorderings from
     the WHATWG spec examples.
-  - No `<template>` element / DocumentFragment support.
+  - ~~No `<template>` element / DocumentFragment support.~~ — minimal
+    support shipped on `feat/browser-whatwg-conformance`.
+    `TagName::Template` is now a real variant; `<template>` parses as
+    a regular element in both InHead and InBody modes; the InHead
+    fallback dispatches via InBody when the current open element is a
+    `Template` so children parse normally instead of implicitly
+    closing `<head>`. The UA stylesheet already had
+    `template { display: none }`, so contents are inert at paint.
+    DocumentFragment isolation (the spec's "template contents owner")
+    is still a follow-up — children currently inherit form/scope from
+    the enclosing tree, which is the same simplification we use for
+    SVG/MathML foreign content.
   - No SVG/MathML foreign content handling.
-  - No parser error reporting — we silently drop malformed input. At
-    minimum we should `log::trace!` on parse errors so users can
-    diagnose broken pages.
+  - ~~No parser error reporting — we silently drop malformed input.~~ —
+    `log::trace!` calls now fire on the most common tree-builder
+    parse errors: stray doctype in body, stray `<html>`/`<head>`/
+    `<body>`, stray table-structure tags outside a table, stray
+    `</table>`, and any token that triggers foster parenting. Filters
+    on the `oasis_browser::html::tree_builder` log target surface
+    these without spamming general output.
 - Full frameset support is **not** a goal — document it as a deliberate
   non-goal.
 

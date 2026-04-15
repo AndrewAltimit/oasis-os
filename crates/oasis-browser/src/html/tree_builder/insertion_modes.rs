@@ -117,6 +117,19 @@ impl TreeBuilder {
                 self.doc.append_child(parent, id);
                 // Void elements: do not push onto open stack.
             },
+            Token::StartTag(tag) if tag.name == "template" => {
+                // Simplified template handling: insert as a regular
+                // element. The UA stylesheet hides `template` via
+                // `display: none`, so the contents won't paint. Per
+                // WHATWG spec the contents should live in a separate
+                // DocumentFragment that is unaffected by the enclosing
+                // form/scope; we don't model that here.
+                let id = self.create_element_from_start_tag(tag);
+                self.insert_element(id);
+            },
+            Token::EndTag(tag) if tag.name == "template" => {
+                self.close_to_tag_any_scope(&TagName::Template);
+            },
             Token::EndTag(tag) if tag.name == "head" => {
                 self.pop_open_element();
                 self.mode = InsertionMode::AfterHead;
@@ -128,6 +141,17 @@ impl TreeBuilder {
                 self.process_token(token);
             },
             _ => {
+                // If a `<template>` is currently the open element on
+                // top of the stack, dispatch the token via the InBody
+                // rules so its children parse normally instead of
+                // implicitly closing `<head>`.
+                if self
+                    .tag_of(self.current_node())
+                    .is_some_and(|t| matches!(t, TagName::Template))
+                {
+                    self.handle_in_body(token);
+                    return;
+                }
                 // Implicitly close <head> and reprocess.
                 self.pop_open_element();
                 self.mode = InsertionMode::AfterHead;
@@ -180,7 +204,9 @@ impl TreeBuilder {
                 // Implicitly close everything.
             },
             Token::Doctype(_) => {
-                // Ignore in body.
+                // Parse error: doctype is only valid in the Initial
+                // insertion mode.
+                log::trace!("html parse error: stray doctype in body");
             },
         }
     }
@@ -193,7 +219,8 @@ impl TreeBuilder {
     ) {
         match tag_name {
             TagName::Html | TagName::Head | TagName::Body => {
-                // Ignore duplicates.
+                // Parse error: nested document-structure tag.
+                log::trace!("html parse error: stray <{}> in body", tag_name.as_str());
             },
             // Stray table-structure tags in body scope are parse errors
             // per WHATWG §13.2.6.4.7 ("in body" insertion mode). Ignore
@@ -211,6 +238,10 @@ impl TreeBuilder {
                 // Ignore. If a <table> is in scope we'd never reach
                 // here — `handle_in_table` / `handle_in_row` etc.
                 // handle them. Outside a table, dropping is correct.
+                log::trace!(
+                    "html parse error: stray <{}> outside table",
+                    tag_name.as_str()
+                );
             },
             // Unmatched </frame>, </frameset>, <frameset> etc. in body
             // scope are also parse errors — we intentionally do not
@@ -308,6 +339,13 @@ impl TreeBuilder {
                 self.original_mode = self.mode;
                 self.mode = InsertionMode::Text;
             },
+            TagName::Template => {
+                // Simplified: insert as a plain element. The UA
+                // stylesheet hides `template { display: none }` so its
+                // contents never paint. Children parse in InBody mode.
+                let id = self.create_element_from_start_tag(tag);
+                self.insert_element(id);
+            },
             TagName::A => {
                 // Close existing <a> in active formatting first.
                 self.close_formatting_a_if_active();
@@ -379,6 +417,10 @@ impl TreeBuilder {
             },
             TagName::Table => {
                 // Misplaced end tag; ignore in body mode.
+                log::trace!("html parse error: </table> with no open table");
+            },
+            TagName::Template => {
+                self.close_to_tag_any_scope(&TagName::Template);
             },
             _ if tag_name.is_formatting() => {
                 self.close_formatting_element(tag_name);
@@ -454,8 +496,29 @@ impl TreeBuilder {
                 // Ignore these end tags in InTable mode.
             },
             _ => {
-                // Foster parenting.
-                self.foster_parent(token);
+                // Per WHATWG §13.2.6.1, foster parenting only applies
+                // when the *adjusted current node* is one of the table
+                // section/row elements. If the user has already pushed
+                // an unrelated element onto the stack (e.g. via an
+                // earlier foster-parented `<div>`), subsequent tokens
+                // attach to that current node directly via the InBody
+                // rules instead of being foster-parented.
+                let current_in_table_context = self.tag_of(self.current_node()).is_some_and(|t| {
+                    matches!(
+                        t,
+                        TagName::Table
+                            | TagName::Tbody
+                            | TagName::Thead
+                            | TagName::Tfoot
+                            | TagName::Tr
+                    )
+                });
+                if current_in_table_context {
+                    log::trace!("html parse error: foster-parented token in table");
+                    self.foster_parent(token);
+                } else {
+                    self.handle_in_body(token);
+                }
             },
         }
     }

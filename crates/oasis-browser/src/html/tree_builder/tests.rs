@@ -1057,6 +1057,137 @@ fn legitimate_table_with_rows_still_works() {
     assert!(doc.text_content(body).contains("cell"));
 }
 
+// ---- Foster parenting ----
+
+/// Per WHATWG §13.2.6.1, a stray `<div>` inside a `<table>` (but not
+/// inside a cell) must be foster-parented immediately before the table
+/// in the table's parent — not appended after the table.
+#[test]
+fn foster_parented_div_lands_before_table() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("p"),
+        text("before"),
+        end("p"),
+        start("table"),
+        start("div"),
+        text("foster"),
+        end("div"),
+        end("table"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let body_children = &doc.get(body).children;
+
+    let table_pos = body_children
+        .iter()
+        .position(|&id| tag_at(&doc, id) == Some(&TagName::Table))
+        .expect("table is a body child");
+    let div_pos = body_children
+        .iter()
+        .position(|&id| tag_at(&doc, id) == Some(&TagName::Div))
+        .expect("foster-parented div is a body child");
+    assert!(
+        div_pos < table_pos,
+        "div must be inserted before the table, got div at {div_pos} and table at {table_pos}"
+    );
+
+    let div_id = body_children[div_pos];
+    assert_eq!(doc.text_content(div_id), "foster");
+}
+
+/// Foster-parented text coalesces with the immediately preceding
+/// sibling text node in the foster-parent — not with the trailing text
+/// node at the end of the parent.
+#[test]
+fn foster_parented_text_coalesces_with_preceding_sibling() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        text("alpha"),
+        start("table"),
+        text("beta"),
+        text("gamma"),
+        end("table"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+
+    // The pre-table "alpha" text node should have absorbed beta+gamma,
+    // and there should be no fresh text node sitting after the table.
+    let mut text_nodes = Vec::new();
+    for &child in &doc.get(body).children {
+        if let NodeKind::Text(s) = &doc.get(child).kind {
+            text_nodes.push(s.clone());
+        }
+    }
+    assert_eq!(
+        text_nodes,
+        vec!["alphabetagamma".to_string()],
+        "foster-parented text must merge into the preceding sibling text node",
+    );
+}
+
+// ---- Template element ----
+
+/// `<template>` parses as a `Template` element and its children attach
+/// to it. The UA stylesheet hides it via `display:none`, so it is not
+/// visible — but the DOM contents must be present.
+#[test]
+fn template_element_parses_with_children() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("template"),
+        start("p"),
+        text("inside template"),
+        end("p"),
+        end("template"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let body_children = &doc.get(body).children;
+
+    let tmpl_id = *body_children
+        .iter()
+        .find(|&&id| tag_at(&doc, id) == Some(&TagName::Template))
+        .expect("template element present");
+    let tmpl_children = &doc.get(tmpl_id).children;
+    assert_eq!(tmpl_children.len(), 1);
+    assert_eq!(tag_at(&doc, tmpl_children[0]), Some(&TagName::P));
+    assert_eq!(doc.text_content(tmpl_id), "inside template");
+}
+
+/// `<template>` is also valid inside `<head>`.
+#[test]
+fn template_element_in_head_parses() {
+    let tokens = vec![
+        start("html"),
+        start("head"),
+        start("template"),
+        start("span"),
+        text("hello"),
+        end("span"),
+        end("template"),
+        end("head"),
+        start("body"),
+        end("body"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let head = doc.head().unwrap();
+    let head_children = &doc.get(head).children;
+    let tmpl_id = *head_children
+        .iter()
+        .find(|&&id| tag_at(&doc, id) == Some(&TagName::Template))
+        .expect("template element present in head");
+    assert_eq!(doc.text_content(tmpl_id), "hello");
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;

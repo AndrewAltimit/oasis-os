@@ -75,46 +75,78 @@ impl TreeBuilder {
     // Foster parenting
     // =============================================================
 
-    /// Foster-parent a token: insert before the table's parent
-    /// (simplified).
+    /// Foster-parent a token. Per WHATWG HTML §13.2.6.1 ("appropriate
+    /// place for inserting a node"), when foster parenting is enabled
+    /// and the current insertion point would be inside a `<table>`,
+    /// `<tbody>`, `<thead>`, `<tfoot>`, or `<tr>`, the new node is
+    /// inserted **immediately before** the foster-parented `<table>`
+    /// in the table's parent — not appended to that parent. Only when
+    /// the table has no parent (which can only happen if the table is
+    /// the document root, which we never construct) do we fall back to
+    /// the previous open element on the stack.
     pub(crate) fn foster_parent(&mut self, token: Token) {
         let table_idx = self
             .open_elements
             .iter()
             .rposition(|&id| self.tag_of(id) == Some(&TagName::Table));
 
-        let foster_target = if let Some(idx) = table_idx {
+        // (foster_parent_id, optional reference_child_id)
+        let (foster_target, before_ref) = if let Some(idx) = table_idx {
             let table_id = self.open_elements[idx];
-            self.doc.nodes[table_id].parent.unwrap_or_else(|| {
-                if idx > 0 {
-                    self.open_elements[idx - 1]
-                } else {
-                    self.doc.root
-                }
-            })
+            if let Some(parent_id) = self.doc.nodes[table_id].parent {
+                (parent_id, Some(table_id))
+            } else if idx > 0 {
+                (self.open_elements[idx - 1], None)
+            } else {
+                (self.doc.root, None)
+            }
         } else {
-            self.current_node()
+            (self.current_node(), None)
+        };
+
+        let insert = |doc: &mut super::super::dom::Document, child: super::super::dom::NodeId| {
+            if let Some(reference) = before_ref {
+                doc.insert_before(foster_target, child, reference);
+            } else {
+                doc.append_child(foster_target, child);
+            }
         };
 
         match token {
             Token::Character(ref s) => {
-                let children = &self.doc.nodes[foster_target].children;
-                if let Some(&last) = children.last()
-                    && let NodeKind::Text(ref mut t) = self.doc.nodes[last].kind
+                // Coalesce into the immediately-previous sibling (the
+                // child that comes right before the reference) when
+                // it's a text node; otherwise insert a fresh text node.
+                let prev_text_id = {
+                    let children = &self.doc.nodes[foster_target].children;
+                    let target_pos = match before_ref {
+                        Some(reference) => children.iter().position(|&id| id == reference),
+                        None => Some(children.len()),
+                    };
+                    target_pos.and_then(|pos| {
+                        if pos == 0 {
+                            None
+                        } else {
+                            Some(children[pos - 1])
+                        }
+                    })
+                };
+                if let Some(prev_id) = prev_text_id
+                    && let NodeKind::Text(ref mut t) = self.doc.nodes[prev_id].kind
                 {
                     t.push_str(s);
                     return;
                 }
                 let id = self.doc.add_node(NodeKind::Text(s.clone()));
-                self.doc.append_child(foster_target, id);
+                insert(&mut self.doc, id);
             },
             Token::Comment(text) => {
                 let id = self.doc.add_node(NodeKind::Comment(text));
-                self.doc.append_child(foster_target, id);
+                insert(&mut self.doc, id);
             },
             Token::StartTag(ref tag) => {
                 let id = self.create_element_from_start_tag(tag);
-                self.doc.append_child(foster_target, id);
+                insert(&mut self.doc, id);
                 let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
                 if !tag_name.is_void() && !tag.self_closing {
                     self.open_elements.push(id);
