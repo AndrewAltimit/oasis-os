@@ -110,7 +110,12 @@ impl TreeBuilder {
 
             // Step 9: common ancestor is the element immediately above
             // formatting element on the open stack.
-            let common_ancestor = self.open_elements[fmt_stack_pos - 1];
+            let Some(common_ancestor) = fmt_stack_pos
+                .checked_sub(1)
+                .map(|i| self.open_elements[i])
+            else {
+                return;
+            };
 
             // Step 10: bookmark is the position of formatting element
             // in the active formatting list.
@@ -217,6 +222,9 @@ impl TreeBuilder {
             // Step 18: remove formatting element from active
             // formatting list, insert the clone at the bookmark.
             self.active_formatting.remove(fmt_list_pos);
+            if bookmark > fmt_list_pos {
+                bookmark -= 1;
+            }
             let insert_at = bookmark.min(self.active_formatting.len());
             self.active_formatting.insert(insert_at, fmt_clone);
 
