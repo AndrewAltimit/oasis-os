@@ -449,8 +449,26 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
 
         match fh.frame_type {
             FRAME_SETTINGS => {
+                // SETTINGS, like PING, is connection-level and MUST
+                // carry stream_id == 0 (RFC 9113 §6.5).
+                if fh.stream_id != 0 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend(
+                        "HTTP/2: SETTINGS on non-zero stream".into(),
+                    ));
+                }
                 if fh.flags & FLAG_ACK != 0 {
-                    // Server ACK'd our settings — nothing to do.
+                    // Server ACK'd our settings. RFC 9113 §6.5:
+                    // "Receipt of a SETTINGS frame with the ACK flag
+                    //  set and a length field value other than 0 MUST
+                    //  be treated as a connection error of type
+                    //  FRAME_SIZE_ERROR."
+                    if !payload.is_empty() {
+                        let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                        return Err(OasisError::Backend(
+                            "HTTP/2: SETTINGS ACK with non-empty payload".into(),
+                        ));
+                    }
                 } else {
                     if !payload.len().is_multiple_of(6) {
                         return Err(OasisError::Backend(
@@ -588,6 +606,15 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 // bodies are capped at 65k above, so updates are moot.
             },
             FRAME_PING => {
+                // RFC 9113 §6.7 — PING is a connection-level frame and
+                // MUST carry stream_id == 0. Anything else is a
+                // connection error.
+                if fh.stream_id != 0 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend(
+                        "HTTP/2: PING on non-zero stream".into(),
+                    ));
+                }
                 if fh.flags & FLAG_ACK == 0 {
                     if payload.len() != 8 {
                         return Err(OasisError::Backend("HTTP/2: malformed PING".into()));
@@ -598,6 +625,13 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 }
             },
             FRAME_RST_STREAM => {
+                // RFC 9113 §6.4 — RST_STREAM on stream 0 is a
+                // connection error. We cannot reply with RST_STREAM on
+                // 0 (also illegal); escalate to GOAWAY.
+                if fh.stream_id == 0 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend("HTTP/2: RST_STREAM on stream 0".into()));
+                }
                 if fh.stream_id == 1 {
                     let code = if payload.len() >= 4 {
                         u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]])
@@ -644,21 +678,28 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 } else {
                     &payload[..]
                 };
-                if body_slice.len() >= 4 {
-                    let promised = u32::from_be_bytes([
-                        body_slice[0] & 0x7f,
-                        body_slice[1],
-                        body_slice[2],
-                        body_slice[3],
-                    ]);
-                    if promised == 0 {
-                        send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR)?;
-                        return Err(OasisError::Backend(
-                            "HTTP/2: PUSH_PROMISE with promised stream 0".into(),
-                        ));
-                    }
-                    send_rst_stream(stream, promised, ERROR_CODE_REFUSED_STREAM)?;
+                // A PUSH_PROMISE that doesn't carry the 4-byte promised
+                // stream ID is malformed — treat as a connection-level
+                // protocol error (RFC 9113 §6.6).
+                if body_slice.len() < 4 {
+                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend(
+                        "HTTP/2: PUSH_PROMISE too short for promised stream ID".into(),
+                    ));
                 }
+                let promised = u32::from_be_bytes([
+                    body_slice[0] & 0x7f,
+                    body_slice[1],
+                    body_slice[2],
+                    body_slice[3],
+                ]);
+                if promised == 0 {
+                    send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR)?;
+                    return Err(OasisError::Backend(
+                        "HTTP/2: PUSH_PROMISE with promised stream 0".into(),
+                    ));
+                }
+                send_rst_stream(stream, promised, ERROR_CODE_REFUSED_STREAM)?;
             },
             FRAME_PRIORITY => {
                 // Deprecated in RFC 9113 but still legal. Ignore.
@@ -1175,6 +1216,67 @@ mod tests {
             saw_continuation_with_end,
             "expected a terminal CONTINUATION frame with END_HEADERS"
         );
+    }
+
+    #[test]
+    fn ping_on_non_zero_stream_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // PING on stream 1 — protocol error per RFC 9113 §6.7.
+        server.extend(build_frame(FRAME_PING, 0, 1, &[0u8; 8]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("PING on non-zero stream"));
+    }
+
+    #[test]
+    fn rst_stream_on_stream_zero_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // RST_STREAM on stream 0 — protocol error per RFC 9113 §6.4.
+        server.extend(build_frame(FRAME_RST_STREAM, 0, 0, &[0, 0, 0, 1]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("RST_STREAM on stream 0"));
+    }
+
+    #[test]
+    fn push_promise_short_payload_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // PUSH_PROMISE with only 3 payload bytes (needs 4 for stream ID).
+        server.extend(build_frame(FRAME_PUSH_PROMISE, 0, 1, &[0, 0, 0]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("PUSH_PROMISE too short"));
+    }
+
+    #[test]
+    fn settings_ack_with_payload_is_connection_error() {
+        let mut server = Vec::new();
+        // SETTINGS ACK with non-empty payload — FRAME_SIZE_ERROR.
+        server.extend(build_frame(FRAME_SETTINGS, FLAG_ACK, 0, &[0u8; 6]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SETTINGS ACK with non-empty payload")
+        );
+    }
+
+    #[test]
+    fn settings_on_non_zero_stream_is_connection_error() {
+        let mut server = Vec::new();
+        // SETTINGS on stream 1 — protocol error per RFC 9113 §6.5.
+        server.extend(build_frame(FRAME_SETTINGS, 0, 1, &[]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("SETTINGS on non-zero stream"));
     }
 
     #[test]
