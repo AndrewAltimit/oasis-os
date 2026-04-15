@@ -12,14 +12,14 @@ use super::types::{
     AnimationPlayState, Appearance, BackfaceVisibility, BackgroundBox, BackgroundImage,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderCollapse, BorderRadius,
     BorderStyle, BoxSizing, Clear, ColorScheme, ContainerType, ContentVisibility, Cursor, Display,
-    FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
-    Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
-    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
-    PointerEvents, Position, Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign,
-    TextAlignLast, TextDecorationLine, TextDecorationStyle, TextDirection, TextJustify,
-    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap,
-    TimingFunction, TouchAction, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility,
-    WhiteSpace, WordBreak,
+    FieldSizing, FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle,
+    FontVariant, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
+    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
+    OverscrollBehavior, PointerEvents, Position, Resize, ScrollBehavior, ScrollSnapAlign,
+    ScrollSnapStop, TextAlign, TextAlignLast, TextDecorationLine, TextDecorationStyle,
+    TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform,
+    TextUnderlinePosition, TextWrap, TimingFunction, TouchAction, TransformStyle, Transition,
+    UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -1938,6 +1938,15 @@ impl ComputedStyle {
             },
             "container-name" => {
                 self.container_name = parse_container_name_list(value);
+            },
+            "field-sizing" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.field_sizing = match kw {
+                        "content" => FieldSizing::Content,
+                        "fixed" => FieldSizing::Fixed,
+                        _ => return,
+                    };
+                }
             },
             "container" => {
                 // `container: <name> [/ <type>]` shorthand.

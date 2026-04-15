@@ -305,6 +305,15 @@ pub enum ContainerType {
     Size,
 }
 
+/// CSS `field-sizing` property. Default `Fixed` keeps form controls
+/// at their declared / `size`-attribute width. `Content` lets the
+/// control track its own value (or placeholder) width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldSizing {
+    Fixed,
+    Content,
+}
+
 /// CSS `object-fit` property for replaced elements (images, video).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectFit {

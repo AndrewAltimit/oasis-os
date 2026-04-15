@@ -12,9 +12,9 @@ pub use super::helpers::MediaViewport;
 pub(crate) use declarations::parse_value_list;
 #[allow(unused_imports)]
 pub use types::{
-    AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CssColor, CssValue,
-    Declaration, KeyframeStop, KeyframesRule, LengthUnit, PropertyId, Rule, Selector,
-    SimpleSelector, Specificity, Stylesheet,
+    AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CounterStyleRule,
+    CssColor, CssValue, Declaration, KeyframeStop, KeyframesRule, LengthUnit, PropertyId,
+    PropertyRule, Rule, ScopeCondition, Selector, SimpleSelector, Specificity, Stylesheet,
 };
 
 pub(crate) use types::SelectorList;
@@ -144,6 +144,8 @@ impl CssParser {
     fn parse_stylesheet(&mut self) -> Stylesheet {
         let mut rules = Vec::new();
         let mut keyframes = Vec::new();
+        let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
+        let mut properties: Vec<PropertyRule> = Vec::new();
         loop {
             self.skip_whitespace();
             if self.at_eof() {
@@ -178,6 +180,18 @@ impl CssParser {
                     for r in self.parse_container_rule() {
                         flatten_nested_rule(None, r, &mut rules);
                     }
+                } else if lc == "scope" {
+                    for r in self.parse_scope_rule() {
+                        flatten_nested_rule(None, r, &mut rules);
+                    }
+                } else if lc == "counter-style" {
+                    if let Some(cs) = self.parse_counter_style_rule() {
+                        counter_styles.push(cs);
+                    }
+                } else if lc == "property" {
+                    if let Some(pr) = self.parse_property_rule() {
+                        properties.push(pr);
+                    }
                 } else {
                     // Other at-rules: skip.
                     self.skip_at_rule();
@@ -196,6 +210,8 @@ impl CssParser {
             rules,
             keyframes,
             layers: std::mem::take(&mut self.layers),
+            counter_styles,
+            properties,
         }
     }
 
@@ -506,6 +522,310 @@ impl CssParser {
         tagged
     }
 
+    /// Parse an `@scope (root) [to (limit)]? { ... }` rule.
+    ///
+    /// Both root and limit selectors are kept as raw strings — the
+    /// cascade re-parses them via `parse_selector_string` so the full
+    /// selector engine handles them. A bare `@scope { ... }` (no root)
+    /// is allowed and means "no root constraint" in our model; a
+    /// real browser would scope it to the stylesheet's owner element,
+    /// but for `<style>` blocks that's effectively `<html>`.
+    fn parse_scope_rule(&mut self) -> Vec<ParsedRule> {
+        self.advance(); // consume @scope
+        self.skip_whitespace();
+
+        let root = self.parse_optional_parenthesised_selector();
+        self.skip_whitespace();
+
+        // Optional `to (limit)` clause.
+        let mut limit = None;
+        if let CssToken::Ident(s) = self.peek().clone()
+            && s.eq_ignore_ascii_case("to")
+        {
+            self.advance();
+            self.skip_whitespace();
+            limit = self.parse_optional_parenthesised_selector();
+            self.skip_whitespace();
+        }
+
+        if !self.expect(&CssToken::OpenBrace) {
+            return Vec::new();
+        }
+
+        let inner_rules = self.parse_at_rule_block();
+        let cond = ScopeCondition { root, limit };
+        let mut tagged = Vec::with_capacity(inner_rules.len());
+        for mut r in inner_rules {
+            if r.scope.is_none() {
+                r.scope = Some(cond.clone());
+            }
+            tagged.push(r);
+        }
+        tagged
+    }
+
+    /// Read a `(...)` group as a raw selector string. Returns `None`
+    /// if the next token isn't an open paren. The contents are
+    /// reassembled with single-space whitespace collapsing so the
+    /// downstream selector parser can handle them.
+    fn parse_optional_parenthesised_selector(&mut self) -> Option<String> {
+        if self.peek() != &CssToken::OpenParen {
+            return None;
+        }
+        self.advance(); // consume (
+        let mut depth: i32 = 1;
+        let mut out = String::new();
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::OpenParen => {
+                    depth += 1;
+                    out.push('(');
+                    self.advance();
+                },
+                CssToken::CloseParen => {
+                    depth -= 1;
+                    self.advance();
+                    if depth == 0 {
+                        break;
+                    }
+                    out.push(')');
+                },
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => out.push_str(&s),
+                        CssToken::Hash(s) => {
+                            out.push('#');
+                            out.push_str(&s);
+                        },
+                        CssToken::Number(n) => out.push_str(&format!("{n}")),
+                        CssToken::Whitespace => out.push(' '),
+                        CssToken::Colon => out.push(':'),
+                        CssToken::Comma => out.push(','),
+                        CssToken::Delim(c) => out.push(c),
+                        CssToken::Dot => out.push('.'),
+                        _ => {},
+                    }
+                },
+            }
+        }
+        let trimmed = out.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    /// Parse a `@counter-style name { descriptor: value; ... }` rule.
+    /// Currently parse-only — descriptors are stored as raw strings or
+    /// lightly typed. List-item rendering still uses the built-in
+    /// styles only.
+    fn parse_counter_style_rule(&mut self) -> Option<CounterStyleRule> {
+        self.advance(); // consume @counter-style
+        self.skip_whitespace();
+        let name = match self.peek().clone() {
+            CssToken::Ident(s) => {
+                self.advance();
+                s
+            },
+            CssToken::String(s) => {
+                self.advance();
+                s
+            },
+            _ => {
+                self.skip_to_close_brace();
+                return None;
+            },
+        };
+        self.skip_whitespace();
+        if !self.expect(&CssToken::OpenBrace) {
+            return None;
+        }
+
+        let mut rule = CounterStyleRule {
+            name,
+            system: None,
+            symbols: Vec::new(),
+            additive_symbols: Vec::new(),
+            range: None,
+            prefix: None,
+            suffix: None,
+            pad: None,
+            negative: None,
+            fallback: None,
+            speak_as: None,
+        };
+
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            let key = match self.peek().clone() {
+                CssToken::Ident(s) => {
+                    self.advance();
+                    s.to_ascii_lowercase()
+                },
+                _ => {
+                    self.advance();
+                    continue;
+                },
+            };
+            self.skip_whitespace();
+            if !self.expect(&CssToken::Colon) {
+                self.skip_to_semicolon_or_close_brace();
+                continue;
+            }
+            self.skip_whitespace();
+            let raw = self.collect_descriptor_value();
+            match key.as_str() {
+                "system" => rule.system = Some(raw.trim().to_ascii_lowercase()),
+                "symbols" => {
+                    rule.symbols = split_counter_symbols(&raw);
+                },
+                "additive-symbols" => {
+                    rule.additive_symbols = parse_additive_symbols(&raw);
+                },
+                "range" => rule.range = Some(raw.trim().to_string()),
+                "prefix" => rule.prefix = Some(unquote(raw.trim())),
+                "suffix" => rule.suffix = Some(unquote(raw.trim())),
+                "pad" => rule.pad = Some(raw.trim().to_string()),
+                "negative" => rule.negative = Some(raw.trim().to_string()),
+                "fallback" => rule.fallback = Some(raw.trim().to_string()),
+                "speak-as" => rule.speak_as = Some(raw.trim().to_string()),
+                _ => {},
+            }
+            // Consume optional terminating `;`.
+            if self.peek() == &CssToken::Semicolon {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+        Some(rule)
+    }
+
+    /// Parse an `@property --name { ... }` registration. Reads the
+    /// `syntax`, `inherits`, and `initial-value` descriptors. Other
+    /// descriptors are tolerated and ignored.
+    fn parse_property_rule(&mut self) -> Option<PropertyRule> {
+        self.advance(); // consume @property
+        self.skip_whitespace();
+        // Property name is a `<custom-property-name>` token, which our
+        // tokenizer surfaces as `Ident("--foo")` (the leading `--`
+        // makes it a normal ident from a tokenizer's point of view).
+        let name = match self.peek().clone() {
+            CssToken::Ident(s) if s.starts_with("--") => {
+                self.advance();
+                s
+            },
+            _ => {
+                self.skip_to_close_brace();
+                return None;
+            },
+        };
+        self.skip_whitespace();
+        if !self.expect(&CssToken::OpenBrace) {
+            return None;
+        }
+
+        let mut rule = PropertyRule {
+            name,
+            syntax: None,
+            inherits: false,
+            initial_value: None,
+        };
+
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            let key = match self.peek().clone() {
+                CssToken::Ident(s) => {
+                    self.advance();
+                    s.to_ascii_lowercase()
+                },
+                _ => {
+                    self.advance();
+                    continue;
+                },
+            };
+            self.skip_whitespace();
+            if !self.expect(&CssToken::Colon) {
+                self.skip_to_semicolon_or_close_brace();
+                continue;
+            }
+            self.skip_whitespace();
+            let raw = self.collect_descriptor_value();
+            match key.as_str() {
+                "syntax" => rule.syntax = Some(unquote(raw.trim())),
+                "inherits" => rule.inherits = raw.trim().eq_ignore_ascii_case("true"),
+                "initial-value" => rule.initial_value = Some(raw.trim().to_string()),
+                _ => {},
+            }
+            if self.peek() == &CssToken::Semicolon {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+        Some(rule)
+    }
+
+    /// Read tokens up to (but not consuming) the next semicolon /
+    /// close-brace at brace-depth 0, reassembling them as raw text.
+    /// Used by `@counter-style` / `@property` descriptor bodies.
+    fn collect_descriptor_value(&mut self) -> String {
+        let mut out = String::new();
+        let mut paren_depth: i32 = 0;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::Semicolon if paren_depth == 0 => break,
+                CssToken::CloseBrace if paren_depth == 0 => break,
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => out.push_str(&s),
+                        CssToken::String(s) => {
+                            out.push('"');
+                            out.push_str(&s);
+                            out.push('"');
+                        },
+                        CssToken::Hash(s) => {
+                            out.push('#');
+                            out.push_str(&s);
+                        },
+                        CssToken::Number(n) => out.push_str(&format!("{n}")),
+                        CssToken::Percentage(n) => {
+                            out.push_str(&format!("{n}%"));
+                        },
+                        CssToken::Dimension(n, u) => {
+                            out.push_str(&format!("{n}{u}"));
+                        },
+                        CssToken::Whitespace => out.push(' '),
+                        CssToken::OpenParen => {
+                            paren_depth += 1;
+                            out.push('(');
+                        },
+                        CssToken::CloseParen => {
+                            paren_depth -= 1;
+                            out.push(')');
+                        },
+                        CssToken::Colon => out.push(':'),
+                        CssToken::Comma => out.push(','),
+                        CssToken::Delim(c) => out.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+        out
+    }
+
     /// Parse a single layer name: an identifier optionally followed by
     /// `.ident` segments (e.g. `framework.theme`). Returns `None` if
     /// no identifier is present.
@@ -577,6 +897,10 @@ impl CssParser {
                     inner_rules.extend(self.parse_container_rule());
                     continue;
                 }
+                if lc == "scope" {
+                    inner_rules.extend(self.parse_scope_rule());
+                    continue;
+                }
                 self.skip_at_rule();
                 continue;
             }
@@ -623,6 +947,7 @@ impl CssParser {
             nested,
             layer: self.current_layer,
             container: None,
+            scope: None,
         })
     }
 
@@ -877,6 +1202,8 @@ struct ParsedRule {
     layer: Option<u16>,
     /// `@container` condition the rule was nested inside, if any.
     container: Option<ContainerCondition>,
+    /// `@scope` condition the rule was nested inside, if any.
+    scope: Option<ScopeCondition>,
 }
 
 /// Flatten a (possibly-nested) parsed rule into concrete [`Rule`]s,
@@ -893,6 +1220,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
         nested,
         layer,
         container,
+        scope,
     } = rule;
 
     let effective = match parent {
@@ -909,6 +1237,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
             declarations,
             layer,
             container: container.clone(),
+            scope: scope.clone(),
         });
     }
 
@@ -1059,6 +1388,88 @@ fn parse_px_in_condition(s: &str) -> Option<f32> {
     let s = s.trim();
     let s = s.strip_suffix("px").unwrap_or(s);
     s.trim().parse::<f32>().ok()
+}
+
+// -------------------------------------------------------------------
+// @counter-style helpers
+// -------------------------------------------------------------------
+
+/// Strip surrounding `"…"` or `'…'` quotes from a single-token value.
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2
+        && let (Some(&first), Some(&last)) = (bytes.first(), bytes.last())
+        && (first == b'"' || first == b'\'')
+        && first == last
+    {
+        return s[1..s.len() - 1].to_string();
+    }
+    s.to_string()
+}
+
+/// Split a `symbols` descriptor value into individual entries, treating
+/// quoted strings as atomic and unquoted runs as bare identifiers.
+fn split_counter_symbols(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str: Option<char> = None;
+    for ch in raw.chars() {
+        if let Some(q) = in_str {
+            if ch == q {
+                in_str = None;
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                if !cur.trim().is_empty() {
+                    out.push(cur.trim().to_string());
+                }
+                cur.clear();
+                in_str = Some(ch);
+            },
+            c if c.is_whitespace() => {
+                if !cur.trim().is_empty() {
+                    out.push(cur.trim().to_string());
+                    cur.clear();
+                }
+            },
+            c => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// Parse an `additive-symbols` descriptor: comma-separated `<weight> <symbol>`
+/// pairs. Symbols can be quoted strings or bare idents.
+fn parse_additive_symbols(raw: &str) -> Vec<(i32, String)> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        // First token is the weight; remainder is the symbol.
+        let (weight_s, sym_s) = match part.split_once(char::is_whitespace) {
+            Some(p) => p,
+            None => continue,
+        };
+        let Ok(weight) = weight_s.trim().parse::<i32>() else {
+            continue;
+        };
+        let symbols = split_counter_symbols(sym_s);
+        if let Some(first) = symbols.into_iter().next() {
+            out.push((weight, first));
+        }
+    }
+    out
 }
 
 // -------------------------------------------------------------------
@@ -1240,6 +1651,8 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "container-type",
     "container-name",
     "container",
+    // Form control sizing.
+    "field-sizing",
 ];
 
 /// Evaluate an `@supports` condition string.

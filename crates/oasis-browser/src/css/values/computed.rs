@@ -8,9 +8,9 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackfaceVisibility, BackgroundBox,
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode,
     BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
-    ContainerType, ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection,
-    FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight,
-    GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
+    ContainerType, ContentVisibility, Cursor, Dimension, Display, FieldSizing, FilterFunction,
+    FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
+    FontWeight, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
     ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior,
     ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection,
@@ -347,6 +347,12 @@ pub struct ComputedStyle {
     /// to apply. Empty means the container is unnamed and only matches
     /// nameless `@container (...)` queries.
     pub container_name: Vec<String>,
+
+    // -- Field sizing ---------------------------------------------------
+    /// `field-sizing` property for form controls. Default `Fixed`
+    /// keeps the input at its CSS / `size` attribute width;
+    /// `Content` shrinks/grows to fit the current value.
+    pub field_sizing: FieldSizing,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -607,6 +613,8 @@ impl Default for ComputedStyle {
 
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
+
+            field_sizing: FieldSizing::Fixed,
         }
     }
 }

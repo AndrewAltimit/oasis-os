@@ -293,7 +293,7 @@ fn collect_inline_fragments(
                 fragments.push(InlineFragment::InlineBox { layout_box: lb });
             },
             BoxType::Replaced(replaced) => {
-                let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced);
+                let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced, &child.style);
                 // Apply CSS width/height if set, falling back to intrinsic.
                 let w = match child.style.width {
                     crate::css::values::Dimension::Px(px) => px,
@@ -403,15 +403,30 @@ fn text_fragments_for_inline(
 }
 
 /// Get the dimensions of a replaced inline element.
-fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
+fn replaced_dimensions(replaced: &ReplacedContent, style: &ComputedStyle) -> (f32, f32) {
+    use crate::css::values::types::FieldSizing;
     match replaced {
         ReplacedContent::Image { width, height, .. } => (*width as f32, *height as f32),
         ReplacedContent::HorizontalRule => (0.0, 2.0),
         ReplacedContent::LineBreak => (0.0, 0.0),
-        ReplacedContent::TextInput { size, .. } => {
-            // Use bitmap measurement for 'M' width as the per-character size.
+        ReplacedContent::TextInput {
+            size,
+            value,
+            placeholder,
+            ..
+        } => {
             let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
-            (*size as f32 * char_w + 8.0, 18.0)
+            let w = if style.field_sizing == FieldSizing::Content {
+                // Track the visible content (value, or placeholder when empty).
+                // Always reserve at least one glyph so the caret has somewhere
+                // to land in an empty content-sized input.
+                let visible: &str = if value.is_empty() { placeholder } else { value };
+                let text_w = oasis_types::backend::bitmap_measure_text(visible, 8) as f32;
+                text_w.max(char_w) + 8.0
+            } else {
+                *size as f32 * char_w + 8.0
+            };
+            (w, 18.0)
         },
         ReplacedContent::SubmitButton { label } => {
             // Use bitmap measurement for accurate label width.
@@ -424,13 +439,37 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
         },
         ReplacedContent::Checkbox { .. } => (13.0, 13.0),
         ReplacedContent::RadioButton { .. } => (13.0, 13.0),
-        ReplacedContent::TextArea { rows, cols, .. } => {
+        ReplacedContent::TextArea {
+            rows,
+            cols,
+            value,
+            placeholder,
+            ..
+        } => {
             let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
             let line_height = 14.0;
-            (
-                *cols as f32 * char_w + 8.0,
-                *rows as f32 * line_height + 4.0,
-            )
+            if style.field_sizing == FieldSizing::Content {
+                // Wrap on existing newlines; size to the longest line.
+                let visible: &str = if value.is_empty() { placeholder } else { value };
+                let mut max_w = char_w;
+                let mut lines: u32 = 0;
+                for line in visible.split('\n') {
+                    lines += 1;
+                    let w = oasis_types::backend::bitmap_measure_text(line, 8) as f32;
+                    if w > max_w {
+                        max_w = w;
+                    }
+                }
+                if lines == 0 {
+                    lines = 1;
+                }
+                (max_w + 8.0, lines as f32 * line_height + 4.0)
+            } else {
+                (
+                    *cols as f32 * char_w + 8.0,
+                    *rows as f32 * line_height + 4.0,
+                )
+            }
         },
         ReplacedContent::Svg { element } => (element.width, element.height),
         ReplacedContent::Canvas { state } => {

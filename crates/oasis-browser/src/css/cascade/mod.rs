@@ -501,6 +501,32 @@ pub fn compute_style(
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
 
+    // Pass 0: `@property` registrations.
+    //   * Strip non-inheriting registered properties that we picked up
+    //     via `ComputedStyle::inherit(parent)` (default for unregistered
+    //     properties is "inherits", which is what `inherit()` already
+    //     does — only `inherits: false` registrations need stripping).
+    //   * Seed initial-values for any registration that doesn't yet
+    //     have a value on this element. Subsequent declarations win.
+    for sheet in stylesheets {
+        for prop in &sheet.properties {
+            if !prop.inherits {
+                style.custom_properties.remove(&prop.name);
+            }
+        }
+    }
+    for sheet in stylesheets {
+        for prop in &sheet.properties {
+            if let Some(ref initial) = prop.initial_value
+                && !style.custom_properties.contains_key(&prop.name)
+            {
+                style
+                    .custom_properties
+                    .insert(prop.name.clone(), initial.clone());
+            }
+        }
+    }
+
     // Pass 1: Apply custom property declarations (--*) to build the
     // properties map before resolving any var() references.
     for entry in &matched {

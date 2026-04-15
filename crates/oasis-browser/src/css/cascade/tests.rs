@@ -69,6 +69,7 @@ fn make_rule(selectors: Vec<Selector>, declarations: Vec<Declaration>) -> Rule {
         declarations,
         layer: None,
         container: None,
+        scope: None,
     }
 }
 
@@ -248,6 +249,8 @@ fn specificity_ordering() {
         rules: vec![rule_class, rule_id],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -283,6 +286,8 @@ fn inheritance_of_color_and_font() {
         rules: vec![rule],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -316,6 +321,8 @@ fn important_overrides_specificity() {
         rules: vec![rule_id, rule_type],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -334,6 +341,8 @@ fn multiple_stylesheets_merged() {
         )],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let sheet2 = Stylesheet {
         rules: vec![make_rule(
@@ -342,6 +351,8 @@ fn multiple_stylesheets_merged() {
         )],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
 
     let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
@@ -362,6 +373,8 @@ fn inline_style_override() {
         )],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
 
     // Inline style says color: blue.
@@ -430,6 +443,8 @@ fn non_element_nodes_get_no_style() {
         rules: vec![],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -2046,6 +2061,8 @@ fn specificity_id_vs_many_classes() {
         rules: vec![rule_classes, rule_id],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -2087,6 +2104,8 @@ fn important_on_inherited_vs_direct() {
         ],
         keyframes: vec![],
         layers: vec![],
+        counter_styles: vec![],
+        properties: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -2336,6 +2355,7 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2349,10 +2369,13 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                 ],
                 keyframes: vec![],
                 layers: vec![],
+                counter_styles: vec![],
+                properties: vec![],
             };
             let doc = super::make_doc(vec![(TagName::Div, vec![])]);
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
@@ -2403,6 +2426,7 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2416,10 +2440,13 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                 ],
                 keyframes: vec![],
                 layers: vec![],
+                counter_styles: vec![],
+                properties: vec![],
             };
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
             let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -2468,6 +2495,7 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2481,10 +2509,13 @@ mod prop_tests {
                         }],
                         layer: None,
                         container: None,
+                        scope: None,
                     },
                 ],
                 keyframes: vec![],
                 layers: vec![],
+                counter_styles: vec![],
+                properties: vec![],
             };
 
             // Build element with id="main" and all the extra classes.
@@ -2705,6 +2736,61 @@ mod container_query_cascade_tests {
             p_color_with_lookup(&sheet, &doc, p_id, Some(&lookup)),
             Color::BLACK
         );
+    }
+
+    fn scope_p_color(css: &str) -> Color {
+        let sheet = Stylesheet::parse(css);
+        let (doc, _, p_id) = make_card_doc();
+        let ctx = ctx();
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx);
+        styles[p_id].as_ref().unwrap().color
+    }
+
+    #[test]
+    fn scope_root_includes_descendants() {
+        // Root matches the div ancestor → p inside scope → red wins.
+        let css = "p { color: black; } @scope (div) { p { color: red; } }";
+        assert_eq!(scope_p_color(css), Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn scope_root_excludes_unrelated_subtrees() {
+        // Root matches no ancestor → out of scope → fall back.
+        let css = "p { color: black; } @scope (.absent) { p { color: red; } }";
+        assert_eq!(scope_p_color(css), Color::BLACK);
+    }
+
+    #[test]
+    fn scope_no_root_applies_everywhere() {
+        let css = "p { color: black; } @scope { p { color: red; } }";
+        assert_eq!(scope_p_color(css), Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn property_initial_value_seeds_var_fallback() {
+        let css = r#"
+            @property --brand { syntax: "*"; inherits: true; initial-value: red; }
+            p { color: var(--brand); }
+        "#;
+        let sheet = Stylesheet::parse(css);
+        let (doc, _, p_id) = make_card_doc();
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        // var(--brand) should resolve to the registered initial-value.
+        assert_eq!(styles[p_id].as_ref().unwrap().color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn property_explicit_value_overrides_initial() {
+        let css = r#"
+            @property --brand { syntax: "*"; inherits: true; initial-value: red; }
+            div { --brand: blue; }
+            p { color: var(--brand); }
+        "#;
+        let sheet = Stylesheet::parse(css);
+        let (doc, _, p_id) = make_card_doc();
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        // Inherited from div which set --brand: blue.
+        assert_eq!(styles[p_id].as_ref().unwrap().color, Color::rgb(0, 0, 255));
     }
 
     #[test]

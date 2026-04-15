@@ -6,7 +6,7 @@
 
 use super::super::parser::{
     AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CssColor, CssValue,
-    LengthUnit, Rule, SimpleSelector, Specificity, Stylesheet,
+    LengthUnit, Rule, ScopeCondition, SimpleSelector, Specificity, Stylesheet,
 };
 use super::super::selectors;
 use super::super::values::ComputedStyle;
@@ -97,6 +97,47 @@ pub(super) fn container_condition_matches(
         cur = doc.nodes[pid].parent;
     }
     false
+}
+
+/// Test whether `node_id` is inside an `@scope (root) [to (limit)]?`
+/// region. Walks up the DOM from the element, failing fast on a limit
+/// boundary and succeeding when an ancestor matches the root selector.
+/// When `cond.root` is `None` the rule applies anywhere not under a
+/// limit boundary.
+pub(super) fn scope_condition_matches(
+    doc: &Document,
+    node_id: NodeId,
+    cond: &ScopeCondition,
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    use super::super::parser::parse_selector_string;
+
+    let root_sel = cond.root.as_deref().and_then(parse_selector_string);
+    let limit_sel = cond.limit.as_deref().and_then(parse_selector_string);
+
+    let mut cur = Some(node_id);
+    while let Some(id) = cur {
+        if matches!(doc.nodes[id].kind, NodeKind::Element(_)) {
+            if let Some(ref limit) = limit_sel {
+                for sel in &limit.selectors {
+                    if matches_selector(doc, id, sel, ctx) {
+                        return false;
+                    }
+                }
+            }
+            if let Some(ref root) = root_sel {
+                for sel in &root.selectors {
+                    if matches_selector(doc, id, sel, ctx) {
+                        return true;
+                    }
+                }
+            }
+        }
+        cur = doc.nodes[id].parent;
+    }
+    // Walked all the way to the document root without crossing a
+    // limit. Accept iff there's no root constraint.
+    cond.root.is_none()
 }
 
 fn eval_feature(f: ContainerFeature, entry: &super::ContainerEntry) -> bool {
@@ -190,6 +231,11 @@ pub(super) fn resolve_pseudo_style(
 
             if let Some(cond) = &rule.container
                 && !container_condition_matches(doc, node_id, cond, ctx)
+            {
+                continue;
+            }
+            if let Some(scope) = &rule.scope
+                && !scope_condition_matches(doc, node_id, scope, ctx)
             {
                 continue;
             }
@@ -380,6 +426,12 @@ pub(super) fn collect_matched_declarations(
         // rule (including ancestor walks) if it can't match.
         if let Some(cond) = &rule.container
             && !container_condition_matches(doc, node_id, cond, ctx)
+        {
+            continue;
+        }
+        // `@scope`-gated rules need an in-scope ancestor.
+        if let Some(scope) = &rule.scope
+            && !scope_condition_matches(doc, node_id, scope, ctx)
         {
             continue;
         }

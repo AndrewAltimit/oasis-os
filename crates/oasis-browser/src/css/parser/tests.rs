@@ -1477,3 +1477,169 @@ mod container_query_tests {
         assert!(cond.features.is_empty());
     }
 }
+
+// -------------------------------------------------------------------
+// @scope, @counter-style, @property, field-sizing parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn scope_with_root_only() {
+        let css = "@scope (.card) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_with_root_and_limit() {
+        let css = "@scope (.card) to (.embed) { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert_eq!(scope.limit.as_deref(), Some(".embed"));
+    }
+
+    #[test]
+    fn scope_no_root_means_no_constraint() {
+        let css = "@scope { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert!(scope.root.is_none());
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_tags_all_inner_rules() {
+        let css = r#"
+            @scope (.card) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for r in &sheet.rules {
+            assert!(r.scope.is_some());
+        }
+    }
+}
+
+#[cfg(test)]
+mod counter_style_tests {
+    use super::*;
+
+    #[test]
+    fn parses_basic_counter_style() {
+        let css = "@counter-style thumbs { system: cyclic; symbols: \"thumbsup\"; suffix: \" \"; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.counter_styles.len(), 1);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.name, "thumbs");
+        assert_eq!(cs.system.as_deref(), Some("cyclic"));
+        assert_eq!(cs.symbols, vec!["thumbsup".to_string()]);
+        assert_eq!(cs.suffix.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn parses_additive_symbols() {
+        let css = r#"
+            @counter-style upper-roman-lite {
+                system: additive;
+                additive-symbols: 10 X, 5 V, 1 I;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.system.as_deref(), Some("additive"));
+        assert_eq!(
+            cs.additive_symbols,
+            vec![
+                (10, "X".to_string()),
+                (5, "V".to_string()),
+                (1, "I".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_with_fallback_and_range() {
+        let css = r#"
+            @counter-style alpha {
+                system: alphabetic;
+                symbols: a b c;
+                fallback: decimal;
+                range: 1 3;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.fallback.as_deref(), Some("decimal"));
+        assert_eq!(cs.range.as_deref(), Some("1 3"));
+        assert_eq!(cs.symbols, vec!["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    #[test]
+    fn parses_property_descriptors() {
+        let css = "@property --brand { syntax: \"<color>\"; inherits: false; \
+                   initial-value: red; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.properties.len(), 1);
+        let p = &sheet.properties[0];
+        assert_eq!(p.name, "--brand");
+        assert_eq!(p.syntax.as_deref(), Some("<color>"));
+        assert!(!p.inherits);
+        assert_eq!(p.initial_value.as_deref(), Some("red"));
+    }
+
+    #[test]
+    fn property_inherits_true() {
+        let css = "@property --x { syntax: \"*\"; inherits: true; initial-value: 0; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].inherits);
+    }
+
+    #[test]
+    fn property_missing_initial_value() {
+        let css = "@property --x { syntax: \"*\"; inherits: false; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].initial_value.is_none());
+    }
+}
+
+#[cfg(test)]
+mod field_sizing_tests {
+    use super::*;
+    use crate::css::values::ComputedStyle;
+    use crate::css::values::types::FieldSizing;
+
+    #[test]
+    fn parses_field_sizing_content() {
+        let decls = first_decls("input { field-sizing: content; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn parses_field_sizing_fixed() {
+        let decls = first_decls("input { field-sizing: fixed; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
+    }
+}
