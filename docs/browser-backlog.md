@@ -195,7 +195,23 @@ that cause real breakage on modern sites:
   the inner selector are scope-bounded to the subject's subtree, so
   `article:has(.a .b)` can't match via an `.a` that lives above the
   article.
-- `@container` queries — most new responsive sites use these.
+- ~~`@container` queries~~ — shipped on `feat/browser-container-queries`.
+  Parses `@container [name?] (min-width|max-width|width|min-height|
+  max-height|height: Npx)` (plus `inline-size` / `block-size` aliases),
+  joined with `and`. Conditions are stored on each contained `Rule` and
+  evaluated at cascade time against the nearest matching container
+  ancestor. `container-type` (`normal` / `inline-size` / `size`),
+  `container-name`, and the `container: <name> [/ <type>]` shorthand are
+  all parsed into `ComputedStyle`. The pipeline does a second
+  cascade+layout pass after the first layout when any rule is
+  container-gated, populating a `ContainerLookup` snapshot of every
+  query container's content-box size; pages without `@container` skip
+  the work entirely. Limitations: nested `@container` rules use
+  innermost-wins instead of AND-combining; style queries
+  (`@container style(...)`) are parsed but always evaluate false; we
+  don't currently iterate the relayout to a fixpoint, so a single pass
+  catches the common "container resizes its descendants based on the
+  first laid-out width" case but not pathological circular dependencies.
 - ~~`@layer`~~ — shipped on `feat/browser-has-selector`. Supports
   statement form (`@layer a, b, c;`), named block form
   (`@layer a { ... }`), and anonymous block form (`@layer { ... }`).
@@ -242,10 +258,37 @@ that cause real breakage on modern sites:
 
 **Medium-impact:**
 
-- `@property` — typed custom property registration.
-- `field-sizing: content`.
-- `@scope` — shipping in Chrome.
-- `counter-style` — rarely breaks rendering but worth parsing.
+- ~~`@property` — typed custom property registration.~~ — shipped on
+  `feat/browser-container-queries`. Parses `@property --name { syntax;
+  inherits; initial-value }` into `Stylesheet.properties`. Cascade
+  seeds the `initial-value` into each element's custom-properties map
+  before pass 1 (so `var(--name)` resolves even when no rule sets it),
+  and respects `inherits: false` by stripping the property after the
+  inherit-from-parent step. `syntax` is parsed but not validated.
+- ~~`field-sizing: content`.~~ — shipped on
+  `feat/browser-container-queries`. New `FieldSizing` enum on
+  `ComputedStyle`. The inline layout pass measures the input's actual
+  `value` (or `placeholder`) width and uses that instead of the
+  `size`-attribute × char-width product. `<textarea>` content-sizing
+  walks lines for height too.
+- ~~`@scope` — shipping in Chrome.~~ — shipped on
+  `feat/browser-container-queries`. Parses `@scope (root) [to (limit)]?
+  { ... }` and tags inner rules with a `ScopeCondition`. Cascade
+  filters scope-gated rules by walking the DOM up from each candidate
+  element: a limit ancestor fails the rule fast; the first matching
+  root ancestor passes it. A bare `@scope { ... }` (no root) applies
+  anywhere not under a limit boundary. Selectors in the scope clause
+  are re-parsed via `parse_selector_string` per element check (cheap
+  for the typical case of one or two scopes per page; we can cache
+  later if real corpora hit it hard).
+- ~~`counter-style` — rarely breaks rendering but worth parsing.~~ —
+  shipped on `feat/browser-container-queries` as parse-only. Parses
+  `@counter-style name { system; symbols; additive-symbols; range;
+  prefix; suffix; pad; negative; fallback; speak-as }` into
+  `Stylesheet.counter_styles` so authors can ship the descriptor
+  block without warnings. List-item rendering still uses the built-in
+  styles only — wiring custom counter styles into `<ol>` markers is a
+  follow-up.
 
 **Low-impact (skip until someone complains):**
 
@@ -256,10 +299,25 @@ that cause real breakage on modern sites:
 
 **Already parsed but not painted — audit needed:**
 
-- `accent-color`, `caret-color` (stored in ComputedStyle; check whether
-  form controls actually use them).
-- `will-change` — today only sets a boolean hint; should promote to
-  layer creation once the compositor lands.
+- ~~`accent-color`, `caret-color`.~~ — both wired up on
+  `feat/browser-container-queries`. `accent-color` tints the checked
+  background of `<input type="checkbox">` and the dot of
+  `<input type="radio">` (Blink-style); the checkmark flips to white
+  when the box is filled with the accent for contrast. `caret-color`
+  draws a 1-pixel caret in focused `<input>` and `<textarea>` form
+  controls (record path), positioned after the value text on text
+  inputs and after the last visible line on textareas, with fallback
+  to `style.color`. PaintViewport now carries `focused_node` so the
+  recorder can tell which input has focus.
+- ~~`will-change`.~~ — broadened on `feat/browser-container-queries`.
+  The boolean is now `will_change_promotes_layer` and accepts any of
+  `transform`, `opacity`, `filter`, `scroll-position`, or `contents`,
+  including `Multiple` value lists like `will-change: top, transform`.
+  The compositor already promotes any element with the flag to its
+  own stacking context AND a real compositing layer (see
+  `creates_compositing_layer` / `creates_stacking_context` in
+  `paint/mod.rs`), so the layer-creation half of the backlog item
+  is now end-to-end.
 
 ---
 
@@ -304,10 +362,10 @@ order is:
    smallest risk). Catches regressions automatically forever.
 2. **`html5lib-tests` integration** (catches tree-builder weirdness in
    one shot, no speculative design needed).
-3. **CSS long-tail subset: ~~`:has()`~~ + ~~`@layer`~~ + `@container` +
-   ~~CSS nesting~~** (real-world breakage on modern sites). `:has()`
-   and `@layer` shipped on `feat/browser-has-selector`; CSS nesting
-   shipped on `feat/css-nesting`. `@container` queries remain.
+3. ~~**CSS long-tail subset: `:has()` + `@layer` + `@container` +
+   CSS nesting**~~ — all shipped. `:has()` and `@layer` on
+   `feat/browser-has-selector`; CSS nesting on `feat/css-nesting`;
+   `@container` on `feat/browser-container-queries`.
 4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
    backdrop-filter, mask, isolation, filter, will-change in one
    architectural change).

@@ -23,7 +23,7 @@ pub use oasis_types::backend::{Color, DrawCommand, GradientStyle, TextureId};
 mod tests {
     use super::*;
     use oasis_types::backend::{
-        SdiAlpha, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
+        SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
     };
 
     // -----------------------------------------------------------------------

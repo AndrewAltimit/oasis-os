@@ -8,14 +8,14 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackfaceVisibility, BackgroundBox,
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode,
     BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
-    ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
-    FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight, GridTrackSize,
-    Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
-    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
-    PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign,
-    ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection, TextJustify,
-    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap,
-    TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
+    ContainerType, ContentVisibility, Cursor, Dimension, Display, FieldSizing, FilterFunction,
+    FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
+    FontWeight, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
+    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
+    OverscrollBehavior, PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior,
+    ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection,
+    TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition,
+    TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
     Visibility, WhiteSpace, WordBreak,
 };
 
@@ -220,7 +220,12 @@ pub struct ComputedStyle {
     pub counter_increment: Vec<(String, i32)>,
 
     // -- Will-change ---------------------------------------------------
-    pub will_change_transform: bool,
+    /// `will-change` declared a hint that promotes this element to its
+    /// own compositing layer (and thus its own stacking context). True
+    /// for any of `transform`, `opacity`, `filter`, `scroll-position`,
+    /// or `contents`. The compositor inspects this flag in
+    /// `creates_compositing_layer` / `creates_stacking_context`.
+    pub will_change_promotes_layer: bool,
 
     // -- Tab size (for preformatted text) --------------------------------
     pub tab_size: u32,
@@ -336,6 +341,23 @@ pub struct ComputedStyle {
 
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
+
+    // -- Container queries ----------------------------------------------
+    /// `container-type`. Default `Normal`. When set to `InlineSize` or
+    /// `Size`, this element establishes a query container that
+    /// descendant `@container` rules can target.
+    pub container_type: ContainerType,
+    /// `container-name`. Zero or more identifiers; an `@container name (...)`
+    /// rule must match one of these names on an ancestor for its rules
+    /// to apply. Empty means the container is unnamed and only matches
+    /// nameless `@container (...)` queries.
+    pub container_name: Vec<String>,
+
+    // -- Field sizing ---------------------------------------------------
+    /// `field-sizing` property for form controls. Default `Fixed`
+    /// keeps the input at its CSS / `size` attribute width;
+    /// `Content` shrinks/grows to fit the current value.
+    pub field_sizing: FieldSizing,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -519,7 +541,7 @@ impl Default for ComputedStyle {
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
 
-            will_change_transform: false,
+            will_change_promotes_layer: false,
 
             tab_size: 8,
 
@@ -593,6 +615,11 @@ impl Default for ComputedStyle {
             justify_items: JustifySelf::Stretch,
 
             custom_properties: FxHashMap::default(),
+
+            container_type: ContainerType::Normal,
+            container_name: Vec::new(),
+
+            field_sizing: FieldSizing::Fixed,
         }
     }
 }

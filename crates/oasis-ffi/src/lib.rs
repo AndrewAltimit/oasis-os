@@ -549,8 +549,8 @@ mod tests {
 
     #[test]
     fn button_from_code_all_valid() {
-        use crate::input::{button_from_code, trigger_from_code};
-        use oasis_core::input::{Button, Trigger};
+        use crate::input::button_from_code;
+        use oasis_core::input::Button;
 
         assert_eq!(button_from_code(OASIS_BUTTON_UP), Some(Button::Up));
         assert_eq!(button_from_code(OASIS_BUTTON_DOWN), Some(Button::Down));

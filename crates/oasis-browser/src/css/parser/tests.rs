@@ -1109,7 +1109,18 @@ mod prop {
 
     #[test]
     fn supports_unrecognized_property_excludes_rules() {
-        let css = "@supports (container-type: inline-size) { .c { width: 100px; } }";
+        // FOOTGUN: this test (and `supports_not_condition` below) needs
+        // a property that is *not* in `SUPPORTED_PROPERTIES`. We pick
+        // `paint-order` because it's a real CSS property we have no
+        // intention of supporting (SVG-only stroke vs. fill order),
+        // which makes it a stable sentinel. If you ever add
+        // `paint-order` to `SUPPORTED_PROPERTIES`, both this test and
+        // `supports_not_condition` will silently flip from passing to
+        // failing — pick another never-going-to-implement property at
+        // that point. The earlier sentinel was `container-type`, which
+        // was added to `SUPPORTED_PROPERTIES` mid-PR and broke both
+        // tests until they were swapped to `paint-order`.
+        let css = "@supports (paint-order: stroke) { .c { width: 100px; } }";
         let sheet = parse(css);
         assert!(
             sheet.rules.is_empty(),
@@ -1130,7 +1141,10 @@ mod prop {
 
     #[test]
     fn supports_not_condition() {
-        let css = "@supports not (container-type: inline-size) { p { color: red; } }";
+        // See `supports_unrecognized_property_excludes_rules` for the
+        // rationale behind `paint-order` as the sentinel — keep both
+        // tests in sync if you ever change it.
+        let css = "@supports not (paint-order: stroke) { p { color: red; } }";
         let sheet = parse(css);
         assert_eq!(sheet.rules.len(), 1, "not unsupported should include rules");
     }
@@ -1375,5 +1389,346 @@ mod nesting_tests {
                 }
             }
         }
+    }
+}
+
+// -------------------------------------------------------------------
+// @container query parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod container_query_tests {
+    use super::*;
+
+    #[test]
+    fn parses_min_width_condition() {
+        let css = "@container (min-width: 400px) { .card { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0]
+            .container
+            .as_ref()
+            .expect("rule should carry a container condition");
+        assert!(cond.name.is_none());
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(400.0)]);
+        assert_eq!(sheet.rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn parses_named_container() {
+        let css = "@container card (min-width: 200px) { p { color: blue; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.name.as_deref(), Some("card"));
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(200.0)]);
+    }
+
+    #[test]
+    fn parses_max_width_inline_size_alias() {
+        let css = "@container (max-inline-size: 320px) { p { font-size: 12px; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MaxWidth(320.0)]);
+    }
+
+    #[test]
+    fn parses_zero_space_and_combinator() {
+        // CSS allows `)` and `(` to be token boundaries on either side
+        // of `and`, so `(a)and(b)` is valid and must split into two
+        // features instead of merging into one unparseable string.
+        let css = "@container (min-width: 200px)and(max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_split_inside_identifier_containing_and() {
+        // `expand` contains "and" but preceded by `p`, not a boundary
+        // char, so `split_css_and` must not treat it as a combinator.
+        let parts = split_css_and("(expand: 200px)");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "(expand: 200px)");
+    }
+
+    #[test]
+    fn parses_and_joined_features() {
+        let css = "@container (min-width: 200px) and (max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_size_alias_maps_to_height() {
+        let css = "@container (min-block-size: 100px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MinHeight(100.0)]);
+    }
+
+    #[test]
+    fn multiple_inner_rules_all_tagged() {
+        let css = r#"
+            @container (min-width: 300px) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for rule in &sheet.rules {
+            let cond = rule
+                .container
+                .as_ref()
+                .expect("each child should be tagged");
+            assert_eq!(cond.features, vec![ContainerFeature::MinWidth(300.0)]);
+        }
+    }
+
+    #[test]
+    fn unrelated_rules_have_no_container() {
+        let css = "p { color: red; }";
+        let sheet = parse(css);
+        assert!(sheet.rules[0].container.is_none());
+    }
+
+    #[test]
+    fn unparseable_feature_drops_to_empty_list() {
+        // `style(--x)` style queries aren't supported; the condition
+        // should parse to an empty feature list which never matches.
+        let css = "@container style(--theme: dark) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert!(cond.features.is_empty());
+    }
+}
+
+// -------------------------------------------------------------------
+// @scope, @counter-style, @property, field-sizing parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn scope_with_root_only() {
+        let css = "@scope (.card) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_with_root_and_limit() {
+        let css = "@scope (.card) to (.embed) { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert_eq!(scope.limit.as_deref(), Some(".embed"));
+    }
+
+    #[test]
+    fn scope_no_root_means_no_constraint() {
+        let css = "@scope { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert!(scope.root.is_none());
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_tags_all_inner_rules() {
+        let css = r#"
+            @scope (.card) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for r in &sheet.rules {
+            assert!(r.scope.is_some());
+        }
+    }
+}
+
+#[cfg(test)]
+mod counter_style_tests {
+    use super::*;
+
+    #[test]
+    fn parses_basic_counter_style() {
+        let css = "@counter-style thumbs { system: cyclic; symbols: \"thumbsup\"; suffix: \" \"; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.counter_styles.len(), 1);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.name, "thumbs");
+        assert_eq!(cs.system.as_deref(), Some("cyclic"));
+        assert_eq!(cs.symbols, vec!["thumbsup".to_string()]);
+        assert_eq!(cs.suffix.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn parses_additive_symbols() {
+        let css = r#"
+            @counter-style upper-roman-lite {
+                system: additive;
+                additive-symbols: 10 X, 5 V, 1 I;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.system.as_deref(), Some("additive"));
+        assert_eq!(
+            cs.additive_symbols,
+            vec![
+                (10, "X".to_string()),
+                (5, "V".to_string()),
+                (1, "I".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_with_fallback_and_range() {
+        let css = r#"
+            @counter-style alpha {
+                system: alphabetic;
+                symbols: a b c;
+                fallback: decimal;
+                range: 1 3;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.fallback.as_deref(), Some("decimal"));
+        assert_eq!(cs.range.as_deref(), Some("1 3"));
+        assert_eq!(cs.symbols, vec!["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    #[test]
+    fn parses_property_descriptors() {
+        let css = "@property --brand { syntax: \"<color>\"; inherits: false; \
+                   initial-value: red; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.properties.len(), 1);
+        let p = &sheet.properties[0];
+        assert_eq!(p.name, "--brand");
+        assert_eq!(p.syntax.as_deref(), Some("<color>"));
+        assert!(!p.inherits);
+        assert_eq!(p.initial_value.as_deref(), Some("red"));
+    }
+
+    #[test]
+    fn property_inherits_true() {
+        let css = "@property --x { syntax: \"*\"; inherits: true; initial-value: 0; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].inherits);
+    }
+
+    #[test]
+    fn property_missing_initial_value() {
+        let css = "@property --x { syntax: \"*\"; inherits: false; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].initial_value.is_none());
+    }
+}
+
+#[cfg(test)]
+mod will_change_tests {
+    use super::*;
+    use crate::css::values::ComputedStyle;
+
+    fn applied(css: &str) -> ComputedStyle {
+        let decls = first_decls(css);
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        style
+    }
+
+    #[test]
+    fn single_keyword_promotes() {
+        for kw in &[
+            "transform",
+            "opacity",
+            "filter",
+            "scroll-position",
+            "contents",
+        ] {
+            let style = applied(&format!("p {{ will-change: {kw}; }}"));
+            assert!(
+                style.will_change_promotes_layer,
+                "{kw} should promote to a layer"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_does_not_promote() {
+        let style = applied("p { will-change: auto; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn multiple_values_promote_if_any_match() {
+        let style = applied("p { will-change: top, transform; }");
+        assert!(style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn unrelated_keywords_do_not_promote() {
+        let style = applied("p { will-change: top, left; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+}
+
+#[cfg(test)]
+mod field_sizing_tests {
+    use super::*;
+    use crate::css::values::ComputedStyle;
+    use crate::css::values::types::FieldSizing;
+
+    #[test]
+    fn parses_field_sizing_content() {
+        let decls = first_decls("input { field-sizing: content; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn parses_field_sizing_fixed() {
+        let decls = first_decls("input { field-sizing: fixed; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
     }
 }

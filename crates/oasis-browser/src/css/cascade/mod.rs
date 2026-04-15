@@ -124,6 +124,89 @@ pub struct CascadeContext<'a> {
     /// The DOM node that currently has keyboard focus (for `:focus` and
     /// `:focus-visible`).
     pub focused_node: Option<NodeId>,
+    /// Snapshot of every query container's box size and name list,
+    /// keyed by `NodeId`. Used to evaluate `@container` rule
+    /// conditions during cascade. `None` on the first cascade pass
+    /// before layout has run; populated for the second pass.
+    pub containers: Option<&'a ContainerLookup>,
+}
+
+/// Per-element container metadata feeding `@container` rule evaluation.
+#[derive(Debug, Clone)]
+pub struct ContainerEntry {
+    /// `container-name` identifiers declared on the element. May be empty.
+    pub names: Vec<String>,
+    /// Border-box inline-axis size in CSS pixels.
+    pub width: f32,
+    /// Border-box block-axis size in CSS pixels.
+    pub height: f32,
+    /// The container type — `InlineSize` rejects block-axis queries.
+    pub container_type: crate::css::values::types::ContainerType,
+}
+
+/// Map of container `NodeId` → metadata. Built post-layout from a walk
+/// over the layout tree by [`build_container_lookup`].
+#[derive(Debug, Default, Clone)]
+pub struct ContainerLookup {
+    pub map: rustc_hash::FxHashMap<NodeId, ContainerEntry>,
+}
+
+impl ContainerLookup {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, id: NodeId) -> Option<&ContainerEntry> {
+        self.map.get(&id)
+    }
+
+    pub fn insert(&mut self, id: NodeId, entry: ContainerEntry) {
+        self.map.insert(id, entry);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// Walk a laid-out `LayoutBox` tree and snapshot every query container
+/// (any element whose computed `container-type` is not `Normal`), keyed
+/// by its DOM node id. `@container` rule conditions are evaluated
+/// against the container's content-box size.
+pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> ContainerLookup {
+    use crate::css::values::types::ContainerType;
+
+    fn walk(b: &crate::layout::box_model::LayoutBox, out: &mut ContainerLookup) {
+        if let Some(nid) = b.node
+            && b.style.container_type != ContainerType::Normal
+        {
+            out.insert(
+                nid,
+                ContainerEntry {
+                    names: b.style.container_name.clone(),
+                    width: b.dimensions.content.width,
+                    height: b.dimensions.content.height,
+                    container_type: b.style.container_type,
+                },
+            );
+        }
+        for c in &b.children {
+            walk(c, out);
+        }
+    }
+
+    let mut lookup = ContainerLookup::new();
+    walk(root, &mut lookup);
+    lookup
+}
+
+/// Return true if any rule in any of the given stylesheets is gated
+/// behind a `@container` condition. Used to skip the second cascade
+/// pass on pages that don't use container queries.
+pub fn stylesheets_use_container_queries(sheets: &[&super::parser::Stylesheet]) -> bool {
+    sheets
+        .iter()
+        .any(|s| s.rules.iter().any(|r| r.container.is_some()))
 }
 
 // -----------------------------------------------------------------------
@@ -420,6 +503,38 @@ pub fn compute_style(
             .then_with(|| a.specificity.cmp(&b.specificity))
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
+
+    // Pass 0: `@property` registrations.
+    //   * Strip non-inheriting registered properties that we picked up
+    //     via `ComputedStyle::inherit(parent)` (default for unregistered
+    //     properties is "inherits", which is what `inherit()` already
+    //     does — only `inherits: false` registrations need stripping).
+    //   * Seed initial-values for any registration that doesn't yet
+    //     have a value on this element. Subsequent declarations win.
+    {
+        let mut last_inherits: rustc_hash::FxHashMap<&str, bool> = rustc_hash::FxHashMap::default();
+        let mut last_initial: rustc_hash::FxHashMap<&str, &str> = rustc_hash::FxHashMap::default();
+        for sheet in stylesheets {
+            for prop in &sheet.properties {
+                last_inherits.insert(&prop.name, prop.inherits);
+                if let Some(ref initial) = prop.initial_value {
+                    last_initial.insert(&prop.name, initial);
+                }
+            }
+        }
+        for (name, &inherits) in &last_inherits {
+            if !inherits {
+                style.custom_properties.remove(*name);
+            }
+        }
+        for (name, initial) in last_initial {
+            if !style.custom_properties.contains_key(name) {
+                style
+                    .custom_properties
+                    .insert(name.to_string(), initial.to_string());
+            }
+        }
+    }
 
     // Pass 1: Apply custom property declarations (--*) to build the
     // properties map before resolving any var() references.

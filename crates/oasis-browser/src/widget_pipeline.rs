@@ -648,23 +648,82 @@ impl BrowserWidget {
         // 4. CSS cascade: user-agent + author stylesheets + inline styles.
         self.diag("[BR] cascade start");
         let ua_sheet = css::default::default_stylesheet();
-        let (styles, selector_index) = {
-            let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
-            for sheet in &author_sheets {
-                all_sheets.push(sheet);
-            }
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
+        for sheet in &author_sheets {
+            all_sheets.push(sheet);
+        }
+        let mut styles = {
             let ctx = css::cascade::CascadeContext {
                 hover_node: self.hover_node,
                 visited_urls: Some(&self.visited_urls),
                 focused_node: None,
+                containers: None,
             };
-            let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
-            self.diag("[BR] selector index start");
-            // Build selector index while all_sheets is alive.
-            let idx = css::cascade::SelectorIndex::build(&all_sheets);
-            (styles, idx)
+            css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx)
         };
+        self.diag("[BR] selector index start");
+        let selector_index = css::cascade::SelectorIndex::build(&all_sheets);
         self.diag(&format!("[BR] cascade done: {} styles", styles.len()));
+
+        // 5. Build link href map from DOM.
+        let href_map = Self::build_link_map(&doc);
+
+        // 6. Build layout tree.
+        self.diag("[BR] layout start");
+        let content_h = self.config.content_height(self.window_h);
+        self.refresh_image_info();
+        let shared = std::rc::Rc::clone(&self.text_cache);
+        let measurer =
+            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        let viewport_w = self.window_w as f32 / self.config.zoom_level;
+        let viewport_h = content_h as f32 / self.config.zoom_level;
+        let mut layout_root = layout::block::build_layout_tree(
+            &doc,
+            &styles,
+            &measurer,
+            viewport_w,
+            viewport_h,
+            Some(url),
+            &self.cached_image_info,
+        );
+        self.diag("[BR] layout done");
+
+        // 6b. `@container` queries: if any author/UA rule is gated behind
+        //     a container condition, do a second cascade+layout pass with
+        //     the post-layout container sizes plumbed into cascade. Pages
+        //     without container queries skip the work entirely.
+        let container_lookup = if css::cascade::stylesheets_use_container_queries(&all_sheets) {
+            let first_lookup = css::cascade::build_container_lookup(&layout_root);
+            if !first_lookup.is_empty() {
+                self.diag("[BR] container-query restyle");
+                let ctx = css::cascade::CascadeContext {
+                    hover_node: self.hover_node,
+                    visited_urls: Some(&self.visited_urls),
+                    focused_node: None,
+                    containers: Some(&first_lookup),
+                };
+                styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+                layout_root = layout::block::build_layout_tree(
+                    &doc,
+                    &styles,
+                    &measurer,
+                    viewport_w,
+                    viewport_h,
+                    Some(url),
+                    &self.cached_image_info,
+                );
+                // Rebuild from the post-second-layout tree so the
+                // cached lookup reflects the *final* container sizes.
+                // Hover/focus restyles reuse this and would otherwise
+                // see stale pre-restyle dimensions for nested
+                // container-query cases.
+                Some(css::cascade::build_container_lookup(&layout_root))
+            } else {
+                Some(first_lookup)
+            }
+        } else {
+            None
+        };
 
         // Update shared computed styles for JS getComputedStyle().
         #[cfg(feature = "javascript")]
@@ -672,18 +731,12 @@ impl BrowserWidget {
             *self.js_styles.borrow_mut() = styles.clone();
         }
 
-        // Cache parsed sheets and selector index for hover restyles.
-        self.cached_author_sheets = author_sheets;
-        self.cached_inline_styles = inline_styles;
-        self.cached_selector_index = Some(selector_index);
-
-        // 4b. Register CSS animations with the animation engine.
-        //     Collect @keyframes from all stylesheets, then register any
-        //     node that declares `animation-name`.
+        // 4b. Register CSS animations with the animation engine using
+        //     the final styles (after any container-query restyle).
         {
             let mut all_keyframes: Vec<&css::parser::KeyframesRule> = Vec::new();
             all_keyframes.extend(ua_sheet.keyframes.iter());
-            for sheet in &self.cached_author_sheets {
+            for sheet in &author_sheets {
                 all_keyframes.extend(sheet.keyframes.iter());
             }
             self.animation_engine = css::animation::AnimationEngine::new();
@@ -701,29 +754,13 @@ impl BrowserWidget {
                 }
             }
         }
+        drop(all_sheets);
 
-        // 5. Build link href map from DOM.
-        let href_map = Self::build_link_map(&doc);
-
-        // 6. Build layout tree.
-        self.diag("[BR] layout start");
-        let content_h = self.config.content_height(self.window_h);
-        self.refresh_image_info();
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
-        let viewport_w = self.window_w as f32 / self.config.zoom_level;
-        let viewport_h = content_h as f32 / self.config.zoom_level;
-        let layout_root = layout::block::build_layout_tree(
-            &doc,
-            &styles,
-            &measurer,
-            viewport_w,
-            viewport_h,
-            Some(url),
-            &self.cached_image_info,
-        );
-        self.diag("[BR] layout done");
+        // Cache parsed sheets and selector index for hover restyles.
+        self.cached_author_sheets = author_sheets;
+        self.cached_inline_styles = inline_styles;
+        self.cached_selector_index = Some(selector_index);
+        self.container_lookup = container_lookup;
 
         // 7a. Collect canvas states from layout tree.
         #[cfg(feature = "javascript")]
@@ -924,6 +961,7 @@ impl BrowserWidget {
                     hover_node: None,
                     visited_urls: Some(&self.visited_urls),
                     focused_node: None,
+                    containers: None,
                 };
                 let styles = css::cascade::style_tree(&reader_doc, &[ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);

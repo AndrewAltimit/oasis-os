@@ -70,6 +70,10 @@ pub struct PaintViewport {
     /// True visible viewport height (excludes buffer zone).
     /// Used for sticky positioning. Defaults to `height` if not set.
     pub visible_height: f32,
+    /// DOM node id that currently has keyboard focus, if any. Used by
+    /// the recorder to draw a caret in focused text inputs and pick
+    /// the `caret-color` from that element's computed style.
+    pub focused_node: Option<NodeId>,
 }
 // -------------------------------------------------------------------
 
@@ -704,7 +708,7 @@ pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
     }
 
     // will-change: transform/opacity/filter creates a stacking context.
-    if style.will_change_transform {
+    if style.will_change_promotes_layer {
         return true;
     }
 
@@ -767,7 +771,7 @@ pub(crate) fn creates_compositing_layer(layout_box: &LayoutBox) -> bool {
         return true;
     }
 
-    if style.will_change_transform {
+    if style.will_change_promotes_layer {
         return true;
     }
 
@@ -903,6 +907,7 @@ mod tests {
         width: 480.0,
         height: 272.0,
         visible_height: 272.0,
+        focused_node: None,
     };
 
     // ---------------------------------------------------------------

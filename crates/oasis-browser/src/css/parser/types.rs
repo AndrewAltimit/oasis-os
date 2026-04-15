@@ -559,6 +559,60 @@ pub struct Rule {
     /// Unlayered author rules win over layered author rules (for normal
     /// declarations); `!important` reverses the order within layers.
     pub layer: Option<u16>,
+    /// `@container` condition the rule was nested inside, if any. The
+    /// rule only contributes its declarations when this condition
+    /// evaluates true against the nearest matching container ancestor
+    /// at cascade time. `None` for unconditional rules.
+    pub container: Option<ContainerCondition>,
+    /// `@scope (root) [to (limit)]?` condition the rule was nested
+    /// inside, if any. The rule only matches elements that are
+    /// descendants of (or equal to) some `root` ancestor and not below
+    /// any matching `limit` boundary. `None` for unconditional rules.
+    pub scope: Option<ScopeCondition>,
+}
+
+/// Parsed `@scope` condition. Both root and limit are stored as the
+/// raw selector text — we re-parse on demand at cascade time via
+/// `parse_selector_string` so we can reuse the full selector engine
+/// without duplicating it here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopeCondition {
+    /// The `(root-selector)` text. `None` means "implicitly scoped to
+    /// the stylesheet's owner element" — for a `<style>` block we treat
+    /// that as "matches anywhere in the document" (no root constraint).
+    pub root: Option<String>,
+    /// The `to (limit-selector)` text, if any. Elements that match the
+    /// limit selector — and all of their descendants — fall outside the
+    /// scope and don't get the rule applied.
+    pub limit: Option<String>,
+}
+
+/// Parsed `@container` condition: optional container name plus a
+/// conjunction of size feature predicates (`min-width`, `max-width`,
+/// `min-height`, `max-height`, `width`, `height`, plus the
+/// `inline-size` / `block-size` aliases).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerCondition {
+    /// Optional container name. `None` matches any unnamed or named
+    /// container ancestor; `Some(name)` matches only ancestors whose
+    /// `container-name` includes this identifier.
+    pub name: Option<String>,
+    /// Feature predicates joined with `and`. All must hold against the
+    /// nearest matching container's size for the rule to apply.
+    pub features: Vec<ContainerFeature>,
+}
+
+/// A single `@container` size feature predicate. Pixel values only —
+/// percent / vw / vh are not supported in the condition (they don't
+/// have a useful meaning against a container's own box).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContainerFeature {
+    MinWidth(f32),
+    MaxWidth(f32),
+    Width(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    Height(f32),
 }
 
 /// A single keyframe stop (percentage + declarations).
@@ -576,6 +630,58 @@ pub struct KeyframesRule {
     pub stops: Vec<KeyframeStop>,
 }
 
+/// A parsed `@counter-style name { ... }` rule. The descriptors are
+/// stored as raw strings — we keep this lossless for round-tripping
+/// but don't yet wire it into list-item rendering, so most fields are
+/// just remembered for `getCounterStyle()`-style introspection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CounterStyleRule {
+    /// The author-supplied counter style name (e.g. `thumbs`).
+    pub name: String,
+    /// `system: cyclic | numeric | alphabetic | symbolic | additive |
+    /// fixed | extends ...`. Stored as a lowercased keyword.
+    pub system: Option<String>,
+    /// `symbols: ...` — the visible glyphs / strings, in order.
+    pub symbols: Vec<String>,
+    /// `additive-symbols: ...` for the `additive` system. Pairs of
+    /// `(weight, symbol)`.
+    pub additive_symbols: Vec<(i32, String)>,
+    /// `range: ...` raw text (e.g. `1 5`, `auto`, `infinite infinite`).
+    pub range: Option<String>,
+    /// `prefix: "x"` — text inserted before the marker.
+    pub prefix: Option<String>,
+    /// `suffix: "x"` — text inserted after the marker.
+    pub suffix: Option<String>,
+    /// `pad: <integer> <symbol>`, stored as raw text.
+    pub pad: Option<String>,
+    /// `negative: <prefix> [<suffix>]`, raw text.
+    pub negative: Option<String>,
+    /// `fallback: <name>` — counter style to fall back to.
+    pub fallback: Option<String>,
+    /// `speak-as: ...` — accessibility fallback. Raw text.
+    pub speak_as: Option<String>,
+}
+
+/// A parsed `@property --foo { ... }` registration. Lets authors
+/// declare a typed custom property with a default initial value and
+/// inheritance flag. The cascade falls back to `initial_value` when
+/// `var(--foo)` is referenced and not overridden by any declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyRule {
+    /// Property name including the leading `--` (e.g. `--brand-color`).
+    pub name: String,
+    /// `syntax: "<color>"` etc. — kept as the raw author string. We
+    /// don't enforce the syntax grammar yet, so any value is accepted.
+    pub syntax: Option<String>,
+    /// `inherits: true | false`. Defaults to `false` per spec when
+    /// the descriptor is missing (which is technically a parse error
+    /// in real browsers, but we accept it).
+    pub inherits: bool,
+    /// `initial-value: ...` — raw value string used as the fallback
+    /// for unresolved `var()` lookups. `None` means no initial value.
+    pub initial_value: Option<String>,
+}
+
 /// A complete parsed stylesheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stylesheet {
@@ -587,4 +693,12 @@ pub struct Stylesheet {
     /// of the form `"__anon_{n}"` so they stay distinct from any
     /// named layer. Empty for stylesheets without any `@layer` rules.
     pub layers: Vec<String>,
+    /// `@counter-style` registrations declared in this stylesheet.
+    /// Currently parse-only: not yet wired into list-item rendering.
+    pub counter_styles: Vec<CounterStyleRule>,
+    /// `@property` registrations declared in this stylesheet. Each
+    /// supplies an `initial-value` fallback that the cascade seeds
+    /// into the element's custom-properties map before resolving any
+    /// `var()` references that target the registered property.
+    pub properties: Vec<PropertyRule>,
 }

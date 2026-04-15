@@ -5,8 +5,8 @@
 //! HTML attribute injection.
 
 use super::super::parser::{
-    AttrOp, Combinator, CompoundSelector, CssColor, CssValue, LengthUnit, Rule, SimpleSelector,
-    Specificity, Stylesheet,
+    AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CssColor, CssValue,
+    LengthUnit, Rule, ScopeCondition, SimpleSelector, Specificity, Stylesheet,
 };
 use super::super::selectors;
 use super::super::values::ComputedStyle;
@@ -60,6 +60,106 @@ pub(super) struct MatchedDeclaration {
     /// Cascade-layer index inside the source stylesheet, or `None`
     /// for unlayered rules / non-stylesheet origins.
     pub(super) layer: Option<u16>,
+}
+
+/// Test whether `node_id`'s nearest matching container ancestor
+/// satisfies a `@container` condition, given the current layout
+/// snapshot in `ctx.containers`.
+///
+/// Returns `false` when there's no container snapshot (the first cascade
+/// pass before layout) or when no ancestor matches the condition's name.
+/// An empty feature list is treated as never-matching to stay safe
+/// against parser failures producing degenerate conditions.
+pub(super) fn container_condition_matches(
+    doc: &Document,
+    node_id: NodeId,
+    cond: &ContainerCondition,
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    let Some(lookup) = ctx.containers else {
+        return false;
+    };
+    if cond.features.is_empty() {
+        return false;
+    }
+    let mut cur = doc.nodes[node_id].parent;
+    while let Some(pid) = cur {
+        if let Some(entry) = lookup.get(pid) {
+            // Skip ancestors whose name doesn't match the requested one.
+            let name_ok = match cond.name.as_deref() {
+                None => true,
+                Some(want) => entry.names.iter().any(|n| n == want),
+            };
+            if name_ok {
+                return cond.features.iter().all(|f| eval_feature(*f, entry));
+            }
+        }
+        cur = doc.nodes[pid].parent;
+    }
+    false
+}
+
+/// Test whether `node_id` is inside an `@scope (root) [to (limit)]?`
+/// region. Walks up the DOM from the element, failing fast on a limit
+/// boundary and succeeding when an ancestor matches the root selector.
+/// When `cond.root` is `None` the rule applies anywhere not under a
+/// limit boundary.
+pub(super) fn scope_condition_matches(
+    doc: &Document,
+    node_id: NodeId,
+    cond: &ScopeCondition,
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    use super::super::parser::parse_selector_string;
+
+    let root_sel = cond.root.as_deref().and_then(parse_selector_string);
+    let limit_sel = cond.limit.as_deref().and_then(parse_selector_string);
+
+    let mut cur = Some(node_id);
+    while let Some(id) = cur {
+        if matches!(doc.nodes[id].kind, NodeKind::Element(_)) {
+            if let Some(ref limit) = limit_sel {
+                for sel in &limit.selectors {
+                    if matches_selector(doc, id, sel, ctx) {
+                        return false;
+                    }
+                }
+            }
+            if let Some(ref root) = root_sel {
+                for sel in &root.selectors {
+                    if matches_selector(doc, id, sel, ctx) {
+                        return true;
+                    }
+                }
+            }
+        }
+        cur = doc.nodes[id].parent;
+    }
+    // Walked all the way to the document root without crossing a
+    // limit. Accept iff there's no root constraint.
+    cond.root.is_none()
+}
+
+fn eval_feature(f: ContainerFeature, entry: &super::ContainerEntry) -> bool {
+    use crate::css::values::types::ContainerType;
+
+    let is_block_axis = matches!(
+        f,
+        ContainerFeature::MinHeight(_)
+            | ContainerFeature::MaxHeight(_)
+            | ContainerFeature::Height(_)
+    );
+    if is_block_axis && entry.container_type == ContainerType::InlineSize {
+        return false;
+    }
+    match f {
+        ContainerFeature::MinWidth(px) => entry.width >= px,
+        ContainerFeature::MaxWidth(px) => entry.width <= px,
+        ContainerFeature::Width(px) => (entry.width - px).abs() < 0.5,
+        ContainerFeature::MinHeight(px) => entry.height >= px,
+        ContainerFeature::MaxHeight(px) => entry.height <= px,
+        ContainerFeature::Height(px) => (entry.height - px).abs() < 0.5,
+    }
 }
 
 /// Compare two declarations by cascade-layer position.
@@ -140,6 +240,16 @@ pub(super) fn resolve_pseudo_style(
             let decl_base = source_order;
             source_order += rule.declarations.len();
 
+            if let Some(cond) = &rule.container
+                && !container_condition_matches(doc, node_id, cond, ctx)
+            {
+                continue;
+            }
+            if let Some(scope) = &rule.scope
+                && !scope_condition_matches(doc, node_id, scope, ctx)
+            {
+                continue;
+            }
             for selector in &rule.selectors.selectors {
                 if selector_pseudo_element(selector) != Some(pseudo) {
                     continue;
@@ -322,6 +432,20 @@ pub(super) fn collect_matched_declarations(
 
     for candidate in &candidates {
         let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];
+        // `@container`-gated rules only contribute when the nearest
+        // matching container satisfies the condition. Skip the whole
+        // rule (including ancestor walks) if it can't match.
+        if let Some(cond) = &rule.container
+            && !container_condition_matches(doc, node_id, cond, ctx)
+        {
+            continue;
+        }
+        // `@scope`-gated rules need an in-scope ancestor.
+        if let Some(scope) = &rule.scope
+            && !scope_condition_matches(doc, node_id, scope, ctx)
+        {
+            continue;
+        }
         let best_specificity = matching_specificity(doc, node_id, rule, ctx);
         if let Some(specificity) = best_specificity {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
