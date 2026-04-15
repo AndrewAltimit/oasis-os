@@ -1109,7 +1109,17 @@ mod prop {
 
     #[test]
     fn supports_unrecognized_property_excludes_rules() {
-        // `paint-order` is not in our SUPPORTED_PROPERTIES list.
+        // FOOTGUN: this test (and `supports_not_condition` below) needs
+        // a property that is *not* in `SUPPORTED_PROPERTIES`. We pick
+        // `paint-order` because it's a real CSS property we have no
+        // intention of supporting (SVG-only stroke vs. fill order),
+        // which makes it a stable sentinel. If you ever add
+        // `paint-order` to `SUPPORTED_PROPERTIES`, both this test and
+        // `supports_not_condition` will silently flip from passing to
+        // failing — pick another never-going-to-implement property at
+        // that point. The earlier sentinel was `container-type`, which
+        // was added to `SUPPORTED_PROPERTIES` mid-PR and broke both
+        // tests until they were swapped to `paint-order`.
         let css = "@supports (paint-order: stroke) { .c { width: 100px; } }";
         let sheet = parse(css);
         assert!(
@@ -1131,6 +1141,9 @@ mod prop {
 
     #[test]
     fn supports_not_condition() {
+        // See `supports_unrecognized_property_excludes_rules` for the
+        // rationale behind `paint-order` as the sentinel — keep both
+        // tests in sync if you ever change it.
         let css = "@supports not (paint-order: stroke) { p { color: red; } }";
         let sheet = parse(css);
         assert_eq!(sheet.rules.len(), 1, "not unsupported should include rules");
