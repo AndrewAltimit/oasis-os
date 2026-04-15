@@ -614,6 +614,12 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 }
             },
             FRAME_WINDOW_UPDATE => {
+                if payload.len() != 4 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+                    return Err(OasisError::Backend(
+                        "HTTP/2: WINDOW_UPDATE payload not 4 bytes".into(),
+                    ));
+                }
                 // We don't track our send window precisely — request
                 // bodies are capped at 65k above, so updates are moot.
             },
@@ -627,11 +633,11 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         "HTTP/2: PING on non-zero stream".into(),
                     ));
                 }
+                if payload.len() != 8 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+                    return Err(OasisError::Backend("HTTP/2: malformed PING".into()));
+                }
                 if fh.flags & FLAG_ACK == 0 {
-                    if payload.len() != 8 {
-                        let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
-                        return Err(OasisError::Backend("HTTP/2: malformed PING".into()));
-                    }
                     let mut op = [0u8; 8];
                     op.copy_from_slice(&payload);
                     send_ping_ack(stream, &op)?;
@@ -1293,6 +1299,30 @@ mod tests {
         let url = crate::loader::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("SETTINGS on non-zero stream"));
+    }
+
+    #[test]
+    fn window_update_wrong_length_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // WINDOW_UPDATE with 3 bytes instead of exactly 4.
+        server.extend(build_frame(FRAME_WINDOW_UPDATE, 0, 0, &[0, 0, 1]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("WINDOW_UPDATE"));
+    }
+
+    #[test]
+    fn ping_ack_with_wrong_length_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // PING ACK with 4 bytes instead of exactly 8.
+        server.extend(build_frame(FRAME_PING, FLAG_ACK, 0, &[0u8; 4]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("malformed PING"));
     }
 
     #[test]
