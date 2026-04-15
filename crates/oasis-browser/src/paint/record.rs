@@ -253,11 +253,22 @@ fn record_box(
                 has_backdrop || !matches!(mix_blend, crate::css::values::types::BlendMode::Normal);
             let mask = match &layout_box.style.mask_image {
                 crate::css::values::BackgroundImage::None => None,
-                image => Some(crate::paint::display_list::MaskParams {
-                    image: image.clone(),
-                    mode: layout_box.style.mask_mode,
-                    composite: layout_box.style.mask_composite,
-                }),
+                image => {
+                    // URL masks carry the decoded image bytes so the
+                    // replay path can sample without a GPU round-trip.
+                    // Gradient masks ignore the texture field.
+                    let texture = if matches!(image, crate::css::values::BackgroundImage::Url(_)) {
+                        layout_box.mask_image_data.clone()
+                    } else {
+                        None
+                    };
+                    Some(crate::paint::display_list::MaskParams {
+                        image: image.clone(),
+                        mode: layout_box.style.mask_mode,
+                        composite: layout_box.style.mask_composite,
+                        texture,
+                    })
+                },
             };
             dl.push(DisplayItem::PushCompositingLayer {
                 bounds,

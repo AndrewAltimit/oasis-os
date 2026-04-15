@@ -5,7 +5,9 @@
 
 use crate::css::values::ComputedStyle;
 use crate::html::dom::NodeId;
+use crate::image::DecodedImage;
 use oasis_types::backend::TextureId;
+use std::sync::Arc;
 
 /// A rectangle with position and size.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -237,6 +239,12 @@ pub struct LayoutBox {
     pub background_texture: Option<TextureId>,
     /// Natural (intrinsic) size of the background image in pixels.
     pub background_texture_size: Option<(u32, u32)>,
+    /// Decoded RGBA pixel data for CSS `mask-image: url(...)`. Shared
+    /// via `Arc` so repeated layout rebuilds don't clone the bytes.
+    /// Assigned during the texture resolution pass alongside
+    /// `background_texture`. None when the style's `mask-image` is
+    /// `none` / a gradient / an unresolved URL.
+    pub mask_image_data: Option<Arc<DecodedImage>>,
 }
 
 impl LayoutBox {
@@ -252,6 +260,7 @@ impl LayoutBox {
             dirty: true,
             background_texture: None,
             background_texture_size: None,
+            mask_image_data: None,
         }
     }
 

@@ -597,23 +597,29 @@ order is:
    CSS nesting**~~ — all shipped. `:has()` and `@layer` on
    `feat/browser-has-selector`; CSS nesting on `feat/css-nesting`;
    `@container` on `feat/browser-container-queries`.
-4. ~~**Compositor overhaul**~~ — shipped. `mix-blend-mode`,
-   `backdrop-filter`, `filter:`, `isolation: isolate`, `will-change:`
-   and `mask-*` all now route through a single
-   `PushCompositingLayer` / `PopCompositingLayer` pair backed by the
-   `SdiRenderTarget` trait surface. Backends without render-target
-   support fall back to the `PushLayer` opacity fast path. The
-   replay pop path shares one CPU readback between `filter:` and
-   `mask-*` via `display_list.rs::apply_mask`, which rasterizes
-   linear/radial gradient masks on the CPU and combines them with
-   the layer's alpha per `mask-mode` (alpha / luminance /
+4. ~~**Compositor overhaul**~~ — shipped, including URL-backed
+   masks. `mix-blend-mode`, `backdrop-filter`, `filter:`,
+   `isolation: isolate`, `will-change:` and the full `mask-*` suite
+   all now route through a single `PushCompositingLayer` /
+   `PopCompositingLayer` pair backed by the `SdiRenderTarget` trait
+   surface. Backends without render-target support fall back to the
+   `PushLayer` opacity fast path. The replay pop path shares one CPU
+   readback between `filter:` and `mask-*` via
+   `display_list.rs::apply_mask`, which rasterizes linear/radial
+   gradient masks and URL-backed masks on the CPU and combines them
+   with the layer's alpha per `mask-mode` (alpha / luminance /
    match-source) and `mask-composite` (destination-in /
-   destination-out / destination-xor). URL-backed masks are a
-   documented follow-up — they require a texture-resolution pass
-   analogous to `background_texture` and currently reduce to "no
-   mask". Regression tests in `paint::tests` cover every
-   compositing-layer trigger plus the destination-in /
-   destination-out / luminance mask math.
+   destination-out / destination-xor). URL masks ride the image
+   fetch pipeline: `collect_page_image_requests` enqueues mask URLs
+   alongside `<img>` srcs, and `BrowserWidget::mask_image_arcs` /
+   `LayoutBox::mask_image_data` lazily attach decoded bytes via
+   `Arc` so per-frame recording cost is a pointer copy. The initial
+   URL path stretches the mask to the layer bounds with nearest-
+   neighbor sampling — full `mask-size` / `mask-position` /
+   `mask-repeat` plumbing is still a follow-up. Regression tests in
+   `paint::tests` cover every compositing-layer trigger, the
+   destination-in / destination-out / luminance mask math, and the
+   URL alpha / luminance sampling paths.
 5. ~~**3D transforms**~~ — shipped (scaffolding on
    `feat/browser-3d-transforms`, follow-ups on
    `feat/browser-3d-transforms-followups`).

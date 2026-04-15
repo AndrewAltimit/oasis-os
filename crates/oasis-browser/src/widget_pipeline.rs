@@ -113,6 +113,7 @@ impl BrowserWidget {
                 self.page_csp = None;
                 self.page_errors.clear();
                 self.decoded_images.clear();
+                self.mask_image_arcs.clear();
                 self.image_textures.clear();
                 self.image_atlas.clear_without_destroy();
                 self.pending_images.clear();
@@ -146,6 +147,7 @@ impl BrowserWidget {
         self.page_csp = None;
         self.page_errors.clear();
         self.decoded_images.clear();
+        self.mask_image_arcs.clear();
         self.image_textures.clear();
         self.image_atlas.clear_without_destroy();
         self.pending_images.clear();

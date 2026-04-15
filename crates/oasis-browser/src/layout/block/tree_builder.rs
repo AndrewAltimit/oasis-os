@@ -660,5 +660,6 @@ fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) 
         dirty: true,
         background_texture: None,
         background_texture_size: None,
+        mask_image_data: None,
     }
 }

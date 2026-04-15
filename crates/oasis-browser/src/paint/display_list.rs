@@ -15,6 +15,8 @@
 //! collected into batches so backends can submit them as a single GPU
 //! draw call.
 
+use std::sync::Arc;
+
 use oasis_types::backend::{
     BatchRect, BatchText, BlendMode as BackendBlendMode, Color, GradientStyle, RenderTargetId,
     SdiBackend, TextureId,
@@ -25,6 +27,7 @@ use crate::css::values::BorderStyle;
 use crate::css::values::types::{
     BackgroundImage, BlendMode as CssBlendMode, FilterFunction, MaskComposite, MaskMode,
 };
+use crate::image::DecodedImage;
 use crate::layout::box_model::Rect;
 
 /// Parameters for a CSS `mask-*` pass applied on `PopCompositingLayer`.
@@ -35,11 +38,14 @@ use crate::layout::box_model::Rect;
 /// layer is composited back into the parent surface.
 ///
 /// The mask image itself is carried as a [`BackgroundImage`] so that
-/// both URL and gradient forms flow through the same compositor path
-/// — gradients are rasterized on the CPU in
-/// [`DisplayList::replay`], URL masks are a follow-up (a texture-
-/// resolution pass analogous to `background_texture` is needed first).
-#[derive(Debug, Clone, PartialEq)]
+/// both URL and gradient forms flow through the same compositor path.
+/// For URL sources, the decoded RGBA bytes are additionally attached
+/// via `texture` — the recorder fills this in from
+/// `LayoutBox::mask_image_data` so the replay path can sample the
+/// image without a GPU round-trip. URL masks with no attached
+/// texture (still loading, or decode failed) reduce to a no-op and
+/// the layer composites unchanged.
+#[derive(Debug, Clone)]
 pub struct MaskParams {
     /// The mask source. `BackgroundImage::None` is never stored here
     /// (the recorder skips emitting `mask` in that case) — keeping the
@@ -49,6 +55,27 @@ pub struct MaskParams {
     pub mode: MaskMode,
     /// `mask-composite` — single-layer semantics only today.
     pub composite: MaskComposite,
+    /// Decoded pixel data for URL-backed masks. Only populated when
+    /// `image` is `BackgroundImage::Url(_)` AND the decoder has
+    /// produced a texture. Shared via `Arc` so recording cost is a
+    /// pointer copy.
+    pub texture: Option<Arc<DecodedImage>>,
+}
+
+impl PartialEq for MaskParams {
+    fn eq(&self, other: &Self) -> bool {
+        // `Arc<DecodedImage>` pointer equality is sufficient for the
+        // display-list equality contract — two mask params from the
+        // same record pass share the same underlying allocation.
+        self.image == other.image
+            && self.mode == other.mode
+            && self.composite == other.composite
+            && match (self.texture.as_ref(), other.texture.as_ref()) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
 }
 
 /// Convert a parsed CSS `BlendMode` into the backend's `BlendMode`
@@ -93,11 +120,13 @@ fn apply_mask(buf: &mut [u8], w: u32, h: u32, mask: &MaskParams) {
     // Rasterize the mask source into a per-pixel 0..=255 mask value.
     let mask_alpha: Vec<u8> = match &mask.image {
         BackgroundImage::None => return,
-        BackgroundImage::Url(_) => {
-            // URL masks would need a texture-resolution pass analogous
-            // to `background_texture`. Out of scope for this pass; the
-            // layer composites unchanged.
-            return;
+        BackgroundImage::Url(_) => match mask.texture.as_ref() {
+            Some(tex) => rasterize_url_mask(w, h, tex, mask.mode),
+            // URL masks with no resolved texture — the fetch/decode
+            // pipeline hasn't produced pixels yet (or the decode
+            // failed). Composite unchanged; a later frame picks the
+            // mask up once the image lands in `decoded_images`.
+            None => return,
         },
         BackgroundImage::Gradient(grad) => rasterize_linear_mask(w, h, grad, mask.mode),
         BackgroundImage::RadialGradient(grad) => rasterize_radial_mask(w, h, grad, mask.mode),
@@ -232,6 +261,54 @@ fn rasterize_radial_mask(
             let t = (nx * nx + ny * ny).sqrt().clamp(0.0, 1.0);
             let color = sample_gradient_stops(&grad.stops, t);
             out[(y * w + x) as usize] = color_to_mask_channel(color, use_alpha);
+        }
+    }
+    out
+}
+
+/// Rasterize a URL-backed mask into a per-pixel 0..=255 grid.
+///
+/// The image is stretched to fit the full layer rect using nearest-
+/// neighbor sampling. `mask-position` / `mask-size` / `mask-repeat`
+/// are intentionally ignored here — CSS positioning and tiling are a
+/// follow-up that will reuse the existing `background_image_tiles`
+/// helper at record time and pass a set of sample rects through to
+/// `MaskParams`. The stretched-to-fit path covers the common "PNG
+/// alpha channel as clip mask" case (rounded avatars, logo badges,
+/// icon masks) without that extra plumbing.
+///
+/// `mask-mode: alpha` reads the source's alpha channel; `luminance`
+/// converts RGB via Rec.601 scaled by alpha. `match-source` chooses
+/// alpha when the source has any non-opaque pixel, else luminance.
+fn rasterize_url_mask(layer_w: u32, layer_h: u32, src: &DecodedImage, mode: MaskMode) -> Vec<u8> {
+    let mut out = vec![0u8; (layer_w * layer_h) as usize];
+    if src.width == 0 || src.height == 0 || src.pixels.len() < (src.width * src.height * 4) as usize
+    {
+        return out;
+    }
+    // Pick alpha vs luminance once for the whole rasterize pass so
+    // the inner loop stays branch-free.
+    let use_alpha = match mode {
+        MaskMode::Alpha => true,
+        MaskMode::Luminance => false,
+        MaskMode::MatchSource => src.pixels.chunks_exact(4).any(|px| px[3] < 255),
+    };
+    let sx_scale = src.width as f32 / layer_w as f32;
+    let sy_scale = src.height as f32 / layer_h as f32;
+    for y in 0..layer_h {
+        let sy = ((y as f32 + 0.5) * sy_scale) as u32;
+        let sy = sy.min(src.height - 1);
+        let row_start = (sy * src.width * 4) as usize;
+        for x in 0..layer_w {
+            let sx = ((x as f32 + 0.5) * sx_scale) as u32;
+            let sx = sx.min(src.width - 1);
+            let i = row_start + (sx * 4) as usize;
+            let r = src.pixels[i];
+            let g = src.pixels[i + 1];
+            let b = src.pixels[i + 2];
+            let a = src.pixels[i + 3];
+            let c = Color { r, g, b, a };
+            out[(y * layer_w + x) as usize] = color_to_mask_channel(c, use_alpha);
         }
     }
     out
@@ -3213,6 +3290,7 @@ mod tests {
             image: CssBgImage::Gradient(opaque_white_to_transparent()),
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
+            texture: None,
         };
         apply_mask(&mut layer, 1, 8, &mask);
         // Top row keeps full alpha (mask=255).
@@ -3233,6 +3311,7 @@ mod tests {
             image: CssBgImage::Gradient(opaque_white_to_transparent()),
             mode: MaskMode::Alpha,
             composite: MaskComposite::Subtract,
+            texture: None,
         };
         apply_mask(&mut layer, 1, 8, &mask);
         // Subtract = destination-out: opaque mask REMOVES the layer.
@@ -3253,25 +3332,89 @@ mod tests {
             image: CssBgImage::None,
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
+            texture: None,
         };
         apply_mask(&mut layer, 2, 2, &mask);
         assert_eq!(layer, original);
     }
 
     #[test]
-    fn apply_mask_url_is_noop_until_texture_pipeline_lands() {
-        // URL-backed masks are documented as a follow-up — the layer
-        // should composite unchanged until the texture resolution pass
-        // wires them through.
+    fn apply_mask_url_without_texture_is_noop() {
+        // URL mask still fetching / decoding — the layer should
+        // composite unchanged until the pixels land in a later frame.
         let mut layer: Vec<u8> = (0..16).flat_map(|_| [10u8, 20, 30, 128]).collect();
         let original = layer.clone();
         let mask = MaskParams {
             image: CssBgImage::Url("some-mask.png".to_string()),
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
+            texture: None,
         };
         apply_mask(&mut layer, 2, 2, &mask);
         assert_eq!(layer, original);
+    }
+
+    #[test]
+    fn apply_mask_url_with_texture_samples_alpha_channel() {
+        // 2x2 mask source: opaque white on the left column,
+        // transparent white on the right column. Alpha mode should
+        // keep the left column and drop the right.
+        let src = Arc::new(DecodedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![
+                255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0,
+            ],
+        });
+        let mut layer: Vec<u8> = (0..4).flat_map(|_| [255u8, 0, 0, 255]).collect();
+        let mask = MaskParams {
+            image: CssBgImage::Url("left-half.png".to_string()),
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
+            texture: Some(src),
+        };
+        apply_mask(&mut layer, 2, 2, &mask);
+        // Left column opaque, right column cleared.
+        assert_eq!(layer[3], 255, "top-left kept");
+        assert_eq!(layer[7], 0, "top-right cleared");
+        assert_eq!(layer[11], 255, "bottom-left kept");
+        assert_eq!(layer[15], 0, "bottom-right cleared");
+    }
+
+    #[test]
+    fn apply_mask_url_luminance_uses_brightness() {
+        // 2x1 source: black pixel left, white pixel right, both
+        // fully opaque. Luminance mode should keep the right (white)
+        // half and drop the left (black) half, even though both
+        // alphas are identical.
+        let src = Arc::new(DecodedImage {
+            width: 2,
+            height: 1,
+            pixels: vec![0, 0, 0, 255, 255, 255, 255, 255],
+        });
+        let mut layer: Vec<u8> = (0..2).flat_map(|_| [0u8, 128, 255, 255]).collect();
+        let mask = MaskParams {
+            image: CssBgImage::Url("bw.png".to_string()),
+            mode: MaskMode::Luminance,
+            composite: MaskComposite::Add,
+            texture: Some(src),
+        };
+        apply_mask(&mut layer, 2, 1, &mask);
+        assert_eq!(layer[3], 0, "black→mask 0→layer cleared");
+        assert_eq!(layer[7], 255, "white→mask 255→layer kept");
+    }
+
+    #[test]
+    fn rasterize_url_mask_stretches_to_layer_bounds() {
+        // 1x1 opaque white source stretched to a 4x4 layer — every
+        // output pixel should be 255.
+        let src = DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let buf = rasterize_url_mask(4, 4, &src, MaskMode::Alpha);
+        assert!(buf.iter().all(|&v| v == 255));
     }
 
     #[test]
