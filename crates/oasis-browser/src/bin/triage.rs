@@ -184,8 +184,16 @@ fn collect_html(root: &Path) -> Vec<PathBuf> {
     let mut stack: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     while let Some(p) = stack.pop() {
         if p.is_dir() {
-            if let Ok(entries) = fs::read_dir(&p) {
-                stack.extend(entries.filter_map(|e| e.ok().map(|e| e.path())));
+            match fs::read_dir(&p) {
+                Ok(entries) => {
+                    stack.extend(entries.filter_map(|e| e.ok().map(|e| e.path())));
+                },
+                Err(e) => {
+                    eprintln!(
+                        "oasis-browser-triage: cannot read directory {}: {e}",
+                        p.display()
+                    );
+                },
             }
         } else if p.extension().is_some_and(|e| e == "html") {
             out.push(p);
