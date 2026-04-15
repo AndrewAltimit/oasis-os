@@ -1438,15 +1438,11 @@ mod container_query_tests {
 
     #[test]
     fn does_not_split_inside_identifier_containing_and() {
-        // `expand` contains the letters `and` but it's an identifier,
-        // not a combinator. Splitting it would corrupt the feature
-        // list. The feature is unparseable either way (we don't accept
-        // `expand` as a value), but the test verifies the structure
-        // ends up as one feature, not two.
-        let css = "@container (min-width: 200px) { p { color: red; } }";
-        // Sanity: control case still parses to one feature.
-        let sheet = parse(css);
-        assert_eq!(sheet.rules[0].container.as_ref().unwrap().features.len(), 1);
+        // `expand` contains "and" but preceded by `p`, not a boundary
+        // char, so `split_css_and` must not treat it as a combinator.
+        let parts = split_css_and("(expand: 200px)");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "(expand: 200px)");
     }
 
     #[test]
