@@ -8,7 +8,8 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-15 (3D transforms scaffolding tracked in `feat/browser-3d-transforms`).
+Last updated: 2026-04-15 (3D transforms epic fully shipped — the three
+follow-ups landed on `feat/browser-3d-transforms-followups`).
 
 ---
 
@@ -90,10 +91,12 @@ below):
 
 ---
 
-## Epic: 3D transforms
+## ✅ Done: 3D transforms
 
 **Effort:** 1–2 weeks. Standalone from compositor, similar
-cross-cutting nature.
+cross-cutting nature. **Complete** — scaffolding shipped on
+`feat/browser-3d-transforms`, three follow-ups shipped on
+`feat/browser-3d-transforms-followups`.
 
 - ~~Add `AffineTransform3D` alongside the existing `AffineTransform2D`.~~
   Shipped on `feat/browser-3d-transforms` as `Matrix3d` (4×4
@@ -173,25 +176,53 @@ cross-cutting nature.
   `resolve_transform_origin` helper that handles the `x_pct`/`y_pct`
   percentage forms.
 
-**Follow-ups (not yet shipped):**
+**Follow-ups shipped on `feat/browser-3d-transforms-followups`:**
 
-- **Z-sorting inside preserve-3d subtrees.** When several siblings
-  are preserved in the same 3D space, paint order should reflect
-  their projected Z, not DOM order. Today we still walk DOM order.
-- **Trapezoidal background for steep perspective.** The 3-corner
-  affine fit is exact for ≤1° error at typical
-  `perspective: 800px` rotations, but at e.g.
-  `rotateY(75deg) perspective(200px)` the bottom-right corner
-  visibly diverges. A non-affine quad path (project all 4 corners
-  and fill the resulting trapezoid) would close this gap.
-- **Existing 2D transform double-translation bug.** The flat path
-  still adds `child_matrix.e/.f` to `tx_offset_x/y` AND applies the
-  matrix in `ctx.transform`, double-counting the rotation pivot
-  translation for non-origin boxes. The screen-space 3D path
-  bypasses this by skipping the offset addition (`needs_screen_path`
-  branch), but the orthographic 2D path keeps the original
-  behaviour for backwards compatibility. Worth fixing in a
-  dedicated PR.
+- ~~**Z-sorting inside preserve-3d subtrees.**~~ — shipped.
+  `paint_box` now detects when the element is a `transform-style:
+  preserve-3d` container whose screen-space matrix was computed
+  (i.e. it went through the 3D screen path) and, for that child
+  walk, flattens the CSS 2.1 stacking-context tiers into a single
+  `normal_children` list. The children are then sorted
+  back-to-front by the projected Z of their layout-center point,
+  computed via the new `preserve3d_child_z` helper that composes
+  `parent_screen_matrix * child_local_matrix` and reads `z/w`
+  after the perspective divide. Siblings with negative `z-index`
+  still carry their usual semantics outside preserve-3d;
+  explicit z-index opt-outs inside preserve-3d are considered a
+  follow-up (the spec itself is fuzzy on the interaction).
+- ~~**Trapezoidal background for steep perspective.**~~ — shipped.
+  `PaintContext` now tracks an inherited
+  `ambient_screen_matrix: Option<Matrix3d>` — the nearest
+  3D-transformed ancestor's full screen-space 4×4 matrix.
+  `paint_background` checks that matrix first: when present (and
+  the element has `border-radius: 0`) it projects all four
+  padding-box corners individually via `apply_point_3d`, producing
+  a true trapezoid under steep rotations like
+  `rotateY(75deg) perspective(200px)`. The 3-corner-fit affine in
+  `project_screen_rect_affine` is still used for the element's own
+  descendant matrix composition (which is an affine operation by
+  definition); only background painting now bypasses it.
+- ~~**Existing 2D transform double-translation bug.**~~ — fixed.
+  The flat orthographic path now builds its 2D affine in screen
+  space (pivot at `(sx + ox_local, sy + oy_local)`) so
+  `ctx.transform` composed with that matrix rotates each box
+  around its correct screen pivot. Correspondingly, for
+  non-translation-only matrices we no longer add
+  `child_matrix.e/.f` to `tx_offset_x/y` — the screen-space
+  matrix already carries all the translation, and the old addition
+  was injecting the rotation-pivot compensation as a stray offset
+  on children. The translate-only fast path is unchanged
+  (`is_translation_only` matrices still flow through the offset
+  shift so plain `translate(...)` doesn't have to round-trip
+  through `fill_polygon`).
+
+Regression tests for all three are in `paint::tests` under
+`crates/oasis-browser/src/paint/mod.rs`:
+`rotate_around_box_center_produces_symmetric_quad`,
+`rotated_parent_does_not_shift_child_offset`,
+`preserve_3d_children_z_sorted_back_to_front`, and
+`steep_perspective_produces_trapezoidal_quad`.
 
 **Backend impact:** desktop and WASM rasterize the flattened 2D
 affine today via the existing `fill_polygon` path. UE5 and PSP also
@@ -480,8 +511,9 @@ order is:
 4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
    backdrop-filter, mask, isolation, filter, will-change in one
    architectural change).
-5. **3D transforms** (lower user impact — most real sites degrade
-   gracefully without them).
+5. ~~**3D transforms**~~ — shipped (scaffolding on
+   `feat/browser-3d-transforms`, follow-ups on
+   `feat/browser-3d-transforms-followups`).
 6. **Launch polish items** (parallel stream, file individually).
 
 PSP JavaScript integration was on this list previously; it shipped

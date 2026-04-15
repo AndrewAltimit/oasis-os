@@ -132,6 +132,15 @@ pub(super) struct PaintContext {
     /// ancestors, in screen-space (post-translated to the ancestor's
     /// transform origin). `None` means "no preserved 3D context active".
     preserved_3d: Option<crate::transform::Matrix3d>,
+    /// Full screen-space 4×4 matrix of the nearest 3D-transformed
+    /// ancestor that went through the screen path. Descendants use
+    /// this to project their background quads through all 4 corners
+    /// individually (rather than via the 3-corner affine fit stored
+    /// in `ctx.transform`), producing a true trapezoidal shape under
+    /// steep perspective rotations like `rotateY(75deg)
+    /// perspective(200px)`. `None` means "no 3D ancestor matrix
+    /// available — fall back to the 2D affine".
+    ambient_screen_matrix: Option<crate::transform::Matrix3d>,
 }
 
 /// A perspective frustum inherited from a `perspective:` ancestor.
@@ -175,6 +184,7 @@ pub fn paint(
         transform: crate::transform::AffineTransform2D::identity(),
         perspective_context: None,
         preserved_3d: None,
+        ambient_screen_matrix: None,
     };
 
     if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
@@ -521,11 +531,25 @@ pub(super) fn paint_box(
         };
         this_element_screen_matrix = Some(m_screen);
         m_screen.project_screen_rect_affine(sx, sy, content.width, content.height)
+    } else if layout_box.style.transforms.is_empty() {
+        crate::transform::AffineTransform2D::identity()
     } else {
-        compute_transform_matrix(
+        // Flat 2D path. Build the matrix in SCREEN space: the pivot
+        // is `(sx + ox_local, sy + oy_local)` rather than the
+        // content-box-local origin. Previously we built the matrix
+        // in local space (origin at `(ox_local, oy_local)`) and then
+        // applied it to screen coordinates in `background.rs`,
+        // which rotated the box around screen `(ox_local, oy_local)`
+        // — only correct when the box was pinned to screen (0,0) —
+        // and injected rotation-pivot compensation into `.e/.f` that
+        // then got double-counted when naively added to child
+        // offsets below.
+        let (ox_l, oy_l, _oz) =
+            resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        crate::transform::AffineTransform2D::from_css_transforms(
             &layout_box.style.transforms,
-            layout_box.style.transform_origin.as_ref(),
-            content,
+            sx + ox_l,
+            sy + oy_l,
         )
     };
     // Compose with parent transform.
@@ -534,18 +558,29 @@ pub(super) fn paint_box(
     if !child_matrix.is_translation_only() {
         ctx.transform = composed;
     }
-    // For child offsets we add the translation component of the
-    // matrix — except in the screen-space path, where the affine
-    // already maps un-transformed screen coordinates to projected
-    // screen coordinates. Adding the translation there would
-    // double-count (the offset shift is already inside the affine).
+    // Child offset handling:
+    //   • Screen path — the projected affine already maps
+    //     un-transformed screen coordinates to their projected
+    //     positions, so adding its `.e/.f` would double-count.
+    //   • Flat path, translate-only — `ctx.transform` is NOT
+    //     updated (fast path), so children won't see the
+    //     translation through the matrix. Push it through the
+    //     offset instead.
+    //   • Flat path, non-trivial — the matrix now lives in screen
+    //     space, so `ctx.transform` handles all translation when
+    //     children's backgrounds project through it. Adding `.e/.f`
+    //     to the offset here was the "double-translation" bug from
+    //     the backlog: it injected the rotation pivot compensation
+    //     as an unrelated offset on children.
     let (tx_offset_x, tx_offset_y) = if needs_screen_path {
         (offset_x, offset_y)
-    } else {
+    } else if child_matrix.is_translation_only() {
         (
             offset_x + child_matrix.e as i32,
             offset_y + child_matrix.f as i32,
         )
+    } else {
+        (offset_x, offset_y)
     };
 
     // If this element establishes a perspective frame, push it for
@@ -581,6 +616,18 @@ pub(super) fn paint_box(
         ctx.preserved_3d = None;
     }
 
+    // Propagate this element's full 4×4 screen-space matrix to
+    // descendants so their backgrounds can project all 4 corners
+    // directly — see the trapezoidal-background follow-up in
+    // `docs/browser-backlog.md`. When this element didn't go
+    // through the screen path (no 3D context active), we leave
+    // the inherited ambient matrix in place so deeper descendants
+    // still see their nearest 3D ancestor's matrix.
+    let prev_ambient_screen_matrix = ctx.ambient_screen_matrix;
+    if let Some(m) = this_element_screen_matrix {
+        ctx.ambient_screen_matrix = Some(m);
+    }
+
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
         BoxType::Block
@@ -603,8 +650,22 @@ pub(super) fn paint_box(
             let mut stacking_neg: Vec<(i32, usize, &LayoutBox)> = Vec::new();
             let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
 
+            // Inside a `transform-style: preserve-3d` subtree,
+            // paint order is entirely determined by the children's
+            // projected Z — CSS 2.1 stacking contexts inside the
+            // 3D frame are effectively flattened into a single
+            // back-to-front pass. Siblings with `translateZ(-100)`
+            // and `translateZ(+100)` get their own stacking
+            // contexts (any `transform` creates one), but that
+            // must not freeze their order: the Z-sort below is
+            // what actually decides who paints first.
+            let preserve3d_flatten = layout_box.style.transform_style == TransformStyle::Preserve3d
+                && this_element_screen_matrix.is_some();
+
             for (idx, child) in layout_box.children.iter().enumerate() {
-                if creates_stacking_context(child) {
+                if preserve3d_flatten {
+                    normal_children.push(child);
+                } else if creates_stacking_context(child) {
                     if child.style.z_index < 0 {
                         stacking_neg.push((child.style.z_index, idx, child));
                     } else {
@@ -617,10 +678,41 @@ pub(super) fn paint_box(
                 }
             }
 
+            // Z-sort normal-flow children inside a preserve-3d
+            // subtree. Siblings in a 3D rendering context occlude
+            // each other by their projected Z, not by DOM order —
+            // so e.g. a `translateZ(-50px)` card should paint before
+            // a `translateZ(50px)` card even if the first appears
+            // later in the DOM. Without this, DOM-later far children
+            // would incorrectly paint over near ones.
+            //
+            // Sort key: the child's screen-center point passed
+            // through `(parent_screen_matrix * child_local_matrix)`,
+            // taking Z. Sorted descending (farther first → painter's
+            // algorithm). Only the normal-flow tier is reordered;
+            // negative and positive z-index stacking contexts keep
+            // their CSS 2.1 ordering, matching how browsers treat
+            // explicit z-index as an opt-out from 3D sorting.
             let y_sorted = matches!(
                 layout_box.box_type,
                 BoxType::Block | BoxType::Anonymous | BoxType::TableWrapper
-            );
+            ) && !(layout_box.style.transform_style == TransformStyle::Preserve3d
+                && this_element_screen_matrix.is_some());
+
+            if layout_box.style.transform_style == TransformStyle::Preserve3d
+                && let Some(m_parent) = this_element_screen_matrix
+                && normal_children.len() > 1
+            {
+                normal_children.sort_by(|a, b| {
+                    let za = preserve3d_child_z(a, &m_parent, ctx, tx_offset_x, tx_offset_y);
+                    let zb = preserve3d_child_z(b, &m_parent, ctx, tx_offset_x, tx_offset_y);
+                    // Far (smaller Z in screen space after projection)
+                    // first. `partial_cmp` handles NaN by falling back
+                    // to Equal — stable sort preserves DOM order on
+                    // ties.
+                    za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
 
             // Step 2: negative z-index stacking contexts (ascending).
             stacking_neg.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -762,6 +854,7 @@ pub(super) fn paint_box(
     ctx.transform = prev_transform;
     ctx.perspective_context = prev_perspective_context;
     ctx.preserved_3d = prev_preserved_3d;
+    ctx.ambient_screen_matrix = prev_ambient_screen_matrix;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -845,6 +938,47 @@ pub(crate) fn transforms_have_3d(transforms: &[TransformFunction]) -> bool {
                 | TransformFunction::Perspective(_)
         )
     })
+}
+
+/// Sort key for `transform-style: preserve-3d` child ordering.
+///
+/// Returns the Z coordinate (after any perspective divide carried by
+/// the parent's screen-space matrix) of the child's layout-center
+/// point, after the child's own local 3D transform has been applied.
+/// Used by `paint_box` to reorder normal-flow children into
+/// back-to-front painter's-algorithm order inside a preserve-3d
+/// subtree.
+fn preserve3d_child_z(
+    child: &LayoutBox,
+    parent_screen_matrix: &crate::transform::Matrix3d,
+    ctx: &PaintContext,
+    offset_x: i32,
+    offset_y: i32,
+) -> f32 {
+    let c = &child.dimensions.content;
+    let ccx = c.x - ctx.scroll_x + offset_x as f32 + c.width / 2.0;
+    let ccy = c.y - ctx.scroll_y + offset_y as f32 + c.height / 2.0;
+
+    let child_local = if child.style.transforms.is_empty() {
+        crate::transform::Matrix3d::identity()
+    } else {
+        let (ox_l, oy_l, oz_l) = resolve_transform_origin(child.style.transform_origin.as_ref(), c);
+        let cox = c.x - ctx.scroll_x + offset_x as f32 + ox_l;
+        let coy = c.y - ctx.scroll_y + offset_y as f32 + oy_l;
+        let local = crate::transform::Matrix3d::from_css_transforms_3d(
+            &child.style.transforms,
+            0.0,
+            0.0,
+            0.0,
+        );
+        crate::transform::Matrix3d::translate(cox, coy, oz_l)
+            .multiply(&local)
+            .multiply(&crate::transform::Matrix3d::translate(-cox, -coy, -oz_l))
+    };
+
+    let composed = parent_screen_matrix.multiply(&child_local);
+    let (_, _, z) = composed.apply_point_3d(ccx, ccy, 0.0);
+    z
 }
 
 /// Resolve a CSS `transform-origin` against an element's content box.
@@ -1884,6 +2018,271 @@ mod tests {
             !green_polygons.is_empty(),
             "preserve-3d with a 2D-only parent transform should still establish a 3D \
              rendering context per CSS Transforms 2 §6",
+        );
+    }
+
+    #[test]
+    fn steep_perspective_produces_trapezoidal_quad() {
+        // Regression guard for the "trapezoidal background"
+        // follow-up. Under `rotateY(75deg) perspective(200px)`
+        // the 3-corner-fit affine used to approximate the 4th
+        // corner as the parallelogram completion
+        // `p1 + p2 - p0`. With the full 4×4 projection path
+        // wired into `paint_background` via
+        // `ctx.ambient_screen_matrix`, all 4 corners are
+        // projected individually through the perspective
+        // frustum, so opposite edges have different lengths
+        // (a true trapezoid) — `|top_edge| ≠ |bottom_edge|`.
+        //
+        // Shape: grandparent establishes perspective, parent
+        // rotates, child has the background we're measuring.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(200, 100, 50);
+        // Child shares the parent's rect so the trapezoid is
+        // the rotated parent's silhouette.
+        let child = make_block(0.0, 0.0, 100.0, 100.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(75.0)];
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.perspective = Some(200.0);
+        let mut gparent = make_block(0.0, 0.0, 300.0, 300.0, gparent_style);
+        gparent.children.push(parent);
+
+        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let quad = backend
+            .polygon_calls()
+            .into_iter()
+            .find_map(|c| {
+                if let DrawCall::FillPolygon { points, color } = c
+                    && *color == Color::rgb(200, 100, 50)
+                {
+                    Some(points)
+                } else {
+                    None
+                }
+            })
+            .expect("expected rotated child polygon");
+        assert_eq!(quad.len(), 4);
+        let top_len_sq = {
+            let dx = (quad[1].0 - quad[0].0) as f32;
+            let dy = (quad[1].1 - quad[0].1) as f32;
+            dx * dx + dy * dy
+        };
+        let bottom_len_sq = {
+            let dx = (quad[2].0 - quad[3].0) as f32;
+            let dy = (quad[2].1 - quad[3].1) as f32;
+            dx * dx + dy * dy
+        };
+        // For a parallelogram these would be equal. Under true
+        // perspective projection they differ — one edge is the
+        // "near" edge, the other the "far" edge.
+        let ratio = top_len_sq.max(bottom_len_sq) / top_len_sq.min(bottom_len_sq);
+        assert!(
+            ratio > 1.02,
+            "expected top/bottom edges to differ under perspective (ratio={ratio})",
+        );
+    }
+
+    #[test]
+    fn preserve_3d_children_z_sorted_back_to_front() {
+        // Two siblings inside a preserve-3d parent under a
+        // perspective ancestor:
+        //   back  — translateZ(-100px), DOM-first, red
+        //   front — translateZ( 100px), DOM-last,  blue
+        // Under painter's algorithm the back child must paint
+        // first, the front child second. The DOM order already
+        // matches that here so we also run a reversed variant
+        // below where DOM order disagrees with Z order and the
+        // sort must kick in.
+        //
+        // Before the Z-sort follow-up, `preserve-3d` children
+        // painted in DOM order, so a DOM-later far child would
+        // incorrectly paint over a DOM-earlier near one.
+        let mut backend = MockBackend::new();
+
+        let mut front_style = ComputedStyle::default();
+        front_style.background_color = Color::rgb(0, 0, 255);
+        front_style.transforms = vec![TransformFunction::TranslateZ(100.0)];
+        // DOM-first (would paint first without sorting).
+        let front = make_block(10.0, 10.0, 50.0, 50.0, front_style);
+
+        let mut back_style = ComputedStyle::default();
+        back_style.background_color = Color::rgb(255, 0, 0);
+        back_style.transforms = vec![TransformFunction::TranslateZ(-100.0)];
+        // DOM-last (would paint last without sorting).
+        let back = make_block(10.0, 10.0, 50.0, 50.0, back_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 200.0, 200.0, parent_style);
+        parent.children.push(front);
+        parent.children.push(back);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.perspective = Some(800.0);
+        let mut gparent = make_block(0.0, 0.0, 400.0, 400.0, gparent_style);
+        gparent.children.push(parent);
+
+        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        // Each child's background projects through the preserve-3d
+        // parent's `ambient_screen_matrix`, so both come out as
+        // `fill_polygon` calls. The Z-sort runs at the child loop,
+        // so the back (red) polygon must appear before the front
+        // (blue) polygon in the draw-call stream.
+        let fills: Vec<_> = backend
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let DrawCall::FillPolygon { color, .. } = c {
+                    Some(*color)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let red_idx = fills
+            .iter()
+            .position(|c| *c == Color::rgb(255, 0, 0))
+            .expect("red (back) should paint");
+        let blue_idx = fills
+            .iter()
+            .position(|c| *c == Color::rgb(0, 0, 255))
+            .expect("blue (front) should paint");
+        assert!(
+            red_idx < blue_idx,
+            "preserve-3d: back child (red, translateZ(-100)) must paint \
+             before front child (blue, translateZ(+100)); red_idx={red_idx}, \
+             blue_idx={blue_idx}",
+        );
+    }
+
+    #[test]
+    fn rotate_around_box_center_produces_symmetric_quad() {
+        // Regression guard for the "double-translation" bug: a
+        // `rotate(45deg)` applied to a parent at screen (100, 50),
+        // size 80×40, with default origin (box center) must
+        // produce — when composed onto a descendant's background
+        // — a polygon whose centroid equals the parent's true
+        // screen center (140, 70). Before the fix the matrix was
+        // built in local space (pivot at content-local (40, 20))
+        // and applied to screen coordinates, so the centroid
+        // came out near (40, 20) — the local pivot, not the
+        // screen pivot.
+        //
+        // NOTE: element backgrounds paint with the *ancestor's*
+        // `ctx.transform`, so to observe the parent's own matrix
+        // we need a child that shares the same screen rect. The
+        // centroid of the child's rotated quad then equals the
+        // parent's screen center, which is the invariant we're
+        // checking.
+        let mut backend = MockBackend::new();
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::Rotate(45.0)];
+        let mut parent = make_block(100.0, 50.0, 80.0, 40.0, parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(10, 20, 30);
+        // Child shares the parent's screen rect so its background
+        // is the rotated box we're measuring.
+        let child = make_block(100.0, 50.0, 80.0, 40.0, child_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let polygon = backend
+            .polygon_calls()
+            .into_iter()
+            .find_map(|c| {
+                if let DrawCall::FillPolygon { points, color } = c
+                    && *color == Color::rgb(10, 20, 30)
+                {
+                    Some(points)
+                } else {
+                    None
+                }
+            })
+            .expect("expected fill_polygon for rotated box");
+        assert_eq!(polygon.len(), 4);
+        let cx = polygon.iter().map(|p| p.0).sum::<i32>() as f32 / 4.0;
+        let cy = polygon.iter().map(|p| p.1).sum::<i32>() as f32 / 4.0;
+        // Expected centroid is the box's screen center (140, 70).
+        assert!(
+            (cx - 140.0).abs() < 2.0,
+            "rotated quad centroid x={cx} (expected ≈140)",
+        );
+        assert!(
+            (cy - 70.0).abs() < 2.0,
+            "rotated quad centroid y={cy} (expected ≈70)",
+        );
+    }
+
+    #[test]
+    fn rotated_parent_does_not_shift_child_offset() {
+        // Regression guard for the second half of the
+        // "double-translation" bug: a rotated parent's
+        // `child_matrix.e/.f` used to be naively added to
+        // `tx_offset_x/y` for its children, injecting the
+        // rotation-pivot compensation as a random translation.
+        // With the fix, non-trivial matrices compose into
+        // `ctx.transform` and children paint at their natural
+        // screen position (then get rotated by composition).
+        //
+        // The test rotates a parent by 180° and asserts the
+        // child's polygon centroid equals what you'd get by
+        // rotating the child around the parent's screen center
+        // — i.e. 180°-flipped to the opposite side of the
+        // parent. Under the old bug, the child was offset by
+        // the parent's `.e/.f` values (unrelated to its real
+        // rotated position).
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(240, 240, 240);
+        // Child at absolute screen rect (110, 110)–(130, 130) —
+        // i.e. inside the parent's (100, 100)–(200, 200) rect.
+        let child = make_block(110.0, 110.0, 20.0, 20.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::Rotate(180.0)];
+        let mut parent = make_block(100.0, 100.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let polygon = backend
+            .polygon_calls()
+            .into_iter()
+            .find_map(|c| {
+                if let DrawCall::FillPolygon { points, color } = c
+                    && *color == Color::rgb(240, 240, 240)
+                {
+                    Some(points)
+                } else {
+                    None
+                }
+            })
+            .expect("expected fill_polygon for rotated child");
+        let cx = polygon.iter().map(|p| p.0).sum::<i32>() as f32 / 4.0;
+        let cy = polygon.iter().map(|p| p.1).sum::<i32>() as f32 / 4.0;
+        // Parent screen rect is (100, 100)–(200, 200), center (150, 150).
+        // Child natural screen rect is (110, 110)–(130, 130), center (120, 120).
+        // Rotating (120, 120) by 180° around (150, 150) → (180, 180).
+        assert!(
+            (cx - 180.0).abs() < 2.0,
+            "rotated child centroid x={cx} (expected ≈180)",
+        );
+        assert!(
+            (cy - 180.0).abs() < 2.0,
+            "rotated child centroid y={cy} (expected ≈180)",
         );
     }
 
