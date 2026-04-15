@@ -7,6 +7,15 @@
 use crate::backend::NetworkStream;
 use crate::error::Result;
 
+/// Result of a TLS handshake that carried an ALPN offer.
+///
+/// `alpn` holds the server-selected protocol bytes (e.g. `b"h2"` or
+/// `b"http/1.1"`), or `None` if the server did not pick anything.
+pub struct TlsConnection {
+    pub stream: Box<dyn NetworkStream>,
+    pub alpn: Option<Vec<u8>>,
+}
+
 /// Provides TLS client connections.
 ///
 /// Each platform backend implements this with its preferred TLS library
@@ -20,6 +29,25 @@ pub trait TlsProvider: Send + Sync {
         stream: Box<dyn NetworkStream>,
         server_name: &str,
     ) -> Result<Box<dyn NetworkStream>>;
+
+    /// Wrap `stream` in a TLS client session and offer the given
+    /// ALPN protocols during the handshake.
+    ///
+    /// The default implementation falls back to [`Self::connect_tls`]
+    /// and reports no ALPN selection — providers that support ALPN
+    /// (rustls, embedded-tls) override this to actually negotiate.
+    fn connect_tls_with_alpn(
+        &self,
+        stream: Box<dyn NetworkStream>,
+        server_name: &str,
+        _alpn_protocols: &[&[u8]],
+    ) -> Result<TlsConnection> {
+        let s = self.connect_tls(stream, server_name)?;
+        Ok(TlsConnection {
+            stream: s,
+            alpn: None,
+        })
+    }
 
     /// Open a raw TCP connection to `host:port`.
     ///

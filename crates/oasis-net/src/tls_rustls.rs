@@ -12,18 +12,24 @@ use rustls::pki_types::ServerName;
 
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
+use oasis_types::tls::TlsConnection;
 
 use super::tls::TlsProvider;
 
 /// Process-wide TLS client configuration (built once, shared by all providers).
+///
+/// Advertises ALPN protocols `h2` and `http/1.1` so servers that require
+/// HTTP/2 (many CDNs) will negotiate it on the same connection. Callers
+/// that don't speak HTTP/2 fall through to the default `http/1.1`
+/// selection and use the plain HTTP/1.1 path.
 static SHARED_CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
     let root_store =
         rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    )
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Arc::new(config)
 });
 
 /// Shared, reusable TLS client configuration (one per process).
@@ -66,8 +72,51 @@ impl TlsProvider for RustlsTlsProvider {
         let conn = rustls::ClientConnection::new(Arc::clone(&self.config), sni)
             .map_err(|e| OasisError::Backend(format!("TLS init: {e}").into()))?;
 
-        Ok(Box::new(RustlsStream::new(conn, stream)?))
+        let (stream, _alpn) = RustlsStream::new(conn, stream)?;
+        Ok(Box::new(stream))
     }
+
+    fn connect_tls_with_alpn(
+        &self,
+        stream: Box<dyn NetworkStream>,
+        server_name: &str,
+        alpn_protocols: &[&[u8]],
+    ) -> Result<TlsConnection> {
+        let sni = ServerName::try_from(server_name.to_owned())
+            .map_err(|e| OasisError::Backend(format!("invalid server name: {e}").into()))?;
+
+        // Build a per-request config only when the caller's ALPN list
+        // differs from what's already baked into `self.config`. That
+        // keeps the common "same as SHARED_CONFIG" case allocation-free
+        // while still letting tests (and any caller with a custom base
+        // config) negotiate arbitrary ALPN lists.
+        let config = if alpn_matches(&self.config.alpn_protocols, alpn_protocols) {
+            Arc::clone(&self.config)
+        } else {
+            let mut cfg = (*self.config).clone();
+            cfg.alpn_protocols = alpn_protocols.iter().map(|p| p.to_vec()).collect();
+            Arc::new(cfg)
+        };
+
+        let conn = rustls::ClientConnection::new(config, sni)
+            .map_err(|e| OasisError::Backend(format!("TLS init: {e}").into()))?;
+
+        let (stream, alpn) = RustlsStream::new(conn, stream)?;
+        Ok(TlsConnection {
+            stream: Box::new(stream),
+            alpn,
+        })
+    }
+}
+
+fn alpn_matches(existing: &[Vec<u8>], requested: &[&[u8]]) -> bool {
+    if existing.len() != requested.len() {
+        return false;
+    }
+    existing
+        .iter()
+        .zip(requested.iter())
+        .all(|(a, b)| a.as_slice() == *b)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +158,10 @@ impl RustlsStream {
     /// Maximum wall-clock time for the TLS handshake.
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    fn new(mut tls: rustls::ClientConnection, mut inner: Box<dyn NetworkStream>) -> Result<Self> {
+    fn new(
+        mut tls: rustls::ClientConnection,
+        mut inner: Box<dyn NetworkStream>,
+    ) -> Result<(Self, Option<Vec<u8>>)> {
         // Perform the TLS handshake eagerly so callers get a ready stream.
         // rustls is lazy -- we pump I/O until the handshake completes.
         let deadline = std::time::Instant::now() + Self::HANDSHAKE_TIMEOUT;
@@ -149,11 +201,16 @@ impl RustlsStream {
         // Flush any remaining handshake bytes.
         let _ = tls.write_tls(&mut adapter);
 
-        Ok(Self {
-            tls,
-            inner,
-            plaintext_buf: VecDeque::new(),
-        })
+        let alpn = tls.alpn_protocol().map(|b| b.to_vec());
+
+        Ok((
+            Self {
+                tls,
+                inner,
+                plaintext_buf: VecDeque::new(),
+            },
+            alpn,
+        ))
     }
 
     /// Pump ciphertext from the network into rustls and move any resulting
@@ -421,6 +478,15 @@ mod tests {
 
     /// Create a self-signed certificate and matching rustls server config.
     fn make_server_config() -> (Arc<rustls::ServerConfig>, rcgen::CertifiedKey) {
+        make_server_config_with_alpn(&[])
+    }
+
+    /// Variant of [`make_server_config`] that advertises specific ALPN
+    /// protocols on the server side, so tests can assert that the
+    /// client and server agree on an application protocol.
+    fn make_server_config_with_alpn(
+        alpn: &[&[u8]],
+    ) -> (Arc<rustls::ServerConfig>, rcgen::CertifiedKey) {
         let certified_key =
             rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
@@ -429,10 +495,11 @@ mod tests {
             rustls::pki_types::PrivateKeyDer::try_from(certified_key.key_pair.serialize_der())
                 .unwrap();
 
-        let config = rustls::ServerConfig::builder()
+        let mut config = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![cert_der], key_der)
             .unwrap();
+        config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
 
         (Arc::new(config), certified_key)
     }
@@ -655,6 +722,62 @@ mod tests {
     fn test_stream_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<RustlsStream>();
+    }
+
+    #[test]
+    fn test_alpn_negotiates_h2_when_offered() {
+        // Server advertises h2 only; client offers [h2, http/1.1].
+        // Handshake should succeed and report h2 as negotiated.
+        let (server_cfg, cert_key) = make_server_config_with_alpn(&[b"h2"]);
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let tcp = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let net: Box<dyn NetworkStream> = Box::new(TcpNetworkStream(tcp));
+        let conn = provider
+            .connect_tls_with_alpn(net, "localhost", &[b"h2", b"http/1.1"])
+            .unwrap();
+        assert_eq!(conn.alpn.as_deref(), Some(b"h2".as_slice()));
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_alpn_falls_back_to_http11() {
+        // Server advertises http/1.1 only; client offers both.
+        let (server_cfg, cert_key) = make_server_config_with_alpn(&[b"http/1.1"]);
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let tcp = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let net: Box<dyn NetworkStream> = Box::new(TcpNetworkStream(tcp));
+        let conn = provider
+            .connect_tls_with_alpn(net, "localhost", &[b"h2", b"http/1.1"])
+            .unwrap();
+        assert_eq!(conn.alpn.as_deref(), Some(b"http/1.1".as_slice()));
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_alpn_none_when_server_silent() {
+        // Server advertises no ALPN protocols — handshake still
+        // succeeds, but with no negotiated protocol.
+        let (server_cfg, cert_key) = make_server_config_with_alpn(&[]);
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let tcp = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let net: Box<dyn NetworkStream> = Box::new(TcpNetworkStream(tcp));
+        let conn = provider
+            .connect_tls_with_alpn(net, "localhost", &[b"h2", b"http/1.1"])
+            .unwrap();
+        assert!(conn.alpn.is_none());
+        let _ = handle.join();
     }
 
     #[test]

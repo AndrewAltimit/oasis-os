@@ -6,6 +6,17 @@ and otherwise tracked via `git log`.
 
 Last updated: 2026-04-15
 
+## Shipped this cycle
+
+- **HTTP/2** (`feat/browser-http2`). ALPN-negotiated `h2` on the
+  existing rustls TLS path. Full HPACK (RFC 7541) — static + dynamic
+  table, integer codec, string literals, Huffman decoder, verified
+  against RFC Appendix C examples. Sync frame layer (RFC 9113) with
+  HEADERS/CONTINUATION reassembly, DATA flow control via
+  `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY, and `PUSH_PROMISE`
+  refusal. One request per connection — no multiplexing, but
+  unblocks every CDN that hard-requires `h2` for the initial GET.
+
 ---
 
 ## Recently shipped (pointers only)
@@ -152,8 +163,6 @@ as individual issues — not a single epic.
   crashes the decode path. Should degrade to a placeholder.
 - **Network error UX** — timeout, DNS fail, TLS error should
   produce a useful error page, not a blank screen.
-- **HTTP/2 support** — we only speak HTTP/1.1. Many modern CDNs
-  require h2. Blocks access to some sites entirely.
 - **`@font-face` / web fonts** — completely missing. Fallback to
   system fonts works but looks wrong on branded pages.
 - **Accessibility** — ARIA roles are parsed but not exposed to
