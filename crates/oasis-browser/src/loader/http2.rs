@@ -76,6 +76,8 @@ const SETTINGS_MAX_HEADER_LIST_SIZE: u16 = 0x6;
 // Error codes (RFC 9113 §7)
 const ERROR_CODE_NO_ERROR: u32 = 0x0;
 const ERROR_CODE_PROTOCOL_ERROR: u32 = 0x1;
+const ERROR_CODE_FLOW_CONTROL_ERROR: u32 = 0x3;
+const ERROR_CODE_FRAME_SIZE_ERROR: u32 = 0x6;
 const ERROR_CODE_REFUSED_STREAM: u32 = 0x7;
 const ERROR_CODE_CANCEL: u32 = 0x8;
 
@@ -464,13 +466,14 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     //  be treated as a connection error of type
                     //  FRAME_SIZE_ERROR."
                     if !payload.is_empty() {
-                        let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                        let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
                         return Err(OasisError::Backend(
                             "HTTP/2: SETTINGS ACK with non-empty payload".into(),
                         ));
                     }
                 } else {
                     if !payload.len().is_multiple_of(6) {
+                        let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
                         return Err(OasisError::Backend(
                             "HTTP/2: malformed SETTINGS frame".into(),
                         ));
@@ -493,26 +496,35 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         match id {
                             SETTINGS_INITIAL_WINDOW_SIZE => {
                                 if val > 0x7fff_ffff {
-                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    let _ = send_goaway(
+                                        stream,
+                                        0,
+                                        ERROR_CODE_FLOW_CONTROL_ERROR,
+                                    );
                                     return Err(OasisError::Backend(
                                         "HTTP/2: FLOW_CONTROL_ERROR on INITIAL_WINDOW_SIZE".into(),
                                     ));
                                 }
                             },
                             SETTINGS_MAX_FRAME_SIZE => {
-                                // Legal range: 2^14..=2^24-1.
                                 if !(16_384..=16_777_215).contains(&val) {
-                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    let _ = send_goaway(
+                                        stream,
+                                        0,
+                                        ERROR_CODE_PROTOCOL_ERROR,
+                                    );
                                     return Err(OasisError::Backend(
                                         "HTTP/2: PROTOCOL_ERROR on MAX_FRAME_SIZE".into(),
                                     ));
                                 }
                             },
                             SETTINGS_ENABLE_PUSH => {
-                                // Client must accept only 0; server
-                                // setting push=1 toward us is invalid.
                                 if val > 1 {
-                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    let _ = send_goaway(
+                                        stream,
+                                        0,
+                                        ERROR_CODE_PROTOCOL_ERROR,
+                                    );
                                     return Err(OasisError::Backend(
                                         "HTTP/2: PROTOCOL_ERROR on ENABLE_PUSH".into(),
                                     ));
@@ -617,6 +629,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 }
                 if fh.flags & FLAG_ACK == 0 {
                     if payload.len() != 8 {
+                        let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
                         return Err(OasisError::Backend("HTTP/2: malformed PING".into()));
                     }
                     let mut op = [0u8; 8];
@@ -632,12 +645,15 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
                     return Err(OasisError::Backend("HTTP/2: RST_STREAM on stream 0".into()));
                 }
+                if payload.len() != 4 {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+                    return Err(OasisError::Backend(
+                        "HTTP/2: RST_STREAM payload not 4 bytes".into(),
+                    ));
+                }
                 if fh.stream_id == 1 {
-                    let code = if payload.len() >= 4 {
-                        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]])
-                    } else {
-                        0
-                    };
+                    let code =
+                        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
                     return Err(OasisError::Backend(
                         format!("HTTP/2 stream reset by peer, code={code}").into(),
                     ));
@@ -682,7 +698,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 // stream ID is malformed — treat as a connection-level
                 // protocol error (RFC 9113 §6.6).
                 if body_slice.len() < 4 {
-                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
                     return Err(OasisError::Backend(
                         "HTTP/2: PUSH_PROMISE too short for promised stream ID".into(),
                     ));
