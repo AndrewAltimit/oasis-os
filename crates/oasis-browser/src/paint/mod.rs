@@ -703,15 +703,19 @@ pub(super) fn paint_box(
                 && let Some(m_parent) = this_element_screen_matrix
                 && normal_children.len() > 1
             {
-                normal_children.sort_by(|a, b| {
-                    let za = preserve3d_child_z(a, &m_parent, ctx, tx_offset_x, tx_offset_y);
-                    let zb = preserve3d_child_z(b, &m_parent, ctx, tx_offset_x, tx_offset_y);
-                    // Far (smaller Z in screen space after projection)
-                    // first. `partial_cmp` handles NaN by falling back
-                    // to Equal — stable sort preserves DOM order on
-                    // ties.
-                    za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal)
+                let mut z_keys: Vec<(f32, usize)> = normal_children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        (preserve3d_child_z(c, &m_parent, ctx, tx_offset_x, tx_offset_y), i)
+                    })
+                    .collect();
+                z_keys.sort_by(|a, b| {
+                    a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
                 });
+                let sorted: Vec<&LayoutBox> =
+                    z_keys.iter().map(|&(_, i)| normal_children[i]).collect();
+                normal_children = sorted;
             }
 
             // Step 2: negative z-index stacking contexts (ascending).
