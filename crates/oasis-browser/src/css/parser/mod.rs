@@ -812,7 +812,12 @@ impl CssParser {
                             out.push('(');
                         },
                         CssToken::CloseParen => {
-                            paren_depth -= 1;
+                            // Clamp at 0 so a stray `)` in malformed
+                            // input can't drive the depth negative —
+                            // that would silently break the
+                            // `paren_depth == 0` stop conditions for
+                            // `;` / `}` and let the loop run away.
+                            paren_depth = (paren_depth - 1).max(0);
                             out.push(')');
                         },
                         CssToken::Colon => out.push(':'),

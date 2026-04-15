@@ -693,14 +693,14 @@ impl BrowserWidget {
         //     the post-layout container sizes plumbed into cascade. Pages
         //     without container queries skip the work entirely.
         let container_lookup = if css::cascade::stylesheets_use_container_queries(&all_sheets) {
-            let lookup = css::cascade::build_container_lookup(&layout_root);
-            if !lookup.is_empty() {
+            let first_lookup = css::cascade::build_container_lookup(&layout_root);
+            if !first_lookup.is_empty() {
                 self.diag("[BR] container-query restyle");
                 let ctx = css::cascade::CascadeContext {
                     hover_node: self.hover_node,
                     visited_urls: Some(&self.visited_urls),
                     focused_node: None,
-                    containers: Some(&lookup),
+                    containers: Some(&first_lookup),
                 };
                 styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
                 layout_root = layout::block::build_layout_tree(
@@ -712,8 +712,15 @@ impl BrowserWidget {
                     Some(url),
                     &self.cached_image_info,
                 );
+                // Rebuild from the post-second-layout tree so the
+                // cached lookup reflects the *final* container sizes.
+                // Hover/focus restyles reuse this and would otherwise
+                // see stale pre-restyle dimensions for nested
+                // container-query cases.
+                Some(css::cascade::build_container_lookup(&layout_root))
+            } else {
+                Some(first_lookup)
             }
-            Some(lookup)
         } else {
             None
         };

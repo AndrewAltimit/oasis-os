@@ -1886,23 +1886,32 @@ fn record_textarea(
     let mut last_line_index: i32 = 0;
     let mut last_line_width: u32 = 0;
     if !text.is_empty() {
-        for (i, line) in text.lines().enumerate() {
+        // Use `split('\n')` rather than `lines()` so a trailing
+        // newline produces a final empty entry. That matters for the
+        // caret: typing "abc\n" should put the caret on the empty
+        // next line, not at the end of "abc".
+        for (i, line) in text.split('\n').enumerate() {
             let ly = y + pad + i as i32 * line_height;
             if ly > y + h as i32 {
                 break;
             }
             let lw = oasis_types::backend::bitmap_measure_text(line, font_size);
-            dl.push(DisplayItem::DrawText {
-                text: line.to_string(),
-                x: x + pad,
-                y: ly,
-                font_size,
-                color,
-                bold: false,
-                italic: false,
-                width: lw,
-                node_id: None,
-            });
+            // Skip the empty trailing draw call (no text to render),
+            // but still record the index/width so the caret lands on
+            // the empty line.
+            if !line.is_empty() {
+                dl.push(DisplayItem::DrawText {
+                    text: line.to_string(),
+                    x: x + pad,
+                    y: ly,
+                    font_size,
+                    color,
+                    bold: false,
+                    italic: false,
+                    width: lw,
+                    node_id: None,
+                });
+            }
             last_line_index = i as i32;
             last_line_width = lw;
         }
