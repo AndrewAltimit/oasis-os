@@ -153,6 +153,7 @@ pub enum TagName {
     Canvas,
     // Scripting
     Noscript,
+    Template,
     // Deprecated but still common
     Center,
     // SVG
@@ -241,6 +242,7 @@ impl TagName {
             "source" => Self::Source,
             "canvas" => Self::Canvas,
             "noscript" => Self::Noscript,
+            "template" => Self::Template,
             "center" => Self::Center,
             "svg" => Self::Svg,
             other => Self::Unknown(other.to_string()),
@@ -325,6 +327,7 @@ impl TagName {
             Self::Source => "source",
             Self::Canvas => "canvas",
             Self::Noscript => "noscript",
+            Self::Template => "template",
             Self::Center => "center",
             Self::Svg => "svg",
             Self::Unknown(s) => s.as_str(),
@@ -588,6 +591,26 @@ impl Document {
     pub fn append_child(&mut self, parent_id: NodeId, child_id: NodeId) {
         self.nodes[parent_id].children.push(child_id);
         self.nodes[child_id].parent = Some(parent_id);
+    }
+
+    /// Insert `child_id` into `parent_id`'s child list immediately
+    /// before `reference_id`. Falls back to `append_child` when
+    /// `reference_id` is not a child of `parent_id`.
+    pub fn insert_before(&mut self, parent_id: NodeId, child_id: NodeId, reference_id: NodeId) {
+        if let Some(pos) = self.nodes[parent_id]
+            .children
+            .iter()
+            .position(|&id| id == reference_id)
+        {
+            self.nodes[parent_id].children.insert(pos, child_id);
+            self.nodes[child_id].parent = Some(parent_id);
+        } else {
+            debug_assert!(
+                false,
+                "insert_before: reference_id is not a child of parent_id"
+            );
+            self.append_child(parent_id, child_id);
+        }
     }
 
     /// Get a reference to a node by ID.
