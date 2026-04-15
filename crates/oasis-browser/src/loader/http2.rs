@@ -496,11 +496,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         match id {
                             SETTINGS_INITIAL_WINDOW_SIZE => {
                                 if val > 0x7fff_ffff {
-                                    let _ = send_goaway(
-                                        stream,
-                                        0,
-                                        ERROR_CODE_FLOW_CONTROL_ERROR,
-                                    );
+                                    let _ = send_goaway(stream, 0, ERROR_CODE_FLOW_CONTROL_ERROR);
                                     return Err(OasisError::Backend(
                                         "HTTP/2: FLOW_CONTROL_ERROR on INITIAL_WINDOW_SIZE".into(),
                                     ));
@@ -508,11 +504,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                             },
                             SETTINGS_MAX_FRAME_SIZE => {
                                 if !(16_384..=16_777_215).contains(&val) {
-                                    let _ = send_goaway(
-                                        stream,
-                                        0,
-                                        ERROR_CODE_PROTOCOL_ERROR,
-                                    );
+                                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
                                     return Err(OasisError::Backend(
                                         "HTTP/2: PROTOCOL_ERROR on MAX_FRAME_SIZE".into(),
                                     ));
@@ -520,11 +512,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                             },
                             SETTINGS_ENABLE_PUSH => {
                                 if val > 1 {
-                                    let _ = send_goaway(
-                                        stream,
-                                        0,
-                                        ERROR_CODE_PROTOCOL_ERROR,
-                                    );
+                                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
                                     return Err(OasisError::Backend(
                                         "HTTP/2: PROTOCOL_ERROR on ENABLE_PUSH".into(),
                                     ));
@@ -658,8 +646,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     ));
                 }
                 if fh.stream_id == 1 {
-                    let code =
-                        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    let code = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
                     return Err(OasisError::Backend(
                         format!("HTTP/2 stream reset by peer, code={code}").into(),
                     ));
