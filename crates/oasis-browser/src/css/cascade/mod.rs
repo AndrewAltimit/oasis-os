@@ -511,20 +511,20 @@ pub fn compute_style(
     //     does — only `inherits: false` registrations need stripping).
     //   * Seed initial-values for any registration that doesn't yet
     //     have a value on this element. Subsequent declarations win.
-    for sheet in stylesheets {
-        for prop in &sheet.properties {
-            if !prop.inherits {
-                style.custom_properties.remove(&prop.name);
-            }
-        }
-    }
     {
+        let mut last_inherits: rustc_hash::FxHashMap<&str, bool> = rustc_hash::FxHashMap::default();
         let mut last_initial: rustc_hash::FxHashMap<&str, &str> = rustc_hash::FxHashMap::default();
         for sheet in stylesheets {
             for prop in &sheet.properties {
+                last_inherits.insert(&prop.name, prop.inherits);
                 if let Some(ref initial) = prop.initial_value {
                     last_initial.insert(&prop.name, initial);
                 }
+            }
+        }
+        for (name, &inherits) in &last_inherits {
+            if !inherits {
+                style.custom_properties.remove(*name);
             }
         }
         for (name, initial) in last_initial {
