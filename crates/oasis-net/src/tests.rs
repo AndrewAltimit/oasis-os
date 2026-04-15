@@ -14,6 +14,12 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// Helper: find a free TCP port by binding to port 0 and releasing it.
+///
+/// There's an inherent TOCTOU race: between the temporary listener's
+/// drop and the caller's subsequent bind, a parallel test may snatch
+/// the same port. Callers that immediately rebind the returned port
+/// should use [`bind_listener_retry`] instead, which re-picks a fresh
+/// port if the race fires.
 fn free_port() -> u16 {
     let tmp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = tmp.local_addr().unwrap().port();
@@ -21,12 +27,51 @@ fn free_port() -> u16 {
     port
 }
 
+/// Start a `RemoteListener` on a free port, retrying on bind failure.
+///
+/// Combines [`free_port`] and `RemoteListener::start` with a retry
+/// loop that re-picks a fresh port on each attempt, closing the
+/// TOCTOU window where a parallel test could have taken the port
+/// between `free_port`'s drop and `listener.start`'s bind. Tests
+/// hitting this race in CI (e.g. `listener_psk_auth` under parallel
+/// cargo test) should use this helper rather than calling
+/// `free_port` + `listener.start().unwrap()` directly.
+fn bind_listener_retry(
+    config_template: impl Fn(u16) -> ListenerConfig,
+    backend: &mut StdNetworkBackend,
+) -> (u16, RemoteListener) {
+    let mut last_err = None;
+    for _ in 0..20 {
+        let port = free_port();
+        let mut listener = RemoteListener::new(config_template(port));
+        match listener.start(backend) {
+            Ok(()) => return (port, listener),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    panic!(
+        "bind_listener_retry: failed to bind a free port after 20 attempts: {:?}",
+        last_err
+    );
+}
+
 #[test]
 fn listen_and_accept() {
     let mut backend = StdNetworkBackend::new();
-    let port = free_port();
-
-    backend.listen(port).unwrap();
+    // Same TOCTOU race as the `RemoteListener` tests — retry on
+    // bind failure with a fresh port. Inlined (not extracted to a
+    // helper) since this is the only raw-backend test that hits it.
+    let port = {
+        let mut bound = None;
+        for _ in 0..20 {
+            let p = free_port();
+            if backend.listen(p).is_ok() {
+                bound = Some(p);
+                break;
+            }
+        }
+        bound.expect("failed to bind a free port after 20 attempts")
+    };
 
     // No connection yet.
     let result = backend.accept().unwrap();
@@ -102,16 +147,16 @@ fn listener_not_listening_by_default() {
 
 #[test]
 fn listener_start_and_stop() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (_port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
     assert!(listener.is_listening());
     listener.stop();
     assert!(!listener.is_listening());
@@ -119,16 +164,16 @@ fn listener_start_and_stop() {
 
 #[test]
 fn listener_accept_no_auth() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     // Connect a client.
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
@@ -167,16 +212,16 @@ fn listener_accept_no_auth() {
 #[test]
 #[cfg(feature = "tls-rustls")]
 fn listener_psk_auth() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: "secret123".to_string(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: "secret123".to_string(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -214,16 +259,16 @@ fn listener_psk_auth() {
 #[test]
 #[cfg(not(feature = "tls-rustls"))]
 fn listener_rejects_psk_without_tls() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: "secret123".to_string(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: "secret123".to_string(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -243,16 +288,16 @@ fn listener_rejects_psk_without_tls() {
 
 #[test]
 fn listener_psk_auth_failure() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: "correct_key".to_string(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: "correct_key".to_string(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -276,16 +321,16 @@ fn listener_psk_auth_failure() {
 
 #[test]
 fn listener_quit_command() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -523,16 +568,16 @@ psk = "p@ss w0rd!#$%^&*()"
 
 #[test]
 fn listener_double_stop_is_ok() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (_port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
     listener.stop();
     // Double stop should not panic.
     listener.stop();
@@ -540,27 +585,17 @@ fn listener_double_stop_is_ok() {
 
 #[test]
 fn listener_start_stop_start() {
-    let port1 = free_port();
-    let config1 = ListenerConfig {
-        port: port1,
+    let mut backend = StdNetworkBackend::new();
+    let make_config = |port| ListenerConfig {
+        port,
         psk: String::new(),
         max_connections: 2,
         ..ListenerConfig::default()
     };
-    let mut listener = RemoteListener::new(config1);
-    let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (_port1, mut listener) = bind_listener_retry(make_config, &mut backend);
     listener.stop();
 
-    let port2 = free_port();
-    let config2 = ListenerConfig {
-        port: port2,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener2 = RemoteListener::new(config2);
-    listener2.start(&mut backend).unwrap();
+    let (_port2, mut listener2) = bind_listener_retry(make_config, &mut backend);
     assert!(listener2.is_listening());
     listener2.stop();
 }
@@ -577,64 +612,49 @@ fn client_default_not_connected() {
 
 #[test]
 fn listener_max_connections_reached() {
-    // Retry with fresh ports to avoid TOCTOU race with free_port() in CI.
-    let mut last_err = None;
-    for _ in 0..5 {
-        let port = free_port();
-        let config = ListenerConfig {
+    let mut backend = StdNetworkBackend::new();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
             port,
             psk: String::new(),
             max_connections: 2,
             ..ListenerConfig::default()
-        };
-        let mut listener = RemoteListener::new(config);
-        let mut backend = StdNetworkBackend::new();
-        match listener.start(&mut backend) {
-            Ok(()) => {
-                // Connect two clients (the maximum).
-                let _c1 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                listener.poll(&mut backend);
-                assert_eq!(listener.connection_count(), 1);
-
-                let _c2 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                listener.poll(&mut backend);
-                assert_eq!(listener.connection_count(), 2);
-
-                // Third connection -- should NOT be accepted.
-                let _c3 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                listener.poll(&mut backend);
-                assert_eq!(listener.connection_count(), 2);
-
-                listener.stop();
-                return;
-            },
-            Err(e) => {
-                last_err = Some(e);
-                continue;
-            },
-        }
-    }
-    panic!(
-        "listener_max_connections_reached: failed to bind after 5 retries: {:?}",
-        last_err
+        },
+        &mut backend,
     );
+
+    // Connect two clients (the maximum).
+    let _c1 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 1);
+
+    let _c2 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 2);
+
+    // Third connection -- should NOT be accepted.
+    let _c3 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 2);
+
+    listener.stop();
 }
 
 #[test]
 fn listener_overlong_line_disconnects() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -668,16 +688,16 @@ fn listener_overlong_line_disconnects() {
 
 #[test]
 fn listener_empty_lines_ignored() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -700,16 +720,16 @@ fn listener_empty_lines_ignored() {
 
 #[test]
 fn listener_multiple_commands_in_one_read() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -735,16 +755,16 @@ fn listener_multiple_commands_in_one_read() {
 #[test]
 fn client_disconnect_and_reconnect() {
     // Start a listener to act as the server.
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    let (port, mut listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
 
     // First connection.
     let mut client_backend = StdNetworkBackend::new();
