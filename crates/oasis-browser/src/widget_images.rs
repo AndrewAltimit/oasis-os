@@ -248,6 +248,43 @@ impl BrowserWidget {
             }
         }
 
+        // Walk computed styles for CSS URL images (background-image,
+        // mask-image). These share the same fetch/decode pipeline as
+        // `<img>` elements, just discovered via cascade instead of DOM.
+        // Both land in `decoded_images` and get resolved into textures
+        // by `ensure_image_textures` / `assign_textures_recursive`.
+        let mut style_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for style_opt in &self.styles {
+            let Some(style) = style_opt else { continue };
+            for img in [&style.background_image, &style.mask_image] {
+                if let css::values::BackgroundImage::Url(ref url) = *img {
+                    let resolved = Self::resolve_src(&base_url, url);
+                    if self.decoded_images.contains_key(&resolved)
+                        || !style_seen.insert(resolved.clone())
+                    {
+                        continue;
+                    }
+                    let source = if self.config.features.sandbox_only {
+                        ResourceSource::Vfs
+                    } else {
+                        ResourceSource::VfsThenNetwork
+                    };
+                    let referrer = base_url.as_deref().and_then(loader::strip_referrer);
+                    eager_requests.push((
+                        resolved.clone(),
+                        ResourceRequest {
+                            url: resolved,
+                            base_url: base_url.clone(),
+                            source,
+                            method: crate::loader::HttpMethod::Get,
+                            body: None,
+                            referrer,
+                        },
+                    ));
+                }
+            }
+        }
+
         // Eager images first, lazy images appended after.
         eager_requests.extend(lazy_requests);
         self.pending_images = eager_requests;
@@ -285,14 +322,7 @@ impl BrowserWidget {
                             break; // receiver dropped
                         }
                     } else if result_tx
-                        .send((
-                            url,
-                            image::DecodedImage {
-                                width: 0,
-                                height: 0,
-                                pixels: Vec::new(),
-                            },
-                        ))
+                        .send((url, image::DecodedImage::new(0, 0, Vec::new())))
                         .is_err()
                     {
                         break;
@@ -343,6 +373,14 @@ impl BrowserWidget {
                     if let Some(evicted) = self.decoded_images.remove(&evict_url) {
                         let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
                         self.decoded_image_bytes -= evicted_bytes;
+                        // Drop the matching mask-image Arc from the
+                        // cache so it doesn't outlive its decoded_images
+                        // counterpart. Any LayoutBox that currently
+                        // pins the Arc via `mask_image_data` keeps it
+                        // alive for the remainder of the frame; the
+                        // next layout rebuild won't find the URL in
+                        // the cache and re-assigns `None`.
+                        self.mask_image_arcs.remove(&evict_url);
                         self.image_info_dirty = true;
                     }
                 } else {
@@ -476,6 +514,12 @@ impl BrowserWidget {
                                 let evicted_bytes =
                                     evicted.width as usize * evicted.height as usize * 4;
                                 self.decoded_image_bytes -= evicted_bytes;
+                                // Drop the matching mask-image Arc so
+                                // the cache doesn't outlive its
+                                // decoded_images counterpart. See the
+                                // `load_next_image_batch` site for
+                                // rationale.
+                                self.mask_image_arcs.remove(&evict_url);
                                 self.image_info_dirty = true;
                             }
                         } else {
@@ -533,6 +577,11 @@ impl BrowserWidget {
                                     let evicted_bytes =
                                         evicted.width as usize * evicted.height as usize * 4;
                                     self.decoded_image_bytes -= evicted_bytes;
+                                    // Keep `mask_image_arcs` in sync
+                                    // with `decoded_images` so mask
+                                    // cache entries never outlive
+                                    // their source.
+                                    self.mask_image_arcs.remove(&evict_url);
                                     self.image_info_dirty = true;
                                 }
                             } else {
@@ -673,18 +722,32 @@ impl BrowserWidget {
         // Collect background-image URLs from styles. These always get
         // individual textures (not atlas-packed) because background images
         // are typically tiled/stretched to arbitrary sizes.
+        //
+        // `mask-image: url(...)` URLs ride the same collection loop.
+        // Mask URLs that land in `decoded_images` are lazily wrapped
+        // in an `Arc` inside `self.mask_image_arcs` so later layout
+        // rebuilds can hand the pointer to every layout box that
+        // needs the decoded bytes without cloning the pixel buffer.
         let mut bg_pending: Vec<String> = Vec::new();
         let mut bg_set = std::collections::HashSet::new();
         for style_opt in &self.styles {
-            if let Some(style) = style_opt
-                && let css::values::BackgroundImage::Url(ref url) = style.background_image
-            {
+            let Some(style) = style_opt else { continue };
+            if let css::values::BackgroundImage::Url(ref url) = style.background_image {
                 let resolved = Self::resolve_src(&base_url, url);
                 if !self.image_textures.contains_key(&resolved)
                     && self.decoded_images.contains_key(&resolved)
                     && bg_set.insert(resolved.clone())
                 {
                     bg_pending.push(resolved);
+                }
+            }
+            if let css::values::BackgroundImage::Url(ref url) = style.mask_image {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.mask_image_arcs.contains_key(&resolved)
+                    && let Some(decoded) = self.decoded_images.get(&resolved)
+                {
+                    self.mask_image_arcs
+                        .insert(resolved, std::sync::Arc::new(decoded.clone()));
                 }
             }
         }
@@ -733,6 +796,7 @@ impl BrowserWidget {
                 &self.image_atlas,
                 self.window_w,
                 &self.cached_image_info,
+                &self.mask_image_arcs,
             );
         }
     }
@@ -742,6 +806,7 @@ impl BrowserWidget {
     ///
     /// For images packed into the atlas, the atlas texture ID and
     /// source region are assigned so the paint layer can use `blit_sub`.
+    #[allow(clippy::too_many_arguments)]
     fn assign_textures_recursive(
         layout_box: &mut layout::box_model::LayoutBox,
         doc: &Option<html::dom::Document>,
@@ -750,6 +815,7 @@ impl BrowserWidget {
         atlas: &crate::image_atlas::ImageAtlas,
         viewport_w: u32,
         image_info: &HashMap<String, (u32, u32)>,
+        mask_arcs: &HashMap<String, std::sync::Arc<image::DecodedImage>>,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
@@ -790,9 +856,22 @@ impl BrowserWidget {
             }
         }
 
+        // Assign decoded mask-image bytes. The Arc clone is cheap;
+        // the underlying pixel buffer is shared with
+        // `self.mask_image_arcs` so every layout box that references
+        // the same URL shares the same allocation.
+        if layout_box.mask_image_data.is_none()
+            && let css::values::BackgroundImage::Url(ref url) = layout_box.style.mask_image
+        {
+            let resolved = Self::resolve_src(base_url, url);
+            if let Some(arc) = mask_arcs.get(&resolved) {
+                layout_box.mask_image_data = Some(std::sync::Arc::clone(arc));
+            }
+        }
+
         for child in &mut layout_box.children {
             Self::assign_textures_recursive(
-                child, doc, base_url, textures, atlas, viewport_w, image_info,
+                child, doc, base_url, textures, atlas, viewport_w, image_info, mask_arcs,
             );
         }
     }

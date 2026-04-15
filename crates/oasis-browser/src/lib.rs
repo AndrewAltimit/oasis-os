@@ -308,6 +308,14 @@ pub struct BrowserWidget {
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
+    /// Arc-wrapped views of `decoded_images` entries used as
+    /// `mask-image: url(...)` sources. Lazily populated by
+    /// `ensure_image_textures` so each unique mask URL clones its
+    /// pixel buffer exactly once, then layout boxes cheaply carry a
+    /// shared reference to the decoded bytes without round-tripping
+    /// through the GPU.
+    mask_image_arcs: HashMap<String, std::sync::Arc<image::DecodedImage>>,
+
     /// Background I/O thread for non-blocking HTTP requests.
     /// Lazily created on first network request.
     ///
@@ -566,6 +574,7 @@ impl BrowserWidget {
             focused_node: None,
             body_node_id: None,
             decoded_images: HashMap::new(),
+            mask_image_arcs: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             io_thread: None,
             tls: None,

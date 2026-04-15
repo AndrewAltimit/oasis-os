@@ -18,6 +18,20 @@ pub struct DecodedImage {
     pub height: u32,
     /// RGBA pixel data, 4 bytes per pixel.
     pub pixels: Vec<u8>,
+    /// Cached: true when any pixel has alpha < 255.
+    pub has_transparency: bool,
+}
+
+impl DecodedImage {
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        let has_transparency = pixels.chunks_exact(4).any(|px| px[3] < 255);
+        Self {
+            width,
+            height,
+            pixels,
+            has_transparency,
+        }
+    }
 }
 
 /// Image format detected from content type or magic bytes.
@@ -139,11 +153,7 @@ fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
         }
     }
 
-    Some(DecodedImage {
-        width: w,
-        height: abs_h,
-        pixels,
-    })
+    Some(DecodedImage::new(w, abs_h, pixels))
 }
 
 /// Decode a PNG image using the `png` crate.
@@ -192,11 +202,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         },
     };
 
-    Some(DecodedImage {
-        width: w,
-        height: h,
-        pixels,
-    })
+    Some(DecodedImage::new(w, h, pixels))
 }
 
 /// Decode a JPEG image using the `jpeg-decoder` crate.
@@ -252,11 +258,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         },
     };
 
-    Some(DecodedImage {
-        width: w,
-        height: h,
-        pixels,
-    })
+    Some(DecodedImage::new(w, h, pixels))
 }
 
 /// Decode a GIF image using the `gif` crate (first frame only, static).
@@ -277,11 +279,11 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
         return None;
     }
 
-    Some(DecodedImage {
-        width: w,
-        height: h,
-        pixels: frame.buffer[..expected_len].to_vec(),
-    })
+    Some(DecodedImage::new(
+        w,
+        h,
+        frame.buffer[..expected_len].to_vec(),
+    ))
 }
 
 /// Decode a WebP image.
@@ -298,11 +300,7 @@ fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
         if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
             return None;
         }
-        Some(DecodedImage {
-            width: w,
-            height: h,
-            pixels: rgba.into_raw(),
-        })
+        Some(DecodedImage::new(w, h, rgba.into_raw()))
     }
     #[cfg(not(feature = "webp"))]
     {
@@ -365,11 +363,7 @@ pub fn bilinear_scale(image: &DecodedImage, new_width: u32, new_height: u32) -> 
         }
     }
 
-    DecodedImage {
-        width: new_width,
-        height: new_height,
-        pixels,
-    }
+    DecodedImage::new(new_width, new_height, pixels)
 }
 
 fn get_pixel(image: &DecodedImage, x: u32, y: u32, channel: u32) -> f32 {
@@ -414,11 +408,7 @@ pub fn broken_image_placeholder(width: u32, height: u32) -> DecodedImage {
         }
     }
 
-    DecodedImage {
-        width: w,
-        height: h,
-        pixels,
-    }
+    DecodedImage::new(w, h, pixels)
 }
 
 fn set_pixel(pixels: &mut [u8], width: u32, x: u32, y: u32, color: Color) {
@@ -692,11 +682,7 @@ mod tests {
 
     #[test]
     fn scale_to_fit_larger_than_max() {
-        let img = DecodedImage {
-            width: 200,
-            height: 100,
-            pixels: vec![128u8; 200 * 100 * 4],
-        };
+        let img = DecodedImage::new(200, 100, vec![128u8; 200 * 100 * 4]);
         let scaled = scale_to_fit(&img, 100, 100);
 
         assert_eq!(scaled.width, 100);
@@ -706,11 +692,7 @@ mod tests {
 
     #[test]
     fn scale_to_fit_already_fits() {
-        let img = DecodedImage {
-            width: 50,
-            height: 30,
-            pixels: vec![128u8; 50 * 30 * 4],
-        };
+        let img = DecodedImage::new(50, 30, vec![128u8; 50 * 30 * 4]);
         let scaled = scale_to_fit(&img, 100, 100);
 
         // Should return a clone, same dimensions.
@@ -720,11 +702,7 @@ mod tests {
 
     #[test]
     fn bilinear_scale_produces_correct_dimensions() {
-        let img = DecodedImage {
-            width: 4,
-            height: 4,
-            pixels: vec![255u8; 4 * 4 * 4],
-        };
+        let img = DecodedImage::new(4, 4, vec![255u8; 4 * 4 * 4]);
         let scaled = bilinear_scale(&img, 8, 6);
 
         assert_eq!(scaled.width, 8);
@@ -735,13 +713,13 @@ mod tests {
     #[test]
     fn bilinear_scale_uniform_image() {
         // A solid-color image should remain solid after scaling.
-        let img = DecodedImage {
-            width: 2,
-            height: 2,
-            pixels: vec![
+        let img = DecodedImage::new(
+            2,
+            2,
+            vec![
                 100, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255,
             ],
-        };
+        );
         let scaled = bilinear_scale(&img, 4, 4);
 
         for chunk in scaled.pixels.chunks(4) {

@@ -292,8 +292,12 @@ pub struct ComputedStyle {
     pub content_visibility: ContentVisibility,
 
     // -- Mask properties (compositor overhaul PR6) ---------------------
-    /// `mask-image` URL (`url(...)`) parsed as a raw string. None = no mask.
-    pub mask_image: Option<String>,
+    /// `mask-image` — reuses the `BackgroundImage` shape so URL forms
+    /// (`url(...)`), linear gradients, and radial gradients can all flow
+    /// through the same compositor path.
+    ///
+    /// `BackgroundImage::None` = no mask.
+    pub mask_image: BackgroundImage,
     /// `mask-mode` — alpha / luminance / match-source.
     pub mask_mode: crate::css::values::types::MaskMode,
     /// `mask-composite` (single-layer). Multi-layer composition falls
@@ -585,7 +589,7 @@ impl Default for ComputedStyle {
             image_rendering: ImageRendering::Auto,
             content_visibility: ContentVisibility::Visible,
 
-            mask_image: None,
+            mask_image: BackgroundImage::None,
             mask_mode: crate::css::values::types::MaskMode::MatchSource,
             mask_composite: crate::css::values::types::MaskComposite::Add,
             mask_clip: BackgroundBox::BorderBox,

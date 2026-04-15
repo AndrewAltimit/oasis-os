@@ -251,6 +251,25 @@ fn record_box(
             let has_backdrop = !layout_box.style.backdrop_filters.is_empty();
             let needs_backdrop =
                 has_backdrop || !matches!(mix_blend, crate::css::values::types::BlendMode::Normal);
+            let mask = match &layout_box.style.mask_image {
+                crate::css::values::BackgroundImage::None => None,
+                image => {
+                    // URL masks carry the decoded image bytes so the
+                    // replay path can sample without a GPU round-trip.
+                    // Gradient masks ignore the texture field.
+                    let texture = if matches!(image, crate::css::values::BackgroundImage::Url(_)) {
+                        layout_box.mask_image_data.clone()
+                    } else {
+                        None
+                    };
+                    Some(crate::paint::display_list::MaskParams {
+                        image: image.clone(),
+                        mode: layout_box.style.mask_mode,
+                        composite: layout_box.style.mask_composite,
+                        texture,
+                    })
+                },
+            };
             dl.push(DisplayItem::PushCompositingLayer {
                 bounds,
                 opacity: layout_box.style.opacity,
@@ -258,6 +277,7 @@ fn record_box(
                 needs_backdrop,
                 filters: layout_box.style.filters.clone(),
                 backdrop_filters: layout_box.style.backdrop_filters.clone(),
+                mask,
             });
         },
         Some(LayerKind::Opacity) => {
