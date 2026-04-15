@@ -107,9 +107,14 @@ fn css_blend_to_backend(m: CssBlendMode) -> BackendBlendMode {
 /// The mask is painted over the full layer rect; each pixel's mask
 /// value is combined with the layer pixel's alpha according to
 /// `mask.mode` (alpha / luminance / match-source) and `mask.composite`
-/// (destination-in / destination-out / destination-in / destination-
-/// xor). URL-backed masks are a documented follow-up and currently
-/// reduce to "no mask" — the layer composites unchanged.
+/// (destination-in / destination-out / destination-xor). URL-backed
+/// masks are sampled from the attached `Arc<DecodedImage>` via
+/// [`rasterize_url_mask`] (nearest-neighbor, stretched to layer
+/// bounds); gradient masks go through [`rasterize_linear_mask`] /
+/// [`rasterize_radial_mask`]. If a URL mask's texture hasn't been
+/// resolved yet (still fetching / decoding) the function early-
+/// returns so the layer composites unchanged and a later frame can
+/// pick up the mask once the pixels land.
 ///
 /// The buffer layout matches [`SdiBackend::load_texture`]: RGBA8,
 /// row-major, no padding.
@@ -213,7 +218,17 @@ fn rasterize_linear_mask(
         for x in 0..w {
             let proj = x as f32 * dx + y as f32 * dy;
             let raw = (proj - min_proj) / len;
-            let t = if grad.repeating { raw.fract().clamp(0.0, 1.0) } else { raw.clamp(0.0, 1.0) };
+            // `f32::fract()` preserves sign in Rust (unlike
+            // `rem_euclid`), so a projection that lands at `raw =
+            // -0.3` would give `fract = -0.3` and then clamp to 0 —
+            // silently collapsing the negative wrap range to the
+            // first stop. Use `rem_euclid(1.0)` so the repeat wraps
+            // properly into `[0, 1)` regardless of sign.
+            let t = if grad.repeating {
+                raw.rem_euclid(1.0)
+            } else {
+                raw.clamp(0.0, 1.0)
+            };
             let color = sample_gradient_stops(&grad.stops, t);
             out[(y * w + x) as usize] = color_to_mask_channel(color, use_alpha);
         }
@@ -223,9 +238,22 @@ fn rasterize_linear_mask(
 
 /// Rasterize a radial-gradient mask into a per-pixel 0..=255 grid.
 ///
-/// The radial center is fixed at the layer center; the radius is the
-/// distance from the center to the nearest edge for a `circle` shape,
-/// and independent X/Y radii for an `ellipse` shape.
+/// The radial center is fixed at the layer center (`RadialGradient`
+/// doesn't parse an explicit `at <position>` today — see the browser
+/// backlog). Radius defaults to CSS `farthest-corner`:
+///
+/// - **Circle**: radius is the distance from the center to the
+///   farthest corner — `sqrt((w/2)^2 + (h/2)^2)`. The box center
+///   is equidistant from all four corners so this is unambiguous.
+/// - **Ellipse**: the axis-aligned ellipse passing through all four
+///   corners has `rx = (w/2) * sqrt(2)`, `ry = (h/2) * sqrt(2)` —
+///   plug `(w/2, h/2)` into `(x/rx)^2 + (y/ry)^2 = 1` and the sum
+///   evaluates to `1/2 + 1/2 = 1` as required.
+///
+/// Earlier revisions used `closest-side` (`min(w, h) / 2` for
+/// circles, `w/2`, `h/2` for ellipses), which terminated the
+/// gradient before it reached the corners of non-square layers and
+/// left those regions filled with the final stop color.
 fn rasterize_radial_mask(
     w: u32,
     h: u32,
@@ -241,10 +269,11 @@ fn rasterize_radial_mask(
     let cx = fw * 0.5;
     let cy = fh * 0.5;
     let (rx, ry) = if grad.shape_circle {
-        let r = (fw.min(fh) * 0.5).max(1.0);
+        let r = ((fw * fw + fh * fh).sqrt() * 0.5).max(1.0);
         (r, r)
     } else {
-        ((fw * 0.5).max(1.0), (fh * 0.5).max(1.0))
+        let sqrt2 = std::f32::consts::SQRT_2;
+        ((fw * 0.5 * sqrt2).max(1.0), (fh * 0.5 * sqrt2).max(1.0))
     };
     let match_alpha = grad.stops.iter().any(|s| s.color.a < 255);
     let use_alpha = match mode {
@@ -3258,6 +3287,84 @@ mod tests {
     }
 
     #[test]
+    fn repeating_linear_mask_wraps_negative_projection() {
+        // A gradient whose natural axis range doesn't line up with
+        // the layer origin — the `raw` projection value at y=0 is
+        // `(proj - min_proj) / len` which can be exactly zero but
+        // neighboring rows can land on fractional positions. We
+        // construct a contrived case by using `ToTop` (dy = -1) so
+        // that `min_proj = -h` and row 0 projects to `raw = 1.0`
+        // (i.e. the end of the first period). Without the old
+        // `fract().clamp(0.0, 1.0)` bug, every row's `raw` lands in
+        // a well-defined period and produces a monotonic sweep per
+        // period.
+        let grad = LinearGradient {
+            direction: GradientDirection::ToTop,
+            repeating: true,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        };
+        // Any row should produce a valid 0..=255 value — the old
+        // `fract() + clamp` path could silently collapse negative
+        // wraparound to 0 for some orientations, which this test
+        // would catch as "every pixel is 0".
+        let buf = rasterize_linear_mask(1, 8, &grad, MaskMode::Alpha);
+        assert_eq!(buf.len(), 8);
+        assert!(
+            buf.iter().any(|&v| v > 0),
+            "repeating gradient should not collapse to all-zero under any axis"
+        );
+    }
+
+    #[test]
+    fn radial_mask_farthest_corner_covers_full_rect() {
+        // Previously the rasterizer used `closest-side` for the
+        // default radius, so a non-square layer had a "dead zone"
+        // beyond the nearest edge where the gradient had already
+        // terminated. With `farthest-corner` every corner sits on
+        // the t=1 locus and the gradient extends to the full box.
+        let grad = RadialGradient {
+            shape_circle: true,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        };
+        let buf = rasterize_radial_mask(16, 4, &grad, MaskMode::Alpha);
+        // Center pixel at (8, 2) is fully opaque.
+        let center = buf[(2 * 16 + 8) as usize];
+        assert_eq!(center, 255, "center should be fully opaque");
+        // A corner pixel (0, 0) lands near t=1 so it's near-
+        // transparent. With the old closest-side radius of 2, corner
+        // distance was ~8.25 against radius 2 → clamped to 1 but the
+        // area beyond t=1 was also 0. Here we assert the corner is
+        // close to zero AND that the midpoint between center and
+        // corner is non-trivially opaque — i.e. the gradient
+        // actually ramps across the width, not just near the center.
+        let corner = buf[0];
+        assert!(corner < 16, "corner should be near transparent: {corner}");
+        let midpoint = buf[(2 * 16 + 4) as usize];
+        assert!(
+            midpoint > 32 && midpoint < 224,
+            "midpoint should land in the gradient middle: {midpoint}"
+        );
+    }
+
+    #[test]
     fn radial_mask_center_brighter_than_edge() {
         let grad = RadialGradient {
             shape_circle: true,
@@ -3357,9 +3464,13 @@ mod tests {
         // 2x2 mask source: opaque white on the left column,
         // transparent white on the right column. Alpha mode should
         // keep the left column and drop the right.
-        let src = Arc::new(DecodedImage::new(2, 2, vec![
+        let src = Arc::new(DecodedImage::new(
+            2,
+            2,
+            vec![
                 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0,
-            ]));
+            ],
+        ));
         let mut layer: Vec<u8> = (0..4).flat_map(|_| [255u8, 0, 0, 255]).collect();
         let mask = MaskParams {
             image: CssBgImage::Url("left-half.png".to_string()),
@@ -3381,7 +3492,11 @@ mod tests {
         // fully opaque. Luminance mode should keep the right (white)
         // half and drop the left (black) half, even though both
         // alphas are identical.
-        let src = Arc::new(DecodedImage::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]));
+        let src = Arc::new(DecodedImage::new(
+            2,
+            1,
+            vec![0, 0, 0, 255, 255, 255, 255, 255],
+        ));
         let mut layer: Vec<u8> = (0..2).flat_map(|_| [0u8, 128, 255, 255]).collect();
         let mask = MaskParams {
             image: CssBgImage::Url("bw.png".to_string()),

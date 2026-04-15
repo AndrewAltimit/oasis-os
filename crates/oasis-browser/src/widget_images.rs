@@ -322,10 +322,7 @@ impl BrowserWidget {
                             break; // receiver dropped
                         }
                     } else if result_tx
-                        .send((
-                            url,
-                            image::DecodedImage::new(0, 0, Vec::new()),
-                        ))
+                        .send((url, image::DecodedImage::new(0, 0, Vec::new())))
                         .is_err()
                     {
                         break;
@@ -376,6 +373,14 @@ impl BrowserWidget {
                     if let Some(evicted) = self.decoded_images.remove(&evict_url) {
                         let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
                         self.decoded_image_bytes -= evicted_bytes;
+                        // Drop the matching mask-image Arc from the
+                        // cache so it doesn't outlive its decoded_images
+                        // counterpart. Any LayoutBox that currently
+                        // pins the Arc via `mask_image_data` keeps it
+                        // alive for the remainder of the frame; the
+                        // next layout rebuild won't find the URL in
+                        // the cache and re-assigns `None`.
+                        self.mask_image_arcs.remove(&evict_url);
                         self.image_info_dirty = true;
                     }
                 } else {
@@ -509,6 +514,12 @@ impl BrowserWidget {
                                 let evicted_bytes =
                                     evicted.width as usize * evicted.height as usize * 4;
                                 self.decoded_image_bytes -= evicted_bytes;
+                                // Drop the matching mask-image Arc so
+                                // the cache doesn't outlive its
+                                // decoded_images counterpart. See the
+                                // `load_next_image_batch` site for
+                                // rationale.
+                                self.mask_image_arcs.remove(&evict_url);
                                 self.image_info_dirty = true;
                             }
                         } else {
@@ -566,6 +577,11 @@ impl BrowserWidget {
                                     let evicted_bytes =
                                         evicted.width as usize * evicted.height as usize * 4;
                                     self.decoded_image_bytes -= evicted_bytes;
+                                    // Keep `mask_image_arcs` in sync
+                                    // with `decoded_images` so mask
+                                    // cache entries never outlive
+                                    // their source.
+                                    self.mask_image_arcs.remove(&evict_url);
                                     self.image_info_dirty = true;
                                 }
                             } else {

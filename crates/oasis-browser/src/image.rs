@@ -25,7 +25,12 @@ pub struct DecodedImage {
 impl DecodedImage {
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
         let has_transparency = pixels.chunks_exact(4).any(|px| px[3] < 255);
-        Self { width, height, pixels, has_transparency }
+        Self {
+            width,
+            height,
+            pixels,
+            has_transparency,
+        }
     }
 }
 
@@ -274,7 +279,11 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
         return None;
     }
 
-    Some(DecodedImage::new(w, h, frame.buffer[..expected_len].to_vec()))
+    Some(DecodedImage::new(
+        w,
+        h,
+        frame.buffer[..expected_len].to_vec(),
+    ))
 }
 
 /// Decode a WebP image.
@@ -704,9 +713,13 @@ mod tests {
     #[test]
     fn bilinear_scale_uniform_image() {
         // A solid-color image should remain solid after scaling.
-        let img = DecodedImage::new(2, 2, vec![
+        let img = DecodedImage::new(
+            2,
+            2,
+            vec![
                 100, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255,
-            ]);
+            ],
+        );
         let scaled = bilinear_scale(&img, 4, 4);
 
         for chunk in scaled.pixels.chunks(4) {
