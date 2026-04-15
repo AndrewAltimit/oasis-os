@@ -835,6 +835,7 @@ impl BrowserWidget {
         // Compute transform offsets (translate, scale, rotate, skew).
         let (tx_x, tx_y) = paint::compute_transform_offsets(
             &layout_box.style.transforms,
+            layout_box.style.transform_origin.as_ref(),
             &layout_box.dimensions.content,
             offset_x,
             offset_y,

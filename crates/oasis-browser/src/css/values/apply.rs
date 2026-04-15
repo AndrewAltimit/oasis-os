@@ -1892,7 +1892,7 @@ impl ComputedStyle {
                 }
             },
             "perspective-origin" => {
-                self.perspective_origin = string_or_keyword(value);
+                self.perspective_origin = Some(parse_perspective_origin(value, parent_font_size));
             },
             "backface-visibility" => {
                 if let Some(kw) = as_keyword(value) {
@@ -2777,6 +2777,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: px,
                 y: 0.0,
+                z: 0.0,
                 x_pct: None,
                 y_pct: None,
             };
@@ -2785,6 +2786,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: 0.0,
                 y: 0.0,
+                z: 0.0,
                 x_pct: Some(*p / 100.0),
                 y_pct: Some(0.5),
             };
@@ -2793,6 +2795,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: 0.0,
                 y: 0.0,
+                z: 0.0,
                 x_pct: Some(0.5),
                 y_pct: Some(0.5),
             };
@@ -2804,6 +2807,7 @@ fn parse_transform_origin(
     let y_pct: Option<f32>;
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
+    let mut z: f32 = 0.0;
 
     let resolve_part = |s: &str| -> (f32, Option<f32>) {
         match s {
@@ -2845,7 +2849,119 @@ fn parse_transform_origin(
         y_pct = Some(0.5);
     }
 
-    TransformOrigin { x, y, x_pct, y_pct }
+    // Optional third token is the Z origin in pixels (no percentage form).
+    if let Some(p2) = parts.get(2) {
+        z = parse_origin_length(p2, parent_font_size);
+    }
+
+    TransformOrigin {
+        x,
+        y,
+        z,
+        x_pct,
+        y_pct,
+    }
+}
+
+/// Parse a CSS length used in transform-origin Z position. Accepts
+/// `px`, `em`, `rem`, and bare numbers (treated as px).
+fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
+    let s = s.trim();
+    if let Some(px) = s.strip_suffix("px") {
+        px.trim().parse::<f32>().unwrap_or(0.0)
+    } else if let Some(em) = s.strip_suffix("em") {
+        em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
+    } else if let Some(rem) = s.strip_suffix("rem") {
+        rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::ROOT_FONT_SIZE
+    } else {
+        s.parse::<f32>().unwrap_or(0.0)
+    }
+}
+
+/// Parse a CSS `perspective-origin` value into a structured
+/// [`super::types::PerspectiveOrigin`]. Supports the same `keyword`,
+/// `<percentage>`, `<length>`, and one/two-token forms as
+/// `transform-origin`, but without a Z component.
+fn parse_perspective_origin(
+    value: &CssValue,
+    parent_font_size: f32,
+) -> super::types::PerspectiveOrigin {
+    use super::types::PerspectiveOrigin;
+
+    let raw = match value {
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        CssValue::Length(_, _) => {
+            let px = resolve_length(value, parent_font_size);
+            return PerspectiveOrigin {
+                x: px,
+                y: 0.0,
+                x_pct: None,
+                y_pct: Some(0.5),
+            };
+        },
+        CssValue::Percentage(p) => {
+            return PerspectiveOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(*p / 100.0),
+                y_pct: Some(0.5),
+            };
+        },
+        _ => {
+            return PerspectiveOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(0.5),
+                y_pct: Some(0.5),
+            };
+        },
+    };
+
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+
+    let resolve_part = |s: &str| -> (f32, Option<f32>) {
+        match s {
+            "left" | "top" => (0.0, Some(0.0)),
+            "center" => (0.0, Some(0.5)),
+            "right" | "bottom" => (0.0, Some(1.0)),
+            _ => {
+                if let Some(pct) = s.strip_suffix('%')
+                    && let Ok(v) = pct.trim().parse::<f32>()
+                {
+                    return (0.0, Some(v / 100.0));
+                }
+                if let Some(px) = s.strip_suffix("px")
+                    && let Ok(v) = px.trim().parse::<f32>()
+                {
+                    return (v, None);
+                }
+                if let Ok(v) = s.parse::<f32>() {
+                    return (v, None);
+                }
+                (0.0, Some(0.5))
+            },
+        }
+    };
+
+    let mut x_pct: Option<f32> = None;
+    let mut x: f32 = 0.0;
+    let mut y: f32 = 0.0;
+    let y_pct: Option<f32>;
+
+    if let Some(p0) = parts.first() {
+        let (px, pct) = resolve_part(p0);
+        x = px;
+        x_pct = pct;
+    }
+    if let Some(p1) = parts.get(1) {
+        let (px, pct) = resolve_part(p1);
+        y = px;
+        y_pct = pct;
+    } else {
+        y_pct = Some(0.5);
+    }
+
+    PerspectiveOrigin { x, y, x_pct, y_pct }
 }
 
 /// Parse a CSS `clip-path` value into a structured [`ClipPath`].
@@ -3721,6 +3837,33 @@ mod tests {
             16.0,
         );
         assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_transform_origin_three_value_includes_z() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform-origin",
+            &CssValue::String("25% 75% 40px".into()),
+            16.0,
+        );
+        let origin = s.transform_origin.expect("transform-origin parsed");
+        assert_eq!(origin.x_pct, Some(0.25));
+        assert_eq!(origin.y_pct, Some(0.75));
+        assert!((origin.z - 40.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_perspective_origin_to_structured_value() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "perspective-origin",
+            &CssValue::String("left center".into()),
+            16.0,
+        );
+        let origin = s.perspective_origin.expect("perspective-origin parsed");
+        assert_eq!(origin.x_pct, Some(0.0));
+        assert_eq!(origin.y_pct, Some(0.5));
     }
 
     #[test]

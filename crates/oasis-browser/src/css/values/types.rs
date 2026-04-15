@@ -650,8 +650,23 @@ pub enum TransformFunction {
 }
 
 /// CSS `transform-origin` value.
+///
+/// `*_pct` fields, when set, are percentages of the element's content
+/// box (0.0..=1.0). Otherwise the bare `x`/`y`/`z` field is used as a
+/// pixel offset. The Z component has no percentage form per spec.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransformOrigin {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub x_pct: Option<f32>,
+    pub y_pct: Option<f32>,
+}
+
+/// CSS `perspective-origin` value. Same shape as the 2D portion of
+/// [`TransformOrigin`] — perspective-origin has no Z component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerspectiveOrigin {
     pub x: f32,
     pub y: f32,
     pub x_pct: Option<f32>,

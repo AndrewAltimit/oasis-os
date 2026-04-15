@@ -127,34 +127,79 @@ cross-cutting nature.
   `rotateY(60deg)` (front) vs. `rotateY(120deg)` (back) live in
   `transform.rs`.
 
+- ~~**Perspective projection.**~~ — shipped on
+  `feat/browser-3d-transforms`. `PaintContext` now tracks an
+  inherited `PerspectiveContext` (distance + screen-space vanishing
+  point) which is pushed when descending into children of an element
+  with the `perspective` CSS property. When a descendant has 3D
+  transforms under an active perspective context, paint takes a
+  screen-space path: it builds the full 4×4
+  `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)`
+  matrix in screen coordinates, projects the box's three reference
+  corners through it with per-vertex perspective divide, and derives
+  a screen-space affine that maps the original screen rect to the
+  projected screen quad via `Matrix3d::project_screen_rect_affine`.
+  The 4th corner is the parallelogram completion `p1 + p2 - p0` —
+  exact for orthographic rotations, an approximation for steep
+  perspective angles. `perspective-origin` is now parsed into a
+  structured `PerspectiveOrigin { x, y, x_pct, y_pct }` (replaces
+  the opaque `String` storage) and resolved against the
+  perspective-establishing element's content box.
+- ~~**`transform-style: preserve-3d`.**~~ — shipped on
+  `feat/browser-3d-transforms`. `PaintContext` carries an ambient
+  `preserved_3d: Option<Matrix3d>` that propagates a parent's full
+  screen-space matrix to descendants when the parent has
+  `transform-style: preserve-3d`. Children compose their own local
+  3D matrix into the preserved ambient matrix instead of flattening
+  at the parent boundary, so a `translateZ(50px)` child under a
+  `rotateY(30deg)` preserve-3d ancestor with a `perspective: 800px`
+  great-grandparent now actually moves toward/away from the viewer
+  and gets perspective-divided correctly. The default `flat`
+  flushes `preserved_3d` to `None` for descendants, matching the
+  spec semantics ("the element renders as a flattened 2D image
+  inside its 3D parent"). Z-sorting of children inside a preserved
+  subtree is still a follow-up — paint order remains DOM order.
+- ~~**`transform-origin: Z`.**~~ — shipped on
+  `feat/browser-3d-transforms`. `TransformOrigin` gained a `z`
+  field, the parser accepts the three-token form
+  (e.g. `transform-origin: 25% 75% 40px`), and
+  `Matrix3d::from_css_transforms_3d` plumbs the Z component through
+  the pre/post translate pair so rotations pivot around an
+  arbitrary 3D point.
+- ~~**Reviewer-flagged: `transform-origin` resolution.**~~ — the
+  earlier scaffolding hardcoded the box centre in
+  `compute_transform_matrix` and the backface-visibility check.
+  Now both consult `style.transform_origin` via a shared
+  `resolve_transform_origin` helper that handles the `x_pct`/`y_pct`
+  percentage forms.
+
 **Follow-ups (not yet shipped):**
 
-- **Perspective projection.** `perspective` (the container property)
-  and `perspective(d)` (the transform function) both parse and feed
-  into the 4×4 pipeline, but `flatten_to_affine` performs only an
-  orthographic drop of the Z column/row. A true perspective-correct
-  paint needs either (a) a non-affine quad path (project the four
-  corners with the perspective divide and feed them to
-  `fill_polygon`, with a matching path for text/borders), or (b) a
-  GPU-side projection matrix on backends that have one.
-  `perspective-origin` is still stored as an opaque string — needs
-  the same structured pre-resolve treatment `transform-origin` got.
-- **`transform-style: preserve-3d`.** Parsed and stored, still
-  ignored. Needs to (1) skip the per-element flatten so descendants
-  inherit the parent's 4×4, (2) re-sort children by transformed Z
-  inside the preserved subtree, and (3) flatten only at the next
-  `Flat` boundary.
-- **`transform-origin: Z`.** The 2D origin is plumbed through
-  `from_css_transforms_3d`, but Z is hard-coded to 0. Trivial extension
-  once `transform-origin` parsing learns a third component.
+- **Z-sorting inside preserve-3d subtrees.** When several siblings
+  are preserved in the same 3D space, paint order should reflect
+  their projected Z, not DOM order. Today we still walk DOM order.
+- **Trapezoidal background for steep perspective.** The 3-corner
+  affine fit is exact for ≤1° error at typical
+  `perspective: 800px` rotations, but at e.g.
+  `rotateY(75deg) perspective(200px)` the bottom-right corner
+  visibly diverges. A non-affine quad path (project all 4 corners
+  and fill the resulting trapezoid) would close this gap.
+- **Existing 2D transform double-translation bug.** The flat path
+  still adds `child_matrix.e/.f` to `tx_offset_x/y` AND applies the
+  matrix in `ctx.transform`, double-counting the rotation pivot
+  translation for non-origin boxes. The screen-space 3D path
+  bypasses this by skipping the offset addition (`needs_screen_path`
+  branch), but the orthographic 2D path keeps the original
+  behaviour for backwards compatibility. Worth fixing in a
+  dedicated PR.
 
 **Backend impact:** desktop and WASM rasterize the flattened 2D
 affine today via the existing `fill_polygon` path. UE5 and PSP also
-inherit the flatten transparently. Once perspective is wired up, the
-non-affine quad path becomes the cross-cutting backend question —
-PSP GU has `sceGumPerspective`, but the backend trait would need a
-new "submit a textured trapezoid with perspective-correct UVs"
-primitive.
+inherit the flatten transparently. The screen-space projection is
+backend-agnostic — it produces standard affines that any backend
+can consume. Trapezoidal painting (the follow-up above) would need
+a non-affine quad primitive on backends that don't already have one;
+PSP GU has `sceGumPerspective` for true perspective rendering.
 
 ---
 
