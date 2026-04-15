@@ -171,8 +171,15 @@ fn collect_html(root: &Path) -> Vec<PathBuf> {
         }
         return out;
     }
-    let Ok(entries) = fs::read_dir(root) else {
-        return out;
+    let entries = match fs::read_dir(root) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!(
+                "oasis-browser-triage: cannot read directory {}: {e}",
+                root.display()
+            );
+            return out;
+        },
     };
     let mut stack: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     while let Some(p) = stack.pop() {
@@ -298,6 +305,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     let ok_count = by_bucket.get("ok").map(|v| v.len()).unwrap_or(0);
     let panic_count = by_bucket.get("panic").map(|v| v.len()).unwrap_or(0);
     let paint_err_count = by_bucket.get("paint-error").map(|v| v.len()).unwrap_or(0);
+    let io_err_count = by_bucket.get("io-error").map(|v| v.len()).unwrap_or(0);
     let slow_count = by_bucket.get("slow").map(|v| v.len()).unwrap_or(0);
     let empty_count = by_bucket.get("empty-layout").map(|v| v.len()).unwrap_or(0);
     let no_draw_count = by_bucket.get("no-draw-calls").map(|v| v.len()).unwrap_or(0);
@@ -329,6 +337,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
         ("empty-layout", empty_count),
         ("no-draw-calls", no_draw_count),
         ("paint-error", paint_err_count),
+        ("io-error", io_err_count),
         ("panic", panic_count),
     ] {
         let pct = if total > 0 {

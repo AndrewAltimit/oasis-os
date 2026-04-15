@@ -65,6 +65,13 @@ fn measure_layout(html: &str, width: f32, height: f32) -> Duration {
 /// end-to-end, measured on the host `cargo test` runs on. Values are
 /// chosen so the debug build has headroom on a modest CI runner; the
 /// release build is 5–10× faster.
+///
+/// `substack_post.html` carries a 750 ms budget instead of the default
+/// 500 ms because it is ~3× larger than the other fixtures (long-form
+/// article with nested `figure` / pull-quote markup, drop-cap, and a
+/// 10+ paragraph body) — a narrow-reflow pass through it does more
+/// work than the "home page" shape of the rest of the corpus. The
+/// budget is set at ~1.5× its observed debug-build cost on CI.
 const BUDGETS: &[(&str, f32, f32, u64)] = &[
     // Desktop viewport — 800x600 — primary budget target.
     ("wikipedia_article.html", 800.0, 600.0, 500),
@@ -77,10 +84,19 @@ const BUDGETS: &[(&str, f32, f32, u64)] = &[
     ("forum_thread.html", 800.0, 600.0, 500),
     ("commerce_product.html", 800.0, 600.0, 500),
     ("substack_post.html", 800.0, 600.0, 750),
-    // PSP viewport — 480x272 — narrow reflow target.
+    // PSP viewport — 480x272 — narrow reflow target. All ten
+    // fixtures are gated here so a narrow-width regression in any
+    // one of them (e.g. a `flex-basis: 0` loop or a text-wrap
+    // O(n²)) fails `cargo test`, not just the four biggest pages.
     ("wikipedia_article.html", 480.0, 272.0, 500),
+    ("news_homepage.html", 480.0, 272.0, 500),
+    ("blog_post.html", 480.0, 272.0, 500),
+    ("adversarial_malformed.html", 480.0, 272.0, 500),
     ("hackernews_frontpage.html", 480.0, 272.0, 500),
     ("github_readme.html", 480.0, 272.0, 500),
+    ("rust_std_docs.html", 480.0, 272.0, 500),
+    ("forum_thread.html", 480.0, 272.0, 500),
+    ("commerce_product.html", 480.0, 272.0, 500),
     ("substack_post.html", 480.0, 272.0, 750),
 ];
 
