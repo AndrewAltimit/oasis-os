@@ -251,6 +251,14 @@ fn record_box(
             let has_backdrop = !layout_box.style.backdrop_filters.is_empty();
             let needs_backdrop =
                 has_backdrop || !matches!(mix_blend, crate::css::values::types::BlendMode::Normal);
+            let mask = match &layout_box.style.mask_image {
+                crate::css::values::BackgroundImage::None => None,
+                image => Some(crate::paint::display_list::MaskParams {
+                    image: image.clone(),
+                    mode: layout_box.style.mask_mode,
+                    composite: layout_box.style.mask_composite,
+                }),
+            };
             dl.push(DisplayItem::PushCompositingLayer {
                 bounds,
                 opacity: layout_box.style.opacity,
@@ -258,6 +266,7 @@ fn record_box(
                 needs_backdrop,
                 filters: layout_box.style.filters.clone(),
                 backdrop_filters: layout_box.style.backdrop_filters.clone(),
+                mask,
             });
         },
         Some(LayerKind::Opacity) => {

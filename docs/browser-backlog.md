@@ -8,12 +8,14 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-15 (Real-world compatibility measurement epic
-fully shipped on `feat/browser-realworld-compat-epic` — corpus
-expanded to 10 fixtures, display-list golden harness for visual
-regression, hard wall-clock layout budgets gating `cargo test`,
-criterion corpus bench group, and a local-only triage binary for
-bucket-sorting arbitrary HTML snapshots).
+Last updated: 2026-04-15 (Compositor overhaul epic closed out on
+`feat/browser-compositor-overhaul`: `mask-*` now flows end-to-end
+through `PushCompositingLayer`, `creates_stacking_context` /
+`creates_compositing_layer` audited so every CSS property that
+allocates a render target has a named regression test, and the
+replay pop path shares a single CPU-readback pass between `filter:`
+and `mask-*`. Real-world compatibility measurement shipped earlier
+on `feat/browser-realworld-compat-epic`.)
 
 ---
 
@@ -595,9 +597,23 @@ order is:
    CSS nesting**~~ — all shipped. `:has()` and `@layer` on
    `feat/browser-has-selector`; CSS nesting on `feat/css-nesting`;
    `@container` on `feat/browser-container-queries`.
-4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
-   backdrop-filter, mask, isolation, filter, will-change in one
-   architectural change).
+4. ~~**Compositor overhaul**~~ — shipped. `mix-blend-mode`,
+   `backdrop-filter`, `filter:`, `isolation: isolate`, `will-change:`
+   and `mask-*` all now route through a single
+   `PushCompositingLayer` / `PopCompositingLayer` pair backed by the
+   `SdiRenderTarget` trait surface. Backends without render-target
+   support fall back to the `PushLayer` opacity fast path. The
+   replay pop path shares one CPU readback between `filter:` and
+   `mask-*` via `display_list.rs::apply_mask`, which rasterizes
+   linear/radial gradient masks on the CPU and combines them with
+   the layer's alpha per `mask-mode` (alpha / luminance /
+   match-source) and `mask-composite` (destination-in /
+   destination-out / destination-xor). URL-backed masks are a
+   documented follow-up — they require a texture-resolution pass
+   analogous to `background_texture` and currently reduce to "no
+   mask". Regression tests in `paint::tests` cover every
+   compositing-layer trigger plus the destination-in /
+   destination-out / luminance mask math.
 5. ~~**3D transforms**~~ — shipped (scaffolding on
    `feat/browser-3d-transforms`, follow-ups on
    `feat/browser-3d-transforms-followups`).

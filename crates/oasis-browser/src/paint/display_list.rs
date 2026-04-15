@@ -22,8 +22,34 @@ use oasis_types::backend::{
 use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
-use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
+use crate::css::values::types::{
+    BackgroundImage, BlendMode as CssBlendMode, FilterFunction, MaskComposite, MaskMode,
+};
 use crate::layout::box_model::Rect;
+
+/// Parameters for a CSS `mask-*` pass applied on `PopCompositingLayer`.
+///
+/// Captured at display-list recording time so the replay path can
+/// rasterize the mask into an alpha buffer and combine it with the
+/// layer pixels (via destination-in / mask-mode semantics) before the
+/// layer is composited back into the parent surface.
+///
+/// The mask image itself is carried as a [`BackgroundImage`] so that
+/// both URL and gradient forms flow through the same compositor path
+/// — gradients are rasterized on the CPU in
+/// [`DisplayList::replay`], URL masks are a follow-up (a texture-
+/// resolution pass analogous to `background_texture` is needed first).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskParams {
+    /// The mask source. `BackgroundImage::None` is never stored here
+    /// (the recorder skips emitting `mask` in that case) — keeping the
+    /// enum form lets us share parse/gradient paint plumbing.
+    pub image: BackgroundImage,
+    /// `mask-mode` — alpha / luminance / match-source.
+    pub mode: MaskMode,
+    /// `mask-composite` — single-layer semantics only today.
+    pub composite: MaskComposite,
+}
 
 /// Convert a parsed CSS `BlendMode` into the backend's `BlendMode`
 /// (they are the same 16-variant vocabulary — a direct map).
@@ -48,6 +74,219 @@ fn css_blend_to_backend(m: CssBlendMode) -> BackendBlendMode {
     }
 }
 
+/// Rasterize a mask source into an alpha grid and apply it to a BGRA
+/// layer buffer.
+///
+/// The mask is painted over the full layer rect; each pixel's mask
+/// value is combined with the layer pixel's alpha according to
+/// `mask.mode` (alpha / luminance / match-source) and `mask.composite`
+/// (destination-in / destination-out / destination-in / destination-
+/// xor). URL-backed masks are a documented follow-up and currently
+/// reduce to "no mask" — the layer composites unchanged.
+///
+/// The buffer layout matches [`SdiBackend::load_texture`]: RGBA8,
+/// row-major, no padding.
+fn apply_mask(buf: &mut [u8], w: u32, h: u32, mask: &MaskParams) {
+    if w == 0 || h == 0 || buf.len() < (w * h * 4) as usize {
+        return;
+    }
+    // Rasterize the mask source into a per-pixel 0..=255 mask value.
+    let mask_alpha: Vec<u8> = match &mask.image {
+        BackgroundImage::None => return,
+        BackgroundImage::Url(_) => {
+            // URL masks would need a texture-resolution pass analogous
+            // to `background_texture`. Out of scope for this pass; the
+            // layer composites unchanged.
+            return;
+        },
+        BackgroundImage::Gradient(grad) => rasterize_linear_mask(w, h, grad, mask.mode),
+        BackgroundImage::RadialGradient(grad) => rasterize_radial_mask(w, h, grad, mask.mode),
+    };
+    // Combine per the `mask-composite` operator. The layer alpha `la`
+    // starts as the already-painted layer's alpha; the mask alpha
+    // `ma` comes from the rasterized buffer.
+    for (pixel, ma) in buf.chunks_exact_mut(4).zip(mask_alpha.iter().copied()) {
+        let la = pixel[3] as u16;
+        let ma = ma as u16;
+        let out = match mask.composite {
+            // Default single-layer behaviour: destination-in.
+            MaskComposite::Add | MaskComposite::Intersect => (la * ma) / 255,
+            // Destination-out: keep layer where mask is 0.
+            MaskComposite::Subtract => (la * (255 - ma)) / 255,
+            // Alpha xor — keep the layer where exactly one of layer
+            // and mask is opaque.
+            MaskComposite::Exclude => {
+                let a = (la * (255 - ma)) / 255;
+                let b = ((255 - la) * ma) / 255;
+                (a + b).min(255)
+            },
+        } as u8;
+        pixel[3] = out;
+    }
+}
+
+/// Rasterize a linear-gradient mask into a per-pixel 0..=255 grid.
+///
+/// The mask value at each pixel is derived from the gradient stop at
+/// that pixel's parametric position along the gradient axis, converted
+/// to a single 0..=255 channel via `mask.mode`:
+///
+/// - `MaskMode::Alpha` — use the stop color's alpha component.
+/// - `MaskMode::Luminance` — use Rec.601 luminance of the RGB, scaled
+///   by the stop color's alpha.
+/// - `MaskMode::MatchSource` — alpha when the gradient has any
+///   non-opaque stop, otherwise luminance.
+fn rasterize_linear_mask(
+    w: u32,
+    h: u32,
+    grad: &crate::css::values::types::LinearGradient,
+    mode: MaskMode,
+) -> Vec<u8> {
+    use crate::css::values::types::GradientDirection;
+    let mut out = vec![0u8; (w * h) as usize];
+    if grad.stops.is_empty() || w == 0 || h == 0 {
+        return out;
+    }
+    // Axis unit vector (in pixel space, y-down).
+    let angle_rad = match grad.direction {
+        GradientDirection::Angle(deg) => deg.to_radians(),
+        GradientDirection::ToTop => 0.0,
+        GradientDirection::ToRight => 90.0_f32.to_radians(),
+        GradientDirection::ToBottom => 180.0_f32.to_radians(),
+        GradientDirection::ToLeft => 270.0_f32.to_radians(),
+    };
+    // CSS gradient angle: 0deg = to top, positive = clockwise.
+    let dx = angle_rad.sin();
+    let dy = -angle_rad.cos();
+    // Project each corner onto the axis to find the gradient length.
+    let fw = w as f32;
+    let fh = h as f32;
+    let corners = [(0.0, 0.0), (fw, 0.0), (0.0, fh), (fw, fh)];
+    let mut min_proj = f32::INFINITY;
+    let mut max_proj = f32::NEG_INFINITY;
+    for (cx, cy) in corners {
+        let p = cx * dx + cy * dy;
+        if p < min_proj {
+            min_proj = p;
+        }
+        if p > max_proj {
+            max_proj = p;
+        }
+    }
+    let len = (max_proj - min_proj).max(1.0);
+    let match_alpha = grad.stops.iter().any(|s| s.color.a < 255);
+    let use_alpha = match mode {
+        MaskMode::Alpha => true,
+        MaskMode::Luminance => false,
+        MaskMode::MatchSource => match_alpha,
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let proj = x as f32 * dx + y as f32 * dy;
+            let mut t = ((proj - min_proj) / len).clamp(0.0, 1.0);
+            if grad.repeating {
+                t = t.fract();
+            }
+            let color = sample_gradient_stops(&grad.stops, t);
+            out[(y * w + x) as usize] = color_to_mask_channel(color, use_alpha);
+        }
+    }
+    out
+}
+
+/// Rasterize a radial-gradient mask into a per-pixel 0..=255 grid.
+///
+/// The radial center is fixed at the layer center; the radius is the
+/// distance from the center to the nearest edge for a `circle` shape,
+/// and independent X/Y radii for an `ellipse` shape.
+fn rasterize_radial_mask(
+    w: u32,
+    h: u32,
+    grad: &crate::css::values::types::RadialGradient,
+    mode: MaskMode,
+) -> Vec<u8> {
+    let mut out = vec![0u8; (w * h) as usize];
+    if grad.stops.is_empty() || w == 0 || h == 0 {
+        return out;
+    }
+    let fw = w as f32;
+    let fh = h as f32;
+    let cx = fw * 0.5;
+    let cy = fh * 0.5;
+    let (rx, ry) = if grad.shape_circle {
+        let r = (fw.min(fh) * 0.5).max(1.0);
+        (r, r)
+    } else {
+        ((fw * 0.5).max(1.0), (fh * 0.5).max(1.0))
+    };
+    let match_alpha = grad.stops.iter().any(|s| s.color.a < 255);
+    let use_alpha = match mode {
+        MaskMode::Alpha => true,
+        MaskMode::Luminance => false,
+        MaskMode::MatchSource => match_alpha,
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let nx = (x as f32 - cx) / rx;
+            let ny = (y as f32 - cy) / ry;
+            let t = (nx * nx + ny * ny).sqrt().clamp(0.0, 1.0);
+            let color = sample_gradient_stops(&grad.stops, t);
+            out[(y * w + x) as usize] = color_to_mask_channel(color, use_alpha);
+        }
+    }
+    out
+}
+
+/// Linear interpolation across a sorted stop list at parametric
+/// position `t` (already clamped to `0..=1`).
+fn sample_gradient_stops(stops: &[crate::css::values::types::GradientStop], t: f32) -> Color {
+    if stops.is_empty() {
+        return Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+    }
+    if t <= stops[0].position {
+        return stops[0].color;
+    }
+    if t >= stops[stops.len() - 1].position {
+        return stops[stops.len() - 1].color;
+    }
+    for pair in stops.windows(2) {
+        let a = &pair[0];
+        let b = &pair[1];
+        if t >= a.position && t <= b.position {
+            let span = (b.position - a.position).max(f32::EPSILON);
+            let u = (t - a.position) / span;
+            return Color {
+                r: lerp_u8(a.color.r, b.color.r, u),
+                g: lerp_u8(a.color.g, b.color.g, u),
+                b: lerp_u8(a.color.b, b.color.b, u),
+                a: lerp_u8(a.color.a, b.color.a, u),
+            };
+        }
+    }
+    stops[stops.len() - 1].color
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    let af = a as f32;
+    let bf = b as f32;
+    (af + (bf - af) * t).round().clamp(0.0, 255.0) as u8
+}
+
+fn color_to_mask_channel(c: Color, use_alpha: bool) -> u8 {
+    if use_alpha {
+        c.a
+    } else {
+        // Rec.601 luma weighted by alpha.
+        let luma = 0.299 * c.r as f32 + 0.587 * c.g as f32 + 0.114 * c.b as f32;
+        ((luma * (c.a as f32 / 255.0)).round()).clamp(0.0, 255.0) as u8
+    }
+}
+
 /// Entry in the compositor layer stack kept during `replay()`.
 struct ActiveLayer {
     /// Allocated render target id. `None` when the backend reported
@@ -66,6 +305,10 @@ struct ActiveLayer {
     /// composite. Empty = no filter pass, fast composite_render_target
     /// path. Non-empty triggers a CPU readback + filter + re-upload.
     filters: Vec<FilterFunction>,
+    /// Optional `mask-*` parameters. When present, the pop path
+    /// rasterizes the mask source over the layer bounds and applies
+    /// it to the layer's alpha channel before the final composite.
+    mask: Option<MaskParams>,
     /// Saved `(compositor_dx, compositor_dy)` from before this layer
     /// was pushed. Restored on `PopCompositingLayer` so that nested
     /// layers don't accumulate translation incorrectly. (Without
@@ -225,6 +468,16 @@ pub enum DisplayItem {
         /// the layer contents are drawn on top. Only consulted when
         /// `needs_backdrop` is true.
         backdrop_filters: Vec<FilterFunction>,
+        /// Optional `mask-*` parameters. When present, the replay path
+        /// reads the layer pixels after filters are applied,
+        /// rasterizes the mask source into an alpha buffer, and
+        /// multiplies the layer alpha by the mask alpha (or mask
+        /// luminance, per `mask-mode`) before the layer is composited
+        /// back to the parent. `mask-composite` selects the per-pixel
+        /// combination (`Add` = destination-in, `Subtract` =
+        /// destination-out, `Intersect` = destination-in, `Exclude` =
+        /// destination-xor in alpha space).
+        mask: Option<MaskParams>,
     },
     /// End a [`PushCompositingLayer`](Self::PushCompositingLayer).
     PopCompositingLayer,
@@ -843,6 +1096,7 @@ impl DisplayList {
                     opacity,
                     blend,
                     filters,
+                    mask,
                     ..
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
@@ -899,6 +1153,7 @@ impl DisplayList {
                         opacity: *opacity,
                         blend: blend_backend,
                         filters: filters.clone(),
+                        mask: mask.clone(),
                         saved_compositor_dx: saved_dx,
                         saved_compositor_dy: saved_dy,
                     });
@@ -927,19 +1182,31 @@ impl DisplayList {
                             // keeps opacity — documented degradation
                             // until a read-modify-write path lands on
                             // the render target itself.
+                            // Any effect that must inspect layer pixels
+                            // before composite funnels through a single
+                            // CPU readback path. Currently that means
+                            // `filter:` and `mask-*`. Both require
+                            // `supports_render_target_readback`.
+                            let has_filter = !layer.filters.is_empty();
+                            let has_mask = layer.mask.is_some();
+                            let run_cpu_pass = (has_filter || has_mask)
+                                && backend.supports_render_target_readback();
                             let composite_res = if unbind_res.is_ok() {
-                                let run_filter = !layer.filters.is_empty()
-                                    && backend.supports_render_target_readback();
-                                if run_filter {
+                                if run_cpu_pass {
                                     let byte_count = (layer.dst_w * layer.dst_h * 4) as usize;
                                     let mut buf = vec![0u8; byte_count];
                                     if backend.read_render_target(id, &mut buf).is_ok() {
-                                        crate::paint::filter_chain::apply_filter_chain(
-                                            &mut buf,
-                                            layer.dst_w,
-                                            layer.dst_h,
-                                            &layer.filters,
-                                        );
+                                        if has_filter {
+                                            crate::paint::filter_chain::apply_filter_chain(
+                                                &mut buf,
+                                                layer.dst_w,
+                                                layer.dst_h,
+                                                &layer.filters,
+                                            );
+                                        }
+                                        if let Some(mask) = layer.mask.as_ref() {
+                                            apply_mask(&mut buf, layer.dst_w, layer.dst_h, mask);
+                                        }
                                         // Pre-multiply opacity into
                                         // alpha so a plain alpha-over
                                         // blit gives the correct result.
@@ -2526,6 +2793,7 @@ mod tests {
             needs_backdrop: false,
             filters: Vec::new(),
             backdrop_filters: Vec::new(),
+            mask: None,
         }
     }
 
@@ -2861,5 +3129,175 @@ mod tests {
         // resolve to outer-local (6, 6) — would be wrong if the pop
         // path naively added inner.dst_x back to compositor_dx.
         assert_eq!(fills.next(), Some((6, 6, 3, 3)), "outer-after");
+    }
+
+    // ---------------------------------------------------------------
+    // Mask-compositing tests (close out the compositor epic).
+    //
+    // The CPU readback path is exercised indirectly via the mask
+    // helpers — the `MockBackend` does not advertise
+    // `supports_render_targets`, so a full replay-level test would
+    // skip the mask pass entirely. Unit-testing the rasterizer +
+    // `apply_mask` directly verifies the destination-in /
+    // destination-out math without needing a real GPU-style backend.
+    // ---------------------------------------------------------------
+
+    use crate::css::values::types::{
+        BackgroundImage as CssBgImage, GradientDirection, GradientStop, LinearGradient,
+        MaskComposite, MaskMode, RadialGradient,
+    };
+
+    fn opaque_white_to_transparent() -> LinearGradient {
+        LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: false,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn linear_mask_produces_monotonic_alpha_ramp() {
+        let grad = opaque_white_to_transparent();
+        let buf = rasterize_linear_mask(4, 8, &grad, MaskMode::Alpha);
+        assert_eq!(buf.len(), 32);
+        // Column 0 should fade from 255 at the top toward 0 at the
+        // bottom. The bottom pixel doesn't reach exactly zero because
+        // the gradient axis spans the full rect while pixel samples
+        // hit the top-left corner of each cell — that's the same
+        // behaviour as CSS `background: linear-gradient(...)`.
+        let col = (0..8).map(|y| buf[(y * 4) as usize]).collect::<Vec<_>>();
+        assert_eq!(col[0], 255, "top row opaque");
+        assert!(col[7] < 64, "bottom row mostly transparent");
+        for pair in col.windows(2) {
+            assert!(pair[0] >= pair[1], "mask alpha must be monotonic");
+        }
+    }
+
+    #[test]
+    fn radial_mask_center_brighter_than_edge() {
+        let grad = RadialGradient {
+            shape_circle: true,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        };
+        let buf = rasterize_radial_mask(8, 8, &grad, MaskMode::Alpha);
+        let center = buf[(4 * 8 + 4) as usize];
+        let corner = buf[0];
+        assert!(center > corner);
+        assert_eq!(center, 255);
+    }
+
+    #[test]
+    fn apply_mask_destination_in_bites_out_transparent_half() {
+        // 8-row-tall opaque red layer so the vertical gradient has
+        // enough resolution to reach near-zero at the bottom.
+        let mut layer: Vec<u8> = (0..8).flat_map(|_| [255u8, 0, 0, 255]).collect();
+        let mask = MaskParams {
+            image: CssBgImage::Gradient(opaque_white_to_transparent()),
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
+        };
+        apply_mask(&mut layer, 1, 8, &mask);
+        // Top row keeps full alpha (mask=255).
+        assert_eq!(layer[3], 255, "top-row alpha preserved");
+        // Alpha must decrease monotonically down the column.
+        let alphas: Vec<u8> = (0..8).map(|y| layer[(y * 4 + 3) as usize]).collect();
+        for pair in alphas.windows(2) {
+            assert!(pair[0] >= pair[1], "alpha monotonic: {alphas:?}");
+        }
+        // Bottom row should be almost gone.
+        assert!(alphas[7] < 64, "bottom alpha mostly cleared: {alphas:?}");
+    }
+
+    #[test]
+    fn apply_mask_subtract_inverts_result() {
+        let mut layer: Vec<u8> = (0..8).flat_map(|_| [0u8, 0, 255, 255]).collect();
+        let mask = MaskParams {
+            image: CssBgImage::Gradient(opaque_white_to_transparent()),
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Subtract,
+        };
+        apply_mask(&mut layer, 1, 8, &mask);
+        // Subtract = destination-out: opaque mask REMOVES the layer.
+        // Top row should be cleared, bottom row mostly preserved.
+        let alphas: Vec<u8> = (0..8).map(|y| layer[(y * 4 + 3) as usize]).collect();
+        assert_eq!(alphas[0], 0, "top alpha cleared: {alphas:?}");
+        assert!(alphas[7] > 192, "bottom alpha mostly preserved: {alphas:?}");
+        for pair in alphas.windows(2) {
+            assert!(pair[0] <= pair[1], "alpha monotonic up: {alphas:?}");
+        }
+    }
+
+    #[test]
+    fn apply_mask_none_image_is_noop() {
+        let mut layer: Vec<u8> = (0..16).flat_map(|_| [10u8, 20, 30, 128]).collect();
+        let original = layer.clone();
+        let mask = MaskParams {
+            image: CssBgImage::None,
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
+        };
+        apply_mask(&mut layer, 2, 2, &mask);
+        assert_eq!(layer, original);
+    }
+
+    #[test]
+    fn apply_mask_url_is_noop_until_texture_pipeline_lands() {
+        // URL-backed masks are documented as a follow-up — the layer
+        // should composite unchanged until the texture resolution pass
+        // wires them through.
+        let mut layer: Vec<u8> = (0..16).flat_map(|_| [10u8, 20, 30, 128]).collect();
+        let original = layer.clone();
+        let mask = MaskParams {
+            image: CssBgImage::Url("some-mask.png".to_string()),
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
+        };
+        apply_mask(&mut layer, 2, 2, &mask);
+        assert_eq!(layer, original);
+    }
+
+    #[test]
+    fn luminance_mask_uses_rgb_not_alpha() {
+        // A black→white gradient, both stops fully opaque. With
+        // `MaskMode::Luminance` the ramp should still go 0→255
+        // (darkness → brightness) even though alpha is constant.
+        let grad = LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: false,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(0, 0, 0, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 1.0,
+                },
+            ],
+        };
+        let buf = rasterize_linear_mask(1, 8, &grad, MaskMode::Luminance);
+        assert_eq!(buf[0], 0, "top row pitch black → mask 0");
+        assert!(buf[7] > 192, "bottom row near-white → mask high");
+        for pair in buf.windows(2) {
+            assert!(pair[0] <= pair[1], "luminance monotonic: {buf:?}");
+        }
     }
 }

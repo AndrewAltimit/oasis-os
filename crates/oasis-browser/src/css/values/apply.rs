@@ -1696,9 +1696,13 @@ impl ComputedStyle {
             // pipeline is the foundation).
             "mask-image" | "-webkit-mask-image" => {
                 if as_keyword(value) == Some("none") {
-                    self.mask_image = None;
+                    self.mask_image = BackgroundImage::None;
                 } else if let CssValue::Url(ref url) = *value {
-                    self.mask_image = Some(url.clone());
+                    self.mask_image = BackgroundImage::Url(url.clone());
+                } else if let CssValue::Gradient(ref grad) = *value {
+                    self.mask_image = BackgroundImage::Gradient(grad.clone());
+                } else if let CssValue::RadialGradient(ref grad) = *value {
+                    self.mask_image = BackgroundImage::RadialGradient(grad.clone());
                 }
             },
             "mask-mode" | "-webkit-mask-mode" => {

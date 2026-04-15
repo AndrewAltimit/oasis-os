@@ -1141,6 +1141,13 @@ pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
         return true;
     }
 
+    // `mask-image: <image>` forces a stacking context so the mask can
+    // be applied to the entire painted subtree in one destination-in
+    // pass instead of per-box.
+    if !matches!(style.mask_image, crate::css::values::BackgroundImage::None) {
+        return true;
+    }
+
     false
 }
 
@@ -1177,6 +1184,14 @@ pub(crate) fn creates_compositing_layer(layout_box: &LayoutBox) -> bool {
     }
 
     if style.will_change_promotes_layer {
+        return true;
+    }
+
+    // `mask-image` needs a real offscreen layer so we can apply a
+    // destination-in pass to the full painted subtree. Without this
+    // promotion, the mask would have nothing to bite into at
+    // `PopCompositingLayer` time.
+    if !matches!(style.mask_image, crate::css::values::BackgroundImage::None) {
         return true;
     }
 
@@ -2553,6 +2568,102 @@ mod tests {
         // z_index_auto is true by default -- this is "z-index: auto".
         let lb = LayoutBox::new(BoxType::Block, style, None);
         assert!(!creates_stacking_context(&lb));
+    }
+
+    // ---------------------------------------------------------------
+    // Compositor epic close-out: every CSS property that should force
+    // a stacking context AND a real compositing layer (the "slow path"
+    // that allocates an offscreen render target) has an assertion
+    // here. Keep this list in sync with `creates_stacking_context` /
+    // `creates_compositing_layer` in this file.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn mix_blend_mode_triggers_compositing_layer() {
+        let mut style = ComputedStyle::default();
+        style.mix_blend_mode = crate::css::values::types::BlendMode::Multiply;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(creates_compositing_layer(&lb));
+    }
+
+    #[test]
+    fn backdrop_filter_triggers_compositing_layer() {
+        let mut style = ComputedStyle::default();
+        style.backdrop_filters = vec![crate::css::values::FilterFunction::Blur(4.0)];
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(creates_compositing_layer(&lb));
+    }
+
+    #[test]
+    fn box_level_filter_triggers_compositing_layer() {
+        let mut style = ComputedStyle::default();
+        style.filters = vec![crate::css::values::FilterFunction::Grayscale(1.0)];
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(creates_compositing_layer(&lb));
+    }
+
+    #[test]
+    fn isolation_isolate_triggers_compositing_layer() {
+        let mut style = ComputedStyle::default();
+        style.isolation = crate::css::values::types::Isolation::Isolate;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(creates_compositing_layer(&lb));
+    }
+
+    #[test]
+    fn will_change_triggers_compositing_layer() {
+        let mut style = ComputedStyle::default();
+        style.will_change_promotes_layer = true;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(creates_compositing_layer(&lb));
+    }
+
+    #[test]
+    fn mask_image_triggers_compositing_layer() {
+        use crate::css::values::types::{GradientDirection, GradientStop, LinearGradient};
+        let mut style = ComputedStyle::default();
+        style.mask_image = crate::css::values::BackgroundImage::Gradient(LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: false,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        });
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(
+            creates_stacking_context(&lb),
+            "mask-image must force a stacking context",
+        );
+        assert!(
+            creates_compositing_layer(&lb),
+            "mask-image must force an offscreen compositing layer",
+        );
+    }
+
+    #[test]
+    fn plain_opacity_stays_on_fast_path() {
+        // opacity < 1 creates a stacking context but NOT a real
+        // compositing layer — it rides the `PushLayer` fast path.
+        let mut style = ComputedStyle::default();
+        style.opacity = 0.5;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+        assert!(
+            !creates_compositing_layer(&lb),
+            "plain opacity must not allocate a render target",
+        );
     }
 
     #[test]
