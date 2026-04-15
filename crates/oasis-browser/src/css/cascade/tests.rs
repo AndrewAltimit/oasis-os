@@ -2628,6 +2628,7 @@ mod container_query_cascade_tests {
                 names: names.iter().map(|s| s.to_string()).collect(),
                 width: w,
                 height: h,
+                container_type: crate::css::values::types::ContainerType::Size,
             },
         );
         l

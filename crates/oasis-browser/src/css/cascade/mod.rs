@@ -140,6 +140,8 @@ pub struct ContainerEntry {
     pub width: f32,
     /// Border-box block-axis size in CSS pixels.
     pub height: f32,
+    /// The container type — `InlineSize` rejects block-axis queries.
+    pub container_type: crate::css::values::types::ContainerType,
 }
 
 /// Map of container `NodeId` → metadata. Built post-layout from a walk
@@ -184,6 +186,7 @@ pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> Con
                     names: b.style.container_name.clone(),
                     width: b.dimensions.content.width,
                     height: b.dimensions.content.height,
+                    container_type: b.style.container_type,
                 },
             );
         }
@@ -515,14 +518,20 @@ pub fn compute_style(
             }
         }
     }
-    for sheet in stylesheets {
-        for prop in &sheet.properties {
-            if let Some(ref initial) = prop.initial_value
-                && !style.custom_properties.contains_key(&prop.name)
-            {
+    {
+        let mut last_initial: rustc_hash::FxHashMap<&str, &str> = rustc_hash::FxHashMap::default();
+        for sheet in stylesheets {
+            for prop in &sheet.properties {
+                if let Some(ref initial) = prop.initial_value {
+                    last_initial.insert(&prop.name, initial);
+                }
+            }
+        }
+        for (name, initial) in last_initial {
+            if !style.custom_properties.contains_key(name) {
                 style
                     .custom_properties
-                    .insert(prop.name.clone(), initial.clone());
+                    .insert(name.to_string(), initial.to_string());
             }
         }
     }

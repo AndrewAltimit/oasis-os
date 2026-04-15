@@ -460,9 +460,6 @@ fn replaced_dimensions(replaced: &ReplacedContent, style: &ComputedStyle) -> (f3
                         max_w = w;
                     }
                 }
-                if lines == 0 {
-                    lines = 1;
-                }
                 (max_w + 8.0, lines as f32 * line_height + 4.0)
             } else {
                 (

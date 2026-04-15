@@ -1342,6 +1342,20 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
 // @container condition parsing
 // -------------------------------------------------------------------
 
+/// Case-insensitive split on ` and ` (CSS combinators are ASCII
+/// case-insensitive).
+fn split_css_and(s: &str) -> Vec<&str> {
+    let lower = s.to_ascii_lowercase();
+    let mut result = Vec::new();
+    let mut start = 0;
+    while let Some(pos) = lower[start..].find(" and ") {
+        result.push(s[start..start + pos].trim());
+        start += pos + 5;
+    }
+    result.push(s[start..].trim());
+    result
+}
+
 /// Parse a `@container` condition string into a [`ContainerCondition`].
 ///
 /// Recognises `(min-width: Npx)`, `(max-width: Npx)`, `(width: Npx)`,
@@ -1349,13 +1363,13 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
 /// (treated as their physical equivalents under our LTR-only horizontal
 /// writing-mode assumption). Multiple features are joined with ` and `.
 /// Any feature we can't parse causes that predicate to be dropped — the
-/// remaining predicates still apply, and an empty feature list always
-/// evaluates true.
+/// remaining predicates still apply, and an empty feature list never
+/// matches (always evaluates false).
 fn parse_container_condition(name: Option<String>, raw: &str) -> ContainerCondition {
     let mut features = Vec::new();
     let raw = raw.trim();
     if !raw.is_empty() {
-        for part in raw.split(" and ") {
+        for part in split_css_and(raw) {
             let inner = part
                 .trim()
                 .trim_start_matches('(')

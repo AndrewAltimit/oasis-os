@@ -141,6 +141,17 @@ pub(super) fn scope_condition_matches(
 }
 
 fn eval_feature(f: ContainerFeature, entry: &super::ContainerEntry) -> bool {
+    use crate::css::values::types::ContainerType;
+
+    let is_block_axis = matches!(
+        f,
+        ContainerFeature::MinHeight(_)
+            | ContainerFeature::MaxHeight(_)
+            | ContainerFeature::Height(_)
+    );
+    if is_block_axis && entry.container_type == ContainerType::InlineSize {
+        return false;
+    }
     match f {
         ContainerFeature::MinWidth(px) => entry.width >= px,
         ContainerFeature::MaxWidth(px) => entry.width <= px,
