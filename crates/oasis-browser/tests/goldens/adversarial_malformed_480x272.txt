@@ -1,0 +1,114 @@
+# viewport 480x272
+draw_text "Unclosed ", 8, 8, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "title ", 62, 8, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "above. ", 98, 8, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Missing ", 140, 8, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ".", 188, 8, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Stray ", 8, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "<tr> ", 44, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "outside ", 74, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "any ", 122, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "table: ", 146, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "should ", 188, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "be ", 230, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "foster-parented", 248, 28, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Paragraph ", 8, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "without ", 68, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "closing ", 116, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "tag ", 164, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "before ", 188, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "a ", 230, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "block", 242, 48, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "block ", 8, 68, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "child ", 44, 68, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "under ", 80, 68, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "bare ", 116, 68, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "text", 146, 68, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "another ", 8, 88, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "para ", 56, 88, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "inside ", 86, 88, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "div", 128, 88, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "and ", 8, 108, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "another ", 32, 108, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "one", 80, 108, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "bold ", 8, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "bold ", 9, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "without ", 38, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "without ", 39, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "closing ", 86, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "closing ", 87, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "italic ", 134, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "italic ", 135, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "underline", 176, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "underline", 177, 128, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 176, 134, 59, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "para ", 8, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "para ", 9, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 8, 154, 32, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "inside ", 38, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "inside ", 39, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 38, 154, 42, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "formatting", 80, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "formatting", 81, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 80, 154, 69, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "more ", 8, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "more ", 9, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 8, 166, 33, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "bold", 38, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "bold", 39, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 38, 166, 26, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " stray ", 62, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 62, 166, 43, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "text ", 104, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 104, 166, 32, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "inside ", 134, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 134, 166, 42, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "table ", 176, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 176, 166, 37, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "row ", 212, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 212, 166, 26, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "cell ", 236, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 236, 166, 28, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "one", 266, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 266, 166, 21, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "cell ", 284, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 284, 166, 28, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "two ", 314, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 314, 166, 26, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with ", 338, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 338, 166, 31, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "list ", 368, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 368, 166, 28, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "inside ", 398, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 398, 166, 42, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "cell", 440, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 166, 24, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "row ", 8, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 8, 178, 26, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "two", 32, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 32, 178, 22, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Unmatched ", 50, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 50, 178, 68, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "closing ", 110, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 110, 178, 49, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "tags ", 158, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 158, 178, 32, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "in ", 188, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 188, 178, 16, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "middle ", 206, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 206, 178, 43, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "final ", 248, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 248, 178, 35, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "para, ", 284, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 284, 178, 36, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "no ", 320, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 320, 178, 18, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "closing ", 338, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 338, 178, 49, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "html ", 386, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 386, 178, 31, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "or ", 416, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 416, 178, 18, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "body", 434, 172, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 178, 28, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+# totals fill_rect=33 draw_text=79 other=0

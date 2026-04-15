@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Why I built a browser engine for a 22-year-old handheld</title>
+<style>
+body { font-family: Georgia, "Times New Roman", serif; color: #1a1a1a; background: #ffffff; margin: 0; line-height: 1.6; }
+header.site { border-bottom: 1px solid #e0e0e0; padding: 12px 24px; text-align: center; }
+header.site .brand { font-size: 20px; font-weight: bold; color: #1a1a1a; text-decoration: none; }
+header.site .tagline { font-size: 12px; color: #707070; margin-top: 2px; }
+article { max-width: 680px; margin: 0 auto; padding: 48px 24px; }
+article h1.post-title { font-size: 36px; line-height: 1.2; margin: 0 0 12px; font-weight: bold; }
+article .subtitle { font-size: 18px; color: #555; margin-bottom: 24px; }
+article .byline { display: flex; align-items: center; border-top: 1px solid #e0e0e0; border-bottom: 1px solid #e0e0e0; padding: 12px 0; margin-bottom: 32px; }
+article .byline .avatar { width: 40px; height: 40px; background: #c0c0c0; border-radius: 50%; margin-right: 12px; }
+article .byline .author { font-size: 14px; }
+article .byline .author .name { font-weight: bold; color: #1a1a1a; }
+article .byline .author .date { color: #707070; }
+article p { font-size: 18px; margin: 18px 0; }
+article p.drop::first-letter { font-size: 56px; float: left; line-height: 1; padding: 4px 8px 0 0; color: #1a1a1a; }
+article blockquote.pull { border-left: 4px solid #e06c00; padding: 8px 0 8px 20px; margin: 24px 0; font-size: 24px; line-height: 1.3; color: #555; font-style: italic; }
+article h2 { font-size: 24px; margin-top: 32px; }
+article figure { margin: 24px 0; }
+article figure .image { width: 100%; height: 240px; background: #f0f0f0; border: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: center; color: #999; }
+article figure figcaption { font-size: 13px; color: #707070; text-align: center; margin-top: 8px; font-style: italic; }
+.author-card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 20px; margin-top: 48px; display: flex; gap: 16px; }
+.author-card .avatar { width: 60px; height: 60px; background: #c0c0c0; border-radius: 50%; }
+.author-card .bio h3 { margin: 0; font-size: 16px; }
+.author-card .bio p { font-size: 14px; color: #555; margin: 4px 0 0; }
+.author-card .follow { background: #e06c00; color: #fff; padding: 6px 16px; border-radius: 20px; font-size: 13px; margin-left: auto; align-self: center; text-decoration: none; }
+footer.post-footer { border-top: 1px solid #e0e0e0; margin-top: 32px; padding: 16px 0; font-size: 13px; color: #707070; text-align: center; }
+footer.post-footer a { color: #e06c00; text-decoration: none; }
+</style>
+</head>
+<body>
+<header class="site">
+<a class="brand" href="#">Spare Cycles</a>
+<div class="tagline">Notes on systems programming and retro hardware</div>
+</header>
+<article>
+<h1 class="post-title">Why I built a browser engine for a 22-year-old handheld</h1>
+<div class="subtitle">The PSP shipped in 2004 with 32 MB of RAM and a 333 MHz MIPS CPU. In 2026, it can run a from-scratch Rust browser engine with working JavaScript. Here's how.</div>
+<div class="byline">
+<div class="avatar"></div>
+<div class="author">
+<div class="name">Andrew Lee</div>
+<div class="date">April 15, 2026 &middot; 12 min read</div>
+</div>
+</div>
+<p class="drop">Every so often I get asked why I'm pouring this much effort into a handheld that stopped shipping over a decade ago. The honest answer is that the PSP is the last device in my collection where I can fit the entire system in my head &mdash; no hidden secure enclaves, no undocumented firmware blobs I can't touch, no coprocessors running blobs signed by a vendor that went out of business.</p>
+<p>When Apple locked down the iPod click wheel, I lost the ability to write code for the device that got me into programming. When Nintendo sealed the 3DS, the homebrew scene pivoted to exploits instead of SDKs. The PSP is the last handheld where the community has a complete toolchain, a working custom firmware, and documented access to every peripheral.</p>
+<blockquote class="pull">It's not nostalgia if the constraint makes you a better engineer.</blockquote>
+<h2>The constraint is the point</h2>
+<p>I've been writing Rust professionally since 2017. Most of that has been on machines where the answer to "how much memory does this need?" is shrug-emoji. The PSP has 24 MB of user-addressable memory, and that's before you've loaded any textures, the TLS stack, or a JavaScript engine. You don't get to shrug.</p>
+<p>That constraint forces decisions you would never make on a server. You don't embed V8; you pick QuickJS because it fits in 600 KB of code. You don't build a fancy compositor; you write a display list and batch the draw calls. You don't link newlib; you write 40 libc shims by hand so that you control every byte the C code can touch.</p>
+<h2>What it actually looks like</h2>
+<figure>
+<div class="image">[screenshot: oasis-os browser rendering hacker news]</div>
+<figcaption>The oasis-os browser rendering a Hacker News mirror on real PSP hardware, April 2026.</figcaption>
+</figure>
+<p>Everything in the screenshot above is running in 24 MB: the HTML tree builder, the CSS cascade with <code>@container</code> queries, a full flex/grid layout engine, the QuickJS JavaScript runtime, and the TLS 1.3 stack needed to fetch the page over HTTPS in the first place.</p>
+<p>The whole thing compiles with stock <code>rust-psp</code> nightly and a vendored pspdev toolchain in Docker. CI runs the entire build on every push, boots it in PPSSPP headless, and snapshots the framebuffer for visual regression. The build is currently around 6.8 MB, of which QuickJS is 900 KB.</p>
+<h2>What's next</h2>
+<p>The next milestone is a public launch targeting April or May. The blockers are boring: visual regression harness coverage, a real-world layout budget gate in CI, and closing out a handful of CSS long-tail items (<code>text-wrap: balance</code> is the big one). The engine is already ~50% of the way there.</p>
+<p>If you want to follow along, the repository is public and every commit is Claude-authored with a human reviewer in the loop. I'll post another update when the corpus hits 20 fixtures.</p>
+</article>
+<div class="author-card">
+<div class="avatar"></div>
+<div class="bio">
+<h3>Andrew Lee</h3>
+<p>Systems programmer in Tokyo. Writes about Rust, retro hardware, and the art of fitting big ideas in small memory footprints.</p>
+</div>
+<a class="follow" href="#">Subscribe</a>
+</div>
+<footer class="post-footer">
+Liked this post? <a href="#">Share it</a> &middot; <a href="#">Subscribe by email</a> &middot; <a href="#">View the archive</a>
+</footer>
+</body>
+</html>

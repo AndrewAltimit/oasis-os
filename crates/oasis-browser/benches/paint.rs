@@ -145,6 +145,7 @@ fn bench_paint(c: &mut Criterion) {
                     width: 480.0,
                     height: 272.0,
                     visible_height: 272.0,
+                    focused_node: None,
                 };
                 b.iter(|| paint_page(layout, &mut backend, vp, link_map));
             },
@@ -186,10 +187,13 @@ fn bench_full_pipeline(c: &mut Criterion) {
                     let link_map: HashMap<usize, String> = HashMap::new();
                     let vp = PaintViewport {
                         scroll_y: 0.0,
+                        scroll_x: 0.0,
                         x: 0,
                         y: 0,
                         width: 480.0,
                         height: 272.0,
+                        visible_height: 272.0,
+                        focused_node: None,
                     };
                     paint_page(&layout, &mut backend, vp, &link_map)
                 });

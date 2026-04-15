@@ -1,0 +1,196 @@
+# viewport 480x272
+draw_text "Anyone ", 8, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Anyone ", 9, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "else ", 50, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "else ", 51, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "running ", 80, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "running ", 81, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 128, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 129, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "on ", 158, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "on ", 159, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "PSP ", 176, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "PSP ", 177, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "hardware?", 200, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "hardware?", 201, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Posted ", 8, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "in ", 50, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "help", 68, 42, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 68, 48, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text " · ", 92, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "@altimit", 116, 42, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 116, 48, 51, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text " · ", 164, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "6 ", 188, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "replies ", 200, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "· ", 248, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "2.1k ", 266, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "views ", 296, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "· ", 332, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "last ", 350, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "activity ", 380, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "4", 434, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "hours ", 8, 54, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ago", 44, 54, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "psp", 8, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "no-std", 26, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "embedded", 62, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "homebrew", 110, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "altimit", 8, 78, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 8, 84, 44, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text " · ", 50, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "original ", 74, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "poster ", 128, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "· ", 170, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "2 ", 188, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "days ", 200, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ago", 230, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "I've ", 8, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "been ", 38, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "hacking ", 68, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "on ", 116, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "a ", 134, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 146, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "homebrew ", 176, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "project ", 230, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "for ", 278, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 302, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Sony ", 326, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "PSP ", 356, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "(the ", 380, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "original", 410, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "2004 ", 8, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "handheld) ", 38, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "and ", 98, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "hit ", 122, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "a ", 146, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "wall ", 158, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "linking ", 188, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "QuickJS. ", 236, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "The ", 290, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "C ", 314, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "code ", 326, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "compiles ", 356, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "fine ", 410, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with", 440, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 8, 114, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 114, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "psp-gcc", 8, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ", ", 50, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "but ", 62, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "linking ", 86, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "fails ", 134, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with ", 170, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 200, 114, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 200, 114, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "invalid ", 200, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 248, 114, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 248, 114, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "binding: ", 248, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 302, 114, 6, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 302, 114, 6, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "0", 302, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " from ", 308, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 344, 114, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 344, 114, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "rust-lld", 344, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ".", 392, 114, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Has ", 8, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "anyone ", 32, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "else ", 74, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "tried ", 104, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "mixing ", 140, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 182, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "code ", 212, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with ", 242, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "a ", 272, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "C ", 284, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "library ", 296, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "on ", 344, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "this ", 362, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "target? ", 392, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "I'm", 440, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "using ", 8, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 44, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 68, 146, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 68, 146, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "rust-psp", 68, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " fork ", 116, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "from ", 152, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "AndrewAltimit ", 182, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with ", 266, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 296, 146, 36, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 296, 146, 36, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "cargo ", 296, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 332, 146, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 332, 146, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "+nightly ", 332, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 386, 146, 18, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 386, 146, 18, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "psp", 386, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ".", 404, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "reply", 8, 166, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 8, 172, 33, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "quote", 38, 166, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 38, 172, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "flag", 68, 166, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 68, 172, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "overdrive", 8, 178, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 8, 184, 61, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text " · ", 62, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "regular ", 86, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "· ", 134, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "2 ", 152, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "days ", 164, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ago ", 194, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "· ", 218, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Solution", 236, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Switch ", 8, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 50, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "linker ", 74, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "to ", 116, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 134, 190, 36, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 134, 190, 36, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "psp-ld", 134, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " instead. ", 170, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "The ", 230, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "binutils ", 254, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "2.43 ", 308, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "that ", 338, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ships ", 368, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with", 404, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "modern ", 8, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "pspdev ", 50, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "emits ", 92, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "a ", 128, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 140, 202, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 140, 202, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text ".symtab", 140, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " layout ", 182, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "that ", 230, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "rust-lld ", 260, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "strictly ", 314, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "rejects. ", 368, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Add", 422, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "this ", 8, 214, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "to ", 38, 214, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "your ", 56, 214, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 86, 214, 108, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 86, 214, 108, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text ".cargo/config.toml", 86, 214, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ":", 194, 214, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 9, 235, 462, 48, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 234, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 471, 234, 1, 50, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 283, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 234, 1, 50, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 17, 241, 144, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 17, 241, 144, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "[target.mipsel-sony-psp]", 17, 241, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 17, 253, 198, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 17, 253, 198, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "linker = \"/opt/pspdev/bin/psp-ld\"", 17, 253, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 17, 265, 126, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 17, 265, 126, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "linker-flavor = \"gnu\"", 17, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+# totals fill_rect=42 draw_text=152 other=0

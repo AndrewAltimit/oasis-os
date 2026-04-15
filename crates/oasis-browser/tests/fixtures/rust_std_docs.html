@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vec in std::vec - Rust</title>
+<style>
+body { font-family: "Source Serif 4", serif; margin: 0; background: #ffffff; color: #1a1a1a; }
+.topbar { background: #353535; color: #ddd; padding: 8px 16px; font-size: 13px; }
+.topbar a { color: #ddd; text-decoration: none; margin-right: 12px; }
+.wrapper { display: flex; }
+nav.sidebar { width: 200px; border-right: 1px solid #e0e0e0; padding: 16px; font-size: 13px; background: #f7f7f7; }
+nav.sidebar h2 { font-size: 14px; margin: 8px 0 4px; color: #333; }
+nav.sidebar ul { list-style: none; padding: 0; margin: 0; }
+nav.sidebar a { color: #3873b9; text-decoration: none; display: block; padding: 2px 0; }
+main { flex: 1; padding: 24px 32px; max-width: 960px; }
+h1.fqn { font-size: 20px; margin: 0 0 12px; font-family: monospace; color: #1a1a1a; }
+h1.fqn .keyword { color: #a71d5d; }
+h1.fqn .ident { color: #183691; }
+.docblock { line-height: 1.5; max-width: 80ch; }
+.docblock p { margin: 8px 0; }
+.docblock code { background: #f5f5f5; padding: 0.1em 0.3em; font-family: monospace; font-size: 90%; border-radius: 3px; }
+h2.section-header { border-bottom: 1px solid #e0e0e0; padding-bottom: 4px; margin-top: 24px; font-size: 18px; }
+.impl-items .method { border-top: 1px solid #eee; padding: 12px 0; }
+.impl-items .method .signature { font-family: monospace; font-size: 14px; color: #1a1a1a; }
+.impl-items .method .signature .keyword { color: #a71d5d; }
+.impl-items .method .signature .fn-name { color: #7349b6; }
+.impl-items .method p { font-size: 14px; color: #4a4a4a; margin: 6px 0 0 16px; }
+pre.example { background: #f5f5f5; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 13px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="topbar">
+<a href="#">std</a> <a href="#">core</a> <a href="#">alloc</a> <a href="#">test</a> <a href="#">proc_macro</a>
+</div>
+<div class="wrapper">
+<nav class="sidebar">
+<h2>Struct Vec</h2>
+<ul>
+<li><a href="#fields">Fields</a></li>
+<li><a href="#methods">Methods</a></li>
+<li><a href="#trait-implementations">Trait Implementations</a></li>
+<li><a href="#auto-trait-implementations">Auto Trait Implementations</a></li>
+</ul>
+<h2>Methods</h2>
+<ul>
+<li><a href="#method.new">new</a></li>
+<li><a href="#method.with_capacity">with_capacity</a></li>
+<li><a href="#method.push">push</a></li>
+<li><a href="#method.pop">pop</a></li>
+<li><a href="#method.len">len</a></li>
+<li><a href="#method.is_empty">is_empty</a></li>
+<li><a href="#method.iter">iter</a></li>
+<li><a href="#method.into_iter">into_iter</a></li>
+</ul>
+</nav>
+<main>
+<h1 class="fqn"><span class="keyword">pub struct</span> <span class="ident">Vec</span>&lt;T, A = Global&gt; { /* private fields */ }</h1>
+<div class="docblock">
+<p>A contiguous growable array type, written as <code>Vec&lt;T&gt;</code>, short for 'vector'.</p>
+<p>Vectors are a fundamental collection in Rust. They are stored on the heap and can grow or shrink at runtime. Indexing is O(1), pushing to the back is amortized O(1), and iteration is cache-friendly.</p>
+<pre class="example">let mut v = Vec::new();
+v.push(1);
+v.push(2);
+assert_eq!(v.len(), 2);
+assert_eq!(v[0], 1);</pre>
+</div>
+<h2 class="section-header" id="methods">Implementations</h2>
+<div class="impl-items">
+<div class="method" id="method.new">
+<div class="signature"><span class="keyword">pub const fn</span> <span class="fn-name">new</span>() -&gt; Vec&lt;T&gt;</div>
+<p>Constructs a new, empty <code>Vec&lt;T&gt;</code>. The vector will not allocate until elements are pushed onto it.</p>
+</div>
+<div class="method" id="method.with_capacity">
+<div class="signature"><span class="keyword">pub fn</span> <span class="fn-name">with_capacity</span>(capacity: usize) -&gt; Vec&lt;T&gt;</div>
+<p>Constructs a new, empty <code>Vec&lt;T&gt;</code> with the specified capacity. The vector will be able to hold exactly <code>capacity</code> elements without reallocating.</p>
+</div>
+<div class="method" id="method.push">
+<div class="signature"><span class="keyword">pub fn</span> <span class="fn-name">push</span>(&amp;mut self, value: T)</div>
+<p>Appends an element to the back of a collection. Panics if the new capacity exceeds <code>isize::MAX</code> bytes.</p>
+</div>
+<div class="method" id="method.pop">
+<div class="signature"><span class="keyword">pub fn</span> <span class="fn-name">pop</span>(&amp;mut self) -&gt; Option&lt;T&gt;</div>
+<p>Removes the last element from a vector and returns it, or <code>None</code> if it is empty.</p>
+</div>
+<div class="method" id="method.len">
+<div class="signature"><span class="keyword">pub const fn</span> <span class="fn-name">len</span>(&amp;self) -&gt; usize</div>
+<p>Returns the number of elements in the vector, also referred to as its 'length'.</p>
+</div>
+<div class="method" id="method.is_empty">
+<div class="signature"><span class="keyword">pub const fn</span> <span class="fn-name">is_empty</span>(&amp;self) -&gt; bool</div>
+<p>Returns <code>true</code> if the vector contains no elements.</p>
+</div>
+</div>
+</main>
+</div>
+</body>
+</html>

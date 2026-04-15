@@ -412,12 +412,13 @@ through to the trait. Backends don't need to know.
     isolation root.
   - `filter_box_blur.html` — `filter: blur(8px)` on a box with mixed
     text/borders.
-  Render via the SDL backend, check in golden PNGs, gate CI on pixel
-  delta. Reuses the visual-regression harness from the
-  ["Real-world compatibility measurement"
-  epic](browser-backlog.md#epic-real-world-compatibility-measurement)
-  if that lands first; otherwise we add a minimal `tests/visual.rs`
-  here.
+  Reuses the display-list golden harness shipped on
+  `feat/browser-realworld-compat-epic`
+  ([done epic](browser-backlog.md#-done-real-world-compatibility-measurement)):
+  drop the compositor fixtures under
+  `crates/oasis-browser/tests/fixtures/` and add them to the
+  `FIXTURES` list in `tests/visual_regression.rs`, then
+  `UPDATE_GOLDENS=1` to seed the expected draw-call streams.
 - **PSP smoke test.** PPSSPP headless run that loads
   `mix_blend_mode_basic.html` and asserts no panic / no GU command
   buffer overflow / no VRAM exhaustion. Visual fidelity not asserted.
