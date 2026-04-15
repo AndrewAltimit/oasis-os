@@ -706,11 +706,17 @@ pub(super) fn paint_box(
             //
             // Sort key: the child's screen-center point passed
             // through `(parent_screen_matrix * child_local_matrix)`,
-            // taking Z. Sorted descending (farther first → painter's
-            // algorithm). Only the normal-flow tier is reordered;
-            // negative and positive z-index stacking contexts keep
-            // their CSS 2.1 ordering, matching how browsers treat
-            // explicit z-index as an opt-out from 3D sorting.
+            // taking Z after the perspective divide. Sorted
+            // ascending — in our frame, smaller Z = farther from
+            // the viewer (the perspective matrix at column 2 row 3
+            // is `-1/d`, so input `translateZ(+k)` lands with
+            // smaller `w` and larger `z/w`), so ascending order
+            // puts far first, matching the painter's-algorithm
+            // back-to-front draw order. Inside a preserve-3d
+            // parent, `preserve3d_flatten` above collapses CSS
+            // 2.1's stacking-context tiers into the single
+            // `normal_children` list so ALL siblings participate
+            // in the sort, not just the normal-flow ones.
             let y_sorted = matches!(
                 layout_box.box_type,
                 BoxType::Block | BoxType::Anonymous | BoxType::TableWrapper
