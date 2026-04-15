@@ -983,16 +983,27 @@ impl ComputedStyle {
             },
 
             // -- Background image ---------------------------------------
+            //
+            // CSS `background-image` accepts a comma-separated list of
+            // layers; the engine only supports single-layer semantics,
+            // so a `CssValue::Multiple` is reduced to its first item.
+            // Without this arm, `background-image: url(a), url(b)`
+            // would fall through every branch and leave the property
+            // unchanged — effectively dropping the whole declaration.
             "background-image" => {
-                if let Some(kw) = as_keyword(value) {
+                let first = match value {
+                    CssValue::Multiple(vs) => vs.first().unwrap_or(value),
+                    _ => value,
+                };
+                if let Some(kw) = as_keyword(first) {
                     if kw == "none" {
                         self.background_image = BackgroundImage::None;
                     }
-                } else if let CssValue::Url(ref url) = *value {
+                } else if let CssValue::Url(ref url) = *first {
                     self.background_image = BackgroundImage::Url(url.clone());
-                } else if let CssValue::Gradient(ref grad) = *value {
+                } else if let CssValue::Gradient(ref grad) = *first {
                     self.background_image = BackgroundImage::Gradient(grad.clone());
-                } else if let CssValue::RadialGradient(ref grad) = *value {
+                } else if let CssValue::RadialGradient(ref grad) = *first {
                     self.background_image = BackgroundImage::RadialGradient(grad.clone());
                 }
             },
@@ -1695,13 +1706,23 @@ impl ComputedStyle {
             // path lives in a follow-up (the filter-chain readback
             // pipeline is the foundation).
             "mask-image" | "-webkit-mask-image" => {
-                if as_keyword(value) == Some("none") {
+                // Multi-layer mask lists reduce to their first layer
+                // (matches the single-layer collapse documented on
+                // `MaskComposite`). Without this, a page using
+                // `mask-image: url(a), url(b)` would fall through all
+                // arms and end up with `BackgroundImage::None`,
+                // silently removing the mask entirely.
+                let first = match value {
+                    CssValue::Multiple(vs) => vs.first().unwrap_or(value),
+                    _ => value,
+                };
+                if as_keyword(first) == Some("none") {
                     self.mask_image = BackgroundImage::None;
-                } else if let CssValue::Url(ref url) = *value {
+                } else if let CssValue::Url(ref url) = *first {
                     self.mask_image = BackgroundImage::Url(url.clone());
-                } else if let CssValue::Gradient(ref grad) = *value {
+                } else if let CssValue::Gradient(ref grad) = *first {
                     self.mask_image = BackgroundImage::Gradient(grad.clone());
-                } else if let CssValue::RadialGradient(ref grad) = *value {
+                } else if let CssValue::RadialGradient(ref grad) = *first {
                     self.mask_image = BackgroundImage::RadialGradient(grad.clone());
                 }
             },
@@ -3480,6 +3501,35 @@ mod tests {
         let value = CssValue::Keyword("none".into());
         s.apply_declaration("text-shadow", &value, 16.0);
         assert!(s.text_shadow.is_none());
+    }
+
+    #[test]
+    fn multi_layer_background_image_takes_first_layer() {
+        // `background-image: url(a), url(b)` parses as
+        // `CssValue::Multiple([Url(a), Url(b)])`. The engine only
+        // supports single-layer semantics, so the first layer should
+        // win instead of the whole declaration being dropped.
+        let mut s = ComputedStyle::default();
+        let value = CssValue::Multiple(vec![
+            CssValue::Url("a.png".into()),
+            CssValue::Url("b.png".into()),
+        ]);
+        s.apply_declaration("background-image", &value, 16.0);
+        assert_eq!(s.background_image, BackgroundImage::Url("a.png".into()));
+    }
+
+    #[test]
+    fn multi_layer_mask_image_takes_first_layer() {
+        // Same behaviour for mask-image: without the `Multiple` arm
+        // the fallthrough left `mask_image = None`, silently
+        // removing the mask on any page using the multi-layer form.
+        let mut s = ComputedStyle::default();
+        let value = CssValue::Multiple(vec![
+            CssValue::Url("mask-a.png".into()),
+            CssValue::Url("mask-b.png".into()),
+        ]);
+        s.apply_declaration("mask-image", &value, 16.0);
+        assert_eq!(s.mask_image, BackgroundImage::Url("mask-a.png".into()));
     }
 
     #[test]

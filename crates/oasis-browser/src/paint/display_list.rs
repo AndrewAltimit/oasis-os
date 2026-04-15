@@ -143,7 +143,19 @@ fn apply_mask(buf: &mut [u8], w: u32, h: u32, mask: &MaskParams) {
         let la = pixel[3] as u16;
         let ma = ma as u16;
         let out = match mask.composite {
-            // Default single-layer behaviour: destination-in.
+            // `Add` and `Intersect` both collapse to destination-in
+            // for a single mask layer. Per spec, `mask-composite:
+            // add` is source-over *between mask layers*, and
+            // `intersect` is destination-in between layers. With
+            // only one mask layer there is no second layer for
+            // `add` to be source-over against — the effective
+            // operation is "apply this layer's mask to the content",
+            // which is destination-in. The branch collapse is
+            // correct for single-layer masks but must be un-
+            // collapsed if/when multi-layer mask composition lands
+            // (the existing `MaskComposite` variants carry the
+            // information forward — the pop path just ignores the
+            // distinction today).
             MaskComposite::Add | MaskComposite::Intersect => (la * ma) / 255,
             // Destination-out: keep layer where mask is 0.
             MaskComposite::Subtract => (la * (255 - ma)) / 255,
@@ -575,12 +587,16 @@ pub enum DisplayItem {
         /// Optional `mask-*` parameters. When present, the replay path
         /// reads the layer pixels after filters are applied,
         /// rasterizes the mask source into an alpha buffer, and
-        /// multiplies the layer alpha by the mask alpha (or mask
-        /// luminance, per `mask-mode`) before the layer is composited
-        /// back to the parent. `mask-composite` selects the per-pixel
-        /// combination (`Add` = destination-in, `Subtract` =
-        /// destination-out, `Intersect` = destination-in, `Exclude` =
-        /// destination-xor in alpha space).
+        /// combines it with the layer alpha (per `mask-mode`:
+        /// alpha / luminance / match-source) before the layer is
+        /// composited back to the parent.
+        ///
+        /// `mask-composite` selects the per-pixel operation. Note
+        /// that the single-layer pop path collapses `Add` and
+        /// `Intersect` to destination-in — see the inline comment
+        /// in `apply_mask` for the spec rationale. Multi-layer
+        /// composition (where `Add` = source-over between mask
+        /// layers) is a follow-up.
         mask: Option<MaskParams>,
     },
     /// End a [`PushCompositingLayer`](Self::PushCompositingLayer).
