@@ -70,34 +70,37 @@ impl TreeBuilder {
             },
             Token::EndTag(ref tag) => {
                 let lower = tag.name.to_ascii_lowercase();
-                if lower == "script" {
-                    // Per spec a `</script>` inside SVG pops the
-                    // current SVG script element; we just treat it
-                    // like any other close.
-                }
-                // Pop open elements up to and including the matching
-                // foreign element (case-insensitive tag compare),
-                // decrementing foreign_depth for each popped
-                // foreign-content descendant. If no match is found,
-                // the end tag is a parse error and we ignore it.
+                // Per WHATWG §13.2.6.5: search inside the current
+                // foreign content subtree only — we can't cross back
+                // into HTML via an end tag. Restrict the scan to the
+                // topmost `foreign_depth` elements of the open stack
+                // (the foreign root + its foreign descendants) so a
+                // malformed `</body>` inside `<svg>` can never
+                // accidentally close an HTML ancestor even if the
+                // `foreign_depth` invariant is later weakened.
+                let depth = self.foreign_depth as usize;
+                let stack_len = self.open_elements.len();
+                debug_assert!(
+                    depth <= stack_len,
+                    "foreign_depth {depth} exceeds open_elements.len() {stack_len}"
+                );
+                let subtree_start = stack_len.saturating_sub(depth);
                 let mut found = None;
-                for (i, &id) in self.open_elements.iter().enumerate().rev() {
+                for (i, &id) in self.open_elements[subtree_start..].iter().enumerate().rev() {
                     if self.tag_of(id).map(TagName::as_str) == Some(lower.as_str()) {
-                        found = Some(i);
+                        found = Some(subtree_start + i);
                         break;
                     }
-                    // Spec: if we walk past a non-foreign element,
-                    // stop and ignore (we can't cross back into HTML
-                    // via an end tag inside foreign content). Our
-                    // foreign_depth > 0 invariant means every element
-                    // on the stack above the svg/math root is in the
-                    // foreign subtree, so this guard is academic here.
                 }
                 if let Some(pos) = found {
-                    let pops = self.open_elements.len() - pos;
+                    let pops = stack_len - pos;
                     self.open_elements.truncate(pos);
-                    let dec = pops.min(self.foreign_depth as usize);
-                    self.foreign_depth -= dec as u32;
+                    debug_assert!(
+                        pops <= self.foreign_depth as usize,
+                        "popping {pops} elements but foreign_depth is only {}",
+                        self.foreign_depth
+                    );
+                    self.foreign_depth -= pops as u32;
                 }
             },
             Token::Eof => {

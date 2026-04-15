@@ -1557,6 +1557,33 @@ fn svg_html_breakout_tag_returns_to_html() {
 }
 
 #[test]
+fn svg_eof_mid_subtree_finalizes_tree() {
+    // Truncated input: `<svg><g><rect>` with no closing tags and no
+    // explicit EOF behaviour beyond what the dispatcher provides.
+    // The foreign-content EOF path must break out and re-dispatch
+    // to InBody so body/html still exist and the tree is well-formed.
+    let tokens = vec![start("svg"), start("g"), start("rect"), Token::Eof];
+    let doc = TreeBuilder::build(tokens);
+    assert!(
+        doc.body().is_some(),
+        "<body> must exist even after mid-svg EOF"
+    );
+    let body = doc.body().unwrap();
+    let svg = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Svg))
+        .copied()
+        .expect("<svg> hoisted under body");
+    // The partial <g><rect> subtree should be preserved, not dropped.
+    let g = doc.get(svg).children[0];
+    assert_eq!(doc.element(g).unwrap().tag.as_str(), "g");
+    let rect = doc.get(g).children[0];
+    assert_eq!(doc.element(rect).unwrap().tag.as_str(), "rect");
+}
+
+#[test]
 fn svg_self_closing_empty_element() {
     // <svg><circle /></svg> — `<circle />` has self_closing=true and
     // must not stay on the open stack.

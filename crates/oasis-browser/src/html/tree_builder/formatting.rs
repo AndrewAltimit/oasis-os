@@ -110,9 +110,7 @@ impl TreeBuilder {
 
             // Step 9: common ancestor is the element immediately above
             // formatting element on the open stack.
-            let Some(common_ancestor) = fmt_stack_pos
-                .checked_sub(1)
-                .map(|i| self.open_elements[i])
+            let Some(common_ancestor) = fmt_stack_pos.checked_sub(1).map(|i| self.open_elements[i])
             else {
                 return;
             };
@@ -148,13 +146,12 @@ impl TreeBuilder {
 
                 // Step 13.5: if node is not in active formatting,
                 // remove it from the open elements stack and
-                // continue the inner loop.
+                // continue the inner loop. `furthest_block_pos` would
+                // go stale after this removal, but we only use
+                // `furthest_block` as a NodeId past this point — its
+                // index is never read again, so no recompute needed.
                 let Some(nfp) = node_fmt_pos else {
                     self.open_elements.remove(node_stack_pos);
-                    if node_stack_pos <= furthest_block_pos {
-                        // Recompute last-node position tracking not
-                        // needed — we only use furthest_block below.
-                    }
                     continue;
                 };
 
