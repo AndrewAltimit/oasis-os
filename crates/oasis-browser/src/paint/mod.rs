@@ -284,24 +284,32 @@ pub(super) fn paint_box(
         return Ok(());
     }
 
-    // backface-visibility: hidden — when the element has any 3D
-    // transform that flips its front face away from the viewer, skip
-    // painting the entire subtree. We compute the surface-normal Z
-    // from the same 4×4 matrix used to build the affine, so the
-    // check stays consistent with whatever the paint flatten does.
+    // backface-visibility: hidden — when the element's effective 3D
+    // transform flips its front face away from the viewer, skip
+    // painting the entire subtree. The effective matrix includes
+    // both the element's own transforms and any inherited preserve-3d
+    // ancestor matrix.
     if layout_box.style.backface_visibility == BackfaceVisibility::Hidden
-        && !layout_box.style.transforms.is_empty()
+        && (!layout_box.style.transforms.is_empty() || ctx.preserved_3d.is_some())
     {
         let content = &layout_box.dimensions.content;
         let (ox, oy, oz) =
             resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
-        let m3d = crate::transform::Matrix3d::from_css_transforms_3d(
-            &layout_box.style.transforms,
-            ox,
-            oy,
-            oz,
-        );
-        if m3d.front_face_normal_z(content.width, content.height) < 0.0 {
+        let local_m3d = if layout_box.style.transforms.is_empty() {
+            crate::transform::Matrix3d::identity()
+        } else {
+            crate::transform::Matrix3d::from_css_transforms_3d(
+                &layout_box.style.transforms,
+                ox,
+                oy,
+                oz,
+            )
+        };
+        let effective = match ctx.preserved_3d {
+            Some(p) => p.multiply(&local_m3d),
+            None => local_m3d,
+        };
+        if effective.front_face_normal_z(content.width, content.height) < 0.0 {
             return Ok(());
         }
     }
