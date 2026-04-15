@@ -626,6 +626,27 @@ pub enum TransformFunction {
     Skew(f32, f32),
     /// `matrix(a, b, c, d, e, f)` — 2D affine transform.
     Matrix(f32, f32, f32, f32, f32, f32),
+    /// `translate3d(tx, ty, tz)` in pixels.
+    Translate3d(f32, f32, f32),
+    /// `translateZ(tz)` in pixels.
+    TranslateZ(f32),
+    /// `scale3d(sx, sy, sz)`.
+    Scale3d(f32, f32, f32),
+    /// `scaleZ(sz)`.
+    ScaleZ(f32),
+    /// `rotateX(angle)` in degrees.
+    RotateX(f32),
+    /// `rotateY(angle)` in degrees.
+    RotateY(f32),
+    /// `rotateZ(angle)` in degrees. Equivalent to 2D `rotate()`.
+    RotateZ(f32),
+    /// `rotate3d(x, y, z, angle_deg)` — rotation around axis `(x, y, z)`.
+    Rotate3d(f32, f32, f32, f32),
+    /// `matrix3d(...)` — 16 column-major values of a 4×4 matrix.
+    Matrix3d([f32; 16]),
+    /// `perspective(d)` in pixels. Applies a perspective projection with
+    /// the viewer at distance `d` along +Z.
+    Perspective(f32),
 }
 
 /// CSS `transform-origin` value.

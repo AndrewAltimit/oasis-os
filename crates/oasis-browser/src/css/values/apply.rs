@@ -2654,6 +2654,79 @@ fn parse_transform(
                     result.push(TransformFunction::Matrix(a, b, c, d, e, f));
                 }
             },
+            "translate3d" => {
+                let x =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                let y =
+                    parse_transform_length(args.get(1).copied().unwrap_or("0"), parent_font_size);
+                let z =
+                    parse_transform_length(args.get(2).copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::Translate3d(x, y, z));
+            },
+            "translateZ" | "translatez" => {
+                let z =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::TranslateZ(z));
+            },
+            "scale3d" => {
+                let sx = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let sy = args
+                    .get(1)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let sz = args
+                    .get(2)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::Scale3d(sx, sy, sz));
+            },
+            "scaleZ" | "scalez" => {
+                let sz = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::ScaleZ(sz));
+            },
+            "rotateX" | "rotatex" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateX(angle));
+            },
+            "rotateY" | "rotatey" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateY(angle));
+            },
+            "rotateZ" | "rotatez" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateZ(angle));
+            },
+            "rotate3d" => {
+                if args.len() >= 4 {
+                    let x = args[0].parse::<f32>().unwrap_or(0.0);
+                    let y = args[1].parse::<f32>().unwrap_or(0.0);
+                    let z = args[2].parse::<f32>().unwrap_or(0.0);
+                    let angle = parse_angle(args[3]);
+                    result.push(TransformFunction::Rotate3d(x, y, z, angle));
+                }
+            },
+            "matrix3d" => {
+                if args.len() >= 16 {
+                    let mut m = [0.0f32; 16];
+                    for (i, slot) in m.iter_mut().enumerate() {
+                        *slot = args[i].parse::<f32>().unwrap_or(0.0);
+                    }
+                    result.push(TransformFunction::Matrix3d(m));
+                }
+            },
+            "perspective" => {
+                let d =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                if d > 0.0 {
+                    result.push(TransformFunction::Perspective(d));
+                }
+            },
             _ => {},
         }
     }
@@ -3648,6 +3721,65 @@ mod tests {
             16.0,
         );
         assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_transform_3d_functions() {
+        use super::super::types::TransformFunction;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform",
+            &CssValue::String(
+                "translate3d(10px, 20px, 30px) rotateX(45deg) rotateY(60deg) scale3d(1, 2, 3) \
+                 perspective(500px)"
+                    .into(),
+            ),
+            16.0,
+        );
+        assert_eq!(s.transforms.len(), 5);
+        assert!(matches!(
+            s.transforms[0],
+            TransformFunction::Translate3d(10.0, 20.0, 30.0)
+        ));
+        assert!(
+            matches!(s.transforms[1], TransformFunction::RotateX(d) if (d - 45.0).abs() < 1e-4)
+        );
+        assert!(
+            matches!(s.transforms[2], TransformFunction::RotateY(d) if (d - 60.0).abs() < 1e-4)
+        );
+        assert!(matches!(
+            s.transforms[3],
+            TransformFunction::Scale3d(1.0, 2.0, 3.0)
+        ));
+        assert!(
+            matches!(s.transforms[4], TransformFunction::Perspective(d) if (d - 500.0).abs() < 1e-4)
+        );
+    }
+
+    #[test]
+    fn parse_transform_rotate3d_and_matrix3d() {
+        use super::super::types::TransformFunction;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform",
+            &CssValue::String(
+                "rotate3d(0, 1, 0, 90deg) matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,7,1)".into(),
+            ),
+            16.0,
+        );
+        assert_eq!(s.transforms.len(), 2);
+        assert!(matches!(
+            s.transforms[0],
+            TransformFunction::Rotate3d(0.0, 1.0, 0.0, d) if (d - 90.0).abs() < 1e-4
+        ));
+        if let TransformFunction::Matrix3d(values) = &s.transforms[1] {
+            assert_eq!(values[12], 5.0);
+            assert_eq!(values[13], 6.0);
+            assert_eq!(values[14], 7.0);
+            assert_eq!(values[15], 1.0);
+        } else {
+            panic!("expected Matrix3d, got {:?}", s.transforms[1]);
+        }
     }
 
     #[test]

@@ -8,7 +8,7 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-14 (tracked in `feat/psp-quickjs`).
+Last updated: 2026-04-15 (3D transforms scaffolding tracked in `feat/browser-3d-transforms`).
 
 ---
 
@@ -95,20 +95,66 @@ below):
 **Effort:** 1–2 weeks. Standalone from compositor, similar
 cross-cutting nature.
 
-- Add `AffineTransform3D` alongside the existing `AffineTransform2D`.
-- Perspective projection: `perspective`, `perspective-origin` (today
-  stored opaque, ignored at paint).
-- `transform-style: preserve-3d` — parsed, ignored. Needs child z-sort
-  under parent's 3D frame and proper matrix composition.
-- `translate3d` / `rotate3d` / `rotateX` / `rotateY` / `rotateZ` /
-  `scale3d` — parsed today but flattened to 2D affine.
-- `backface-visibility: hidden` — parsed; needs paint-time normal
-  check to cull back-facing quads.
+- ~~Add `AffineTransform3D` alongside the existing `AffineTransform2D`.~~
+  Shipped on `feat/browser-3d-transforms` as `Matrix3d` (4×4
+  column-major matrix in `crates/oasis-browser/src/transform.rs`).
+  Provides `identity`, `translate`, `scale`, `rotate_x/y/z`,
+  `rotate_axis`, `perspective`, `multiply`, `apply_homogeneous`,
+  `apply_point_3d`, `from_2d_affine`, `from_css_transforms_3d`, and
+  `flatten_to_affine`. The existing
+  `AffineTransform2D::from_css_transforms` is now a thin wrapper:
+  `Matrix3d::from_css_transforms_3d(...).flatten_to_affine()`.
+- ~~`translate3d` / `rotate3d` / `rotateX` / `rotateY` / `rotateZ` /
+  `scale3d` — parsed today but flattened to 2D affine.~~ — parsed on
+  `feat/browser-3d-transforms`. `TransformFunction` gained
+  `Translate3d`, `TranslateZ`, `Scale3d`, `ScaleZ`, `RotateX`,
+  `RotateY`, `RotateZ`, `Rotate3d`, `Matrix3d`, and `Perspective`
+  variants. The CSS parser handles `translate3d()`, `translateZ()`,
+  `scale3d()`, `scaleZ()`, `rotateX/Y/Z()`, `rotate3d(x,y,z,deg)`,
+  `matrix3d(...16 values)`, and the `perspective(d)` function.
+  Evaluation runs through the new `Matrix3d` 4×4 pipeline, then
+  flattens orthographically — `rotateX(60deg)` becomes a vertical
+  squash by `cos(60°)`, `rotateY(60deg)` a horizontal squash, etc.
+  This is visually correct under orthographic projection but loses
+  the perspective trapezoid (see follow-ups below).
+- ~~`backface-visibility: hidden` — parsed; needs paint-time normal
+  check to cull back-facing quads.~~ — shipped on
+  `feat/browser-3d-transforms`. `paint_box` builds a `Matrix3d` from
+  the element's transforms when `backface_visibility == Hidden`,
+  computes the surface-normal Z of the
+  `(0,0,0)→(w,0,0)→(0,h,0)` triangle, and skips painting the entire
+  subtree when it's negative. Front-face culling test cases for
+  `rotateY(60deg)` (front) vs. `rotateY(120deg)` (back) live in
+  `transform.rs`.
 
-**Backend impact:** desktop and WASM can rasterize transformed quads
-today. UE5 and PSP need careful thought — PSP GU does have a perspective
-matrix stack (`sceGumPerspective`) but wiring it into 2D UI paint is
-non-trivial.
+**Follow-ups (not yet shipped):**
+
+- **Perspective projection.** `perspective` (the container property)
+  and `perspective(d)` (the transform function) both parse and feed
+  into the 4×4 pipeline, but `flatten_to_affine` performs only an
+  orthographic drop of the Z column/row. A true perspective-correct
+  paint needs either (a) a non-affine quad path (project the four
+  corners with the perspective divide and feed them to
+  `fill_polygon`, with a matching path for text/borders), or (b) a
+  GPU-side projection matrix on backends that have one.
+  `perspective-origin` is still stored as an opaque string — needs
+  the same structured pre-resolve treatment `transform-origin` got.
+- **`transform-style: preserve-3d`.** Parsed and stored, still
+  ignored. Needs to (1) skip the per-element flatten so descendants
+  inherit the parent's 4×4, (2) re-sort children by transformed Z
+  inside the preserved subtree, and (3) flatten only at the next
+  `Flat` boundary.
+- **`transform-origin: Z`.** The 2D origin is plumbed through
+  `from_css_transforms_3d`, but Z is hard-coded to 0. Trivial extension
+  once `transform-origin` parsing learns a third component.
+
+**Backend impact:** desktop and WASM rasterize the flattened 2D
+affine today via the existing `fill_polygon` path. UE5 and PSP also
+inherit the flatten transparently. Once perspective is wired up, the
+non-affine quad path becomes the cross-cutting backend question —
+PSP GU has `sceGumPerspective`, but the backend trait would need a
+new "submit a textured trapezoid with perspective-correct UVs"
+primitive.
 
 ---
 

@@ -33,6 +33,7 @@ pub(crate) mod tiling;
 
 use std::collections::HashMap;
 
+use crate::css::values::types::BackfaceVisibility;
 use crate::css::values::{
     BackgroundImage, ClipLength, ClipPath, Dimension, Overflow, Position, TextOverflow,
     TransformFunction, Visibility, WhiteSpace,
@@ -255,6 +256,25 @@ pub(super) fn paint_box(
     }
     if box_right < 0.0 || screen_x > ctx.viewport_width {
         return Ok(());
+    }
+
+    // backface-visibility: hidden — when the element has any 3D
+    // transform that flips its front face away from the viewer, skip
+    // painting the entire subtree. We compute the surface-normal Z
+    // from the same 4×4 matrix used to build the affine, so the
+    // check stays consistent with whatever the paint flatten does.
+    if layout_box.style.backface_visibility == BackfaceVisibility::Hidden
+        && !layout_box.style.transforms.is_empty()
+    {
+        let content = &layout_box.dimensions.content;
+        let m3d = crate::transform::Matrix3d::from_css_transforms_3d(
+            &layout_box.style.transforms,
+            content.width / 2.0,
+            content.height / 2.0,
+        );
+        if m3d.front_face_normal_z(content.width, content.height) < 0.0 {
+            return Ok(());
+        }
     }
 
     let is_visible = layout_box.style.visibility == Visibility::Visible;

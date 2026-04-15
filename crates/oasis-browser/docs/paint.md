@@ -135,9 +135,22 @@ A surprising amount of CSS is parsed and cascaded but not yet honored
 by the painter. See the **Storage vs. rendering** section in
 [`css-coverage.md`](css-coverage.md). Notable: `clip-path`, `mask-*`,
 `backdrop-filter`, `mix-blend-mode`, `content-visibility`, full
-`scroll-snap-*` behaviour, and the 3D transform stack
-(`perspective`, `transform-style: preserve-3d`,
-`backface-visibility`).
+`scroll-snap-*` behaviour, and the perspective half of the 3D
+transform stack (`perspective`, `perspective-origin`,
+`transform-style: preserve-3d`).
+
+3D transform *functions* themselves (`rotateX`, `rotate3d`,
+`translate3d`, `scale3d`, `matrix3d`, `perspective(d)`) **are**
+evaluated: the parser builds a list of `TransformFunction`s, the
+`Matrix3d` 4×4 pipeline in `transform.rs` composes them, and
+`flatten_to_affine` drops the Z column/row so the existing 2D affine
+paint path renders the orthographic projection. `backface-visibility:
+hidden` is honored by checking the surface-normal Z of the
+transformed front face in `paint_box` and skipping back-facing
+subtrees. The unimplemented part is true perspective projection —
+non-affine quads with a perspective divide — which would let
+`rotateX(60deg)` under an ancestor `perspective: 800px` produce a
+trapezoid instead of a parallelogram.
 
 When wiring one of these into the painter:
 
