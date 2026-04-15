@@ -75,6 +75,7 @@ const SETTINGS_MAX_HEADER_LIST_SIZE: u16 = 0x6;
 
 // Error codes (RFC 9113 §7)
 const ERROR_CODE_NO_ERROR: u32 = 0x0;
+const ERROR_CODE_PROTOCOL_ERROR: u32 = 0x1;
 const ERROR_CODE_REFUSED_STREAM: u32 = 0x7;
 const ERROR_CODE_CANCEL: u32 = 0x8;
 
@@ -179,32 +180,76 @@ pub fn h2_request<S: Read + Write>(
     write_all(stream, CLIENT_PREFACE)?;
     send_initial_settings(stream)?;
 
-    // 2. Build and send HEADERS frame for stream 1.
-    let header_block = encode_request_headers(method, url, body.is_some(), extra_headers);
-    let end_stream = body.is_none();
-    let mut flags = FLAG_END_HEADERS;
-    if end_stream {
-        flags |= FLAG_END_STREAM;
+    // 2. Bound request-body size. HTTP/2's default initial send window
+    //    is 64 KiB (RFC 9113 §6.9.2); anything bigger would need us to
+    //    track the peer's WINDOW_UPDATE frames, which isn't worth the
+    //    complexity for a single-request client.
+    if let Some(data) = body
+        && data.len() > 65_535
+    {
+        return Err(OasisError::Backend(
+            "HTTP/2: request body exceeds default send window".into(),
+        ));
     }
-    write_frame_header(stream, header_block.len() as u32, FRAME_HEADERS, flags, 1)?;
-    write_all(stream, &header_block)?;
 
-    // 3. If there's a body, send it as a single DATA frame with
-    //    END_STREAM. We don't currently respect the server's initial
-    //    window size for the request body — we assume it's at least
-    //    64 KiB (the HTTP/2 default) and that request bodies are small.
+    // 3. Build and send HEADERS frame for stream 1. We fragment into
+    //    CONTINUATION frames if the block exceeds the default
+    //    MAX_FRAME_SIZE (16 KiB is HTTP/2's floor and also the peer's
+    //    initial limit before SETTINGS arrives).
+    let header_block = encode_request_headers(method, url, body.map(|b| b.len()), extra_headers);
+    let end_stream = body.is_none();
+    write_header_block(stream, &header_block, 1, end_stream)?;
+
+    // 4. If there's a body, send it as a single DATA frame with
+    //    END_STREAM. The 16 KiB floor applies here too — no real
+    //    server advertises a smaller MAX_FRAME_SIZE, so we don't
+    //    bother fragmenting body DATA for the POST case.
     if let Some(data) = body {
-        if data.len() > 65_535 {
-            return Err(OasisError::Backend(
-                "HTTP/2: request body exceeds default send window".into(),
-            ));
-        }
         write_frame_header(stream, data.len() as u32, FRAME_DATA, FLAG_END_STREAM, 1)?;
         write_all(stream, data)?;
     }
 
-    // 4. Drive the read loop.
+    // 5. Drive the read loop.
     read_response(stream)
+}
+
+/// Write a HEADERS frame, splitting into CONTINUATION frames if the
+/// block is larger than the HTTP/2 default `MAX_FRAME_SIZE` (16 KiB).
+/// This keeps us conformant even if a server advertises the spec
+/// minimum.
+fn write_header_block<W: Write>(
+    w: &mut W,
+    block: &[u8],
+    stream_id: u32,
+    end_stream: bool,
+) -> Result<()> {
+    const DEFAULT_MAX_FRAME_SIZE: usize = 16_384;
+    let es_flag = if end_stream { FLAG_END_STREAM } else { 0 };
+
+    if block.len() <= DEFAULT_MAX_FRAME_SIZE {
+        let flags = FLAG_END_HEADERS | es_flag;
+        write_frame_header(w, block.len() as u32, FRAME_HEADERS, flags, stream_id)?;
+        write_all(w, block)?;
+        return Ok(());
+    }
+
+    // First chunk as HEADERS (with END_STREAM if requested, but not
+    // END_HEADERS), remaining chunks as CONTINUATION, final CONTINUATION
+    // with END_HEADERS.
+    let (first, rest) = block.split_at(DEFAULT_MAX_FRAME_SIZE);
+    write_frame_header(w, first.len() as u32, FRAME_HEADERS, es_flag, stream_id)?;
+    write_all(w, first)?;
+
+    let mut cursor = rest;
+    while !cursor.is_empty() {
+        let take = cursor.len().min(DEFAULT_MAX_FRAME_SIZE);
+        let (chunk, tail) = cursor.split_at(take);
+        let flags = if tail.is_empty() { FLAG_END_HEADERS } else { 0 };
+        write_frame_header(w, chunk.len() as u32, FRAME_CONTINUATION, flags, stream_id)?;
+        write_all(w, chunk)?;
+        cursor = tail;
+    }
+    Ok(())
 }
 
 // --- Settings --------------------------------------------------------
@@ -277,7 +322,7 @@ fn send_ping_ack<W: Write>(w: &mut W, opaque: &[u8; 8]) -> Result<()> {
 fn encode_request_headers(
     method: &str,
     url: &Url,
-    has_body: bool,
+    body_len: Option<usize>,
     extra_headers: &[(&str, &str)],
 ) -> Vec<u8> {
     let mut out = Vec::new();
@@ -307,7 +352,7 @@ fn encode_request_headers(
     let mut saw_accept = false;
     let mut saw_accept_encoding = false;
     let mut saw_content_type = false;
-    let mut content_length: Option<String> = None;
+    let mut saw_content_length = false;
     for (name, value) in extra_headers {
         let lower = name.to_ascii_lowercase();
         // Skip connection-specific headers that are banned in HTTP/2
@@ -320,6 +365,7 @@ fn encode_request_headers(
             "accept" => saw_accept = true,
             "accept-encoding" => saw_accept_encoding = true,
             "content-type" => saw_content_type = true,
+            "content-length" => saw_content_length = true,
             _ => {},
         }
         encode_literal(&mut out, &lower, value);
@@ -333,7 +379,7 @@ fn encode_request_headers(
     if !saw_accept_encoding {
         encode_literal(&mut out, "accept-encoding", "gzip, deflate, br");
     }
-    if has_body {
+    if let Some(len) = body_len {
         if !saw_content_type {
             encode_literal(
                 &mut out,
@@ -341,15 +387,13 @@ fn encode_request_headers(
                 "application/x-www-form-urlencoded",
             );
         }
-        if content_length.is_none() {
-            // Caller didn't specify; we send it inline anyway.
-            content_length = Some(String::new());
+        if !saw_content_length {
+            // Content-length is optional in HTTP/2 when END_STREAM
+            // terminates the body, but strict API gateways reject
+            // body-carrying requests without it.
+            encode_literal(&mut out, "content-length", &len.to_string());
         }
-        // Content-length is filled in by the caller in `h2_request` via
-        // the body length — but since we need it in the header block,
-        // fill it in now.
     }
-    let _ = content_length;
 
     out
 }
@@ -407,17 +451,69 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 if fh.flags & FLAG_ACK != 0 {
                     // Server ACK'd our settings — nothing to do.
                 } else {
-                    // Parse settings so we can respect MAX_FRAME_SIZE etc.
-                    // (We currently ignore most of them, but still ACK.)
                     if !payload.len().is_multiple_of(6) {
                         return Err(OasisError::Backend(
                             "HTTP/2: malformed SETTINGS frame".into(),
                         ));
                     }
+                    // Walk the 6-byte entries. We only care about a
+                    // handful; everything else we accept silently.
+                    // RFC 9113 §6.5.2 gives the legal bounds and
+                    // requires FLOW_CONTROL_ERROR / PROTOCOL_ERROR on
+                    // out-of-range values.
+                    let mut i = 0;
+                    while i + 6 <= payload.len() {
+                        let id = u16::from_be_bytes([payload[i], payload[i + 1]]);
+                        let val = u32::from_be_bytes([
+                            payload[i + 2],
+                            payload[i + 3],
+                            payload[i + 4],
+                            payload[i + 5],
+                        ]);
+                        i += 6;
+                        match id {
+                            SETTINGS_INITIAL_WINDOW_SIZE => {
+                                if val > 0x7fff_ffff {
+                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    return Err(OasisError::Backend(
+                                        "HTTP/2: FLOW_CONTROL_ERROR on INITIAL_WINDOW_SIZE".into(),
+                                    ));
+                                }
+                            },
+                            SETTINGS_MAX_FRAME_SIZE => {
+                                // Legal range: 2^14..=2^24-1.
+                                if !(16_384..=16_777_215).contains(&val) {
+                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    return Err(OasisError::Backend(
+                                        "HTTP/2: PROTOCOL_ERROR on MAX_FRAME_SIZE".into(),
+                                    ));
+                                }
+                            },
+                            SETTINGS_ENABLE_PUSH => {
+                                // Client must accept only 0; server
+                                // setting push=1 toward us is invalid.
+                                if val > 1 {
+                                    let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
+                                    return Err(OasisError::Backend(
+                                        "HTTP/2: PROTOCOL_ERROR on ENABLE_PUSH".into(),
+                                    ));
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
                     send_settings_ack(stream)?;
                 }
             },
             FRAME_HEADERS => {
+                if fh.stream_id == 0 {
+                    // HEADERS on the connection stream is a protocol
+                    // error (RFC 9113 §6.2). RST_STREAM on 0 is itself
+                    // illegal, so we must escalate to a connection
+                    // error via GOAWAY.
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend("HTTP/2: HEADERS on stream 0".into()));
+                }
                 if fh.stream_id != 1 {
                     // Stray frame on an unknown stream — reset it.
                     send_rst_stream(stream, fh.stream_id, ERROR_CODE_CANCEL)?;
@@ -454,6 +550,12 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 }
             },
             FRAME_DATA => {
+                if fh.stream_id == 0 {
+                    // DATA on stream 0 is a connection-level protocol
+                    // error (RFC 9113 §6.1). Same escalation as above.
+                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                    return Err(OasisError::Backend("HTTP/2: DATA on stream 0".into()));
+                }
                 if fh.stream_id != 1 {
                     send_rst_stream(stream, fh.stream_id, ERROR_CODE_CANCEL)?;
                     continue;
@@ -521,10 +623,32 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
             },
             FRAME_PUSH_PROMISE => {
                 // RFC 9113 §6.6 — we sent ENABLE_PUSH=0, so this is a
-                // protocol error. Reject cleanly.
-                if payload.len() >= 4 {
-                    let promised =
-                        u32::from_be_bytes([payload[0] & 0x7f, payload[1], payload[2], payload[3]]);
+                // protocol error. Reject cleanly. The promised stream
+                // ID lives after any PADDED byte, so strip padding
+                // before indexing.
+                let body_slice = if fh.flags & FLAG_PADDED != 0 {
+                    if payload.is_empty() {
+                        return Err(OasisError::Backend(
+                            "HTTP/2: PUSH_PROMISE PADDED with empty frame".into(),
+                        ));
+                    }
+                    let pad_len = payload[0] as usize;
+                    if 1 + pad_len > payload.len() {
+                        return Err(OasisError::Backend(
+                            "HTTP/2: PUSH_PROMISE pad_len too large".into(),
+                        ));
+                    }
+                    &payload[1..payload.len() - pad_len]
+                } else {
+                    &payload[..]
+                };
+                if body_slice.len() >= 4 {
+                    let promised = u32::from_be_bytes([
+                        body_slice[0] & 0x7f,
+                        body_slice[1],
+                        body_slice[2],
+                        body_slice[3],
+                    ]);
                     send_rst_stream(stream, promised, ERROR_CODE_REFUSED_STREAM)?;
                 }
             },
@@ -854,7 +978,7 @@ mod tests {
     #[test]
     fn request_headers_include_pseudo_and_defaults() {
         let url = crate::loader::Url::parse("https://example.com/path?q=1").unwrap();
-        let block = encode_request_headers("GET", &url, false, &[]);
+        let block = encode_request_headers("GET", &url, None, &[]);
 
         let mut table = DynamicTable::new(4096);
         let decoded = decode_block(&block, &mut table, 4096).unwrap();
@@ -878,7 +1002,7 @@ mod tests {
         let block = encode_request_headers(
             "GET",
             &url,
-            false,
+            None,
             &[
                 ("Connection", "keep-alive"),
                 ("Transfer-Encoding", "chunked"),
@@ -896,6 +1020,152 @@ mod tests {
             decoded
                 .iter()
                 .any(|(n, v)| n == "cookie" && v == "session=abc")
+        );
+    }
+
+    #[test]
+    fn post_request_emits_content_length() {
+        let url = crate::loader::Url::parse("https://example.com/api").unwrap();
+        let block = encode_request_headers("POST", &url, Some(42), &[]);
+        let mut table = DynamicTable::new(4096);
+        let decoded = decode_block(&block, &mut table, 4096).unwrap();
+        let cl = decoded
+            .iter()
+            .find(|(n, _)| n == "content-length")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(cl, Some("42"));
+    }
+
+    #[test]
+    fn explicit_content_length_header_not_duplicated() {
+        let url = crate::loader::Url::parse("https://example.com/api").unwrap();
+        let block = encode_request_headers("POST", &url, Some(3), &[("Content-Length", "99")]);
+        let mut table = DynamicTable::new(4096);
+        let decoded = decode_block(&block, &mut table, 4096).unwrap();
+        let cls: Vec<&str> = decoded
+            .iter()
+            .filter(|(n, _)| n == "content-length")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(cls, vec!["99"]);
+    }
+
+    #[test]
+    fn headers_on_stream_zero_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // HEADERS on stream 0 — must trigger a connection-level error,
+        // not RST_STREAM on stream 0.
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 0, &[]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("stream 0"));
+        // Verify a GOAWAY was emitted on stream 0, not a RST_STREAM.
+        let w = &stream.written;
+        let mut i = CLIENT_PREFACE.len();
+        let mut saw_goaway = false;
+        let mut saw_rst_on_zero = false;
+        while i + 9 <= w.len() {
+            let length = ((w[i] as usize) << 16) | ((w[i + 1] as usize) << 8) | (w[i + 2] as usize);
+            let ftype = w[i + 3];
+            let sid = (((w[i + 5] & 0x7f) as u32) << 24)
+                | ((w[i + 6] as u32) << 16)
+                | ((w[i + 7] as u32) << 8)
+                | (w[i + 8] as u32);
+            if ftype == FRAME_GOAWAY {
+                saw_goaway = true;
+            }
+            if ftype == FRAME_RST_STREAM && sid == 0 {
+                saw_rst_on_zero = true;
+            }
+            i += 9 + length;
+        }
+        assert!(saw_goaway, "client did not send GOAWAY on stream 0 error");
+        assert!(
+            !saw_rst_on_zero,
+            "client illegally sent RST_STREAM on stream 0"
+        );
+    }
+
+    #[test]
+    fn data_on_stream_zero_is_connection_error() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        server.extend(build_frame(FRAME_DATA, 0, 0, b"bad"));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("stream 0"));
+    }
+
+    #[test]
+    fn settings_max_frame_size_out_of_range_rejected() {
+        // Server advertises MAX_FRAME_SIZE = 1 (below the 16 KiB floor).
+        let mut settings_payload = Vec::new();
+        push_setting(&mut settings_payload, SETTINGS_MAX_FRAME_SIZE, 1);
+
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &settings_payload));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("MAX_FRAME_SIZE"));
+    }
+
+    #[test]
+    fn large_header_block_fragments_into_continuation() {
+        // Build a header block larger than 16 KiB (the default HTTP/2
+        // MAX_FRAME_SIZE floor) by adding a big Cookie header.
+        let big_cookie = "k=".to_string() + &"x".repeat(20_000);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+
+        // Script the server: reply immediately with a small response.
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        let hdr_block = make_response_headers();
+        server.extend(build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            1,
+            &hdr_block,
+        ));
+
+        let mut stream = MemStream::new(server);
+        h2_request(
+            &mut stream,
+            "GET",
+            &url,
+            None,
+            &[("cookie", big_cookie.as_str())],
+        )
+        .unwrap();
+
+        // Walk the written frames; there should be at least one
+        // HEADERS followed by one or more CONTINUATION frames.
+        let w = &stream.written;
+        let mut i = CLIENT_PREFACE.len();
+        let mut saw_headers_without_end = false;
+        let mut saw_continuation_with_end = false;
+        while i + 9 <= w.len() {
+            let length = ((w[i] as usize) << 16) | ((w[i + 1] as usize) << 8) | (w[i + 2] as usize);
+            let ftype = w[i + 3];
+            let flags = w[i + 4];
+            if ftype == FRAME_HEADERS && flags & FLAG_END_HEADERS == 0 {
+                saw_headers_without_end = true;
+            }
+            if ftype == FRAME_CONTINUATION && flags & FLAG_END_HEADERS != 0 {
+                saw_continuation_with_end = true;
+            }
+            i += 9 + length;
+        }
+        assert!(
+            saw_headers_without_end,
+            "expected an initial HEADERS frame without END_HEADERS"
+        );
+        assert!(
+            saw_continuation_with_end,
+            "expected a terminal CONTINUATION frame with END_HEADERS"
         );
     }
 
