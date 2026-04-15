@@ -458,9 +458,17 @@ pub(super) fn paint_box(
     //     and no inherited preserve-3d context.
     let content = &layout_box.dimensions.content;
     let has_3d_transforms = transforms_have_3d(&layout_box.style.transforms);
+    // Per CSS Transforms 2 §6, `transform-style: preserve-3d`
+    // unconditionally establishes a 3D rendering context — independent
+    // of whether the element itself has 3D transforms. So a parent
+    // with `transform: rotate(45deg); transform-style: preserve-3d`
+    // and a child with `rotateY(60deg)` should compose the 2D
+    // rotation with the 3D rotation in 3D space, not flatten the
+    // parent first. We enter the screen path whenever the element
+    // (or any ancestor) is participating in 3D rendering.
     let needs_screen_path = ctx.preserved_3d.is_some()
         || (ctx.perspective_context.is_some() && has_3d_transforms)
-        || (layout_box.style.transform_style == TransformStyle::Preserve3d && has_3d_transforms);
+        || layout_box.style.transform_style == TransformStyle::Preserve3d;
     // Box top-left in screen coordinates (matching the background.rs
     // convention: layout coord - scroll + offset). Used by the screen
     // path and below by the children walk.
@@ -1777,6 +1785,105 @@ mod tests {
         assert!(
             !yellow_polygons.is_empty(),
             "expected the inner child to be projected via fill_polygon under preserve-3d",
+        );
+    }
+
+    #[test]
+    fn preserve_3d_propagates_without_ancestor_perspective() {
+        // Reviewer-flagged regression risk: a `preserve-3d` element
+        // with NO ancestor `perspective` would previously fall back
+        // to orthographic flatten, leaving descendants in a flat
+        // coordinate system. The fix routes preserve-3d through the
+        // screen path unconditionally so descendants inherit the
+        // parent's screen-space matrix.
+        //
+        // Structure:
+        //   parent — rotateY(60deg) + transform-style: preserve-3d
+        //     child — background red, no transform
+        // The child should be painted via fill_polygon — proving
+        // the parent's rotation propagates as a 3D context even
+        // without a `perspective:` ancestor.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(255, 0, 0);
+        let child = make_block(10.0, 10.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(60.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let red_polygons: Vec<_> = backend
+            .polygon_calls()
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DrawCall::FillPolygon { color, .. } if *color == Color::rgb(255, 0, 0)
+                )
+            })
+            .collect();
+        assert!(
+            !red_polygons.is_empty(),
+            "preserve-3d parent without ancestor perspective should still propagate \
+             its 3D matrix to descendants — regression guard",
+        );
+    }
+
+    #[test]
+    fn preserve_3d_with_2d_only_transform_still_propagates() {
+        // CSS Transforms 2 §6 — `transform-style: preserve-3d`
+        // unconditionally establishes a 3D rendering context, even
+        // when the element has no 3D transforms of its own. A 2D
+        // rotation on a preserve-3d parent must still be composed
+        // with a 3D-transformed child in 3D space, not flattened
+        // first.
+        //
+        // Structure:
+        //   parent — rotate(45deg) (2D!) + transform-style: preserve-3d
+        //     child — rotateY(60deg) (3D)
+        //       grandchild — background green
+        // The grandchild should be painted via fill_polygon —
+        // proving the parent's 2D transform propagated as a 3D
+        // context (otherwise the child would have flattened
+        // independently and the chain would break).
+        let mut backend = MockBackend::new();
+
+        let mut grandchild_style = ComputedStyle::default();
+        grandchild_style.background_color = Color::rgb(0, 255, 0);
+        let grandchild = make_block(5.0, 5.0, 30.0, 30.0, grandchild_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.transforms = vec![TransformFunction::RotateY(60.0)];
+        let mut child = make_block(20.0, 20.0, 40.0, 40.0, child_style);
+        child.children.push(grandchild);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::Rotate(45.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let green_polygons: Vec<_> = backend
+            .polygon_calls()
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DrawCall::FillPolygon { color, .. } if *color == Color::rgb(0, 255, 0)
+                )
+            })
+            .collect();
+        assert!(
+            !green_polygons.is_empty(),
+            "preserve-3d with a 2D-only parent transform should still establish a 3D \
+             rendering context per CSS Transforms 2 §6",
         );
     }
 
