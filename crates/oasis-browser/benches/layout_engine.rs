@@ -145,6 +145,7 @@ fn bench_corpus_layout(c: &mut Criterion) {
         "forum_thread.html",
         "commerce_product.html",
         "substack_post.html",
+        "adversarial_malformed.html",
     ];
 
     let measurer = SimpleTextMeasurer;
@@ -155,9 +156,8 @@ fn bench_corpus_layout(c: &mut Criterion) {
         let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", name]
             .iter()
             .collect();
-        let Ok(html) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let html = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("missing bench fixture {}: {e}", path.display()));
 
         for (w, h, label) in [
             (800.0f32, 600.0f32, "800x600"),

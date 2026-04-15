@@ -51,6 +51,7 @@ use oasis_browser::internals::{
 enum Bucket {
     Ok,
     Panic,
+    PaintError,
     Slow,
     EmptyLayout,
     NoDrawCalls,
@@ -61,6 +62,7 @@ impl Bucket {
         match self {
             Bucket::Ok => "ok",
             Bucket::Panic => "panic",
+            Bucket::PaintError => "paint-error",
             Bucket::Slow => "slow",
             Bucket::EmptyLayout => "empty-layout",
             Bucket::NoDrawCalls => "no-draw-calls",
@@ -216,7 +218,7 @@ fn triage_one(path: &Path, w: f32, h: f32, slow_budget: Duration) -> Outcome {
             &HashMap::new(),
         );
         let layout_box_count = count_boxes(&layout);
-        let mut backend = oasis_test_backend_stub::NullBackend::default();
+        let mut backend = oasis_test_backend_stub::NullBackend::new(w as u32, h as u32);
         let vp = PaintViewport {
             scroll_y: 0.0,
             scroll_x: 0.0,
@@ -235,7 +237,7 @@ fn triage_one(path: &Path, w: f32, h: f32, slow_budget: Duration) -> Outcome {
     match result {
         Ok((box_count, draw_calls, paint_ok)) => {
             let mut bucket = if !paint_ok {
-                Bucket::Panic
+                Bucket::PaintError
             } else if box_count <= 1 {
                 Bucket::EmptyLayout
             } else if draw_calls == 0 {
@@ -293,6 +295,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     let total = outcomes.len();
     let ok_count = by_bucket.get("ok").map(|v| v.len()).unwrap_or(0);
     let panic_count = by_bucket.get("panic").map(|v| v.len()).unwrap_or(0);
+    let paint_err_count = by_bucket.get("paint-error").map(|v| v.len()).unwrap_or(0);
     let slow_count = by_bucket.get("slow").map(|v| v.len()).unwrap_or(0);
     let empty_count = by_bucket.get("empty-layout").map(|v| v.len()).unwrap_or(0);
     let no_draw_count = by_bucket.get("no-draw-calls").map(|v| v.len()).unwrap_or(0);
@@ -323,6 +326,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
         ("slow", slow_count),
         ("empty-layout", empty_count),
         ("no-draw-calls", no_draw_count),
+        ("paint-error", paint_err_count),
         ("panic", panic_count),
     ] {
         let pct = if total > 0 {
@@ -334,7 +338,7 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     }
     out.push('\n');
 
-    for label in ["panic", "slow", "empty-layout", "no-draw-calls", "ok"] {
+    for label in ["panic", "paint-error", "slow", "empty-layout", "no-draw-calls", "ok"] {
         let Some(entries) = by_bucket.get(label) else {
             continue;
         };
@@ -408,9 +412,20 @@ mod oasis_test_backend_stub {
     };
     use oasis_types::error::Result;
 
-    #[derive(Default)]
     pub struct NullBackend {
         pub call_count: usize,
+        viewport_w: u32,
+        viewport_h: u32,
+    }
+
+    impl NullBackend {
+        pub fn new(viewport_w: u32, viewport_h: u32) -> Self {
+            Self {
+                call_count: 0,
+                viewport_w,
+                viewport_h,
+            }
+        }
     }
 
     impl SdiCore for NullBackend {
@@ -463,7 +478,7 @@ mod oasis_test_backend_stub {
     impl SdiGradients for NullBackend {}
     impl SdiAlpha for NullBackend {
         fn viewport_size(&self) -> (u32, u32) {
-            (800, 600)
+            (self.viewport_w, self.viewport_h)
         }
     }
     impl SdiText for NullBackend {}
