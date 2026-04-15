@@ -605,6 +605,10 @@ impl Document {
             self.nodes[parent_id].children.insert(pos, child_id);
             self.nodes[child_id].parent = Some(parent_id);
         } else {
+            debug_assert!(
+                false,
+                "insert_before: reference_id is not a child of parent_id"
+            );
             self.append_child(parent_id, child_id);
         }
     }

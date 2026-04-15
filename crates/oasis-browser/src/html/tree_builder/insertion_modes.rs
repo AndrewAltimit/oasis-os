@@ -124,11 +124,17 @@ impl TreeBuilder {
                 // WHATWG spec the contents should live in a separate
                 // DocumentFragment that is unaffected by the enclosing
                 // form/scope; we don't model that here.
+                // SECURITY: children share enclosing scope; <script>
+                // inside a moved template can execute.
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
             },
             Token::EndTag(tag) if tag.name == "template" => {
-                self.close_to_tag_any_scope(&TagName::Template);
+                if self.has_in_scope(&TagName::Template) {
+                    self.close_to_tag_any_scope(&TagName::Template);
+                } else {
+                    log::trace!("html parse error: stray </template>");
+                }
             },
             Token::EndTag(tag) if tag.name == "head" => {
                 self.pop_open_element();
@@ -420,7 +426,11 @@ impl TreeBuilder {
                 log::trace!("html parse error: </table> with no open table");
             },
             TagName::Template => {
-                self.close_to_tag_any_scope(&TagName::Template);
+                if self.has_in_scope(&TagName::Template) {
+                    self.close_to_tag_any_scope(&TagName::Template);
+                } else {
+                    log::trace!("html parse error: stray </template>");
+                }
             },
             _ if tag_name.is_formatting() => {
                 self.close_formatting_element(tag_name);
