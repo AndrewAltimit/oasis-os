@@ -734,6 +734,7 @@ pub(super) fn paint_box(
                         i,
                     ));
                 }
+                // stable: ties preserve DOM order
                 z_keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
                 let sorted: Vec<&LayoutBox> =
                     z_keys.iter().map(|&(_, i)| normal_children[i]).collect();
