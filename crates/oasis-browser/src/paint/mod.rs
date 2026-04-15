@@ -450,8 +450,9 @@ pub(super) fn paint_box(
     //     and no inherited preserve-3d context.
     let content = &layout_box.dimensions.content;
     let has_3d_transforms = transforms_have_3d(&layout_box.style.transforms);
-    let needs_screen_path =
-        ctx.preserved_3d.is_some() || (ctx.perspective_context.is_some() && has_3d_transforms);
+    let needs_screen_path = ctx.preserved_3d.is_some()
+        || (ctx.perspective_context.is_some() && has_3d_transforms)
+        || (layout_box.style.transform_style == TransformStyle::Preserve3d && has_3d_transforms);
     // Box top-left in screen coordinates (matching the background.rs
     // convention: layout coord - scroll + offset). Used by the screen
     // path and below by the children walk.
@@ -485,8 +486,12 @@ pub(super) fn paint_box(
             Some(p) => p.multiply(&m_local_screen),
             None => m_local_screen,
         };
-        // Apply the perspective frustum (if any) on the outside.
-        let m_screen = if let Some(persp) = ctx.perspective_context {
+        // Apply the perspective frustum (if any) on the outside — but
+        // skip when inheriting a preserve-3d matrix that already
+        // contains the frustum.
+        let m_screen = if ctx.preserved_3d.is_none()
+            && let Some(persp) = ctx.perspective_context
+        {
             crate::transform::Matrix3d::translate(persp.vanishing_x, persp.vanishing_y, 0.0)
                 .multiply(&crate::transform::Matrix3d::perspective(persp.distance))
                 .multiply(&crate::transform::Matrix3d::translate(
