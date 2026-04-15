@@ -992,7 +992,10 @@ impl ComputedStyle {
             // unchanged — effectively dropping the whole declaration.
             "background-image" => {
                 let first = match value {
-                    CssValue::Multiple(vs) => vs.first().unwrap_or(value),
+                    CssValue::Multiple(vs) => {
+                        debug_assert!(!vs.is_empty(), "empty Multiple in background-image");
+                        vs.first().unwrap_or(value)
+                    }
                     _ => value,
                 };
                 if let Some(kw) = as_keyword(first) {
@@ -1713,7 +1716,10 @@ impl ComputedStyle {
                 // arms and end up with `BackgroundImage::None`,
                 // silently removing the mask entirely.
                 let first = match value {
-                    CssValue::Multiple(vs) => vs.first().unwrap_or(value),
+                    CssValue::Multiple(vs) => {
+                        debug_assert!(!vs.is_empty(), "empty Multiple in mask-image");
+                        vs.first().unwrap_or(value)
+                    }
                     _ => value,
                 };
                 if as_keyword(first) == Some("none") {
