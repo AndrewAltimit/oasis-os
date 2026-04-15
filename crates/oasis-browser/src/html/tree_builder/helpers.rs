@@ -103,6 +103,10 @@ impl TreeBuilder {
     // =============================================================
 
     /// Check if an element with the given tag is in scope.
+    ///
+    /// Per WHATWG §13.2.4.2 the default scope-boundary set includes
+    /// `template` so that scope queries cannot walk across a template
+    /// boundary into its enclosing tree.
     pub(crate) fn has_in_scope(&self, tag: &TagName) -> bool {
         for &id in self.open_elements.iter().rev() {
             if let Some(t) = self.tag_of(id) {
@@ -111,7 +115,12 @@ impl TreeBuilder {
                 }
                 if matches!(
                     t,
-                    TagName::Html | TagName::Table | TagName::Td | TagName::Th | TagName::Caption
+                    TagName::Html
+                        | TagName::Table
+                        | TagName::Td
+                        | TagName::Th
+                        | TagName::Caption
+                        | TagName::Template
                 ) {
                     return false;
                 }
@@ -135,6 +144,7 @@ impl TreeBuilder {
                         | TagName::Caption
                         | TagName::Ol
                         | TagName::Ul
+                        | TagName::Template
                 ) {
                     return false;
                 }
@@ -149,7 +159,7 @@ impl TreeBuilder {
                 if t == tag {
                     return true;
                 }
-                if matches!(t, TagName::Html | TagName::Table) {
+                if matches!(t, TagName::Html | TagName::Table | TagName::Template) {
                     return false;
                 }
             }
@@ -173,7 +183,12 @@ impl TreeBuilder {
                 }
                 if matches!(
                     t,
-                    TagName::Html | TagName::Table | TagName::Td | TagName::Th | TagName::Caption
+                    TagName::Html
+                        | TagName::Table
+                        | TagName::Td
+                        | TagName::Th
+                        | TagName::Caption
+                        | TagName::Template
                 ) {
                     return false;
                 }

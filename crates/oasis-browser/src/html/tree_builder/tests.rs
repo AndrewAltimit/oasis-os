@@ -1188,6 +1188,48 @@ fn template_element_in_head_parses() {
     assert_eq!(doc.text_content(tmpl_id), "hello");
 }
 
+/// Per WHATWG §13.2.4.2, `template` is a default scope boundary.
+/// A `<p>` opened *before* a `<template>` must not be reachable from
+/// inside the template — opening a nested `<p>` inside the template
+/// must not implicitly close the outer one. The outer `<p>` therefore
+/// keeps its trailing text content.
+#[test]
+fn template_is_a_scope_boundary_for_outer_p() {
+    let tokens = vec![
+        start("html"),
+        start("body"),
+        start("p"),
+        text("outer-before "),
+        start("template"),
+        start("p"),
+        text("inner"),
+        end("p"),
+        end("template"),
+        text("outer-after"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+
+    // The outer <p> must still contain "outer-after" — if the template
+    // boundary was missing, the inner `<p>` start tag would have called
+    // `close_p_if_in_scope()` which would have walked across the
+    // template and closed the outer <p>.
+    let outer_p = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&id| tag_at(&doc, id) == Some(&TagName::P))
+        .copied()
+        .expect("outer <p>");
+    let outer_text = doc.text_content(outer_p);
+    assert!(
+        outer_text.contains("outer-before") && outer_text.contains("outer-after"),
+        "outer <p> lost its trailing text — template boundary was crossed: {outer_text:?}"
+    );
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;
