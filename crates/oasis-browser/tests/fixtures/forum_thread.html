@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Anyone else running Rust on PSP hardware? - Rust Users Forum</title>
+<style>
+body { font-family: "Helvetica Neue", Arial, sans-serif; color: #222; background: #f0f0f0; margin: 0; }
+header.topic-header { background: #ffffff; border-bottom: 1px solid #ddd; padding: 16px 32px; }
+header.topic-header h1 { font-size: 22px; margin: 0 0 8px; color: #1a1a1a; }
+header.topic-header .meta { font-size: 12px; color: #707070; }
+header.topic-header .meta a { color: #3b8dbd; text-decoration: none; }
+.tags { margin-top: 6px; }
+.tag { display: inline-block; background: #e8e8e8; color: #333; padding: 1px 6px; font-size: 11px; border-radius: 2px; margin-right: 4px; }
+.topic-body { max-width: 840px; margin: 24px auto; }
+.post { display: flex; background: #ffffff; border: 1px solid #ddd; margin-bottom: 12px; padding: 16px; border-radius: 4px; }
+.post .avatar { width: 48px; height: 48px; background: #c0c0c0; border-radius: 50%; margin-right: 12px; flex-shrink: 0; }
+.post .body { flex: 1; }
+.post .header { font-size: 12px; color: #707070; margin-bottom: 8px; }
+.post .header .user { color: #3b8dbd; font-weight: bold; text-decoration: none; }
+.post .content { font-size: 14px; line-height: 1.5; }
+.post .content p { margin: 6px 0; }
+.post .content code { background: #f5f5f5; padding: 1px 4px; font-family: monospace; border-radius: 2px; }
+.post .content blockquote { border-left: 3px solid #ddd; padding-left: 12px; color: #555; margin: 8px 0; }
+.post .actions { margin-top: 10px; font-size: 12px; color: #707070; }
+.post .actions a { color: #707070; text-decoration: none; margin-right: 12px; }
+.post.solution { border-color: #3fb950; background: #f0fff4; }
+.solution-badge { background: #3fb950; color: #fff; padding: 2px 6px; font-size: 11px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header class="topic-header">
+<h1>Anyone else running Rust on PSP hardware?</h1>
+<div class="meta">Posted in <a href="#">help</a> &middot; <a href="#">@altimit</a> &middot; 6 replies &middot; 2.1k views &middot; last activity 4 hours ago</div>
+<div class="tags"><span class="tag">psp</span><span class="tag">no-std</span><span class="tag">embedded</span><span class="tag">homebrew</span></div>
+</header>
+<main class="topic-body">
+<article class="post">
+<div class="avatar"></div>
+<div class="body">
+<div class="header"><a class="user" href="#">altimit</a> &middot; original poster &middot; 2 days ago</div>
+<div class="content">
+<p>I've been hacking on a Rust homebrew project for the Sony PSP (the original 2004 handheld) and hit a wall linking QuickJS. The C code compiles fine with <code>psp-gcc</code>, but linking fails with <code>invalid binding: 0</code> from <code>rust-lld</code>.</p>
+<p>Has anyone else tried mixing Rust code with a C library on this target? I'm using the <code>rust-psp</code> fork from AndrewAltimit with <code>cargo +nightly psp</code>.</p>
+</div>
+<div class="actions"><a href="#">reply</a><a href="#">quote</a><a href="#">flag</a></div>
+</div>
+</article>
+<article class="post solution">
+<div class="avatar"></div>
+<div class="body">
+<div class="header"><a class="user" href="#">overdrive</a> &middot; regular &middot; 2 days ago &middot; <span class="solution-badge">Solution</span></div>
+<div class="content">
+<p>Switch the linker to <code>psp-ld</code> instead. The binutils 2.43 that ships with modern pspdev emits a <code>.symtab</code> layout that rust-lld strictly rejects. Add this to your <code>.cargo/config.toml</code>:</p>
+<pre><code>[target.mipsel-sony-psp]
+linker = "/opt/pspdev/bin/psp-ld"
+linker-flavor = "gnu"</code></pre>
+<p>You'll also need to re-play the target-spec pre-link args and provide a supplementary link script that synthesises <code>_gp</code>, since the rust-psp target script omits it (rust-lld computes it internally).</p>
+</div>
+<div class="actions"><a href="#">reply</a><a href="#">quote</a><a href="#">flag</a></div>
+</div>
+</article>
+<article class="post">
+<div class="avatar"></div>
+<div class="body">
+<div class="header"><a class="user" href="#">altimit</a> &middot; original poster &middot; 1 day ago</div>
+<div class="content">
+<blockquote>Switch the linker to <code>psp-ld</code> instead.</blockquote>
+<p>That fixed the link! But now I'm crashing inside <code>JS_Eval</code> on real hardware. Works fine in PPSSPP. Any ideas?</p>
+</div>
+<div class="actions"><a href="#">reply</a><a href="#">quote</a><a href="#">flag</a></div>
+</div>
+</article>
+<article class="post">
+<div class="avatar"></div>
+<div class="body">
+<div class="header"><a class="user" href="#">mipsfan</a> &middot; senior &middot; 1 day ago</div>
+<div class="content">
+<p>Classic FPU ABI mismatch. PSP Allegrex has a single-precision FPU only. <code>rust-psp</code>'s target spec declares <code>+single-float</code>, but <code>psp-gcc</code> defaults to <code>-mdouble-float</code>. PPSSPP silently fixes it up; real hardware crashes in the <code>dtoa</code> double-precision helpers.</p>
+<p>Set <code>CFLAGS_mipsel_sony_psp_std=-msingle-float</code> in your <code>.cargo/config.toml</code> and rebuild from clean.</p>
+</div>
+<div class="actions"><a href="#">reply</a><a href="#">quote</a><a href="#">flag</a></div>
+</div>
+</article>
+<article class="post">
+<div class="avatar"></div>
+<div class="body">
+<div class="header"><a class="user" href="#">altimit</a> &middot; original poster &middot; 12 hours ago</div>
+<div class="content">
+<p>That was it. Thanks all &mdash; QuickJS-NG now runs on real PSP hardware, tested end-to-end with a page that mutates three DOM nodes from an inline script.</p>
+</div>
+<div class="actions"><a href="#">reply</a><a href="#">quote</a><a href="#">flag</a></div>
+</div>
+</article>
+</main>
+</body>
+</html>

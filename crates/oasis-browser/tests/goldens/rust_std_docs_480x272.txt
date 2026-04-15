@@ -1,0 +1,86 @@
+# viewport 480x272
+draw_text "std", 8, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 8, 14, 21, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "core", 26, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 26, 14, 28, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "alloc", 50, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 50, 14, 31, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "test", 80, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 80, 14, 28, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "proc_macro", 104, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 104, 14, 72, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Struct ", 8, 20, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Struct ", 9, 20, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Vec", 50, 20, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Vec", 51, 20, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 28, 47, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Fields", 48, 47, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 53, 38, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 59, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Methods", 48, 59, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 65, 50, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 71, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Trait ", 48, 71, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 77, 37, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Implementations", 84, 71, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 84, 77, 103, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 83, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Auto ", 48, 83, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 89, 32, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Trait ", 78, 83, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 78, 89, 37, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Implementations", 114, 83, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 114, 89, 103, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Methods", 8, 105, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Methods", 9, 105, 12, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 28, 133, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new", 48, 133, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 139, 22, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 145, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "with_capacity", 48, 145, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 151, 89, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 157, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "push", 48, 157, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 163, 28, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 169, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "pop", 48, 169, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 175, 21, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 181, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "len", 48, 181, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 187, 19, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 193, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "is_empty", 48, 193, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 199, 56, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 205, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "iter", 48, 205, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 211, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 28, 217, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "into_iter", 48, 217, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 48, 223, 60, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "pub ", 8, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "pub ", 9, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "struct", 32, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "struct", 33, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Vec", 68, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Vec", 69, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "<T, ", 86, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "<T, ", 87, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "A ", 110, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "A ", 111, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "= ", 122, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "= ", 123, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Global> ", 134, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Global> ", 135, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "{ ", 182, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "{ ", 183, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "/* ", 194, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "/* ", 195, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "private ", 212, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "private ", 213, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "fields ", 260, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "fields ", 261, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "*/ ", 302, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "*/ ", 303, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "}", 320, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "}", 321, 237, 16, Color { r: 0, g: 0, b: 0, a: 255 }
+# totals fill_rect=20 draw_text=64 other=0

@@ -1,9 +1,23 @@
 //! Benchmarks for the layout engine.
+//!
+//! Three groups:
+//!
+//! - `layout_blocks` / `layout_table` — synthetic stress tests that
+//!   measure raw layout throughput as a function of element count.
+//! - `layout_corpus` — real-world fixtures from
+//!   `crates/oasis-browser/tests/fixtures/`, measured end-to-end
+//!   (`parse + cascade + layout`) at two viewport sizes (800×600
+//!   desktop, 480×272 PSP). Pair this with the hard wall-clock budget
+//!   in `tests/layout_budget.rs` — the bench catches 20% regressions,
+//!   the budget test catches catastrophic ones.
+
+use std::path::PathBuf;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_browser::SimpleTextMeasurer;
 use oasis_browser::internals::{
-    CascadeContext, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, style_tree,
+    CascadeContext, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, default_stylesheet,
+    style_tree,
 };
 
 /// Generate HTML with `n` block-level divs.
@@ -114,5 +128,74 @@ fn bench_table_layout(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_block_layout, bench_table_layout);
+/// Real-world corpus fixtures benched at desktop + PSP viewport sizes.
+///
+/// Each entry measures the full `parse + cascade + build_layout_tree`
+/// pipeline against the fixture. Criterion will fire on a > ~20%
+/// regression compared to the saved baseline, so this is where paint
+/// / layout rewrites should get their pre-merge pass.
+fn bench_corpus_layout(c: &mut Criterion) {
+    const FIXTURES: &[&str] = &[
+        "wikipedia_article.html",
+        "news_homepage.html",
+        "blog_post.html",
+        "hackernews_frontpage.html",
+        "github_readme.html",
+        "rust_std_docs.html",
+        "forum_thread.html",
+        "commerce_product.html",
+        "substack_post.html",
+    ];
+
+    let measurer = SimpleTextMeasurer;
+    let ua = default_stylesheet();
+    let mut group = c.benchmark_group("layout_corpus");
+
+    for name in FIXTURES {
+        let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", name]
+            .iter()
+            .collect();
+        let Ok(html) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+
+        for (w, h, label) in [
+            (800.0f32, 600.0f32, "800x600"),
+            (480.0f32, 272.0f32, "480x272"),
+        ] {
+            let bench_id = format!("{}_{}", name.trim_end_matches(".html"), label);
+            let ua_ref = &ua;
+            group.bench_with_input(
+                BenchmarkId::new("pipeline", &bench_id),
+                &(html.clone(), w, h),
+                |b, (html, w, h)| {
+                    b.iter(|| {
+                        let tokens = Tokenizer::new(html).tokenize();
+                        let doc = TreeBuilder::build(tokens);
+                        let sheets: Vec<&Stylesheet> = vec![ua_ref];
+                        let styles = style_tree(&doc, &sheets, &[], &CascadeContext::default());
+                        build_layout_tree(
+                            &doc,
+                            &styles,
+                            &measurer,
+                            *w,
+                            *h,
+                            None,
+                            &std::collections::HashMap::new(),
+                        )
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_block_layout,
+    bench_table_layout,
+    bench_corpus_layout
+);
 criterion_main!(benches);

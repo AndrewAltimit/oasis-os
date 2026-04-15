@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>altimit/oasis-os: Embeddable OS framework in Rust</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #24292f; margin: 0; background: #ffffff; }
+.page-header { background: #24292f; color: #ffffff; padding: 12px 24px; }
+.page-header a { color: #ffffff; text-decoration: none; }
+.repo-nav { border-bottom: 1px solid #d0d7de; padding: 8px 24px; background: #f6f8fa; }
+.repo-nav a { margin-right: 16px; color: #24292f; text-decoration: none; }
+.repo-nav a.selected { border-bottom: 2px solid #fd8c73; padding-bottom: 8px; font-weight: 600; }
+.layout { display: flex; padding: 16px 24px; gap: 24px; }
+.readme { flex: 3; border: 1px solid #d0d7de; border-radius: 6px; padding: 32px; background: #ffffff; }
+.sidebar { flex: 1; }
+.readme h1 { border-bottom: 1px solid #d8dee4; padding-bottom: 8px; font-size: 2em; }
+.readme h2 { border-bottom: 1px solid #d8dee4; padding-bottom: 6px; margin-top: 24px; font-size: 1.5em; }
+.readme p { line-height: 1.5; }
+.readme code { background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-family: monospace; font-size: 85%; }
+.readme pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }
+.readme pre code { background: transparent; padding: 0; }
+.badge { display: inline-block; padding: 2px 6px; font-size: 12px; background: #3fb950; color: #fff; border-radius: 3px; margin-right: 4px; }
+.badge.warn { background: #d29922; }
+.sidebar h3 { font-size: 14px; color: #57606a; border-bottom: 1px solid #d8dee4; padding-bottom: 4px; }
+.sidebar p { font-size: 13px; color: #57606a; }
+.sidebar ul { list-style: none; padding: 0; font-size: 12px; }
+.sidebar ul li { padding: 2px 0; }
+table.lang-stats { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.lang-stats td { padding: 2px 4px; }
+</style>
+</head>
+<body>
+<div class="page-header">
+<a href="#">altimit</a> / <a href="#"><b>oasis-os</b></a> &nbsp; <span class="badge">Public</span>
+</div>
+<nav class="repo-nav">
+<a href="#" class="selected">&lt;&gt; Code</a>
+<a href="#">Issues <span>42</span></a>
+<a href="#">Pull requests <span>7</span></a>
+<a href="#">Actions</a>
+<a href="#">Projects</a>
+<a href="#">Wiki</a>
+<a href="#">Security</a>
+<a href="#">Insights</a>
+</nav>
+<div class="layout">
+<div class="readme">
+<h1>OASIS_OS</h1>
+<p><span class="badge">build passing</span><span class="badge warn">coverage 78%</span><span class="badge">license MIT</span></p>
+<p>An embeddable operating system framework written in Rust (edition 2024). Provides a skinnable shell, scene-graph UI, virtual file system, and a from-scratch browser engine that renders HTML / CSS / Gemini to any pixel buffer.</p>
+<h2>Features</h2>
+<ul>
+<li>Runs on desktop (SDL3), WebAssembly, Unreal Engine 5, and Sony PSP hardware.</li>
+<li>18 skins including PSP XMB, Windows XP, NeXTSTEP, and BeOS.</li>
+<li>90+ terminal commands across 17 modules with shell expansion and pipes.</li>
+<li>Full HTML5 tree construction with adoption agency and foster parenting.</li>
+</ul>
+<h2>Getting started</h2>
+<p>Clone the repository and run <code>cargo build --release -p oasis-app</code>. You will need Rust 1.91.0 or newer.</p>
+<pre><code>git clone https://github.com/altimit/oasis-os.git
+cd oasis-os
+cargo build --release
+./target/release/oasis-app</code></pre>
+<h2>Supported backends</h2>
+<p>The same core compiles to every backend. Each backend implements the <code>SdiCore</code> trait and optionally extends it with <code>SdiBackend</code> for accelerated primitives.</p>
+<h2>License</h2>
+<p>Dual-licensed under the Unlicense and MIT. See <a href="#">LICENSE-MIT</a> and <a href="#">LICENSE-UNLICENSE</a> for details.</p>
+</div>
+<aside class="sidebar">
+<h3>About</h3>
+<p>Embeddable OS framework in Rust with a from-scratch browser engine.</p>
+<h3>Topics</h3>
+<p><a href="#">rust</a> <a href="#">psp</a> <a href="#">browser-engine</a> <a href="#">embedded</a></p>
+<h3>Releases</h3>
+<ul>
+<li>v0.9.2 &mdash; 3 days ago</li>
+<li>v0.9.1 &mdash; 2 weeks ago</li>
+<li>v0.9.0 &mdash; 1 month ago</li>
+</ul>
+<h3>Languages</h3>
+<table class="lang-stats">
+<tr><td>Rust</td><td>92.4%</td></tr>
+<tr><td>C</td><td>4.1%</td></tr>
+<tr><td>Shell</td><td>1.8%</td></tr>
+<tr><td>HTML</td><td>1.2%</td></tr>
+<tr><td>Other</td><td>0.5%</td></tr>
+</table>
+</aside>
+</div>
+</body>
+</html>

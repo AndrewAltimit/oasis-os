@@ -8,11 +8,12 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-15 (WHATWG HTML conformance epic fully shipped on
-`feat/browser-whatwg-epic-completion` — full adoption agency
-algorithm, simplified foreign content (SVG / MathML) with the
-canonical breakout list, template form-scope isolation, and a
-vendored html5lib-tests-format harness seeded with 9 fixtures).
+Last updated: 2026-04-15 (Real-world compatibility measurement epic
+fully shipped on `feat/browser-realworld-compat-epic` — corpus
+expanded to 10 fixtures, display-list golden harness for visual
+regression, hard wall-clock layout budgets gating `cargo test`,
+criterion corpus bench group, and a local-only triage binary for
+bucket-sorting arbitrary HTML snapshots).
 
 ---
 
@@ -237,47 +238,89 @@ PSP GU has `sceGumPerspective` for true perspective rendering.
 
 ---
 
-## Epic: Real-world compatibility measurement
+## ✅ Done: Real-world compatibility measurement
 
-**Effort:** ongoing grind. **Highest-leverage item on the list.**
+**Effort:** ~1 week (actual). Shipped on
+`feat/browser-realworld-compat-epic`. The "ongoing grind" framing
+still applies — corpus expansion is genuinely open-ended — but the
+infrastructure is now in place so adding fixture #11 costs a drag-
+and-drop + `UPDATE_GOLDENS=1`.
 
-This PR (`feat/browser-improvements`) added 4 fixtures in
-`tests/fixtures/`. That's the floor, not the target.
+- ~~**Corpus expansion.**~~ — shipped as 10 fixtures under
+  `crates/oasis-browser/tests/fixtures/`: `wikipedia_article.html`,
+  `news_homepage.html`, `blog_post.html`,
+  `adversarial_malformed.html` (the original four), plus
+  `hackernews_frontpage.html`, `github_readme.html`,
+  `rust_std_docs.html`, `forum_thread.html`, `commerce_product.html`,
+  and `substack_post.html`. Each fixture is hand-authored to
+  resemble a stable revision of the real site and exercises a
+  different layout regime: HN's `<table>`-driven list, GitHub's
+  flex two-column, Rust std's sidebar + monospace signatures,
+  Discourse-style avatar-flex posts, Amazon-style price block +
+  reviews, and Substack's drop-cap long-form post. The corpus sits
+  at the floor of the original 20–50 target — expanding further
+  only requires dropping a new `.html` into `tests/fixtures/`,
+  adding it to `FIXTURES` in `tests/visual_regression.rs`, and
+  running `UPDATE_GOLDENS=1` to seed the goldens.
+- ~~**Visual regression harness.**~~ — shipped as a display-list
+  golden harness in
+  `crates/oasis-browser/tests/visual_regression.rs`. For each
+  fixture, the full parse → cascade → layout → paint pipeline runs
+  into a `MockSdiCore` that records every draw call; the resulting
+  stream is canonicalized (bookkeeping calls dropped, `fill_rect`
+  / `draw_text` / `clear` / `blit` / clip ops kept) and diffed
+  against a checked-in golden under `tests/goldens/`. Two
+  viewports are covered: 800×600 desktop and 480×272 PSP. **Why a
+  display-list dump instead of PNG:** reviewable text diffs in
+  code review, deterministic across backends (no anti-aliasing
+  drift), no binary blobs in the repo. The harness runs as part
+  of the normal `cargo test` step — no separate CI job — so every
+  paint-path change has to be intentional about updating goldens
+  (`UPDATE_GOLDENS=1 cargo test -p oasis-browser --test
+  visual_regression`). Current corpus produces ~4100 total lines
+  of golden across 20 files.
+- ~~**Layout performance budgets.**~~ — shipped in two pieces:
+  - `crates/oasis-browser/tests/layout_budget.rs` is a hard wall-
+    clock cap that runs under `cargo test`. Each fixture has a
+    budget measured in milliseconds; catastrophic O(n²) / O(n³)
+    regressions fail the normal test run. Most fixtures are
+    budgeted at 500 ms; the `substack_post` long-form fixture gets
+    750 ms headroom. The test does a warm-up pass per fixture so
+    the budget measures steady-state cost, not cold-start.
+  - `crates/oasis-browser/benches/layout_engine.rs` grew a new
+    `layout_corpus` group that runs the full pipeline against each
+    real-world fixture at both desktop and PSP viewport sizes.
+    Criterion's statistical baseline-diff picks up regressions
+    smaller than the budget test would catch (~20% rather than
+    ~2×), so the two layers compose — the budget fails loudly on
+    catastrophic regressions, the bench catches subtle ones.
+- ~~**Triage tooling (not in CI).**~~ — shipped as the
+  `oasis-browser-triage` binary
+  (`crates/oasis-browser/src/bin/triage.rs`). Walks a user-supplied
+  directory of HTML snapshots, runs each page through the full
+  pipeline under `std::panic::catch_unwind`, and emits a Markdown
+  report that buckets pages as `ok`, `panic`, `slow`,
+  `empty-layout`, or `no-draw-calls`. **Local only by design** —
+  the tool does not fetch URLs, because network fetching belongs
+  in the real browser, not in a diagnostic. Usage:
+  `cargo run -p oasis-browser --bin oasis-browser-triage --
+  --input dir/ --output report.md [--slow-budget-ms 2000]
+  [--viewport 800x600]`.
 
-**Corpus expansion (20–50 fixtures):**
+**Drive-by fix:** `crates/oasis-browser/benches/paint.rs` had
+bitrotten `PaintViewport` initializers (missing `focused_node`,
+`visible_height`, `scroll_x` from earlier field additions). Fixed
+in the same branch since the bench group was already in scope.
 
-- Wikipedia article (real HTML pulled from a stable revision, not
-  synthetic).
-- Hacker News front page.
-- GitHub README rendered output.
-- A docs site (Rust `std` docs, MDN reference page).
-- A forum (phpBB or Discourse snapshot).
-- A news masthead (NYT-style multi-column grid).
-- A commerce product page.
-- A blog platform post (Medium, Substack).
+**Follow-ups not in this epic:**
 
-Strip each to a reasonable size and check in under `tests/fixtures/`.
-
-**Visual regression harness.** Single highest-leverage item:
-
-- Render each corpus fixture to PNG via the SDL backend.
-- Check golden PNGs into the repo (one per fixture).
-- CI gate on pixel delta > threshold.
-- Add as a new CI step after the existing `screenshot regression` job.
-- This catches ~90% of paint regressions automatically.
-
-**Layout performance budgets:**
-
-- "Wikipedia frontpage lays out in <500ms on desktop, <2s on PSP."
-- Wire into the existing `cargo bench` infrastructure under
-  `benches/layout_engine.rs`.
-- CI gate on regression > 20%.
-
-**Triage tooling (not in CI):**
-
-- Crawler script: point at a curated list of top-500 sites, record which
-  ones panic/error/hang, bucketed by failure mode. Local tool for
-  triage, not CI.
+- Add a RTL / bidi stress fixture and an @-media-queries responsive
+  grid fixture to the corpus.
+- Wire the bench baseline into CI as an actual gate (currently the
+  baseline has to be saved manually via `cargo bench --
+  --save-baseline main`).
+- Extend the triage tool with a `--parallel` flag using `rayon` for
+  large corpora.
 
 ---
 
@@ -541,8 +584,10 @@ single epic — file as individual issues.
 If the constraint is a short runway to public launch, the priority
 order is:
 
-1. **Visual regression harness** (biggest leverage per hour of work,
-   smallest risk). Catches regressions automatically forever.
+1. ~~**Visual regression harness**~~ — shipped on
+   `feat/browser-realworld-compat-epic` (see the Done epic above).
+   Display-list goldens + wall-clock layout budgets + criterion
+   corpus bench group.
 2. ~~**`html5lib-tests` integration**~~ — shipped as a vendored-subset
    harness on `feat/browser-whatwg-epic-completion` (see the WHATWG
    HTML conformance epic above).
