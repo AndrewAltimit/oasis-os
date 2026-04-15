@@ -413,8 +413,7 @@ through to the trait. Backends don't need to know.
   - `filter_box_blur.html` — `filter: blur(8px)` on a box with mixed
     text/borders.
   Reuses the display-list golden harness shipped on
-  `feat/browser-realworld-compat-epic`
-  ([done epic](browser-backlog.md#-done-real-world-compatibility-measurement)):
+  `feat/browser-realworld-compat-epic`:
   drop the compositor fixtures under
   `crates/oasis-browser/tests/fixtures/` and add them to the
   `FIXTURES` list in `tests/visual_regression.rs`, then

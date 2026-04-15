@@ -1,648 +1,178 @@
 # Browser Engine Backlog
 
-Gap analysis and follow-up work for `oasis-browser`, organized by epic.
-Each epic is scoped as a standalone PR or short series. Items marked with
-effort estimates assume one focused engineer-week.
+Forward-looking gap analysis for `oasis-browser`. Open work only —
+shipped epics are summarised in a single "Recently shipped" section
+and otherwise tracked via `git log`.
 
-This document is the live roadmap for closing the gap between our
-from-scratch engine and a launch-ready embedded browser. Items are
-grouped by area; ranking guidance is at the bottom.
-
-Last updated: 2026-04-15 (Compositor overhaul epic closed out on
-`feat/browser-compositor-overhaul`: `mask-*` now flows end-to-end
-through `PushCompositingLayer`, `creates_stacking_context` /
-`creates_compositing_layer` audited so every CSS property that
-allocates a render target has a named regression test, and the
-replay pop path shares a single CPU-readback pass between `filter:`
-and `mask-*`. Real-world compatibility measurement shipped earlier
-on `feat/browser-realworld-compat-epic`.)
+Last updated: 2026-04-15
 
 ---
 
-## ✅ Done: PSP JavaScript integration (QuickJS-NG + DOM)
+## Recently shipped (pointers only)
 
-Completed on `feat/psp-quickjs` (2026-04-14). All PSP targets now share
-the same `rquickjs-engine` backend as desktop/WASM/UE5 — the earlier
-`boa_engine` PSP backend has been removed entirely. Scripts tags,
-`document.getElementById`, `textContent`, event dispatch, `fetch`,
-`localStorage`, and the rest of the DOM surface run against a real DOM
-on real PSP hardware (verified end-to-end with an HTTP-served test
-page mutating three DOM nodes).
+The big compatibility and architecture epics are done. See git log
+for the detailed commit history; each bullet names the merge branch
+so you can `git show` for specifics.
 
-**Key decisions and fixes, for the historical record:**
-
-- **Switched PSP from `boa_engine` back to QuickJS-NG via `rquickjs`.**
-  The original "pure-Rust JS on PSP" plan used `boa` to avoid a MIPS
-  C toolchain. Once pspdev was installed (`/opt/pspdev`), wiring the
-  `cc` crate at `psp-gcc` via `CC_mipsel_sony_psp_std` was
-  straightforward, and QuickJS is ~10× faster than boa on Allegrex.
-- **Linker routed through `psp-ld` instead of `rust-lld`.** GCC 15 /
-  binutils 2.43 emit `.symtab` headers with a `sh_info` layout that
-  `rust-lld` strictly rejects (`invalid binding: 0`). Switched the
-  Rust target's linker to `/opt/pspdev/bin/psp-ld` via
-  `linker-flavor=gnu` under `-Z unstable-options`, re-playing the
-  rust-psp target-spec pre-link args (`--emit-relocs`, `--nmagic`,
-  inline PRX link script) under the `gnu` flavor. Added a tiny
-  supplementary link script (`tools/psp-linkscript.ld`) to synthesise
-  `_gp` at ALIGN(16)+0x7ff0; the rust-psp target script omits `_gp`
-  because rust-lld computes it internally.
-- **Plan B shims instead of pspdev's newlib.** To stay dependency-free
-  we don't link `libc.a` / `libm.a` / `libcglue.a` — those archives are
-  compiled as eabi32 / msingle-float / abicalls and can't be merged
-  with Rust's o32 / mdouble-float / non-abicalls code. Instead
-  `src/quickjs_shim.rs` provides the ~40 libc/libm symbols QuickJS
-  references (math via the `libm` crate, string/memory routines,
-  `calloc`/`realloc` forwarding to libpsp's malloc/free with header
-  decoding, non-variadic stdio stubs, a 256-byte `_impure_ptr` static,
-  RTC-backed `clock_gettime` family).
-- **FPU ABI: C must be `-msingle-float`, not `-mdouble-float`.** The
-  real-hardware blocker that ate five days of debugging. PSP Allegrex
-  has a single-precision FPU only; rust-psp's target spec declares
-  `"features": "+single-float"`. We were building QuickJS C with
-  `-mdouble-float`, which PPSSPP silently fixed up but which crashed
-  on real hardware inside `JS_Eval`'s dtoa path on the first double-
-  precision helper call. Fixed by flipping `CFLAGS_mipsel_sony_psp_std`
-  to `-msingle-float`. All six JSTEST probes pass post-fix.
-- **Lazy init.** `BrowserState::widget` in
-  `crates/oasis-backend-psp/src/app_states.rs` stores
-  `Option<BrowserWidget>`; the JS engine is only constructed when the
-  user actually launches the browser app. Boot-time cost is zero.
-- **Binary impact.** EBOOT grew from 6.26 MB (no `javascript` feature)
-  → 6.79 MB (with DOM bindings). Runtime heap drops from 8.76 MB →
-  8.44 MB free after browser open. Both fit comfortably in the PSP's
-  24 MB user partition.
-
-**Expected perf ceiling.** QuickJS on Allegrex is still two orders of
-magnitude slower than V8 on desktop — inert pages with small
-bootstrap scripts will work fine; React SPAs will crawl. This is the
-same honest framing as before, just with QuickJS's real numbers
-instead of boa's.
-
-**Follow-up tickets** (filed separately in the launch-polish section
-below):
-
-- Space-collapsing bug: JS-mutated `textContent` containing ASCII
-  spaces renders without visible spaces on PSP (`"hello from QuickJS"`
-  renders as `"hellofromQuickJS"`). Likely a PSP bitmap font / text
-  measurement quirk in the browser paint path, not a JS issue — the
-  same mutation renders correctly on desktop. Scope: investigate
-  whether `glyph_advance(' ')` returns 0 in the PSP font table, or
-  whether the text layout step collapses whitespace after
-  JS-triggered re-layout.
-- `js_dom.rs` bootstrap bloat: two large JS string constants
-  (`JS_DOM_BOOTSTRAP` ~530 lines, `JS_CANVAS_BOOTSTRAP` ~144 lines)
-  eagerly get compiled into `.rodata` even on PSP where canvas is
-  unused. Consider feature-gating the canvas bootstrap behind a
-  separate flag to trim ~20 KB on PSP.
+- **Compositor overhaul** (`feat/browser-compositor-overhaul`).
+  `mix-blend-mode`, `backdrop-filter`, `filter:`, `isolation:
+  isolate`, `will-change:`, and `mask-*` (including URL-backed
+  masks) all route through a single `PushCompositingLayer` /
+  `PopCompositingLayer` pair backed by the `SdiRenderTarget` trait.
+  Backends without render-target support fall back to `PushLayer`.
+- **3D transforms** (`feat/browser-3d-transforms` + follow-ups).
+  4×4 `Matrix3d`, screen-space perspective projection, `transform-
+  style: preserve-3d` with Z-sorted children, `backface-visibility`,
+  `transform-origin: Z`, and a trapezoidal background path for
+  steep perspective angles.
+- **Real-world compatibility measurement**
+  (`feat/browser-realworld-compat-epic`). Display-list golden
+  harness for visual regression, hard wall-clock layout budgets
+  gating `cargo test`, criterion corpus bench group, and a local-
+  only triage binary for bucket-sorting arbitrary HTML snapshots.
+- **WHATWG HTML conformance** (`feat/browser-whatwg-epic-completion`
+  + earlier `feat/browser-whatwg-conformance`). Full §13.2.6.4.7
+  adoption agency algorithm, foster parenting, `<template>` with
+  form-scope isolation, foreign content subset (SVG/MathML), parser
+  error reporting, and a vendored-subset `html5lib-tests` harness.
+- **CSS long tail** (`feat/browser-has-selector`,
+  `feat/browser-container-queries`, `feat/css-nesting`). `:has()`,
+  `@layer`, `@container`, CSS nesting, `@scope`, `@property`,
+  `@counter-style` (parse-only), `color-mix()` / `oklch()` /
+  `color()` / `light-dark()`, logical properties, `aspect-ratio`
+  for non-replaced blocks, `text-wrap` parsing, `field-sizing:
+  content`, `accent-color`, `caret-color`.
+- **PSP JavaScript** (`feat/psp-quickjs`). QuickJS-NG via `rquickjs`
+  on real PSP hardware, same DOM bindings as desktop/WASM/UE5.
 
 ---
 
-## ✅ Done: 3D transforms
+## Epic: Missing CSS features (remaining)
 
-**Effort:** 1–2 weeks. Standalone from compositor, similar
-cross-cutting nature. **Complete** — scaffolding shipped on
-`feat/browser-3d-transforms`, three follow-ups shipped on
-`feat/browser-3d-transforms-followups`.
+Low-impact. Deliberately deferred until real-world corpus pressure
+surfaces breakage. Skipping these does not block launch.
 
-- ~~Add `AffineTransform3D` alongside the existing `AffineTransform2D`.~~
-  Shipped on `feat/browser-3d-transforms` as `Matrix3d` (4×4
-  column-major matrix in `crates/oasis-browser/src/transform.rs`).
-  Provides `identity`, `translate`, `scale`, `rotate_x/y/z`,
-  `rotate_axis`, `perspective`, `multiply`, `apply_homogeneous`,
-  `apply_point_3d`, `from_2d_affine`, `from_css_transforms_3d`, and
-  `flatten_to_affine`. The existing
-  `AffineTransform2D::from_css_transforms` is now a thin wrapper:
-  `Matrix3d::from_css_transforms_3d(...).flatten_to_affine()`.
-- ~~`translate3d` / `rotate3d` / `rotateX` / `rotateY` / `rotateZ` /
-  `scale3d` — parsed today but flattened to 2D affine.~~ — parsed on
-  `feat/browser-3d-transforms`. `TransformFunction` gained
-  `Translate3d`, `TranslateZ`, `Scale3d`, `ScaleZ`, `RotateX`,
-  `RotateY`, `RotateZ`, `Rotate3d`, `Matrix3d`, and `Perspective`
-  variants. The CSS parser handles `translate3d()`, `translateZ()`,
-  `scale3d()`, `scaleZ()`, `rotateX/Y/Z()`, `rotate3d(x,y,z,deg)`,
-  `matrix3d(...16 values)`, and the `perspective(d)` function.
-  Evaluation runs through the new `Matrix3d` 4×4 pipeline, then
-  flattens orthographically — `rotateX(60deg)` becomes a vertical
-  squash by `cos(60°)`, `rotateY(60deg)` a horizontal squash, etc.
-  This is visually correct under orthographic projection but loses
-  the perspective trapezoid (see follow-ups below).
-- ~~`backface-visibility: hidden` — parsed; needs paint-time normal
-  check to cull back-facing quads.~~ — shipped on
-  `feat/browser-3d-transforms`. `paint_box` builds a `Matrix3d` from
-  the element's transforms when `backface_visibility == Hidden`,
-  computes the surface-normal Z of the
-  `(0,0,0)→(w,0,0)→(0,h,0)` triangle, and skips painting the entire
-  subtree when it's negative. Front-face culling test cases for
-  `rotateY(60deg)` (front) vs. `rotateY(120deg)` (back) live in
-  `transform.rs`.
-
-- ~~**Perspective projection.**~~ — shipped on
-  `feat/browser-3d-transforms`. `PaintContext` now tracks an
-  inherited `PerspectiveContext` (distance + screen-space vanishing
-  point) which is pushed when descending into children of an element
-  with the `perspective` CSS property. When a descendant has 3D
-  transforms under an active perspective context, paint takes a
-  screen-space path: it builds the full 4×4
-  `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)`
-  matrix in screen coordinates, projects the box's three reference
-  corners through it with per-vertex perspective divide, and derives
-  a screen-space affine that maps the original screen rect to the
-  projected screen quad via `Matrix3d::project_screen_rect_affine`.
-  The 4th corner is the parallelogram completion `p1 + p2 - p0` —
-  exact for orthographic rotations, an approximation for steep
-  perspective angles. `perspective-origin` is now parsed into a
-  structured `PerspectiveOrigin { x, y, x_pct, y_pct }` (replaces
-  the opaque `String` storage) and resolved against the
-  perspective-establishing element's content box.
-- ~~**`transform-style: preserve-3d`.**~~ — shipped on
-  `feat/browser-3d-transforms`. `PaintContext` carries an ambient
-  `preserved_3d: Option<Matrix3d>` that propagates a parent's full
-  screen-space matrix to descendants when the parent has
-  `transform-style: preserve-3d`. Children compose their own local
-  3D matrix into the preserved ambient matrix instead of flattening
-  at the parent boundary, so a `translateZ(50px)` child under a
-  `rotateY(30deg)` preserve-3d ancestor with a `perspective: 800px`
-  great-grandparent now actually moves toward/away from the viewer
-  and gets perspective-divided correctly. The default `flat`
-  flushes `preserved_3d` to `None` for descendants, matching the
-  spec semantics ("the element renders as a flattened 2D image
-  inside its 3D parent"). Z-sorting of children inside a preserved
-  subtree is still a follow-up — paint order remains DOM order.
-- ~~**`transform-origin: Z`.**~~ — shipped on
-  `feat/browser-3d-transforms`. `TransformOrigin` gained a `z`
-  field, the parser accepts the three-token form
-  (e.g. `transform-origin: 25% 75% 40px`), and
-  `Matrix3d::from_css_transforms_3d` plumbs the Z component through
-  the pre/post translate pair so rotations pivot around an
-  arbitrary 3D point.
-- ~~**Reviewer-flagged: `transform-origin` resolution.**~~ — the
-  earlier scaffolding hardcoded the box centre in
-  `compute_transform_matrix` and the backface-visibility check.
-  Now both consult `style.transform_origin` via a shared
-  `resolve_transform_origin` helper that handles the `x_pct`/`y_pct`
-  percentage forms.
-
-**Follow-ups shipped on `feat/browser-3d-transforms-followups`:**
-
-- ~~**Z-sorting inside preserve-3d subtrees.**~~ — shipped.
-  `paint_box` now detects when the element is a `transform-style:
-  preserve-3d` container whose screen-space matrix was computed
-  (i.e. it went through the 3D screen path) and, for that child
-  walk, flattens the CSS 2.1 stacking-context tiers into a single
-  `normal_children` list. The children are then sorted
-  back-to-front by the projected Z of their layout-center point,
-  computed via the new `preserve3d_child_z` helper that composes
-  `parent_screen_matrix * child_local_matrix` and reads `z/w`
-  after the perspective divide. Siblings with negative `z-index`
-  still carry their usual semantics outside preserve-3d;
-  explicit z-index opt-outs inside preserve-3d are considered a
-  follow-up (the spec itself is fuzzy on the interaction).
-- ~~**Trapezoidal background for steep perspective.**~~ — shipped.
-  `PaintContext` now tracks an inherited
-  `ambient_screen_matrix: Option<Matrix3d>` — the nearest
-  3D-transformed ancestor's full screen-space 4×4 matrix.
-  `paint_background` checks that matrix first: when present (and
-  the element has `border-radius: 0`) it projects all four
-  padding-box corners individually via `apply_point_3d`, producing
-  a true trapezoid under steep rotations like
-  `rotateY(75deg) perspective(200px)`. The 3-corner-fit affine in
-  `project_screen_rect_affine` is still used for the element's own
-  descendant matrix composition (which is an affine operation by
-  definition); only background painting now bypasses it.
-- ~~**Existing 2D transform double-translation bug.**~~ — fixed.
-  The flat orthographic path now builds its 2D affine in screen
-  space (pivot at `(sx + ox_local, sy + oy_local)`) so
-  `ctx.transform` composed with that matrix rotates each box
-  around its correct screen pivot. Correspondingly, for
-  non-translation-only matrices we no longer add
-  `child_matrix.e/.f` to `tx_offset_x/y` — the screen-space
-  matrix already carries all the translation, and the old addition
-  was injecting the rotation-pivot compensation as a stray offset
-  on children. The translate-only fast path is unchanged
-  (`is_translation_only` matrices still flow through the offset
-  shift so plain `translate(...)` doesn't have to round-trip
-  through `fill_polygon`).
-
-Regression tests for all three are in `paint::tests` under
-`crates/oasis-browser/src/paint/mod.rs`:
-`rotate_around_box_center_produces_symmetric_quad`,
-`rotated_parent_does_not_shift_child_offset`,
-`preserve_3d_children_z_sorted_back_to_front`, and
-`steep_perspective_produces_trapezoidal_quad`.
-
-**Backend impact:** desktop and WASM rasterize the flattened 2D
-affine today via the existing `fill_polygon` path. UE5 and PSP also
-inherit the flatten transparently. The screen-space projection is
-backend-agnostic — it produces standard affines that any backend
-can consume. Trapezoidal painting (the follow-up above) would need
-a non-affine quad primitive on backends that don't already have one;
-PSP GU has `sceGumPerspective` for true perspective rendering.
+- **View Transitions API** (`view-transition-*`).
+- **Anchor Positioning** (CSS Anchor Positioning Module Level 1).
+- **Subgrid**.
+- **`scroll-timeline` / `animation-timeline`**.
 
 ---
 
-## ✅ Done: Real-world compatibility measurement
+## Follow-ups from shipped epics
 
-**Effort:** ~1 week (actual). Shipped on
-`feat/browser-realworld-compat-epic`. The "ongoing grind" framing
-still applies — corpus expansion is genuinely open-ended — but the
-infrastructure is now in place so adding fixture #11 costs a drag-
-and-drop + `UPDATE_GOLDENS=1`.
+Small, well-scoped items pulled out of already-shipped epics. Each
+is small enough to handle as a drive-by on a related PR.
 
-- ~~**Corpus expansion.**~~ — shipped as 10 fixtures under
-  `crates/oasis-browser/tests/fixtures/`: `wikipedia_article.html`,
-  `news_homepage.html`, `blog_post.html`,
-  `adversarial_malformed.html` (the original four), plus
-  `hackernews_frontpage.html`, `github_readme.html`,
-  `rust_std_docs.html`, `forum_thread.html`, `commerce_product.html`,
-  and `substack_post.html`. Each fixture is hand-authored to
-  resemble a stable revision of the real site and exercises a
-  different layout regime: HN's `<table>`-driven list, GitHub's
-  flex two-column, Rust std's sidebar + monospace signatures,
-  Discourse-style avatar-flex posts, Amazon-style price block +
-  reviews, and Substack's drop-cap long-form post. The corpus sits
-  at the floor of the original 20–50 target — expanding further
-  only requires dropping a new `.html` into `tests/fixtures/`,
-  adding it to `FIXTURES` in `tests/visual_regression.rs`, and
-  running `UPDATE_GOLDENS=1` to seed the goldens.
-- ~~**Visual regression harness.**~~ — shipped as a display-list
-  golden harness in
-  `crates/oasis-browser/tests/visual_regression.rs`. For each
-  fixture, the full parse → cascade → layout → paint pipeline runs
-  into a `MockSdiCore` that records every draw call; the resulting
-  stream is canonicalized (bookkeeping calls dropped, `fill_rect`
-  / `draw_text` / `clear` / `blit` / clip ops kept) and diffed
-  against a checked-in golden under `tests/goldens/`. Two
-  viewports are covered: 800×600 desktop and 480×272 PSP. **Why a
-  display-list dump instead of PNG:** reviewable text diffs in
-  code review, deterministic across backends (no anti-aliasing
-  drift), no binary blobs in the repo. The harness runs as part
-  of the normal `cargo test` step — no separate CI job — so every
-  paint-path change has to be intentional about updating goldens
-  (`UPDATE_GOLDENS=1 cargo test -p oasis-browser --test
-  visual_regression`). Current corpus produces ~4100 total lines
-  of golden across 20 files.
-- ~~**Layout performance budgets.**~~ — shipped in two pieces:
-  - `crates/oasis-browser/tests/layout_budget.rs` is a hard wall-
-    clock cap that runs under `cargo test`. Each fixture has a
-    budget measured in milliseconds; catastrophic O(n²) / O(n³)
-    regressions fail the normal test run. Most fixtures are
-    budgeted at 500 ms; the `substack_post` long-form fixture gets
-    750 ms headroom. The test does a warm-up pass per fixture so
-    the budget measures steady-state cost, not cold-start.
-  - `crates/oasis-browser/benches/layout_engine.rs` grew a new
-    `layout_corpus` group that runs the full pipeline against each
-    real-world fixture at both desktop and PSP viewport sizes.
-    Criterion's statistical baseline-diff picks up regressions
-    smaller than the budget test would catch (~20% rather than
-    ~2×), so the two layers compose — the budget fails loudly on
-    catastrophic regressions, the bench catches subtle ones.
-- ~~**Triage tooling (not in CI).**~~ — shipped as the
-  `oasis-browser-triage` binary
-  (`crates/oasis-browser/src/bin/triage.rs`). Walks a user-supplied
-  directory of HTML snapshots, runs each page through the full
-  pipeline under `std::panic::catch_unwind`, and emits a Markdown
-  report that buckets pages as `ok`, `panic`, `slow`,
-  `empty-layout`, or `no-draw-calls`. **Local only by design** —
-  the tool does not fetch URLs, because network fetching belongs
-  in the real browser, not in a diagnostic. Usage:
-  `cargo run -p oasis-browser --bin oasis-browser-triage --
-  --input dir/ --output report.md [--slow-budget-ms 2000]
-  [--viewport 800x600]`.
+### Compositor / mask
 
-**Drive-by fix:** `crates/oasis-browser/benches/paint.rs` had
-bitrotten `PaintViewport` initializers (missing `focused_node`,
-`visible_height`, `scroll_x` from earlier field additions). Fixed
-in the same branch since the bench group was already in scope.
+- **`mask-size` / `mask-position` / `mask-repeat` for URL masks.**
+  URL masks currently stretch to layer bounds with nearest-neighbor
+  sampling. Wire `background_image_tiles` through `MaskParams` so
+  positioned / tiled / sized masks work. The stretched-to-fit path
+  already covers the rounded-avatar / logo-badge case.
+- **Real GPU read-modify-write for layer filters.** The filter
+  + mask pop path drops the CSS blend mode (becomes `Normal`)
+  because it reads back, composites via a plain alpha-over blit,
+  then throws the texture away. A GPU-side path would keep blend
+  mode + filter + opacity composable.
+- **Nested `@container` rules: AND-combining.** Current behavior
+  is innermost-wins. Pathological circular dependencies also not
+  resolved (single-pass relayout).
+- **`@container style(...)` queries** parse but always evaluate
+  false.
 
-**Follow-ups not in this epic:**
+### 3D transforms
 
-- Add a RTL / bidi stress fixture and an @-media-queries responsive
-  grid fixture to the corpus.
-- Wire the bench baseline into CI as an actual gate (currently the
-  baseline has to be saved manually via `cargo bench --
-  --save-baseline main`).
-- Extend the triage tool with a `--parallel` flag using `rayon` for
-  large corpora.
+- **Z-index opt-outs inside `preserve-3d` subtrees.** Explicit
+  `z-index` on a child inside a preserved 3D container currently
+  flattens into the Z-sort instead of leaving the preserved plane.
+- **Real perspective rendering on GPU backends.** PSP GU has
+  `sceGumPerspective` for true perspective projection; the
+  software path uses a 3-corner-fit affine.
 
----
+### WHATWG HTML
 
-## ✅ Done: WHATWG HTML conformance
+- **Full DocumentFragment scope isolation for table + select**
+  (currently form-scope isolation only).
+- **SVG camelCase identifier round-trip** (`<foreignObject>`,
+  `<textPath>`). Tag names are stored lowercased; expose a
+  namespace-aware representation if real pages need it.
 
-**Effort:** ~1 week (actual). Shipped on
-`feat/browser-whatwg-epic-completion` — the remaining items from the
-original epic all landed in one pass.
+### CSS long tail
 
-- ~~**Integrate `html5lib-tests`** (~20k standard tests from the WHATWG
-  working group).~~ — shipped on `feat/browser-whatwg-epic-completion`
-  as a **vendored-subset** harness. `crates/oasis-browser/tests/html5lib_tree_construction.rs`
-  parses the upstream `.dat` format (tree-construction dialect: `#data`
-  / `#errors` / `#new-errors` / `#document` / `#document-fragment` /
-  `#script-on|off`) and diffs our tree builder output against the
-  pipe-indented expected dump. Fixtures live under
-  `tests/fixtures/html5lib/tree_construction_basic.dat` (9 cases
-  covering the features this epic touched: basic tree shape, the
-  `<p>a<b>b<i>c</b>d</i>e</p>` spec example for adoption agency,
-  `<b><div>...</div></b>` furthest-block handling, `<svg>` / `<math>`
-  subtrees, `<template>` hoisting to `<head>`, list + table implicit
-  structure). We pull in a curated subset rather than the full ~20k
-  upstream repo because (a) many upstream tests exercise features we
-  deliberately don't implement — full namespaced SVG with camelCase
-  fixup, MathML integration points, the adversarial 8+-iteration
-  adoption agency cases, plaintext mode, etc. — and (b) we don't want
-  to make CI depend on an external download. The harness is
-  extensible: drop more `.dat` files into the fixtures directory and
-  list them in `FIXTURE_FILES`.
-- ~~Foster parenting is subtly wrong — inserts at the wrong position.~~
-  (Already fixed earlier on `feat/browser-whatwg-conformance`.)
-- ~~Adoption agency algorithm is simplified.~~ — **full WHATWG
-  §13.2.6.4.7 algorithm shipped** on
-  `feat/browser-whatwg-epic-completion`. `close_formatting_element`
-  now runs the outer 8-iteration / inner 64-iteration rebuild loop,
-  computes the "furthest block" via a new `TagName::is_special()`
-  helper, and reparents children via a clone-and-insert pass on each
-  iteration. The common adversarial cases all work:
-  `<p>a<b>b<i>c</b>d</i>e</p>` produces `<p>a<b>b<i>c</i></b><i>d</i>e</p>`
-  (with text hoisted correctly), `<b><div>x</div></b>` keeps
-  `<b><div>x</div></b>` as-is (the `</div>` closes cleanly before the
-  `</b>` reaches adoption agency), and `<b><p>...</b></p>` runs the
-  full move-furthest-block-to-common-ancestor path. A new
-  `Document::detach_node` helper (unlinks without freeing, unlike
-  `remove_child`) supports the reparenting.
-- ~~No `<template>` element / DocumentFragment support.~~ — earlier
-  minimal support is now **upgraded with form-scope isolation**. A
-  `template_form_stack: Vec<Option<NodeId>>` on `TreeBuilder` saves the
-  enclosing `form_element` pointer on `<template>` open and restores
-  it on close, so a `<form>` inside a `<template>` inside an outer
-  `<form>` actually parses instead of being silently dropped by our
-  nested-form guard. The InHead fallback was also corrected to check
-  the *entire* open elements stack for a `<template>` ancestor (not
-  just the current node), which unblocks parsing `<template><p>x</p></template>`
-  where the `</p>` arrives while we're still in InHead. BeforeHead
-  also now recognises `<template>` as a head-content tag that triggers
-  an implicit `<head>` + InHead switch rather than falling through to
-  an implicit `<body>`. Real DocumentFragment isolation for other
-  scope types (table, select) is still a follow-up.
-- ~~No SVG/MathML foreign content handling.~~ — shipped on
-  `feat/browser-whatwg-epic-completion` as a simplified subset of
-  WHATWG §13.2.6.5. `TreeBuilder::foreign_depth` counts open
-  foreign-content elements; while > 0, tokens are dispatched through
-  `handle_foreign_content` instead of the HTML insertion modes.
-  Generic start tags become literal elements (no `close_p_if_in_scope`,
-  no `reconstruct_formatting`, no void-element fixup), `self_closing`
-  is honored so `<circle />` works, and end tags pop to the matching
-  element without adoption agency. HTML **breakout** is implemented
-  against the canonical spec list (`b`, `big`, `blockquote`, `body`,
-  `br`, `center`, `code`, `dd`, `div`, `dl`, `dt`, `em`, `embed`,
-  `h1`…`h6`, `head`, `hr`, `i`, `img`, `li`, `listing`, `menu`,
-  `meta`, `nobr`, `ol`, `p`, `pre`, `ruby`, `s`, `small`, `span`,
-  `strong`, `strike`, `sub`, `sup`, `table`, `tt`, `u`, `ul`, `var`)
-  — seeing one of these tags inside `<svg>`/`<math>` pops the
-  foreign subtree off the open stack and reprocesses the token via
-  the HTML path. Tag names are stored lowercased (the tokenizer
-  already lowercases and we don't track namespaces), so SVG
-  camelCase identifiers like `<foreignObject>` / `<textPath>` don't
-  round-trip — this is an intentional simplification.
-- ~~No parser error reporting — we silently drop malformed input.~~
-  (Already fixed earlier on `feat/browser-whatwg-conformance`.)
-- Full frameset support remains a **deliberate non-goal**.
+- **Custom counter styles wired to `<ol>` markers.**
+  `@counter-style` parses into `Stylesheet.counter_styles` today
+  but list-item rendering still uses the built-ins only.
+- **`text-wrap: balance` / `pretty` layout-side algorithm.** Parsed
+  and stored; fall through to `wrap` at layout time.
+- **Replaced-element `aspect-ratio`** (`<img>`, `<video>`).
+  Non-replaced blocks derive height from width × ratio; replaced
+  elements don't yet.
+- **Cross-stylesheet `@layer` name merging.** Layer names are
+  sheet-local; cross-stylesheet ordering falls through to source
+  order.
+- **Color-space-aware `color-mix`.** Currently interpolates in
+  linear sRGB regardless of the requested color space.
+- **`light-dark()` color-scheme tracking.** Always returns the
+  light-mode argument.
+- **RTL support** anywhere in the engine. Logical properties
+  rewrite to physical LTR at parse time.
 
----
+### Real-world compatibility
 
-## Epic: Missing CSS features (the long tail)
+- **RTL / bidi stress fixture** in the corpus.
+- **`@media` responsive grid fixture** in the corpus.
+- **Bench baseline as a CI gate.** Currently manual save via
+  `cargo bench -- --save-baseline main`.
+- **Triage tool `--parallel` flag** via rayon.
 
-**Effort:** varies per item. We currently implement ~120 properties;
-Blink/WebKit ship ~600. Most of the gap is niche. These are the ones
-that cause real breakage on modern sites:
+### PSP
 
-**High-impact, should prioritize:**
-
-- ~~`:has()` selector~~ — shipped on `feat/browser-has-selector`. Parses
-  relative-selector lists (`> child`, `+ sib`, `~ sib`, descendant),
-  matches candidates against each relative selector, specificity takes
-  the max of the inner selectors. Ancestor-walking combinators inside
-  the inner selector are scope-bounded to the subject's subtree, so
-  `article:has(.a .b)` can't match via an `.a` that lives above the
-  article.
-- ~~`@container` queries~~ — shipped on `feat/browser-container-queries`.
-  Parses `@container [name?] (min-width|max-width|width|min-height|
-  max-height|height: Npx)` (plus `inline-size` / `block-size` aliases),
-  joined with `and`. Conditions are stored on each contained `Rule` and
-  evaluated at cascade time against the nearest matching container
-  ancestor. `container-type` (`normal` / `inline-size` / `size`),
-  `container-name`, and the `container: <name> [/ <type>]` shorthand are
-  all parsed into `ComputedStyle`. The pipeline does a second
-  cascade+layout pass after the first layout when any rule is
-  container-gated, populating a `ContainerLookup` snapshot of every
-  query container's content-box size; pages without `@container` skip
-  the work entirely. Limitations: nested `@container` rules use
-  innermost-wins instead of AND-combining; style queries
-  (`@container style(...)`) are parsed but always evaluate false; we
-  don't currently iterate the relayout to a fixpoint, so a single pass
-  catches the common "container resizes its descendants based on the
-  first laid-out width" case but not pathological circular dependencies.
-- ~~`@layer`~~ — shipped on `feat/browser-has-selector`. Supports
-  statement form (`@layer a, b, c;`), named block form
-  (`@layer a { ... }`), and anonymous block form (`@layer { ... }`).
-  Cascade sort factors layer order between origin and specificity;
-  `!important` reverses layer priority per spec. Known limitation:
-  layer names are sheet-local (not merged across multiple stylesheets)
-  — cross-stylesheet ordering still falls through to source order.
-- ~~CSS nesting (`& .foo { }`)~~ — shipped on `feat/css-nesting` (parse-time
-  desugaring: Cartesian-expands parent × child selector lists, substitutes
-  `&` inline, supports nested `@media`, no compositor/matcher changes).
-- ~~`color-mix()`, `oklch()`, `color()`, `light-dark()` functions~~ —
-  shipped on `feat/browser-has-selector`. `hsl/hsla`, `oklch/oklab`,
-  `color(srgb | srgb-linear | display-p3 …)`, `color-mix(in srgb, …)`,
-  and `light-dark()` all parse to our existing sRGB `CssColor`.
-  `color-mix` interpolates in linear sRGB (not in the requested color
-  space for non-`srgb` arguments yet). `light-dark()` always returns
-  the light-mode argument since we don't track a color-scheme context
-  at parse time.
-- ~~Logical properties~~ — shipped on `feat/browser-has-selector`.
-  Parse-time rewrite of `margin-inline-*`, `padding-block-*`,
-  `inset-inline-*`, `border-inline/block-*-{width,color,style}`, and
-  `inline-size`/`block-size` (plus min/max variants) to their LTR
-  physical equivalents. `margin-inline` / `padding-block` /
-  `inset-inline` / `inset-block` shorthands expand with the usual
-  one-value / two-value forms. RTL is still not supported anywhere in
-  the engine so the rewrite is always LTR.
-- ~~`text-wrap: balance` / `pretty`~~ — parsed and stored on
-  `ComputedStyle` on `feat/browser-has-selector`. `wrap` / `nowrap`
-  behave correctly; `balance` / `pretty` / `stable` fall through to
-  `wrap` because the layout-side balancing algorithm is a follow-up.
-- ~~`:is()` / `:where()` — check if already supported; audit.~~
-  **Already done.** Parsed in
-  `crates/oasis-browser/src/css/parser/selectors.rs:166-168` and
-  matched in `crates/oasis-browser/src/css/cascade/matching.rs` via
-  the `Is` / `Where` arms of `matches_simple`.
-- ~~`aspect-ratio` — audit, may already be supported.~~
-  Parsed and stored before; **now wired into block layout on
-  `feat/browser-has-selector`**: non-replaced block elements with
-  `height: auto` derive their content height from the resolved
-  content width and the ratio. Explicit height always wins; when
-  `width` is also `auto` we let children drive the height as before.
-  Replaced-element aspect-ratio sizing (img, video) is still a
-  follow-up.
-
-**Medium-impact:**
-
-- ~~`@property` — typed custom property registration.~~ — shipped on
-  `feat/browser-container-queries`. Parses `@property --name { syntax;
-  inherits; initial-value }` into `Stylesheet.properties`. Cascade
-  seeds the `initial-value` into each element's custom-properties map
-  before pass 1 (so `var(--name)` resolves even when no rule sets it),
-  and respects `inherits: false` by stripping the property after the
-  inherit-from-parent step. `syntax` is parsed but not validated.
-- ~~`field-sizing: content`.~~ — shipped on
-  `feat/browser-container-queries`. New `FieldSizing` enum on
-  `ComputedStyle`. The inline layout pass measures the input's actual
-  `value` (or `placeholder`) width and uses that instead of the
-  `size`-attribute × char-width product. `<textarea>` content-sizing
-  walks lines for height too.
-- ~~`@scope` — shipping in Chrome.~~ — shipped on
-  `feat/browser-container-queries`. Parses `@scope (root) [to (limit)]?
-  { ... }` and tags inner rules with a `ScopeCondition`. Cascade
-  filters scope-gated rules by walking the DOM up from each candidate
-  element: a limit ancestor fails the rule fast; the first matching
-  root ancestor passes it. A bare `@scope { ... }` (no root) applies
-  anywhere not under a limit boundary. Selectors in the scope clause
-  are re-parsed via `parse_selector_string` per element check (cheap
-  for the typical case of one or two scopes per page; we can cache
-  later if real corpora hit it hard).
-- ~~`counter-style` — rarely breaks rendering but worth parsing.~~ —
-  shipped on `feat/browser-container-queries` as parse-only. Parses
-  `@counter-style name { system; symbols; additive-symbols; range;
-  prefix; suffix; pad; negative; fallback; speak-as }` into
-  `Stylesheet.counter_styles` so authors can ship the descriptor
-  block without warnings. List-item rendering still uses the built-in
-  styles only — wiring custom counter styles into `<ol>` markers is a
-  follow-up.
-
-**Low-impact (skip until someone complains):**
-
-- View Transitions API (`view-transition-*`).
-- Anchor Positioning (CSS Anchor Positioning Module Level 1).
-- Subgrid.
-- `scroll-timeline`, `animation-timeline`.
-
-**Already parsed but not painted — audit needed:**
-
-- ~~`accent-color`, `caret-color`.~~ — both wired up on
-  `feat/browser-container-queries`. `accent-color` tints the checked
-  background of `<input type="checkbox">` and the dot of
-  `<input type="radio">` (Blink-style); the checkmark flips to white
-  when the box is filled with the accent for contrast. `caret-color`
-  draws a 1-pixel caret in focused `<input>` and `<textarea>` form
-  controls (record path), positioned after the value text on text
-  inputs and after the last visible line on textareas, with fallback
-  to `style.color`. PaintViewport now carries `focused_node` so the
-  recorder can tell which input has focus.
-- ~~`will-change`.~~ — broadened on `feat/browser-container-queries`.
-  The boolean is now `will_change_promotes_layer` and accepts any of
-  `transform`, `opacity`, `filter`, `scroll-position`, or `contents`,
-  including `Multiple` value lists like `will-change: top, transform`.
-  The compositor already promotes any element with the flag to its
-  own stacking context AND a real compositing layer (see
-  `creates_compositing_layer` / `creates_stacking_context` in
-  `paint/mod.rs`), so the layer-creation half of the backlog item
-  is now end-to-end.
+- **Space-collapsing in JS-mutated text nodes.** `textContent`
+  containing ASCII spaces renders without visible spaces on PSP
+  only. Likely a `glyph_advance(' ')` returning 0 in the PSP
+  bitmap font table (`oasis-backend-psp/src/font.rs`) or the text
+  layout step collapsing whitespace after JS-triggered relayout.
+- **`js_dom.rs` bootstrap bloat.** `JS_DOM_BOOTSTRAP` and
+  `JS_CANVAS_BOOTSTRAP` are large string constants; feature-gate
+  the canvas half to trim ~20 KB on PSP where canvas is unused.
 
 ---
 
 ## Launch-polish items
 
-These don't show up as CSS properties but bite users first. Not a
-single epic — file as individual issues.
+These don't show up as CSS properties but bite users first. File
+as individual issues — not a single epic.
 
-- **Font rendering quality across skins** — kerning, hinting, subpixel
-  positioning. Especially on PSP where we have system TrueType fonts
-  via `psp::font`.
-- **PSP space-collapsing in JS-mutated text nodes.** When JavaScript
-  sets `textContent` to a string containing ASCII spaces (e.g.
-  `"hello from QuickJS"`), the PSP browser renders it without any
-  visible spaces (`"hellofromQuickJS"`). The same mutation renders
-  correctly on desktop. Not a JS bug — likely either `glyph_advance`
-  returns 0 for U+0020 in one of the PSP bitmap font tables
-  (`oasis-backend-psp/src/font.rs`), or the text layout step collapses
-  whitespace after JS-triggered re-layout. Reproduce: `browse
-  http://<pc>/test.html` where test.html contains an inline script
-  that assigns a space-containing string to an element's
-  `textContent`. Screencap will show the space-free rendering.
+- **Font rendering quality across skins** — kerning, hinting,
+  subpixel positioning. Especially on PSP where we have system
+  TrueType fonts via `psp::font`.
 - **Image decoding error recovery** — corrupt JPEG/PNG currently
   crashes the decode path. Should degrade to a placeholder.
-- **Network error UX** — timeout, DNS fail, TLS error should produce a
-  useful error page, not a blank screen.
-- **HTTP/2 support** — we only speak HTTP/1.1. Many modern CDNs require
-  h2. Blocks access to some sites entirely.
-- **`@font-face` / web fonts** — completely missing. Fallback to system
-  fonts works but looks wrong on branded pages.
-- **Accessibility** — ARIA roles are parsed but not exposed to anything.
-  Low priority for launch but should at least have a plan.
-
----
-
-## Ranking by ROI for "launch in 1–2 months"
-
-If the constraint is a short runway to public launch, the priority
-order is:
-
-1. ~~**Visual regression harness**~~ — shipped on
-   `feat/browser-realworld-compat-epic` (see the Done epic above).
-   Display-list goldens + wall-clock layout budgets + criterion
-   corpus bench group.
-2. ~~**`html5lib-tests` integration**~~ — shipped as a vendored-subset
-   harness on `feat/browser-whatwg-epic-completion` (see the WHATWG
-   HTML conformance epic above).
-3. ~~**CSS long-tail subset: `:has()` + `@layer` + `@container` +
-   CSS nesting**~~ — all shipped. `:has()` and `@layer` on
-   `feat/browser-has-selector`; CSS nesting on `feat/css-nesting`;
-   `@container` on `feat/browser-container-queries`.
-4. ~~**Compositor overhaul**~~ — shipped, including URL-backed
-   masks. `mix-blend-mode`, `backdrop-filter`, `filter:`,
-   `isolation: isolate`, `will-change:` and the full `mask-*` suite
-   all now route through a single `PushCompositingLayer` /
-   `PopCompositingLayer` pair backed by the `SdiRenderTarget` trait
-   surface. Backends without render-target support fall back to the
-   `PushLayer` opacity fast path. The replay pop path shares one CPU
-   readback between `filter:` and `mask-*` via
-   `display_list.rs::apply_mask`, which rasterizes linear/radial
-   gradient masks and URL-backed masks on the CPU and combines them
-   with the layer's alpha per `mask-mode` (alpha / luminance /
-   match-source) and `mask-composite` (destination-in /
-   destination-out / destination-xor). URL masks ride the image
-   fetch pipeline: `collect_page_image_requests` enqueues mask URLs
-   alongside `<img>` srcs, and `BrowserWidget::mask_image_arcs` /
-   `LayoutBox::mask_image_data` lazily attach decoded bytes via
-   `Arc` so per-frame recording cost is a pointer copy. The initial
-   URL path stretches the mask to the layer bounds with nearest-
-   neighbor sampling — full `mask-size` / `mask-position` /
-   `mask-repeat` plumbing is still a follow-up. Regression tests in
-   `paint::tests` cover every compositing-layer trigger, the
-   destination-in / destination-out / luminance mask math, and the
-   URL alpha / luminance sampling paths.
-5. ~~**3D transforms**~~ — shipped (scaffolding on
-   `feat/browser-3d-transforms`, follow-ups on
-   `feat/browser-3d-transforms-followups`).
-6. **Launch polish items** (parallel stream, file individually).
-
-PSP JavaScript integration was on this list previously; it shipped
-on `feat/psp-quickjs` (see the Done section at the top) and is no
-longer blocking.
+- **Network error UX** — timeout, DNS fail, TLS error should
+  produce a useful error page, not a blank screen.
+- **HTTP/2 support** — we only speak HTTP/1.1. Many modern CDNs
+  require h2. Blocks access to some sites entirely.
+- **`@font-face` / web fonts** — completely missing. Fallback to
+  system fonts works but looks wrong on branded pages.
+- **Accessibility** — ARIA roles are parsed but not exposed to
+  anything. Low priority for launch but should at least have a
+  plan.
 
 ---
 
 ## Out of scope / non-goals
 
-Document these explicitly so we stop relitigating them:
+Documented so we stop relitigating them.
 
-- **V8-level JS performance on PSP.** Not happening. We ship QuickJS-NG
-  on PSP (see the Done epic at the top); it's two orders of magnitude
-  slower than V8 and that's fine for our target use cases.
+- **V8-level JS performance on PSP.** We ship QuickJS-NG on PSP;
+  it's two orders of magnitude slower than V8 and that's fine for
+  the target use cases.
 - **Service workers, WebRTC, Web Audio API, IndexedDB.** Too much
-  surface area for an embedded engine. If something needs these, it's
-  not our target use case.
-- **Full HTML5 frameset support.** Deliberate non-goal — the web has
-  moved on.
-- **SVG animation (SMIL).** Parse basic SVG paths only; complex SVG
-  rendering is out of scope.
+  surface area for an embedded engine.
+- **Full HTML5 frameset support.** Deliberate non-goal — the web
+  has moved on.
+- **SVG animation (SMIL).** Parse basic SVG paths only; complex
+  SVG rendering is out of scope.
 - **CSS Houdini.** Too new, no ecosystem demand.
