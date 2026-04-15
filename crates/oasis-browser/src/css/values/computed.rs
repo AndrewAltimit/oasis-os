@@ -220,7 +220,12 @@ pub struct ComputedStyle {
     pub counter_increment: Vec<(String, i32)>,
 
     // -- Will-change ---------------------------------------------------
-    pub will_change_transform: bool,
+    /// `will-change` declared a hint that promotes this element to its
+    /// own compositing layer (and thus its own stacking context). True
+    /// for any of `transform`, `opacity`, `filter`, `scroll-position`,
+    /// or `contents`. The compositor inspects this flag in
+    /// `creates_compositing_layer` / `creates_stacking_context`.
+    pub will_change_promotes_layer: bool,
 
     // -- Tab size (for preformatted text) --------------------------------
     pub tab_size: u32,
@@ -536,7 +541,7 @@ impl Default for ComputedStyle {
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
 
-            will_change_transform: false,
+            will_change_promotes_layer: false,
 
             tab_size: 8,
 

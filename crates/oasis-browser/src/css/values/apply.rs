@@ -1386,13 +1386,15 @@ impl ComputedStyle {
             },
 
             // -- Will-change -----------------------------------------------
+            //
+            // The spec lets authors list any animatable property; we
+            // only care about the subset that benefits from layer
+            // promotion: `transform`, `opacity`, `filter`,
+            // `scroll-position`, `contents`. Other listed properties
+            // (e.g. `top`, `left`) are ignored — they're hints, not
+            // guarantees, and we can't paint them faster anyway.
             "will-change" => {
-                if let Some(kw) = as_keyword(value) {
-                    self.will_change_transform = matches!(kw, "transform" | "opacity" | "filter");
-                } else if let CssValue::String(s) = value {
-                    self.will_change_transform =
-                        s.contains("transform") || s.contains("opacity") || s.contains("filter");
-                }
+                self.will_change_promotes_layer = will_change_promotes(value);
             },
 
             // -- Tab size ---------------------------------------------------
@@ -1972,6 +1974,27 @@ impl ComputedStyle {
     }
 }
 
+/// True if a `will-change` value names any property that benefits
+/// from layer promotion in our pipeline.
+///
+/// Recognised hints are `transform`, `opacity`, `filter`,
+/// `scroll-position`, and `contents`. All other identifiers (and
+/// `auto`) leave the flag false.
+pub(crate) fn will_change_promotes(value: &CssValue) -> bool {
+    fn kw_promotes(kw: &str) -> bool {
+        matches!(
+            kw.trim(),
+            "transform" | "opacity" | "filter" | "scroll-position" | "contents"
+        )
+    }
+    match value {
+        CssValue::Keyword(s) => kw_promotes(s),
+        CssValue::String(s) => s.split([',', ' ']).any(kw_promotes),
+        CssValue::Multiple(parts) => parts.iter().any(will_change_promotes),
+        _ => false,
+    }
+}
+
 /// Parse a `container-name` value: a list of identifiers, the
 /// keyword `none`, or empty. Returns the list of names; `none`
 /// produces an empty list.
@@ -2236,7 +2259,7 @@ impl ComputedStyle {
             "filter" => self.filters = Vec::new(),
             "counter-reset" => self.counter_reset = Vec::new(),
             "counter-increment" => self.counter_increment = Vec::new(),
-            "will-change" => self.will_change_transform = false,
+            "will-change" => self.will_change_promotes_layer = false,
             "tab-size" => self.tab_size = 8,
             "column-count" => self.column_count = 0,
             "column-width" => self.column_width = 0.0,

@@ -187,6 +187,7 @@ impl BrowserWidget {
                     width: self.window_w as f32,
                     height: buffered_h,
                     visible_height: content_h as f32,
+                    focused_node: self.focused_node,
                 };
 
                 // Record to display list (no draw calls emitted).
@@ -269,6 +270,7 @@ impl BrowserWidget {
                         width: self.window_w as f32,
                         height: buffered_h,
                         visible_height: content_h as f32,
+                        focused_node: self.focused_node,
                     };
                     let links = paint::record::record(
                         layout,
@@ -353,6 +355,7 @@ impl BrowserWidget {
                             width: self.window_w as f32,
                             height: buffered_h,
                             visible_height: content_h as f32,
+                            focused_node: self.focused_node,
                         };
                         let links = paint::record::record(
                             layout,

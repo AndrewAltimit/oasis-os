@@ -1618,6 +1618,56 @@ mod property_tests {
 }
 
 #[cfg(test)]
+mod will_change_tests {
+    use super::*;
+    use crate::css::values::ComputedStyle;
+
+    fn applied(css: &str) -> ComputedStyle {
+        let decls = first_decls(css);
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        style
+    }
+
+    #[test]
+    fn single_keyword_promotes() {
+        for kw in &[
+            "transform",
+            "opacity",
+            "filter",
+            "scroll-position",
+            "contents",
+        ] {
+            let style = applied(&format!("p {{ will-change: {kw}; }}"));
+            assert!(
+                style.will_change_promotes_layer,
+                "{kw} should promote to a layer"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_does_not_promote() {
+        let style = applied("p { will-change: auto; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn multiple_values_promote_if_any_match() {
+        let style = applied("p { will-change: top, transform; }");
+        assert!(style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn unrelated_keywords_do_not_promote() {
+        let style = applied("p { will-change: top, left; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+}
+
+#[cfg(test)]
 mod field_sizing_tests {
     use super::*;
     use crate::css::values::ComputedStyle;

@@ -49,6 +49,9 @@ struct RecordContext<'a> {
     /// Per-element scroll offsets for nested scroll containers.
     /// Maps DOM node IDs to `(scroll_x, scroll_y)` pixel offsets.
     nested_scroll_offsets: &'a HashMap<NodeId, (f32, f32)>,
+    /// DOM node id with keyboard focus, used to draw a caret in
+    /// focused `<input>` / `<textarea>` form controls.
+    focused_node: Option<NodeId>,
 }
 
 // -------------------------------------------------------------------
@@ -95,6 +98,7 @@ pub fn record_with_scroll(
         text_overflow_ellipsis: false,
         current_node: None,
         nested_scroll_offsets,
+        focused_node: viewport.focused_node,
     };
 
     record_box(
@@ -1413,7 +1417,17 @@ fn record_replaced(
             is_password,
             ..
         } => {
-            record_text_input(layout_box, dl, x, y, value, placeholder, *is_password);
+            let focused = layout_box.node.is_some() && layout_box.node == ctx.focused_node;
+            record_text_input(
+                layout_box,
+                dl,
+                x,
+                y,
+                value,
+                placeholder,
+                *is_password,
+                focused,
+            );
         },
         ReplacedContent::Checkbox { checked } => {
             record_checkbox(layout_box, dl, x, y, *checked);
@@ -1424,7 +1438,8 @@ fn record_replaced(
         ReplacedContent::TextArea {
             value, placeholder, ..
         } => {
-            record_textarea(layout_box, dl, x, y, value, placeholder);
+            let focused = layout_box.node.is_some() && layout_box.node == ctx.focused_node;
+            record_textarea(layout_box, dl, x, y, value, placeholder, focused);
         },
         ReplacedContent::SelectBox {
             label,
@@ -1449,6 +1464,7 @@ fn record_replaced(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_text_input(
     layout_box: &LayoutBox,
     dl: &mut DisplayList,
@@ -1457,6 +1473,7 @@ fn record_text_input(
     value: &str,
     placeholder: &str,
     is_password: bool,
+    focused: bool,
 ) {
     let style = &layout_box.style;
     let w = layout_box.dimensions.content.width as u32;
@@ -1560,6 +1577,9 @@ fn record_text_input(
     let font_size = style.font_size as u16;
     let pad = style.padding_left.max(3.0) as i32;
     let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+    // Width of the rendered value text, used both to draw the text and
+    // to position the caret immediately after it.
+    let mut value_text_width: u32 = 0;
     if !value.is_empty() {
         let display_text = if is_password {
             "\u{25CF}".repeat(value.chars().count())
@@ -1567,6 +1587,7 @@ fn record_text_input(
             value.to_string()
         };
         let value_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size);
+        value_text_width = value_w;
         dl.push(DisplayItem::DrawText {
             text: display_text,
             x: x + pad,
@@ -1592,18 +1613,44 @@ fn record_text_input(
             node_id: None,
         });
     }
+    // Draw a one-pixel caret after the value when the field has focus.
+    // `caret-color` overrides the text color; default to it.
+    if focused {
+        let caret_color = style.caret_color.unwrap_or(style.color);
+        let caret_x = x + pad + value_text_width as i32;
+        let caret_h = font_size as u32 + 2;
+        let caret_y = y + pad_top - 1;
+        // Clip the caret inside the visible content box.
+        if caret_x < x + w as i32 - 1 {
+            dl.push(DisplayItem::FillRect {
+                x: caret_x,
+                y: caret_y,
+                w: 1,
+                h: caret_h,
+                color: caret_color,
+                node_id: None,
+            });
+        }
+    }
 }
 
 fn record_checkbox(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32, checked: bool) {
     let w = layout_box.dimensions.content.width as u32;
     let h = layout_box.dimensions.content.height as u32;
-    // White background
+    let accent = layout_box.style.accent_color;
+    // Background: when checked and the author supplied `accent-color`,
+    // tint the box with the accent like Blink does. Otherwise keep the
+    // plain white box.
+    let bg = match (checked, accent) {
+        (true, Some(c)) => c,
+        _ => Color::rgb(255, 255, 255),
+    };
     dl.push(DisplayItem::FillRect {
         x,
         y,
         w,
         h,
-        color: Color::rgb(255, 255, 255),
+        color: bg,
         node_id: None,
     });
     // Border
@@ -1640,9 +1687,15 @@ fn record_checkbox(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y: i32,
         color: bc,
         node_id: None,
     });
-    // Checkmark when checked
+    // Checkmark when checked. If the box is filled with `accent-color`
+    // we draw the check in white for contrast; otherwise the check
+    // takes the accent color (or black as the spec default).
     if checked && w >= 5 && h >= 5 {
-        let ck = Color::rgb(0, 0, 0);
+        let ck = if accent.is_some() {
+            Color::rgb(255, 255, 255)
+        } else {
+            Color::rgb(0, 0, 0)
+        };
         // Short leg of checkmark
         for &(dx, dy) in &[(2, -5), (3, -4), (4, -3)] {
             dl.push(DisplayItem::FillRect {
@@ -1738,18 +1791,20 @@ fn record_radio_button(
             node_id: None,
         });
     }
-    // Inner dot when checked
+    // Inner dot when checked. Take `accent-color` if the author set it,
+    // otherwise fall back to plain black.
     if checked && w > 8 && h > 8 {
         let inset = 4_u32;
         let dw = w - inset * 2;
         let dh = h - inset * 2;
+        let dot = layout_box.style.accent_color.unwrap_or(Color::rgb(0, 0, 0));
         if dw > 0 && dh > 0 {
             dl.push(DisplayItem::FillRect {
                 x: x + inset as i32,
                 y: y + inset as i32,
                 w: dw,
                 h: dh,
-                color: Color::rgb(0, 0, 0),
+                color: dot,
                 node_id: None,
             });
         }
@@ -1763,6 +1818,7 @@ fn record_textarea(
     y: i32,
     value: &str,
     placeholder: &str,
+    focused: bool,
 ) {
     let style = &layout_box.style;
     let w = layout_box.dimensions.content.width as u32;
@@ -1827,6 +1883,8 @@ fn record_textarea(
     } else {
         ("", style.color)
     };
+    let mut last_line_index: i32 = 0;
+    let mut last_line_width: u32 = 0;
     if !text.is_empty() {
         for (i, line) in text.lines().enumerate() {
             let ly = y + pad + i as i32 * line_height;
@@ -1843,6 +1901,34 @@ fn record_textarea(
                 bold: false,
                 italic: false,
                 width: lw,
+                node_id: None,
+            });
+            last_line_index = i as i32;
+            last_line_width = lw;
+        }
+    }
+    // Caret on the last visible line, after the last character.
+    if focused {
+        let caret_color = style.caret_color.unwrap_or(style.color);
+        // If the value is empty (we drew the placeholder), put the
+        // caret at the top-left of the field instead of after the
+        // placeholder text.
+        let (caret_x, caret_y) = if value.is_empty() {
+            (x + pad, y + pad)
+        } else {
+            (
+                x + pad + last_line_width as i32,
+                y + pad + last_line_index * line_height,
+            )
+        };
+        let caret_h = font_size as u32 + 2;
+        if caret_x < x + w as i32 - 1 && caret_y + caret_h as i32 <= y + h as i32 {
+            dl.push(DisplayItem::FillRect {
+                x: caret_x,
+                y: caret_y,
+                w: 1,
+                h: caret_h,
+                color: caret_color,
                 node_id: None,
             });
         }
@@ -2200,5 +2286,125 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
         y,
         width: (right - x).max(0.0),
         height: (bottom - y).max(0.0),
+    }
+}
+
+#[cfg(test)]
+mod form_paint_tests {
+    use super::*;
+    use crate::css::values::ComputedStyle;
+    use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, ReplacedContent};
+
+    fn make_text_input_box(value: &str, focused: bool, caret: Option<Color>) -> (LayoutBox, bool) {
+        let mut style = ComputedStyle::default();
+        style.font_size = 12.0;
+        style.color = Color::rgb(0, 0, 0);
+        style.caret_color = caret;
+        let mut lb = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::TextInput {
+                value: value.to_string(),
+                placeholder: String::new(),
+                size: 20,
+                is_password: false,
+            }),
+            style,
+            Some(7),
+        );
+        lb.dimensions = Dimensions {
+            content: crate::layout::box_model::Rect::new(0.0, 0.0, 200.0, 20.0),
+            ..Dimensions::default()
+        };
+        (lb, focused)
+    }
+
+    fn record_input_items(value: &str, focused: bool, caret: Option<Color>) -> Vec<DisplayItem> {
+        let (lb, focused) = make_text_input_box(value, focused, caret);
+        let mut dl = DisplayList::new();
+        record_text_input(&lb, &mut dl, 0, 0, value, "", false, focused);
+        dl.items().to_vec()
+    }
+
+    fn count_caret_with_color(items: &[DisplayItem], color: Color) -> usize {
+        items
+            .iter()
+            .filter(|it| {
+                matches!(
+                    it,
+                    DisplayItem::FillRect { w: 1, color: c, .. } if *c == color
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn caret_drawn_when_focused() {
+        let items = record_input_items("abc", true, None);
+        // Default caret-color falls back to text color (black).
+        assert!(count_caret_with_color(&items, Color::rgb(0, 0, 0)) >= 1);
+    }
+
+    #[test]
+    fn caret_not_drawn_when_unfocused() {
+        let items = record_input_items("abc", false, None);
+        assert_eq!(count_caret_with_color(&items, Color::rgb(0, 0, 0)), 0);
+    }
+
+    #[test]
+    fn caret_color_overrides_text_color() {
+        let blue = Color::rgb(0, 0, 255);
+        let items = record_input_items("abc", true, Some(blue));
+        assert!(count_caret_with_color(&items, blue) >= 1);
+        // No black caret in this case (text color is still black, but
+        // the 1-pixel caret rect should be blue).
+        assert_eq!(count_caret_with_color(&items, Color::rgb(0, 0, 0)), 0);
+    }
+
+    #[test]
+    fn checkbox_uses_accent_color_when_checked() {
+        let mut style = ComputedStyle::default();
+        let pink = Color::rgb(255, 0, 128);
+        style.accent_color = Some(pink);
+        let mut lb = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::Checkbox { checked: true }),
+            style,
+            Some(11),
+        );
+        lb.dimensions = Dimensions {
+            content: crate::layout::box_model::Rect::new(0.0, 0.0, 13.0, 13.0),
+            ..Dimensions::default()
+        };
+        let mut dl = DisplayList::new();
+        record_checkbox(&lb, &mut dl, 0, 0, true);
+        // The first FillRect is the background and should now be pink.
+        let first_bg = dl.items().iter().find_map(|it| match it {
+            DisplayItem::FillRect { color, w, h, .. } if *w == 13 && *h == 13 => Some(*color),
+            _ => None,
+        });
+        assert_eq!(first_bg, Some(pink));
+    }
+
+    #[test]
+    fn radio_uses_accent_color_for_dot() {
+        let mut style = ComputedStyle::default();
+        let teal = Color::rgb(0, 200, 200);
+        style.accent_color = Some(teal);
+        let mut lb = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::RadioButton { checked: true }),
+            style,
+            Some(12),
+        );
+        lb.dimensions = Dimensions {
+            content: crate::layout::box_model::Rect::new(0.0, 0.0, 13.0, 13.0),
+            ..Dimensions::default()
+        };
+        let mut dl = DisplayList::new();
+        record_radio_button(&lb, &mut dl, 0, 0, true);
+        // The dot is the rect at the inset; ensure at least one rect
+        // uses the teal accent.
+        let any_teal = dl
+            .items()
+            .iter()
+            .any(|it| matches!(it, DisplayItem::FillRect { color, .. } if *color == teal));
+        assert!(any_teal, "radio dot should use accent-color");
     }
 }

@@ -299,10 +299,25 @@ that cause real breakage on modern sites:
 
 **Already parsed but not painted — audit needed:**
 
-- `accent-color`, `caret-color` (stored in ComputedStyle; check whether
-  form controls actually use them).
-- `will-change` — today only sets a boolean hint; should promote to
-  layer creation once the compositor lands.
+- ~~`accent-color`, `caret-color`.~~ — both wired up on
+  `feat/browser-container-queries`. `accent-color` tints the checked
+  background of `<input type="checkbox">` and the dot of
+  `<input type="radio">` (Blink-style); the checkmark flips to white
+  when the box is filled with the accent for contrast. `caret-color`
+  draws a 1-pixel caret in focused `<input>` and `<textarea>` form
+  controls (record path), positioned after the value text on text
+  inputs and after the last visible line on textareas, with fallback
+  to `style.color`. PaintViewport now carries `focused_node` so the
+  recorder can tell which input has focus.
+- ~~`will-change`.~~ — broadened on `feat/browser-container-queries`.
+  The boolean is now `will_change_promotes_layer` and accepts any of
+  `transform`, `opacity`, `filter`, `scroll-position`, or `contents`,
+  including `Multiple` value lists like `will-change: top, transform`.
+  The compositor already promotes any element with the flag to its
+  own stacking context AND a real compositing layer (see
+  `creates_compositing_layer` / `creates_stacking_context` in
+  `paint/mod.rs`), so the layer-creation half of the backlog item
+  is now end-to-end.
 
 ---
 
