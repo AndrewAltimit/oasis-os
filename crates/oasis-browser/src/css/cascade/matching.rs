@@ -53,6 +53,62 @@ pub(super) struct MatchedDeclaration {
     pub(super) origin: Origin,
     pub(super) specificity: Specificity,
     pub(super) source_order: usize,
+    /// Index of the source stylesheet, used to scope cascade-layer
+    /// comparison to rules from the same sheet (cross-sheet ordering
+    /// still falls through to `source_order`).
+    pub(super) sheet_idx: u16,
+    /// Cascade-layer index inside the source stylesheet, or `None`
+    /// for unlayered rules / non-stylesheet origins.
+    pub(super) layer: Option<u16>,
+}
+
+/// Compare two declarations by cascade-layer position.
+///
+/// Spec semantics:
+/// - Within the same stylesheet, unlayered author rules beat layered
+///   author rules for normal declarations; `!important` reverses that
+///   (layered `!important` wins over unlayered `!important`).
+/// - Earlier-declared layers lose to later-declared layers for normal
+///   declarations; `!important` reverses again (earlier layers win).
+/// - Across different stylesheets we fall through to `source_order`
+///   since layer names are sheet-local in this v1 implementation.
+pub(super) fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    if a.sheet_idx != b.sheet_idx {
+        return Ordering::Equal;
+    }
+    // Only style-origin declarations participate in layering.
+    if a.origin != Origin::Stylesheet || b.origin != Origin::Stylesheet {
+        return Ordering::Equal;
+    }
+    // `!important` must be consistent for the comparison to make sense.
+    // The outer sort already splits by `important`; this helper runs
+    // after that, so we can assume both sides share the same bit.
+    let important = a.important;
+
+    match (a.layer, b.layer) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => {
+            // Unlayered wins for normal, loses for !important.
+            if important {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        },
+        (Some(_), None) => {
+            if important {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        },
+        (Some(ao), Some(bo)) => {
+            // Later layers win for normal, earlier wins for !important.
+            if important { bo.cmp(&ao) } else { ao.cmp(&bo) }
+        },
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -79,7 +135,7 @@ pub(super) fn resolve_pseudo_style(
     let mut matched: Vec<MatchedDeclaration> = Vec::new();
     let mut source_order: usize = 0;
 
-    for stylesheet in stylesheets {
+    for (sheet_idx, stylesheet) in stylesheets.iter().enumerate() {
         for rule in &stylesheet.rules {
             let decl_base = source_order;
             source_order += rule.declarations.len();
@@ -100,6 +156,8 @@ pub(super) fn resolve_pseudo_style(
                         origin: Origin::Stylesheet,
                         specificity,
                         source_order: decl_base + i,
+                        sheet_idx: sheet_idx as u16,
+                        layer: rule.layer,
                     });
                 }
             }
@@ -115,6 +173,7 @@ pub(super) fn resolve_pseudo_style(
         a.important
             .cmp(&b.important)
             .then_with(|| a.origin.cmp(&b.origin))
+            .then_with(|| compare_layers(a, b))
             .then_with(|| a.specificity.cmp(&b.specificity))
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
@@ -273,6 +332,8 @@ pub(super) fn collect_matched_declarations(
                     origin: Origin::Stylesheet,
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
+                    sheet_idx: candidate.sheet_idx as u16,
+                    layer: rule.layer,
                 });
             }
         }
@@ -305,6 +366,8 @@ pub(super) fn collect_matched_declarations(
                 origin: Origin::Inline,
                 specificity: inline_spec,
                 source_order: inline_base + i,
+                sheet_idx: u16::MAX,
+                layer: None,
             });
         }
     }
@@ -335,6 +398,8 @@ fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDecl
             origin: Origin::Presentational,
             specificity: zero_spec,
             source_order: 0,
+            sheet_idx: u16::MAX,
+            layer: None,
         });
     };
 
@@ -528,6 +593,27 @@ pub(crate) fn matches_selector(
     selector: &super::super::parser::Selector,
     ctx: &CascadeContext<'_>,
 ) -> bool {
+    matches_selector_scoped(doc, node_id, selector, ctx, None, None)
+}
+
+/// Like [`matches_selector`] but with an optional `scope` ancestor
+/// that bounds combinator walks.
+///
+/// When `scope` is `Some(E)`, ancestor walks triggered by descendant
+/// or child combinators stop *before* reaching `E`, and sibling walks
+/// triggered by `+` / `~` are confined to `E`'s subtree. This is how
+/// `:has()` evaluates its inner selectors: elements referenced by the
+/// relative selector must live strictly inside the subject's subtree,
+/// so `article:has(.a .b)` can't match via an `.a` that is an ancestor
+/// of `article` itself.
+fn matches_selector_scoped(
+    doc: &Document,
+    node_id: NodeId,
+    selector: &super::super::parser::Selector,
+    ctx: &CascadeContext<'_>,
+    scope: Option<NodeId>,
+    scope_combinator: Option<&Combinator>,
+) -> bool {
     let parts = &selector.parts;
     if parts.is_empty() {
         return false;
@@ -548,10 +634,16 @@ pub(crate) fn matches_selector(
         let combinator = parts[i + 1].1.as_ref();
         match combinator {
             Some(Combinator::Child) => match parent_element(doc, current) {
-                Some(pid) if matches_compound(doc, pid, compound, ctx) => {
+                Some(pid)
+                    if !in_scope_exclusive(pid, scope)
+                        || !matches_compound(doc, pid, compound, ctx) =>
+                {
+                    return false;
+                },
+                Some(pid) => {
                     current = pid;
                 },
-                _ => return false,
+                None => return false,
             },
             Some(Combinator::AdjacentSibling) => match previous_sibling_element(doc, current) {
                 Some(sid) if matches_compound(doc, sid, compound, ctx) => {
@@ -580,6 +672,9 @@ pub(crate) fn matches_selector(
                 let mut found = false;
                 let mut ancestor = parent_element(doc, current);
                 while let Some(anc_id) = ancestor {
+                    if !in_scope_exclusive(anc_id, scope) {
+                        break;
+                    }
                     if matches_compound(doc, anc_id, compound, ctx) {
                         current = anc_id;
                         found = true;
@@ -594,7 +689,51 @@ pub(crate) fn matches_selector(
         }
     }
 
+    // Enforce the leading combinator from :has(). After the right-to-left
+    // walk, `current` is the node that matched the leftmost compound.
+    // scope_combinator specifies the required relationship between that
+    // node and the scope element.
+    if let (Some(sc), Some(sid)) = (scope_combinator, scope) {
+        match sc {
+            Combinator::Child => {
+                if parent_element(doc, current) != Some(sid) {
+                    return false;
+                }
+            },
+            Combinator::AdjacentSibling => {
+                if previous_sibling_element(doc, current) != Some(sid) {
+                    return false;
+                }
+            },
+            Combinator::GeneralSibling => {
+                let mut sib = next_sibling_element(doc, sid);
+                let mut found = false;
+                while let Some(s) = sib {
+                    if s == current {
+                        found = true;
+                        break;
+                    }
+                    sib = next_sibling_element(doc, s);
+                }
+                if !found {
+                    return false;
+                }
+            },
+            Combinator::Descendant => {},
+        }
+    }
+
     true
+}
+
+/// Returns `true` if `node_id` is a strict descendant of `scope`
+/// (not equal to it). With `scope = None`, always returns `true`.
+#[inline]
+fn in_scope_exclusive(node_id: NodeId, scope: Option<NodeId>) -> bool {
+    match scope {
+        None => true,
+        Some(sid) => node_id != sid,
+    }
 }
 
 /// Check if a compound selector matches a given node.
@@ -631,10 +770,13 @@ fn matches_simple(
         SimpleSelector::PseudoClassFn(name, arg) => {
             match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
-        SimpleSelector::Not(inner) => !matches_compound(doc, node_id, inner, ctx),
+        SimpleSelector::Not(inner_list) => !inner_list
+            .iter()
+            .any(|compound| matches_compound(doc, node_id, compound, ctx)),
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
             .any(|compound| matches_compound(doc, node_id, compound, ctx)),
+        SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx),
         SimpleSelector::Attribute { name, op, value } => {
             match_attribute(elem, name, op, value.as_deref())
         },
@@ -763,6 +905,97 @@ fn parent_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
             return Some(pid);
         }
         current = doc.nodes[pid].parent;
+    }
+    None
+}
+
+/// Match the `:has(relative-selector-list)` relational pseudo-class.
+///
+/// For each relative selector, collect candidate elements based on the
+/// leading combinator (descendants for descendant, direct children for
+/// `>`, the next element sibling for `+`, following element siblings
+/// for `~`) and succeed if any candidate matches the inner selector
+/// with the subject element as the scope boundary. Ancestor walks
+/// inside the inner selector stop before reaching the subject, so
+/// `article:has(.a .b)` cannot match via an `.a` that lives outside
+/// `article`'s subtree.
+fn matches_has(
+    doc: &Document,
+    node_id: NodeId,
+    list: &[(Combinator, super::super::parser::Selector)],
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    list.iter().any(|(combinator, sel)| {
+        let scope = Some(node_id);
+        let sc = Some(combinator);
+        let matched = |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc);
+        match combinator {
+            Combinator::Descendant | Combinator::Child => {
+                // DFS the subject's subtree. For Descendant the scope
+                // bounding is sufficient; for Child the scope_combinator
+                // check in matches_selector_scoped verifies the leftmost
+                // matched compound is a direct child of the subject.
+                let mut stack: Vec<NodeId> = doc.nodes[node_id].children.clone();
+                while let Some(nid) = stack.pop() {
+                    if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                        return true;
+                    }
+                    stack.extend(doc.nodes[nid].children.iter().copied());
+                }
+                false
+            },
+            Combinator::AdjacentSibling => {
+                if let Some(sib) = next_sibling_element(doc, node_id) {
+                    if matched(sib) {
+                        return true;
+                    }
+                    if sel.parts.len() > 1 {
+                        let mut stack: Vec<NodeId> = doc.nodes[sib].children.clone();
+                        while let Some(nid) = stack.pop() {
+                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                                return true;
+                            }
+                            stack.extend(doc.nodes[nid].children.iter().copied());
+                        }
+                    }
+                }
+                false
+            },
+            Combinator::GeneralSibling => {
+                let mut sib = next_sibling_element(doc, node_id);
+                while let Some(sid) = sib {
+                    if matched(sid) {
+                        return true;
+                    }
+                    if sel.parts.len() > 1 {
+                        let mut stack: Vec<NodeId> = doc.nodes[sid].children.clone();
+                        while let Some(nid) = stack.pop() {
+                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                                return true;
+                            }
+                            stack.extend(doc.nodes[nid].children.iter().copied());
+                        }
+                    }
+                    sib = next_sibling_element(doc, sid);
+                }
+                false
+            },
+        }
+    })
+}
+
+/// Find the next sibling that is an element node.
+fn next_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
+    let parent = doc.nodes[node_id].parent?;
+    let siblings = &doc.nodes[parent].children;
+    let mut seen = false;
+    for &sid in siblings {
+        if seen && matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+            return Some(sid);
+        }
+        if sid == node_id {
+            seen = true;
+        }
     }
     None
 }

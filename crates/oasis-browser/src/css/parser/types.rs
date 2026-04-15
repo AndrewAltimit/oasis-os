@@ -43,12 +43,17 @@ pub enum SimpleSelector {
     PseudoClassFn(String, String),
     /// Pseudo-element: `::before`, `::after`.
     PseudoElement(String),
-    /// Negation: `:not(selector)`.
-    Not(Box<CompoundSelector>),
+    /// Negation: `:not(selector-list)`. Matches an element that does
+    /// not match any compound in the list (Selectors Level 4 form).
+    Not(Vec<CompoundSelector>),
     /// `:is(selector-list)` -- matches if any inner selector matches.
     Is(Vec<CompoundSelector>),
     /// `:where(selector-list)` -- like `:is()` but zero specificity.
     Where(Vec<CompoundSelector>),
+    /// `:has(relative-selector-list)` -- the relational pseudo-class.
+    /// Each entry is a leading combinator (default [`Combinator::Descendant`])
+    /// and a full selector evaluated relative to the subject element.
+    Has(Vec<(Combinator, Selector)>),
     /// Nesting selector `&` — a parser-time marker that refers to the
     /// enclosing rule's selector. Desugared into concrete selectors at
     /// parse time; should not appear in the final AST.
@@ -132,12 +137,20 @@ impl Selector {
                     | SimpleSelector::Attribute { .. } => {
                         classes = classes.saturating_add(1);
                     },
-                    SimpleSelector::Not(inner) => {
-                        // :not() itself doesn't count, but its argument does.
-                        let inner_spec = compound_specificity(inner);
-                        ids = ids.saturating_add(inner_spec.ids);
-                        classes = classes.saturating_add(inner_spec.classes);
-                        types = types.saturating_add(inner_spec.types);
+                    SimpleSelector::Not(inner_list) => {
+                        // :not() itself doesn't count, but the most
+                        // specific compound in its argument list does.
+                        let max_spec = inner_list.iter().map(compound_specificity).max().unwrap_or(
+                            Specificity {
+                                inline: 0,
+                                ids: 0,
+                                classes: 0,
+                                types: 0,
+                            },
+                        );
+                        ids = ids.saturating_add(max_spec.ids);
+                        classes = classes.saturating_add(max_spec.classes);
+                        types = types.saturating_add(max_spec.types);
                     },
                     SimpleSelector::Is(inner_list) => {
                         // :is() takes the max specificity of its arguments.
@@ -149,6 +162,24 @@ impl Selector {
                                 types: 0,
                             },
                         );
+                        ids = ids.saturating_add(max_spec.ids);
+                        classes = classes.saturating_add(max_spec.classes);
+                        types = types.saturating_add(max_spec.types);
+                    },
+                    SimpleSelector::Has(inner_list) => {
+                        // :has() takes the max specificity across the
+                        // relative selectors it contains, the same rule
+                        // as :is().
+                        let max_spec = inner_list
+                            .iter()
+                            .map(|(_, sel)| sel.specificity())
+                            .max()
+                            .unwrap_or(Specificity {
+                                inline: 0,
+                                ids: 0,
+                                classes: 0,
+                                types: 0,
+                            });
                         ids = ids.saturating_add(max_spec.ids);
                         classes = classes.saturating_add(max_spec.classes);
                         types = types.saturating_add(max_spec.types);
@@ -195,11 +226,21 @@ fn compound_specificity(compound: &CompoundSelector) -> Specificity {
             | SimpleSelector::Attribute { .. } => {
                 classes = classes.saturating_add(1);
             },
-            SimpleSelector::Not(inner) => {
-                let inner_spec = compound_specificity(inner);
-                ids = ids.saturating_add(inner_spec.ids);
-                classes = classes.saturating_add(inner_spec.classes);
-                types = types.saturating_add(inner_spec.types);
+            SimpleSelector::Not(inner_list) => {
+                let max_spec =
+                    inner_list
+                        .iter()
+                        .map(compound_specificity)
+                        .max()
+                        .unwrap_or(Specificity {
+                            inline: 0,
+                            ids: 0,
+                            classes: 0,
+                            types: 0,
+                        });
+                ids = ids.saturating_add(max_spec.ids);
+                classes = classes.saturating_add(max_spec.classes);
+                types = types.saturating_add(max_spec.types);
             },
             SimpleSelector::Is(inner_list) => {
                 let max_spec =
@@ -213,6 +254,21 @@ fn compound_specificity(compound: &CompoundSelector) -> Specificity {
                             classes: 0,
                             types: 0,
                         });
+                ids = ids.saturating_add(max_spec.ids);
+                classes = classes.saturating_add(max_spec.classes);
+                types = types.saturating_add(max_spec.types);
+            },
+            SimpleSelector::Has(inner_list) => {
+                let max_spec = inner_list
+                    .iter()
+                    .map(|(_, sel)| sel.specificity())
+                    .max()
+                    .unwrap_or(Specificity {
+                        inline: 0,
+                        ids: 0,
+                        classes: 0,
+                        types: 0,
+                    });
                 ids = ids.saturating_add(max_spec.ids);
                 classes = classes.saturating_add(max_spec.classes);
                 types = types.saturating_add(max_spec.types);
@@ -498,6 +554,11 @@ impl CssColor {
 pub struct Rule {
     pub selectors: SelectorList,
     pub declarations: Vec<Declaration>,
+    /// Cascade-layer membership: index into the parent stylesheet's
+    /// [`Stylesheet::layers`] list, or `None` if the rule is unlayered.
+    /// Unlayered author rules win over layered author rules (for normal
+    /// declarations); `!important` reverses the order within layers.
+    pub layer: Option<u16>,
 }
 
 /// A single keyframe stop (percentage + declarations).
@@ -520,4 +581,10 @@ pub struct KeyframesRule {
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
     pub keyframes: Vec<KeyframesRule>,
+    /// Cascade layers declared in this stylesheet, in declaration
+    /// order. Each `Rule`'s `layer` field is an index into this list.
+    /// Anonymous layers (from `@layer { ... }`) get a synthetic name
+    /// of the form `"__anon_{n}"` so they stay distinct from any
+    /// named layer. Empty for stylesheets without any `@layer` rules.
+    pub layers: Vec<String>,
 }

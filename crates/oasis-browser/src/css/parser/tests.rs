@@ -884,6 +884,123 @@ fn linear_gradient_default_direction() {
     assert_eq!(g.stops.len(), 2);
 }
 
+// -- :has() relational pseudo-class ------------------------------
+
+// -- @layer cascade layers --------------------------------------
+
+#[test]
+fn layer_statement_form_registers_names_in_order() {
+    let sheet = parse("@layer reset, framework, overrides;");
+    assert_eq!(
+        sheet.layers,
+        vec![
+            "reset".to_string(),
+            "framework".to_string(),
+            "overrides".to_string(),
+        ]
+    );
+    // No rules emitted for statement form.
+    assert!(sheet.rules.is_empty());
+}
+
+#[test]
+fn layer_block_tags_inner_rules() {
+    let sheet = parse("@layer framework { p { color: red; } } p { color: blue; }");
+    assert_eq!(sheet.layers, vec!["framework".to_string()]);
+    assert_eq!(sheet.rules.len(), 2);
+    // The first rule (from the layer block) is tagged.
+    assert_eq!(sheet.rules[0].layer, Some(0));
+    // The second rule (outside the layer) is unlayered.
+    assert_eq!(sheet.rules[1].layer, None);
+}
+
+#[test]
+fn layer_statement_fixes_order_before_blocks() {
+    // `@layer a, b;` should freeze the order so that a later
+    // `@layer b { ... }` block followed by a `@layer a { ... }` block
+    // still reports `a` as index 0 and `b` as index 1.
+    let sheet = parse(
+        "@layer a, b; \
+         @layer b { p { color: red; } } \
+         @layer a { p { color: blue; } }",
+    );
+    assert_eq!(sheet.layers, vec!["a".to_string(), "b".to_string()]);
+    // Rule order mirrors source order (b then a).
+    assert_eq!(sheet.rules[0].layer, Some(1)); // b
+    assert_eq!(sheet.rules[1].layer, Some(0)); // a
+}
+
+#[test]
+fn layer_anonymous_block_gets_synthetic_name() {
+    let sheet = parse("@layer { p { color: red; } }");
+    assert_eq!(sheet.layers.len(), 1);
+    assert!(sheet.layers[0].starts_with("__anon_"));
+    assert_eq!(sheet.rules[0].layer, Some(0));
+}
+
+#[test]
+fn has_descendant_selector() {
+    let sels = first_selectors("article:has(img) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], SimpleSelector::Type("article".into()));
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant, got {:?}", parts[1]);
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(
+        inner[0].1.parts[0].0.parts,
+        vec![SimpleSelector::Type("img".into())]
+    );
+}
+
+#[test]
+fn has_direct_child_selector() {
+    let sels = first_selectors("ul:has(> li.active) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Child);
+}
+
+#[test]
+fn has_next_sibling_selector() {
+    let sels = first_selectors("h1:has(+ p) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner[0].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_selector_list() {
+    // Comma-separated relative selectors are ORed.
+    let sels = first_selectors("div:has(.a, > .b, + .c) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 3);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(inner[1].0, Combinator::Child);
+    assert_eq!(inner[2].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_specificity_takes_max_of_inner() {
+    // `:has(.a)` should contribute one class-level specificity unit.
+    let sels = first_selectors("div:has(.a) { color: red; }");
+    let spec = sels.selectors[0].specificity();
+    // 1 type (div) + 1 class (.a) = (0, 0, 1, 1)
+    assert_eq!(spec.ids, 0);
+    assert_eq!(spec.classes, 1);
+    assert_eq!(spec.types, 1);
+}
+
 mod prop {
     use super::*;
     use crate::css::helpers::named_color;
@@ -1114,6 +1231,7 @@ mod nesting_tests {
                     SimpleSelector::Not(_) => out.push_str(":not(…)"),
                     SimpleSelector::Is(_) => out.push_str(":is(…)"),
                     SimpleSelector::Where(_) => out.push_str(":where(…)"),
+                    SimpleSelector::Has(_) => out.push_str(":has(…)"),
                     SimpleSelector::Attribute { name, .. } => {
                         out.push('[');
                         out.push_str(name);

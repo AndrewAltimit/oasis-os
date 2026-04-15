@@ -146,15 +146,15 @@ impl CssParser {
                             self.advance();
                             let lc = name.to_ascii_lowercase();
                             if lc == "not" {
-                                // Parse :not(compound)
-                                self.skip_whitespace();
-                                if let Some(inner) = self.parse_compound_selector() {
-                                    parts.push(SimpleSelector::Not(Box::new(inner)));
-                                }
+                                // Parse :not(selector-list). Selectors
+                                // Level 4 allows a comma-separated list
+                                // of compound selectors here.
+                                let inner_list = self.parse_compound_selector_list();
                                 self.skip_whitespace();
                                 if self.peek() == &CssToken::CloseParen {
                                     self.advance();
                                 }
+                                parts.push(SimpleSelector::Not(inner_list));
                             } else if lc == "is" || lc == "where" {
                                 // Parse :is(selector-list) / :where(selector-list)
                                 let inner_list = self.parse_compound_selector_list();
@@ -167,6 +167,14 @@ impl CssParser {
                                 } else {
                                     parts.push(SimpleSelector::Where(inner_list));
                                 }
+                            } else if lc == "has" {
+                                // Parse :has(relative-selector-list).
+                                let inner_list = self.parse_relative_selector_list();
+                                self.skip_whitespace();
+                                if self.peek() == &CssToken::CloseParen {
+                                    self.advance();
+                                }
+                                parts.push(SimpleSelector::Has(inner_list));
                             } else {
                                 // Functional pseudo-class like :nth-child(2n+1)
                                 let arg = self.consume_until_close_paren();
@@ -190,6 +198,51 @@ impl CssParser {
         } else {
             Some(CompoundSelector { parts })
         }
+    }
+
+    /// Parse a comma-separated list of relative selectors inside `:has()`.
+    ///
+    /// Each relative selector may begin with an explicit combinator
+    /// (`>`, `+`, `~`); otherwise the descendant combinator is implied.
+    /// Stops at `)` (does not consume it).
+    fn parse_relative_selector_list(&mut self) -> Vec<(Combinator, Selector)> {
+        let mut list = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.peek() == &CssToken::CloseParen || self.peek() == &CssToken::Eof {
+                break;
+            }
+            let leading = match self.peek() {
+                CssToken::Greater => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::Child
+                },
+                CssToken::Plus => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::AdjacentSibling
+                },
+                CssToken::Delim('~') => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::GeneralSibling
+                },
+                _ => Combinator::Descendant,
+            };
+            if let Some(sel) = self.parse_selector() {
+                list.push((leading, sel));
+            } else {
+                break;
+            }
+            self.skip_whitespace();
+            if self.peek() == &CssToken::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        list
     }
 
     /// Parse a comma-separated list of compound selectors inside `:is()` / `:where()`.

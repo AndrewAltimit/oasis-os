@@ -67,6 +67,7 @@ fn make_rule(selectors: Vec<Selector>, declarations: Vec<Declaration>) -> Rule {
     Rule {
         selectors: SelectorList { selectors },
         declarations,
+        layer: None,
     }
 }
 
@@ -245,6 +246,7 @@ fn specificity_ordering() {
     let sheet = Stylesheet {
         rules: vec![rule_class, rule_id],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -279,6 +281,7 @@ fn inheritance_of_color_and_font() {
     let sheet = Stylesheet {
         rules: vec![rule],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -311,6 +314,7 @@ fn important_overrides_specificity() {
     let sheet = Stylesheet {
         rules: vec![rule_id, rule_type],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -328,6 +332,7 @@ fn multiple_stylesheets_merged() {
             vec![decl("color", CssValue::Keyword("red".to_string()), false)],
         )],
         keyframes: vec![],
+        layers: vec![],
     };
     let sheet2 = Stylesheet {
         rules: vec![make_rule(
@@ -335,6 +340,7 @@ fn multiple_stylesheets_merged() {
             vec![decl("font-weight", CssValue::Number(700.0), false)],
         )],
         keyframes: vec![],
+        layers: vec![],
     };
 
     let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
@@ -354,6 +360,7 @@ fn inline_style_override() {
             vec![decl("color", CssValue::Keyword("red".to_string()), false)],
         )],
         keyframes: vec![],
+        layers: vec![],
     };
 
     // Inline style says color: blue.
@@ -421,6 +428,7 @@ fn non_element_nodes_get_no_style() {
     let sheet = Stylesheet {
         rules: vec![],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -551,9 +559,9 @@ fn not_selector() {
     let sel = Selector {
         parts: vec![(
             CompoundSelector {
-                parts: vec![SimpleSelector::Not(Box::new(CompoundSelector {
+                parts: vec![SimpleSelector::Not(vec![CompoundSelector {
                     parts: vec![SimpleSelector::Type("div".to_string())],
-                }))],
+                }])],
             },
             None,
         )],
@@ -562,6 +570,37 @@ fn not_selector() {
     assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
     // <div> is <div>, so it does NOT match :not(div).
     assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+}
+
+#[test]
+fn not_selector_list_form() {
+    // :not(div, p) should match an element that is neither a div nor a p.
+    let doc = make_doc(vec![
+        (TagName::Span, vec![]),
+        (TagName::P, vec![]),
+        (TagName::Div, vec![]),
+    ]);
+    // Parse via CSS to exercise the Level 4 list form end-to-end.
+    let sheet = Stylesheet::parse("*:not(div, p) { color: red; }");
+    let sel = sheet.rules[0].selectors.selectors[0].clone();
+    // <span> (node 3) matches.
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // <p> (node 4) excluded by the list.
+    assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+    // <div> (node 5) excluded by the list.
+    assert!(!matching::matches_selector(&doc, 5, &sel, &ctx()));
+}
+
+#[test]
+fn not_selector_list_specificity_takes_max() {
+    // :not(p, #header) should count one ID (the max of the two).
+    let sheet = Stylesheet::parse("div:not(p, #header) { color: red; }");
+    let sel = &sheet.rules[0].selectors.selectors[0];
+    let spec = sel.specificity();
+    // div = 1 type; #header = 1 id; no classes.
+    assert_eq!(spec.ids, 1);
+    assert_eq!(spec.classes, 0);
+    assert_eq!(spec.types, 1);
 }
 
 #[test]
@@ -1237,6 +1276,425 @@ fn test_body_has_default_margin() {
     );
 }
 
+// -- :has() relational pseudo-class ---------------------------------
+
+/// Build a document with an <article> body child that contains an <img>
+/// descendant (nested inside a <div>) plus a trailing <p> sibling.
+///
+/// Layout:
+///   0 Document
+///   1 <html>
+///   2 <body>
+///   3   <article>
+///   4     <div>
+///   5       <img>
+///   6   <p>
+///   7   <section>
+///   8     <span>  (plain span, no img)
+fn make_has_doc() -> Document {
+    let mut nodes = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![],
+            }),
+            parent: Some(1),
+            children: vec![3, 6, 7],
+        },
+        // 3: <article> with <div><img></div>
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Article,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Div,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![5],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Img,
+                attributes: vec![],
+            }),
+            parent: Some(4),
+            children: vec![],
+        },
+        // 6: <p>, sibling of <article>
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![],
+        },
+        // 7: <section> with a <span>, no <img> anywhere inside
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Section,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![8],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Span,
+                attributes: vec![],
+            }),
+            parent: Some(7),
+            children: vec![],
+        },
+    ];
+    // Silence unused mut warning if no further pushes.
+    let _ = &mut nodes;
+    Document::from_nodes(nodes, 0)
+}
+
+/// Parse a CSS selector from source like `"article:has(img)"`.
+fn parse_selector(src: &str) -> Selector {
+    let full = format!("{src} {{ color: red; }}");
+    let sheet = Stylesheet::parse(&full);
+    sheet.rules[0].selectors.selectors[0].clone()
+}
+
+// -- @layer cascade ordering ----------------------------------------
+
+#[test]
+fn layered_rule_loses_to_unlayered_author_rule() {
+    // `@layer framework { p { color: red } }` vs unlayered
+    // `p { color: blue }`. Spec: unlayered author rules beat layered
+    // author rules (for normal declarations). Blue should win.
+    let sheet = Stylesheet::parse(
+        "@layer framework { p { color: red; } } \
+         p { color: blue; }",
+    );
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.color, Color::rgb(0, 0, 255));
+}
+
+#[test]
+fn later_layer_wins_over_earlier_layer() {
+    // Two layers declared via a statement to freeze their order:
+    // `reset` first, then `overrides`. Both set p's color; the
+    // `overrides` (later) layer should win.
+    let sheet = Stylesheet::parse(
+        "@layer reset, overrides; \
+         @layer overrides { p { color: blue; } } \
+         @layer reset { p { color: red; } }",
+    );
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    // Blue (overrides) wins despite being declared earlier in source
+    // than the `reset` block — layer order comes from the statement.
+    assert_eq!(style.color, Color::rgb(0, 0, 255));
+}
+
+#[test]
+fn layered_important_beats_unlayered_important() {
+    // `!important` inverts the layer priority: layered `!important`
+    // should beat unlayered `!important`.
+    let sheet = Stylesheet::parse(
+        "@layer framework { p { color: red !important; } } \
+         p { color: blue !important; }",
+    );
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.color, Color::rgb(255, 0, 0));
+}
+
+#[test]
+fn earlier_layer_important_beats_later_layer_important() {
+    // With `!important`, earlier-declared layers win.
+    let sheet = Stylesheet::parse(
+        "@layer reset, overrides; \
+         @layer reset { p { color: red !important; } } \
+         @layer overrides { p { color: blue !important; } }",
+    );
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.color, Color::rgb(255, 0, 0));
+}
+
+#[test]
+fn layer_does_not_override_specificity_within_layer() {
+    // Inside the same layer, specificity still decides.
+    // `.foo` (specificity 10) should beat `p` (specificity 1).
+    let sheet = Stylesheet::parse(
+        "@layer framework { \
+           p { color: red; } \
+           .foo { color: blue; } \
+         }",
+    );
+    let doc = make_doc(vec![(
+        TagName::P,
+        vec![Attribute {
+            name: "class".to_string(),
+            value: "foo".to_string(),
+        }],
+    )]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.color, Color::rgb(0, 0, 255));
+}
+
+// -- text-wrap parsing ---------------------------------------------
+
+#[test]
+fn text_wrap_balance_parses_and_applies() {
+    use super::super::values::TextWrap;
+    let sheet = Stylesheet::parse("h1 { text-wrap: balance; }");
+    let doc = make_doc(vec![(TagName::H1, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("h1 has style");
+    assert_eq!(style.text_wrap, TextWrap::Balance);
+}
+
+#[test]
+fn text_wrap_pretty_parses_and_applies() {
+    use super::super::values::TextWrap;
+    let sheet = Stylesheet::parse("p { text-wrap: pretty; }");
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.text_wrap, TextWrap::Pretty);
+}
+
+#[test]
+fn text_wrap_defaults_to_wrap() {
+    use super::super::values::TextWrap;
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let sheet = Stylesheet::parse("");
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.text_wrap, TextWrap::Wrap);
+}
+
+#[test]
+fn has_descendant_matches_article_with_img() {
+    let doc = make_has_doc();
+    let sel = parse_selector("article:has(img)");
+    // <article> (node 3) has a nested <img> → match.
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // <section> (node 7) has no <img> → no match.
+    let sel2 = parse_selector("section:has(img)");
+    assert!(!matching::matches_selector(&doc, 7, &sel2, &ctx()));
+}
+
+#[test]
+fn has_direct_child_distinguishes_depth() {
+    let doc = make_has_doc();
+    // :has(> img) requires an *immediate* <img> child.
+    let sel = parse_selector("article:has(> img)");
+    // <article>'s direct children are just <div>, not <img>.
+    assert!(!matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // But <div> (node 4) does have <img> as a direct child.
+    let sel2 = parse_selector("div:has(> img)");
+    assert!(matching::matches_selector(&doc, 4, &sel2, &ctx()));
+}
+
+#[test]
+fn has_next_sibling_matches() {
+    let doc = make_has_doc();
+    // <article>'s next element sibling is <p>.
+    let sel = parse_selector("article:has(+ p)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // No + img sibling.
+    let sel2 = parse_selector("article:has(+ img)");
+    assert!(!matching::matches_selector(&doc, 3, &sel2, &ctx()));
+}
+
+#[test]
+fn has_general_sibling_matches() {
+    let doc = make_has_doc();
+    // <article> ~ <section> — section follows later.
+    let sel = parse_selector("article:has(~ section)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+}
+
+#[test]
+fn has_selector_list_any_matches() {
+    let doc = make_has_doc();
+    // Comma list: match if any relative selector matches.
+    // <article> has no direct <img> child, but does have a nested <img>.
+    let sel = parse_selector("article:has(> img, img)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+}
+
+#[test]
+fn has_inner_combinator_is_scope_bounded() {
+    // Build a document where the outer <body> has class "marker", and
+    // the subject <article> contains a <span>. Under a naive
+    // (non-scoped) matcher, `article:has(.marker span)` would match via
+    // body.marker (an ancestor of the span that is *outside* the
+    // article's subtree). With scope bounding, ancestor walks for the
+    // inner `.marker span` stop at `<article>` and the match fails.
+    //
+    // Layout:
+    //   0 Document
+    //   1 <html>
+    //   2 <body class="marker">
+    //   3   <article>
+    //   4     <span>
+    let nodes = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![Attribute {
+                    name: "class".to_string(),
+                    value: "marker".to_string(),
+                }],
+            }),
+            parent: Some(1),
+            children: vec![3],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Article,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Span,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        },
+    ];
+    let doc = Document::from_nodes(nodes, 0);
+    let sel = parse_selector("article:has(.marker span)");
+    assert!(
+        !matching::matches_selector(&doc, 3, &sel, &ctx()),
+        "`.marker` lives outside the article's subtree and must not match"
+    );
+    // Sanity: if the marker is *inside* the article, it should match.
+    let nodes2 = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![],
+            }),
+            parent: Some(1),
+            children: vec![3],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Article,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Div,
+                attributes: vec![Attribute {
+                    name: "class".to_string(),
+                    value: "marker".to_string(),
+                }],
+            }),
+            parent: Some(3),
+            children: vec![5],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Span,
+                attributes: vec![],
+            }),
+            parent: Some(4),
+            children: vec![],
+        },
+    ];
+    let doc2 = Document::from_nodes(nodes2, 0);
+    assert!(matching::matches_selector(&doc2, 3, &sel, &ctx()));
+}
+
+#[test]
+fn has_child_multi_compound_anchors_on_first_compound() {
+    // `:has(> div img)` means "has a direct child `div` containing an
+    // `img`". The inner selector is multi-compound; the first compound
+    // must match a direct child of the subject, not an arbitrary
+    // descendant.
+    let doc = make_has_doc();
+    // article (3) → div (4) → img (5).
+    // Direct child div contains img → match.
+    let sel = parse_selector("article:has(> div img)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // article has no direct child span → must not match.
+    let sel2 = parse_selector("article:has(> span img)");
+    assert!(
+        !matching::matches_selector(&doc, 3, &sel2, &ctx()),
+        "first compound must match a direct child, not a deeper descendant"
+    );
+    // section (7) → span (8), no div child → must not match.
+    assert!(!matching::matches_selector(&doc, 7, &sel, &ctx()));
+}
+
+#[test]
+fn has_non_element_node_is_ignored() {
+    // :has() against a non-element should be false (matches_simple
+    // already guards on ElementData).
+    let doc = make_has_doc();
+    let sel = parse_selector("*:has(img)");
+    // Node 0 is the Document, not an element.
+    assert!(!matching::matches_selector(&doc, 0, &sel, &ctx()));
+}
+
 mod prop {
     use proptest::prelude::*;
 
@@ -1578,6 +2036,7 @@ fn specificity_id_vs_many_classes() {
     let sheet = Stylesheet {
         rules: vec![rule_classes, rule_id],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -1618,6 +2077,7 @@ fn important_on_inherited_vs_direct() {
             ),
         ],
         keyframes: vec![],
+        layers: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -1865,6 +2325,7 @@ mod prop_tests {
                             important: false,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -1876,9 +2337,11 @@ mod prop_tests {
                             important: false,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                 ],
                 keyframes: vec![],
+                layers: vec![],
             };
             let doc = super::make_doc(vec![(TagName::Div, vec![])]);
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
@@ -1927,6 +2390,7 @@ mod prop_tests {
                             important: false,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -1938,9 +2402,11 @@ mod prop_tests {
                             important: false,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                 ],
                 keyframes: vec![],
+                layers: vec![],
             };
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
             let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -1987,6 +2453,7 @@ mod prop_tests {
                             important: false,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -1998,9 +2465,11 @@ mod prop_tests {
                             important: true,
                             property_id: PropertyId::from_name("color"),
                         }],
+                        layer: None,
                     },
                 ],
                 keyframes: vec![],
+                layers: vec![],
             };
 
             // Build element with id="main" and all the extra classes.

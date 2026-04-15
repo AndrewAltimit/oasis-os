@@ -22,7 +22,7 @@ pub use types::{
     GridTrackSize, Isolation, JustifyContent, LinearGradient, ListStylePosition, ListStyleType,
     ObjectFit, ObjectPosition, Overflow, OverflowWrap, PointerEvents, Position, ROOT_FONT_SIZE,
     RadialGradient, Resize, TextAlign, TextDecoration, TextDecorationLine, TextDecorationStyle,
-    TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction, TouchAction,
+    TextDirection, TextOverflow, TextShadow, TextTransform, TextWrap, TimingFunction, TouchAction,
     TransformFunction, TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility,
     WhiteSpace, WordBreak,
 };

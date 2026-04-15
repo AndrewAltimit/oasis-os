@@ -27,182 +27,295 @@ use super::parser::{CssValue, Declaration, PropertyId};
 pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
     let mut out = Vec::new();
     for decl in decls {
-        match decl.property.as_str() {
-            "margin" => {
-                out.extend(expand_box_shorthand("margin", &decl.value, decl.important));
-            },
-            "padding" => {
-                out.extend(expand_box_shorthand("padding", &decl.value, decl.important));
-            },
-            "border" => {
-                out.extend(expand_border(&decl.value, decl.important));
-            },
-            "border-top" | "border-right" | "border-bottom" | "border-left" => {
-                out.extend(expand_border_side(
-                    &decl.property,
-                    &decl.value,
-                    decl.important,
-                ));
-            },
-            "background" => {
-                out.extend(expand_background(&decl.value, decl.important));
-            },
-            "list-style" => {
-                out.extend(expand_list_style(&decl.value, decl.important));
-            },
-            "border-width" => {
-                let vals = match &decl.value {
-                    CssValue::Multiple(vs) => vs.clone(),
-                    other => vec![other.clone()],
-                };
-                let (t, r, b, l) = match vals.len() {
-                    1 => (
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                    ),
-                    2 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[0].clone(),
-                        vals[1].clone(),
-                    ),
-                    3 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[2].clone(),
-                        vals[1].clone(),
-                    ),
-                    _ => (
-                        vals[0].clone(),
-                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                    ),
-                };
-                for (prop, val) in [
-                    ("border-top-width", t),
-                    ("border-right-width", r),
-                    ("border-bottom-width", b),
-                    ("border-left-width", l),
-                ] {
-                    out.push(Declaration {
-                        property: prop.into(),
-                        value: val,
-                        important: decl.important,
-                        property_id: PropertyId::from_name(prop),
-                    });
-                }
-            },
-            "border-style" => {
-                let vals = match &decl.value {
-                    CssValue::Multiple(vs) => vs.clone(),
-                    other => vec![other.clone()],
-                };
-                let (t, r, b, l) = match vals.len() {
-                    1 => (
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                    ),
-                    2 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[0].clone(),
-                        vals[1].clone(),
-                    ),
-                    3 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[2].clone(),
-                        vals[1].clone(),
-                    ),
-                    _ => (
-                        vals[0].clone(),
-                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                    ),
-                };
-                for (prop, val) in [
-                    ("border-top-style", t),
-                    ("border-right-style", r),
-                    ("border-bottom-style", b),
-                    ("border-left-style", l),
-                ] {
-                    out.push(Declaration {
-                        property: prop.into(),
-                        value: val,
-                        important: decl.important,
-                        property_id: PropertyId::from_name(prop),
-                    });
-                }
-            },
-            "border-color" => {
-                let vals = match &decl.value {
-                    CssValue::Multiple(vs) => vs.clone(),
-                    other => vec![other.clone()],
-                };
-                let (t, r, b, l) = match vals.len() {
-                    1 => (
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                        vals[0].clone(),
-                    ),
-                    2 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[0].clone(),
-                        vals[1].clone(),
-                    ),
-                    3 => (
-                        vals[0].clone(),
-                        vals[1].clone(),
-                        vals[2].clone(),
-                        vals[1].clone(),
-                    ),
-                    _ => (
-                        vals[0].clone(),
-                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                    ),
-                };
-                for (prop, val) in [
-                    ("border-top-color", t),
-                    ("border-right-color", r),
-                    ("border-bottom-color", b),
-                    ("border-left-color", l),
-                ] {
-                    out.push(Declaration {
-                        property: prop.into(),
-                        value: val,
-                        important: decl.important,
-                        property_id: PropertyId::from_name(prop),
-                    });
-                }
-            },
-            "flex" => {
-                out.extend(expand_flex(&decl.value, decl.important));
-            },
-            "font" => {
-                out.extend(expand_font(&decl.value, decl.important));
-            },
-            "overflow" => {
-                // `overflow` shorthand sets both overflow-x and overflow-y.
-                // We only support a single overflow property, so just pass through.
-                out.push(decl);
-            },
-            "grid-template" => {
-                out.extend(expand_grid_template(&decl.value, decl.important));
-            },
-            _ => out.push(decl),
+        // Rewrite CSS logical properties (`margin-inline-start`,
+        // `padding-block`, `inset-inline-end`, etc.) to their physical
+        // LTR equivalents before the main shorthand pass. This keeps
+        // the rest of the engine completely unaware of logical
+        // properties, at the cost of losing RTL awareness — something
+        // we don't currently have anywhere else either.
+        for decl in rewrite_logical_property(decl) {
+            match decl.property.as_str() {
+                "margin" => {
+                    out.extend(expand_box_shorthand("margin", &decl.value, decl.important));
+                },
+                "padding" => {
+                    out.extend(expand_box_shorthand("padding", &decl.value, decl.important));
+                },
+                "border" => {
+                    out.extend(expand_border(&decl.value, decl.important));
+                },
+                "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                    out.extend(expand_border_side(
+                        &decl.property,
+                        &decl.value,
+                        decl.important,
+                    ));
+                },
+                "background" => {
+                    out.extend(expand_background(&decl.value, decl.important));
+                },
+                "list-style" => {
+                    out.extend(expand_list_style(&decl.value, decl.important));
+                },
+                "border-width" => {
+                    let vals = match &decl.value {
+                        CssValue::Multiple(vs) => vs.clone(),
+                        other => vec![other.clone()],
+                    };
+                    let (t, r, b, l) = match vals.len() {
+                        1 => (
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                        ),
+                        2 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[0].clone(),
+                            vals[1].clone(),
+                        ),
+                        3 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[2].clone(),
+                            vals[1].clone(),
+                        ),
+                        _ => (
+                            vals[0].clone(),
+                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                        ),
+                    };
+                    for (prop, val) in [
+                        ("border-top-width", t),
+                        ("border-right-width", r),
+                        ("border-bottom-width", b),
+                        ("border-left-width", l),
+                    ] {
+                        out.push(Declaration {
+                            property: prop.into(),
+                            value: val,
+                            important: decl.important,
+                            property_id: PropertyId::from_name(prop),
+                        });
+                    }
+                },
+                "border-style" => {
+                    let vals = match &decl.value {
+                        CssValue::Multiple(vs) => vs.clone(),
+                        other => vec![other.clone()],
+                    };
+                    let (t, r, b, l) = match vals.len() {
+                        1 => (
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                        ),
+                        2 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[0].clone(),
+                            vals[1].clone(),
+                        ),
+                        3 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[2].clone(),
+                            vals[1].clone(),
+                        ),
+                        _ => (
+                            vals[0].clone(),
+                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                        ),
+                    };
+                    for (prop, val) in [
+                        ("border-top-style", t),
+                        ("border-right-style", r),
+                        ("border-bottom-style", b),
+                        ("border-left-style", l),
+                    ] {
+                        out.push(Declaration {
+                            property: prop.into(),
+                            value: val,
+                            important: decl.important,
+                            property_id: PropertyId::from_name(prop),
+                        });
+                    }
+                },
+                "border-color" => {
+                    let vals = match &decl.value {
+                        CssValue::Multiple(vs) => vs.clone(),
+                        other => vec![other.clone()],
+                    };
+                    let (t, r, b, l) = match vals.len() {
+                        1 => (
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                            vals[0].clone(),
+                        ),
+                        2 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[0].clone(),
+                            vals[1].clone(),
+                        ),
+                        3 => (
+                            vals[0].clone(),
+                            vals[1].clone(),
+                            vals[2].clone(),
+                            vals[1].clone(),
+                        ),
+                        _ => (
+                            vals[0].clone(),
+                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                        ),
+                    };
+                    for (prop, val) in [
+                        ("border-top-color", t),
+                        ("border-right-color", r),
+                        ("border-bottom-color", b),
+                        ("border-left-color", l),
+                    ] {
+                        out.push(Declaration {
+                            property: prop.into(),
+                            value: val,
+                            important: decl.important,
+                            property_id: PropertyId::from_name(prop),
+                        });
+                    }
+                },
+                "flex" => {
+                    out.extend(expand_flex(&decl.value, decl.important));
+                },
+                "font" => {
+                    out.extend(expand_font(&decl.value, decl.important));
+                },
+                "overflow" => {
+                    // `overflow` shorthand sets both overflow-x and overflow-y.
+                    // We only support a single overflow property, so just pass through.
+                    out.push(decl);
+                },
+                "grid-template" => {
+                    out.extend(expand_grid_template(&decl.value, decl.important));
+                },
+                _ => out.push(decl),
+            }
         }
     }
     out
+}
+
+/// Rewrite CSS logical properties into their LTR physical equivalents.
+///
+/// Longhands with a single mapping (e.g. `margin-inline-start` →
+/// `margin-left`) return a one-element vec with the property renamed.
+/// Two-side shorthands (`margin-inline`, `padding-block`,
+/// `inset-inline`, `inset-block`) expand into a pair of physical
+/// longhands, handling the one-value (both sides the same) and
+/// two-value (start + end) forms.
+///
+/// Non-logical properties pass through unchanged.
+fn rewrite_logical_property(decl: Declaration) -> Vec<Declaration> {
+    let prop = decl.property.as_str();
+
+    // Fast path: bail out immediately for properties that don't contain
+    // "-inline" / "-block" / "inset-" — saves string churn in the common
+    // case.
+    if !prop.contains("inline") && !prop.contains("block") && !prop.starts_with("inset") {
+        return vec![decl];
+    }
+
+    // Two-side logical shorthands. Each entry maps the shorthand name
+    // to the pair of physical longhands it expands into (start_side,
+    // end_side). Order matches CSS spec: first value = start, second
+    // value = end; single value = both sides.
+    const SHORTHAND_MAP: &[(&str, &str, &str)] = &[
+        ("margin-inline", "margin-left", "margin-right"),
+        ("margin-block", "margin-top", "margin-bottom"),
+        ("padding-inline", "padding-left", "padding-right"),
+        ("padding-block", "padding-top", "padding-bottom"),
+        ("inset-inline", "left", "right"),
+        ("inset-block", "top", "bottom"),
+    ];
+    for (shorthand, start_side, end_side) in SHORTHAND_MAP {
+        if prop == *shorthand {
+            let vals = match &decl.value {
+                CssValue::Multiple(vs) if vs.len() >= 2 => (vs[0].clone(), vs[1].clone()),
+                other => (other.clone(), other.clone()),
+            };
+            return vec![
+                Declaration::new(start_side.to_string(), vals.0, decl.important),
+                Declaration::new(end_side.to_string(), vals.1, decl.important),
+            ];
+        }
+    }
+
+    // Longhand logical → physical renames (LTR).
+    const LONGHAND_MAP: &[(&str, &str)] = &[
+        ("margin-inline-start", "margin-left"),
+        ("margin-inline-end", "margin-right"),
+        ("margin-block-start", "margin-top"),
+        ("margin-block-end", "margin-bottom"),
+        ("padding-inline-start", "padding-left"),
+        ("padding-inline-end", "padding-right"),
+        ("padding-block-start", "padding-top"),
+        ("padding-block-end", "padding-bottom"),
+        ("inset-inline-start", "left"),
+        ("inset-inline-end", "right"),
+        ("inset-block-start", "top"),
+        ("inset-block-end", "bottom"),
+        ("border-inline-start-width", "border-left-width"),
+        ("border-inline-end-width", "border-right-width"),
+        ("border-block-start-width", "border-top-width"),
+        ("border-block-end-width", "border-bottom-width"),
+        ("border-inline-start-color", "border-left-color"),
+        ("border-inline-end-color", "border-right-color"),
+        ("border-block-start-color", "border-top-color"),
+        ("border-block-end-color", "border-bottom-color"),
+        ("border-inline-start-style", "border-left-style"),
+        ("border-inline-end-style", "border-right-style"),
+        ("border-block-start-style", "border-top-style"),
+        ("border-block-end-style", "border-bottom-style"),
+    ];
+    for (logical, physical) in LONGHAND_MAP {
+        if prop == *logical {
+            return vec![Declaration::new(
+                physical.to_string(),
+                decl.value,
+                decl.important,
+            )];
+        }
+    }
+
+    // Logical size properties map directly (inline-size → width,
+    // block-size → height) — these are rare but trivial to support.
+    const SIZE_MAP: &[(&str, &str)] = &[
+        ("inline-size", "width"),
+        ("block-size", "height"),
+        ("min-inline-size", "min-width"),
+        ("min-block-size", "min-height"),
+        ("max-inline-size", "max-width"),
+        ("max-block-size", "max-height"),
+    ];
+    for (logical, physical) in SIZE_MAP {
+        if prop == *logical {
+            return vec![Declaration::new(
+                physical.to_string(),
+                decl.value,
+                decl.important,
+            )];
+        }
+    }
+
+    vec![decl]
 }
 
 /// Expand the `grid-template` shorthand.
@@ -1168,6 +1281,78 @@ mod tests {
         for d in &result {
             assert_eq!(d.value, kw("thin"));
         }
+    }
+
+    // -- Logical properties -----------------------------------------
+
+    #[test]
+    fn logical_margin_inline_start_rewrites_to_left() {
+        let result = expand("margin-inline-start", px(10.0));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].property, "margin-left");
+        assert_eq!(result[0].value, px(10.0));
+    }
+
+    #[test]
+    fn logical_margin_block_end_rewrites_to_bottom() {
+        let result = expand("margin-block-end", px(4.0));
+        assert_eq!(result[0].property, "margin-bottom");
+    }
+
+    #[test]
+    fn logical_padding_inline_shorthand_single_value() {
+        // `padding-inline: 8px` → padding-left: 8px; padding-right: 8px.
+        let result = expand("padding-inline", px(8.0));
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].property, "padding-left");
+        assert_eq!(result[1].property, "padding-right");
+        assert_eq!(result[0].value, px(8.0));
+        assert_eq!(result[1].value, px(8.0));
+    }
+
+    #[test]
+    fn logical_padding_inline_shorthand_two_values() {
+        // `padding-inline: 4px 12px` → padding-left: 4; padding-right: 12.
+        let result = expand(
+            "padding-inline",
+            CssValue::Multiple(vec![px(4.0), px(12.0)]),
+        );
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].property, "padding-left");
+        assert_eq!(result[0].value, px(4.0));
+        assert_eq!(result[1].property, "padding-right");
+        assert_eq!(result[1].value, px(12.0));
+    }
+
+    #[test]
+    fn logical_inset_block_shorthand() {
+        // `inset-block: 0` → top: 0; bottom: 0.
+        let result = expand("inset-block", px(0.0));
+        assert_eq!(result[0].property, "top");
+        assert_eq!(result[1].property, "bottom");
+    }
+
+    #[test]
+    fn logical_border_inline_start_width() {
+        let result = expand("border-inline-start-width", px(2.0));
+        assert_eq!(result[0].property, "border-left-width");
+    }
+
+    #[test]
+    fn logical_inline_size_rewrites_to_width() {
+        let result = expand("inline-size", px(200.0));
+        assert_eq!(result[0].property, "width");
+        let result = expand("block-size", px(100.0));
+        assert_eq!(result[0].property, "height");
+        let result = expand("min-inline-size", px(50.0));
+        assert_eq!(result[0].property, "min-width");
+    }
+
+    #[test]
+    fn logical_rewrite_preserves_important() {
+        let result = expand_imp("margin-inline-end", px(6.0));
+        assert_eq!(result[0].property, "margin-right");
+        assert!(result[0].important);
     }
 
     #[test]

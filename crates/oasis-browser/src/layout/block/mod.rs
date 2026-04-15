@@ -955,7 +955,28 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
             }
         },
         Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            calculate_auto_height(layout_box);
+            // Use `aspect-ratio` to derive height from width when
+            // height is auto, matching the CSS Box Sizing Level 4
+            // rule that `aspect-ratio` applies to non-replaced blocks
+            // whose width is definite. Only honor the ratio when the
+            // author explicitly set a width — with `width: auto` the
+            // block fills its containing block and we'd rather let
+            // content drive the height.
+            if let Some(ratio) = layout_box.style.aspect_ratio
+                && ratio > 0.0
+                && !matches!(layout_box.style.width, Dimension::Auto)
+            {
+                let content_w = layout_box.dimensions.content.width;
+                let derived = content_w / ratio;
+                let content_h = if is_border_box {
+                    (derived - pad_v - bdr_v).max(0.0)
+                } else {
+                    derived.max(0.0)
+                };
+                layout_box.dimensions.content.height = content_h;
+            } else {
+                calculate_auto_height(layout_box);
+            }
         },
     }
 

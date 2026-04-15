@@ -17,8 +17,9 @@ use super::types::{
     ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, Position,
     Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast,
     TextDecorationLine, TextDecorationStyle, TextDirection, TextJustify, TextOverflow,
-    TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TimingFunction, TouchAction,
-    TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap, TimingFunction,
+    TouchAction, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -562,6 +563,18 @@ impl ComputedStyle {
                         "pre" => WhiteSpace::Pre,
                         "pre-wrap" => WhiteSpace::PreWrap,
                         "pre-line" => WhiteSpace::PreLine,
+                        _ => return,
+                    };
+                }
+            },
+            "text-wrap" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_wrap = match kw {
+                        "wrap" => TextWrap::Wrap,
+                        "nowrap" => TextWrap::Nowrap,
+                        "balance" => TextWrap::Balance,
+                        "pretty" => TextWrap::Pretty,
+                        "stable" => TextWrap::Stable,
                         _ => return,
                     };
                 }
@@ -2083,6 +2096,7 @@ impl ComputedStyle {
             "text-decoration" => self.text_decoration = initial.text_decoration,
             "text-transform" => self.text_transform = initial.text_transform,
             "white-space" => self.white_space = initial.white_space,
+            "text-wrap" => self.text_wrap = initial.text_wrap,
             "line-height" => self.line_height = initial.line_height,
             "float" => self.float = initial.float,
             "clear" => self.clear = initial.clear,
@@ -3173,7 +3187,7 @@ mod tests {
                     | "float" | "clear" | "visibility"
                     | "text-align" | "text-decoration"
                     | "text-indent" | "text-transform"
-                    | "white-space" | "line-height"
+                    | "white-space" | "text-wrap" | "line-height"
                     | "letter-spacing" | "word-spacing"
                     | "font-weight" | "font-style" | "font-family"
                     | "list-style-type" | "list-style-position"

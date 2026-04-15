@@ -188,17 +188,57 @@ that cause real breakage on modern sites:
 
 **High-impact, should prioritize:**
 
-- `:has()` selector — shows up in modern sites constantly.
+- ~~`:has()` selector~~ — shipped on `feat/browser-has-selector`. Parses
+  relative-selector lists (`> child`, `+ sib`, `~ sib`, descendant),
+  matches candidates against each relative selector, specificity takes
+  the max of the inner selectors. Ancestor-walking combinators inside
+  the inner selector are scope-bounded to the subject's subtree, so
+  `article:has(.a .b)` can't match via an `.a` that lives above the
+  article.
 - `@container` queries — most new responsive sites use these.
-- `@layer` — cascade layers, used by design systems (Tailwind, etc.).
+- ~~`@layer`~~ — shipped on `feat/browser-has-selector`. Supports
+  statement form (`@layer a, b, c;`), named block form
+  (`@layer a { ... }`), and anonymous block form (`@layer { ... }`).
+  Cascade sort factors layer order between origin and specificity;
+  `!important` reverses layer priority per spec. Known limitation:
+  layer names are sheet-local (not merged across multiple stylesheets)
+  — cross-stylesheet ordering still falls through to source order.
 - ~~CSS nesting (`& .foo { }`)~~ — shipped on `feat/css-nesting` (parse-time
   desugaring: Cartesian-expands parent × child selector lists, substitutes
   `&` inline, supports nested `@media`, no compositor/matcher changes).
-- `color-mix()`, `oklch()`, `color()`, `light-dark()` functions.
-- Logical properties: `margin-inline-start`, `padding-block-end`, etc.
-- `text-wrap: balance` / `pretty` — increasingly common for headings.
-- `:is()` / `:where()` — check if already supported; audit.
-- `aspect-ratio` — audit, may already be supported.
+- ~~`color-mix()`, `oklch()`, `color()`, `light-dark()` functions~~ —
+  shipped on `feat/browser-has-selector`. `hsl/hsla`, `oklch/oklab`,
+  `color(srgb | srgb-linear | display-p3 …)`, `color-mix(in srgb, …)`,
+  and `light-dark()` all parse to our existing sRGB `CssColor`.
+  `color-mix` interpolates in linear sRGB (not in the requested color
+  space for non-`srgb` arguments yet). `light-dark()` always returns
+  the light-mode argument since we don't track a color-scheme context
+  at parse time.
+- ~~Logical properties~~ — shipped on `feat/browser-has-selector`.
+  Parse-time rewrite of `margin-inline-*`, `padding-block-*`,
+  `inset-inline-*`, `border-inline/block-*-{width,color,style}`, and
+  `inline-size`/`block-size` (plus min/max variants) to their LTR
+  physical equivalents. `margin-inline` / `padding-block` /
+  `inset-inline` / `inset-block` shorthands expand with the usual
+  one-value / two-value forms. RTL is still not supported anywhere in
+  the engine so the rewrite is always LTR.
+- ~~`text-wrap: balance` / `pretty`~~ — parsed and stored on
+  `ComputedStyle` on `feat/browser-has-selector`. `wrap` / `nowrap`
+  behave correctly; `balance` / `pretty` / `stable` fall through to
+  `wrap` because the layout-side balancing algorithm is a follow-up.
+- ~~`:is()` / `:where()` — check if already supported; audit.~~
+  **Already done.** Parsed in
+  `crates/oasis-browser/src/css/parser/selectors.rs:166-168` and
+  matched in `crates/oasis-browser/src/css/cascade/matching.rs` via
+  the `Is` / `Where` arms of `matches_simple`.
+- ~~`aspect-ratio` — audit, may already be supported.~~
+  Parsed and stored before; **now wired into block layout on
+  `feat/browser-has-selector`**: non-replaced block elements with
+  `height: auto` derive their content height from the resolved
+  content width and the ratio. Explicit height always wins; when
+  `width` is also `auto` we let children drive the height as before.
+  Replaced-element aspect-ratio sizing (img, video) is still a
+  follow-up.
 
 **Medium-impact:**
 
@@ -264,8 +304,10 @@ order is:
    smallest risk). Catches regressions automatically forever.
 2. **`html5lib-tests` integration** (catches tree-builder weirdness in
    one shot, no speculative design needed).
-3. **CSS long-tail subset: `:has()` + `@container` + CSS nesting**
-   (real-world breakage on modern sites).
+3. **CSS long-tail subset: ~~`:has()`~~ + ~~`@layer`~~ + `@container` +
+   ~~CSS nesting~~** (real-world breakage on modern sites). `:has()`
+   and `@layer` shipped on `feat/browser-has-selector`; CSS nesting
+   shipped on `feat/css-nesting`. `@container` queries remain.
 4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
    backdrop-filter, mask, isolation, filter, will-change in one
    architectural change).

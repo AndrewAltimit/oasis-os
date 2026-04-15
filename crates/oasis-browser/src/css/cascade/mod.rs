@@ -410,12 +410,13 @@ pub fn compute_style(
         tag_cache,
     );
 
-    // Sort by cascade order: specificity, then source order.
+    // Sort by cascade order: origin, layer, specificity, source order.
     // `!important` declarations come after normal ones.
     matched.sort_by(|a, b| {
         a.important
             .cmp(&b.important)
             .then_with(|| a.origin.cmp(&b.origin))
+            .then_with(|| matching::compare_layers(a, b))
             .then_with(|| a.specificity.cmp(&b.specificity))
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
