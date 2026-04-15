@@ -1230,6 +1230,368 @@ fn template_is_a_scope_boundary_for_outer_p() {
     );
 }
 
+// -- adoption agency algorithm (WHATWG §13.2.6.4.7) -------------------
+
+/// Helper: collect every element's tag along a DFS path, skipping
+/// Document/Text/Comment nodes, to make tree shape assertions easy.
+fn element_shape(doc: &Document, id: NodeId) -> String {
+    fn walk(doc: &Document, id: NodeId, out: &mut String) {
+        match &doc.nodes[id].kind {
+            NodeKind::Element(data) => {
+                out.push('<');
+                out.push_str(data.tag.as_str());
+                out.push('>');
+                for &c in &doc.nodes[id].children {
+                    walk(doc, c, out);
+                }
+                out.push_str("</");
+                out.push_str(data.tag.as_str());
+                out.push('>');
+            },
+            NodeKind::Text(s) => out.push_str(s),
+            _ => {
+                for &c in &doc.nodes[id].children {
+                    walk(doc, c, out);
+                }
+            },
+        }
+    }
+    let mut s = String::new();
+    walk(doc, id, &mut s);
+    s
+}
+
+#[test]
+fn adoption_agency_b_p_end_b_end_p() {
+    // WHATWG spec example: `<p>1<b>2<i>3</b>4</i>5</p>`
+    // The adoption agency should rebuild the tree so the `<i>` inside
+    // `<b>` ends up cloned into `<p>` with 4 as its content.
+    let tokens = vec![
+        start("p"),
+        text("1"),
+        start("b"),
+        text("2"),
+        start("i"),
+        text("3"),
+        end("b"),
+        text("4"),
+        end("i"),
+        text("5"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let full_text = doc.text_content(body);
+    // All five characters must survive.
+    assert!(
+        full_text.contains('1')
+            && full_text.contains('2')
+            && full_text.contains('3')
+            && full_text.contains('4')
+            && full_text.contains('5'),
+        "text dropped during adoption agency: {full_text}"
+    );
+    // And they must be in source order.
+    let positions: Vec<_> = ['1', '2', '3', '4', '5']
+        .iter()
+        .map(|&c| full_text.find(c).unwrap())
+        .collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "text order scrambled: {full_text} positions {positions:?}"
+    );
+}
+
+#[test]
+fn adoption_agency_simple_bp_reorder() {
+    // Adversarial `<b><p></b></p>`: after adoption, the `<b>` should
+    // wrap the empty prefix, while the `<p>` contains a cloned `<b>`.
+    // In any case, the end tag sequence must not lose text.
+    let tokens = vec![
+        start("b"),
+        text("bold"),
+        start("p"),
+        text("also"),
+        end("b"),
+        text("plain"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let shape = element_shape(&doc, body);
+    assert!(shape.contains("bold"), "lost 'bold': {shape}");
+    assert!(shape.contains("also"), "lost 'also': {shape}");
+    assert!(shape.contains("plain"), "lost 'plain': {shape}");
+    // There must be a <p> in the tree.
+    assert!(shape.contains("<p>"), "no <p>: {shape}");
+    // `plain` appears under the <p> subtree (whereas the simplified
+    // algorithm used to leave it hanging outside).
+    let p_id = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::P))
+        .copied()
+        .expect("<p> should exist");
+    let p_text = doc.text_content(p_id);
+    assert!(
+        p_text.contains("plain"),
+        "'plain' should live inside <p>: {p_text:?}"
+    );
+}
+
+#[test]
+fn adoption_agency_b_div_close_b() {
+    // <b>1<div>2</b>3</div>
+    // Per spec: the <div> is the furthest block. After adoption, the
+    // <div> moves to the original common ancestor (<body>) and
+    // receives a clone of <b> wrapping "2".
+    let tokens = vec![
+        start("b"),
+        text("1"),
+        start("div"),
+        text("2"),
+        end("b"),
+        text("3"),
+        end("div"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let full_text = doc.text_content(body);
+    assert!(full_text.contains('1'), "'1' dropped: {full_text}");
+    assert!(full_text.contains('2'), "'2' dropped: {full_text}");
+    assert!(full_text.contains('3'), "'3' dropped: {full_text}");
+    // <div> should be a direct child of <body>, not still nested
+    // inside the original <b>.
+    let div_under_body = doc
+        .get(body)
+        .children
+        .iter()
+        .any(|&c| tag_at(&doc, c) == Some(&TagName::Div));
+    assert!(div_under_body, "<div> should be hoisted up to <body>");
+}
+
+// -- template contents isolation (DocumentFragment emulation) ----------
+
+#[test]
+fn template_isolates_form_scope() {
+    // Outer <form>, then inside a <template>, a nested <form>.
+    // Without isolation the nested <form> would be ignored (because
+    // `form_element` is already set by the outer). With isolation, the
+    // inner <form> should be inserted and parse normally.
+    let tokens = vec![
+        start("form"),
+        start("template"),
+        start("form"),
+        start("input"),
+        end("form"),
+        end("template"),
+        end("form"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+
+    // Find the outer <form>, then the <template> inside it, then
+    // confirm the template subtree contains a <form>.
+    let outer_form = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Form))
+        .copied()
+        .expect("outer form");
+    let tmpl = doc
+        .get(outer_form)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Template))
+        .copied()
+        .expect("template inside form");
+    let inner_form = doc
+        .get(tmpl)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Form))
+        .copied();
+    assert!(
+        inner_form.is_some(),
+        "inner <form> should exist inside the template — outer form scope must not leak in"
+    );
+}
+
+// -- foreign content (svg / mathml) ------------------------------------
+
+#[test]
+fn svg_subtree_parses_without_auto_close() {
+    // Inside <svg>, a stray <g> should NOT auto-close the enclosing
+    // <p> the way an HTML block element would. Both <p> and <svg>
+    // must be siblings under body, and <g> must be nested in <svg>.
+    let tokens = vec![
+        start("p"),
+        text("before "),
+        start("svg"),
+        start("g"),
+        start("rect"),
+        end("rect"),
+        end("g"),
+        end("svg"),
+        text(" after"),
+        end("p"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+
+    // Body should have exactly one child: the <p>.
+    let body_children = &doc.get(body).children;
+    let p_children: Vec<_> = body_children
+        .iter()
+        .filter(|&&c| tag_at(&doc, c) == Some(&TagName::P))
+        .copied()
+        .collect();
+    assert_eq!(
+        p_children.len(),
+        1,
+        "expected exactly one <p>; the svg breakout must not have split it"
+    );
+    let p = p_children[0];
+    // The <p> must contain an <svg>, and the full text "before  after"
+    // (with the space inserted between) must round-trip.
+    let svg_id = doc
+        .get(p)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Svg))
+        .copied()
+        .expect("<svg> should be a child of <p>");
+    // <g><rect/></g> chain nested under svg.
+    let g = doc.get(svg_id).children[0];
+    assert_eq!(
+        doc.element(g).unwrap().tag.as_str(),
+        "g",
+        "<g> should be inside <svg>"
+    );
+    let rect = doc.get(g).children[0];
+    assert_eq!(doc.element(rect).unwrap().tag.as_str(), "rect");
+    let full_text = doc.text_content(p);
+    assert!(
+        full_text.contains("before") && full_text.contains("after"),
+        "text around <svg> lost: {full_text:?}"
+    );
+}
+
+#[test]
+fn math_subtree_parses_as_foreign_content() {
+    let tokens = vec![
+        start("math"),
+        start("mi"),
+        text("x"),
+        end("mi"),
+        start("mo"),
+        text("="),
+        end("mo"),
+        start("mn"),
+        text("1"),
+        end("mn"),
+        end("math"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let math_id = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Math))
+        .copied()
+        .expect("<math> root should exist");
+    let children: Vec<&str> = doc
+        .get(math_id)
+        .children
+        .iter()
+        .filter_map(|&c| doc.element(c).map(|e| e.tag.as_str()))
+        .collect();
+    assert_eq!(children, vec!["mi", "mo", "mn"]);
+    assert_eq!(doc.text_content(math_id), "x=1");
+}
+
+#[test]
+fn svg_html_breakout_tag_returns_to_html() {
+    // Seeing a <div> inside <svg> must break out of foreign content
+    // and reparse the <div> as HTML.
+    let tokens = vec![
+        start("svg"),
+        start("rect"),
+        end("rect"),
+        start("div"),
+        text("back to html"),
+        end("div"),
+        end("svg"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    // Body should have two children: svg (with rect) and div.
+    let tags: Vec<&str> = doc
+        .get(body)
+        .children
+        .iter()
+        .filter_map(|&c| doc.element(c).map(|e| e.tag.as_str()))
+        .collect();
+    assert!(
+        tags.contains(&"svg") && tags.contains(&"div"),
+        "expected <svg> and <div> siblings under body, got {tags:?}"
+    );
+    let div = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Div))
+        .copied()
+        .expect("div");
+    assert_eq!(doc.text_content(div), "back to html");
+}
+
+#[test]
+fn svg_self_closing_empty_element() {
+    // <svg><circle /></svg> — `<circle />` has self_closing=true and
+    // must not stay on the open stack.
+    let tokens = vec![
+        start("svg"),
+        Token::StartTag(super::super::tokenizer::StartTagToken {
+            name: "circle".into(),
+            self_closing: true,
+            attributes: Vec::new(),
+        }),
+        end("svg"),
+        Token::Eof,
+    ];
+    let doc = TreeBuilder::build(tokens);
+    let body = doc.body().unwrap();
+    let svg = doc
+        .get(body)
+        .children
+        .iter()
+        .find(|&&c| tag_at(&doc, c) == Some(&TagName::Svg))
+        .copied()
+        .expect("svg");
+    let circle_count = doc
+        .get(svg)
+        .children
+        .iter()
+        .filter(|&&c| {
+            doc.element(c)
+                .map(|e| e.tag.as_str() == "circle")
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(circle_count, 1);
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;

@@ -1,0 +1,112 @@
+#data
+<p>hello</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "hello"
+
+#data
+<div><span>x</span></div>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <div>
+|       <span>
+|         "x"
+
+#data
+<p>a<b>b<i>c</b>d</i>e</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "a"
+|       <b>
+|         "b"
+|         <i>
+|           "c"
+|       <i>
+|         "d"
+|       "e"
+
+#data
+<b><div>x</div></b>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <b>
+|       <div>
+|         "x"
+
+#data
+<p>x<svg><g><rect></rect></g></svg>y</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "x"
+|       <svg>
+|         <g>
+|           <rect>
+|       "y"
+
+#data
+<math><mi>x</mi></math>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <math>
+|       <mi>
+|         "x"
+
+#data
+<template><p>x</p></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       <p>
+|         "x"
+|   <body>
+
+#data
+<ul><li>a<li>b<li>c</ul>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <ul>
+|       <li>
+|         "a"
+|       <li>
+|         "b"
+|       <li>
+|         "c"
+
+#data
+<table><tr><td>cell</td></tr></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "cell"
