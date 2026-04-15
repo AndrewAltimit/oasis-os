@@ -995,7 +995,7 @@ impl ComputedStyle {
                     CssValue::Multiple(vs) => {
                         debug_assert!(!vs.is_empty(), "empty Multiple in background-image");
                         vs.first().unwrap_or(value)
-                    }
+                    },
                     _ => value,
                 };
                 if let Some(kw) = as_keyword(first) {
@@ -1719,7 +1719,7 @@ impl ComputedStyle {
                     CssValue::Multiple(vs) => {
                         debug_assert!(!vs.is_empty(), "empty Multiple in mask-image");
                         vs.first().unwrap_or(value)
-                    }
+                    },
                     _ => value,
                 };
                 if as_keyword(first) == Some("none") {
