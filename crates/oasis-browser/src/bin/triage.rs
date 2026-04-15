@@ -338,7 +338,14 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     }
     out.push('\n');
 
-    for label in ["panic", "paint-error", "slow", "empty-layout", "no-draw-calls", "ok"] {
+    for label in [
+        "panic",
+        "paint-error",
+        "slow",
+        "empty-layout",
+        "no-draw-calls",
+        "ok",
+    ] {
         let Some(entries) = by_bucket.get(label) else {
             continue;
         };
