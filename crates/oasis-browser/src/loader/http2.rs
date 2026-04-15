@@ -920,4 +920,59 @@ mod tests {
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.body, b"body");
     }
+
+    /// Live end-to-end probe against `www.wikipedia.org`. Hidden
+    /// behind `#[ignore]` so CI doesn't flake on network failures —
+    /// run with `cargo test -p oasis-browser wikipedia_live -- --ignored`.
+    #[test]
+    #[ignore]
+    fn wikipedia_live_h2() {
+        use crate::loader::http::http_get;
+        use oasis_net::tls_rustls::RustlsTlsProvider;
+        use oasis_types::tls::TlsProvider;
+
+        let provider = RustlsTlsProvider::new();
+        let tls: &dyn TlsProvider = &provider;
+        let url = crate::loader::Url::parse("https://www.wikipedia.org/").unwrap();
+        let resp =
+            http_get(&url, Some(tls)).unwrap_or_else(|e| panic!("wikipedia fetch failed: {e}"));
+        let body = String::from_utf8_lossy(&resp.body);
+        assert!(
+            body.len() > 10_000,
+            "body suspiciously small ({} bytes): {:?}",
+            body.len(),
+            &body[..body.len().min(400)]
+        );
+        assert!(
+            body.contains("<html") || body.contains("<!DOCTYPE") || body.contains("<!doctype"),
+            "unexpected body prefix: {:?}",
+            &body[..body.len().min(400)]
+        );
+        // Real Wikipedia content signal.
+        assert!(
+            body.contains("Wikipedia"),
+            "body did not contain 'Wikipedia'"
+        );
+    }
+
+    /// Similar live probe against `github.com`, another major CDN that
+    /// hard-requires HTTP/2.
+    #[test]
+    #[ignore]
+    fn github_live_h2() {
+        use crate::loader::http::http_get;
+        use oasis_net::tls_rustls::RustlsTlsProvider;
+        use oasis_types::tls::TlsProvider;
+
+        let provider = RustlsTlsProvider::new();
+        let tls: &dyn TlsProvider = &provider;
+        let url = crate::loader::Url::parse("https://github.com/").unwrap();
+        let resp = http_get(&url, Some(tls)).unwrap_or_else(|e| panic!("github fetch failed: {e}"));
+        assert_eq!(resp.status, 200);
+        assert!(
+            resp.body.len() > 5_000,
+            "body suspiciously small: {} bytes",
+            resp.body.len()
+        );
+    }
 }
