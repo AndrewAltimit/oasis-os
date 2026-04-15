@@ -11,15 +11,15 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
     AnimationPlayState, Appearance, BackfaceVisibility, BackgroundBox, BackgroundImage,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderCollapse, BorderRadius,
-    BorderStyle, BoxSizing, Clear, ColorScheme, ContentVisibility, Cursor, Display, FlexDirection,
-    FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, Hyphens,
-    ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition, ListStyleType,
-    ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, Position,
-    Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast,
-    TextDecorationLine, TextDecorationStyle, TextDirection, TextJustify, TextOverflow,
-    TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap, TimingFunction,
-    TouchAction, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    BorderStyle, BoxSizing, Clear, ColorScheme, ContainerType, ContentVisibility, Cursor, Display,
+    FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
+    Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
+    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
+    PointerEvents, Position, Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign,
+    TextAlignLast, TextDecorationLine, TextDecorationStyle, TextDirection, TextJustify,
+    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap,
+    TimingFunction, TouchAction, TransformStyle, Transition, UserSelect, VerticalAlign, Visibility,
+    WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -1925,6 +1925,29 @@ impl ComputedStyle {
                 }
             },
 
+            // -- Container queries ------------------------------------
+            "container-type" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.container_type = match kw {
+                        "normal" => ContainerType::Normal,
+                        "inline-size" => ContainerType::InlineSize,
+                        "size" => ContainerType::Size,
+                        _ => return,
+                    };
+                }
+            },
+            "container-name" => {
+                self.container_name = parse_container_name_list(value);
+            },
+            "container" => {
+                // `container: <name> [/ <type>]` shorthand.
+                let (names, ty) = parse_container_shorthand(value);
+                self.container_name = names;
+                if let Some(t) = ty {
+                    self.container_type = t;
+                }
+            },
+
             // -- Inset shorthand --------------------------------------
             "inset" => {
                 let dim = resolve_dimension(value, parent_font_size);
@@ -1938,7 +1961,97 @@ impl ComputedStyle {
             _ => {},
         }
     }
+}
 
+/// Parse a `container-name` value: a list of identifiers, the
+/// keyword `none`, or empty. Returns the list of names; `none`
+/// produces an empty list.
+pub(crate) fn parse_container_name_list(value: &CssValue) -> Vec<String> {
+    fn push_ident(out: &mut Vec<String>, kw: &str) {
+        let kw = kw.trim();
+        if kw.is_empty() || kw.eq_ignore_ascii_case("none") {
+            return;
+        }
+        out.push(kw.to_string());
+    }
+    let mut out = Vec::new();
+    match value {
+        CssValue::Keyword(kw) => {
+            for tok in kw.split_whitespace() {
+                push_ident(&mut out, tok);
+            }
+        },
+        CssValue::String(s) => {
+            for tok in s.split_whitespace() {
+                push_ident(&mut out, tok);
+            }
+        },
+        CssValue::Multiple(parts) => {
+            for p in parts {
+                out.extend(parse_container_name_list(p));
+            }
+        },
+        _ => {},
+    }
+    out
+}
+
+/// Parse a `container` shorthand: `<name> [/ <type>]`.
+///
+/// Examples:
+/// - `container: card` → name = ["card"], type = None
+/// - `container: card / inline-size` → name = ["card"], type = InlineSize
+/// - `container: none / size` → name = [], type = Size
+pub(crate) fn parse_container_shorthand(value: &CssValue) -> (Vec<String>, Option<ContainerType>) {
+    // Flatten into a single string and split on `/`.
+    fn flatten(v: &CssValue, out: &mut String) {
+        match v {
+            CssValue::Keyword(kw) => {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(kw);
+            },
+            CssValue::String(s) => {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(s);
+            },
+            CssValue::Multiple(parts) => {
+                for p in parts {
+                    flatten(p, out);
+                }
+            },
+            _ => {},
+        }
+    }
+    let mut raw = String::new();
+    flatten(value, &mut raw);
+    let mut split = raw.splitn(2, '/');
+    let name_part = split.next().unwrap_or("").trim();
+    let type_part = split.next().map(|s| s.trim());
+
+    let names = if name_part.eq_ignore_ascii_case("none") || name_part.is_empty() {
+        Vec::new()
+    } else {
+        name_part
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect()
+    };
+
+    let ty = type_part.and_then(|t| match t.to_ascii_lowercase().as_str() {
+        "normal" => Some(ContainerType::Normal),
+        "inline-size" => Some(ContainerType::InlineSize),
+        "size" => Some(ContainerType::Size),
+        _ => None,
+    });
+
+    (names, ty)
+}
+
+impl ComputedStyle {
     /// Parse a `transition` shorthand value into a [`Transition`].
     ///
     /// Format: `<property> <duration> [<timing>] [<delay>]`

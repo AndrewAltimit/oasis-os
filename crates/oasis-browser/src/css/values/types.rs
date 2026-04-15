@@ -290,6 +290,21 @@ pub enum TextWrap {
     Stable,
 }
 
+/// CSS `container-type` property — declares whether an element
+/// establishes a query container, and along which axes its size can
+/// be queried by descendant `@container` rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerType {
+    /// Default. Element is not a query container.
+    Normal,
+    /// Element is a query container for inline-axis size queries
+    /// (`inline-size`, `width` in horizontal-LTR writing modes).
+    InlineSize,
+    /// Element is a query container for both inline- and block-axis
+    /// size queries.
+    Size,
+}
+
 /// CSS `object-fit` property for replaced elements (images, video).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectFit {

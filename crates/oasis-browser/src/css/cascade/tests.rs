@@ -4,7 +4,7 @@ use super::super::parser::{
     AttrOp, Combinator, CompoundSelector, CssValue, Declaration, PropertyId, Rule, Selector,
     SelectorList, SimpleSelector, Stylesheet,
 };
-use super::super::values::{Display, FontWeight};
+use super::super::values::{ComputedStyle, Display, FontWeight};
 use super::*;
 use crate::html::dom::{Attribute, Document, ElementData, Node, NodeKind, TagName};
 use oasis_types::backend::Color;
@@ -68,6 +68,7 @@ fn make_rule(selectors: Vec<Selector>, declarations: Vec<Declaration>) -> Rule {
         selectors: SelectorList { selectors },
         declarations,
         layer: None,
+        container: None,
     }
 }
 
@@ -801,6 +802,7 @@ fn hover_matches_hovered_node() {
         hover_node: Some(3),
         visited_urls: None,
         focused_node: None,
+        containers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -840,6 +842,7 @@ fn hover_matches_ancestor_of_hovered_node() {
         hover_node: Some(p_id),
         visited_urls: None,
         focused_node: None,
+        containers: None,
     };
     // <div> (ancestor) should also match :hover.
     let __out = &doc.nodes[3].kind;
@@ -871,6 +874,7 @@ fn visited_matches_with_visited_url() {
         hover_node: None,
         visited_urls: Some(&visited),
         focused_node: None,
+        containers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -901,6 +905,7 @@ fn link_matches_unvisited_anchor() {
         hover_node: None,
         visited_urls: Some(&visited),
         focused_node: None,
+        containers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -924,6 +929,7 @@ fn hover_style_applied_via_cascade() {
         hover_node: Some(3),
         visited_urls: None,
         focused_node: None,
+        containers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let style = styles[3].as_ref().expect("p should have style");
@@ -952,6 +958,7 @@ fn visited_style_applied_via_cascade() {
         hover_node: None,
         visited_urls: Some(&visited),
         focused_node: None,
+        containers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &vctx);
     let style = styles[3].as_ref().expect("a should have style");
@@ -1968,6 +1975,7 @@ fn pseudo_class_with_type_selector() {
         hover_node: Some(3),
         visited_urls: None,
         focused_node: None,
+        containers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let a_style = styles[3].as_ref().expect("a should have style");
@@ -1979,6 +1987,7 @@ fn pseudo_class_with_type_selector() {
         hover_node: Some(4),
         visited_urls: None,
         focused_node: None,
+        containers: None,
     };
     let styles2 = style_tree(&doc, &[&sheet], &[], &hctx_p);
     let p_style = styles2[4].as_ref().unwrap();
@@ -2326,6 +2335,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2338,6 +2348,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                 ],
                 keyframes: vec![],
@@ -2391,6 +2402,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2403,6 +2415,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                 ],
                 keyframes: vec![],
@@ -2454,6 +2467,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                     Rule {
                         selectors: SelectorList {
@@ -2466,6 +2480,7 @@ mod prop_tests {
                             property_id: PropertyId::from_name("color"),
                         }],
                         layer: None,
+                        container: None,
                     },
                 ],
                 keyframes: vec![],
@@ -2545,5 +2560,172 @@ mod prop_tests {
             let tokens = CssTokenizer::new(&input).tokenize();
             let _ = crate::css::parser::parse_value_list(&tokens);
         }
+    }
+}
+
+// -------------------------------------------------------------------
+// @container query cascade
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod container_query_cascade_tests {
+    use super::*;
+
+    /// Build a doc shaped like `<html><body><div class="card"><p/></div></body></html>`,
+    /// where the div is the query container and the p is the rule subject.
+    fn make_card_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+        let div_id = 3;
+        let p_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(div_id),
+            children: vec![],
+        });
+        doc.nodes[div_id].children.push(p_id);
+        (doc, div_id, p_id)
+    }
+
+    fn lookup_with(div_id: NodeId, names: Vec<&str>, w: f32, h: f32) -> ContainerLookup {
+        let mut l = ContainerLookup::new();
+        l.insert(
+            div_id,
+            ContainerEntry {
+                names: names.iter().map(|s| s.to_string()).collect(),
+                width: w,
+                height: h,
+            },
+        );
+        l
+    }
+
+    fn p_color_with_lookup(
+        sheet: &Stylesheet,
+        doc: &Document,
+        p_id: NodeId,
+        lookup: Option<&ContainerLookup>,
+    ) -> Color {
+        let ctx = CascadeContext {
+            hover_node: None,
+            visited_urls: None,
+            focused_node: None,
+            containers: lookup,
+        };
+        let styles = style_tree(doc, &[sheet], &[], &ctx);
+        styles[p_id].as_ref().unwrap().color
+    }
+
+    #[test]
+    fn min_width_matches_when_container_wide_enough() {
+        let css = "p { color: black; } @container (min-width: 400px) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, div_id, p_id) = make_card_doc();
+        let lookup = lookup_with(div_id, vec![], 500.0, 100.0);
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, Some(&lookup)),
+            Color::rgb(255, 0, 0),
+            "container is 500px ≥ 400px → red wins"
+        );
+    }
+
+    #[test]
+    fn min_width_does_not_match_when_container_too_narrow() {
+        let css = "p { color: black; } @container (min-width: 400px) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, div_id, p_id) = make_card_doc();
+        let lookup = lookup_with(div_id, vec![], 300.0, 100.0);
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, Some(&lookup)),
+            Color::BLACK,
+            "container is 300px < 400px → black wins"
+        );
+    }
+
+    #[test]
+    fn rule_skipped_without_lookup() {
+        // Without a container snapshot the gated rule must not contribute.
+        let css = "p { color: black; } @container (min-width: 1px) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, _, p_id) = make_card_doc();
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, None),
+            Color::BLACK,
+            "no lookup → container rules treated as never-matching"
+        );
+    }
+
+    #[test]
+    fn named_container_only_matches_matching_name() {
+        let css = "@container card (min-width: 100px) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, div_id, p_id) = make_card_doc();
+
+        // Wrong name → no match → falls back to UA default (Color::BLACK).
+        let wrong = lookup_with(div_id, vec!["sidebar"], 500.0, 100.0);
+        let style_with_wrong = p_color_with_lookup(&sheet, &doc, p_id, Some(&wrong));
+
+        // Right name → match → red.
+        let right = lookup_with(div_id, vec!["card"], 500.0, 100.0);
+        let style_with_right = p_color_with_lookup(&sheet, &doc, p_id, Some(&right));
+
+        assert_eq!(style_with_wrong, Color::BLACK);
+        assert_eq!(style_with_right, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn max_width_predicate() {
+        let css = "p { color: black; } @container (max-width: 500px) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, div_id, p_id) = make_card_doc();
+
+        let narrow = lookup_with(div_id, vec![], 400.0, 100.0);
+        let wide = lookup_with(div_id, vec![], 600.0, 100.0);
+
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, Some(&narrow)),
+            Color::rgb(255, 0, 0)
+        );
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, Some(&wide)),
+            Color::BLACK
+        );
+    }
+
+    #[test]
+    fn empty_features_never_match() {
+        // `style(...)` parses to an empty feature list; should never apply.
+        let css = "p { color: black; } @container style(--x: y) { p { color: red; } }";
+        let sheet = Stylesheet::parse(css);
+        let (doc, div_id, p_id) = make_card_doc();
+        let lookup = lookup_with(div_id, vec![], 500.0, 100.0);
+        assert_eq!(
+            p_color_with_lookup(&sheet, &doc, p_id, Some(&lookup)),
+            Color::BLACK
+        );
+    }
+
+    #[test]
+    fn build_container_lookup_picks_up_container_type() {
+        use crate::css::values::types::ContainerType;
+        use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, Rect};
+
+        let mut style = ComputedStyle::default();
+        style.container_type = ContainerType::InlineSize;
+        style.container_name = vec!["card".to_string()];
+
+        let mut child = LayoutBox::new(BoxType::Block, style, Some(7));
+        child.dimensions = Dimensions {
+            content: Rect::new(0.0, 0.0, 320.0, 240.0),
+            ..Dimensions::default()
+        };
+
+        let lookup = build_container_lookup(&child);
+        let entry = lookup.get(7).expect("container should be indexed");
+        assert_eq!(entry.names, vec!["card".to_string()]);
+        assert!((entry.width - 320.0).abs() < 0.01);
+        assert!((entry.height - 240.0).abs() < 0.01);
     }
 }

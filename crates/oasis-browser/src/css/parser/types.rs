@@ -559,6 +559,39 @@ pub struct Rule {
     /// Unlayered author rules win over layered author rules (for normal
     /// declarations); `!important` reverses the order within layers.
     pub layer: Option<u16>,
+    /// `@container` condition the rule was nested inside, if any. The
+    /// rule only contributes its declarations when this condition
+    /// evaluates true against the nearest matching container ancestor
+    /// at cascade time. `None` for unconditional rules.
+    pub container: Option<ContainerCondition>,
+}
+
+/// Parsed `@container` condition: optional container name plus a
+/// conjunction of size feature predicates (`min-width`, `max-width`,
+/// `min-height`, `max-height`, `width`, `height`, plus the
+/// `inline-size` / `block-size` aliases).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerCondition {
+    /// Optional container name. `None` matches any unnamed or named
+    /// container ancestor; `Some(name)` matches only ancestors whose
+    /// `container-name` includes this identifier.
+    pub name: Option<String>,
+    /// Feature predicates joined with `and`. All must hold against the
+    /// nearest matching container's size for the rule to apply.
+    pub features: Vec<ContainerFeature>,
+}
+
+/// A single `@container` size feature predicate. Pixel values only —
+/// percent / vw / vh are not supported in the condition (they don't
+/// have a useful meaning against a container's own box).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContainerFeature {
+    MinWidth(f32),
+    MaxWidth(f32),
+    Width(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    Height(f32),
 }
 
 /// A single keyframe stop (percentage + declarations).

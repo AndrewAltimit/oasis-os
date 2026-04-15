@@ -455,6 +455,7 @@ impl BrowserWidget {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
             focused_node: self.focused_node,
+            containers: self.container_lookup.as_ref(),
         };
 
         let mut any_changed = false;
@@ -890,6 +891,7 @@ impl BrowserWidget {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
             focused_node: self.focused_node,
+            containers: self.container_lookup.as_ref(),
         };
 
         let mut any_changed = false;

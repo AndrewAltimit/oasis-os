@@ -195,7 +195,23 @@ that cause real breakage on modern sites:
   the inner selector are scope-bounded to the subject's subtree, so
   `article:has(.a .b)` can't match via an `.a` that lives above the
   article.
-- `@container` queries — most new responsive sites use these.
+- ~~`@container` queries~~ — shipped on `feat/browser-container-queries`.
+  Parses `@container [name?] (min-width|max-width|width|min-height|
+  max-height|height: Npx)` (plus `inline-size` / `block-size` aliases),
+  joined with `and`. Conditions are stored on each contained `Rule` and
+  evaluated at cascade time against the nearest matching container
+  ancestor. `container-type` (`normal` / `inline-size` / `size`),
+  `container-name`, and the `container: <name> [/ <type>]` shorthand are
+  all parsed into `ComputedStyle`. The pipeline does a second
+  cascade+layout pass after the first layout when any rule is
+  container-gated, populating a `ContainerLookup` snapshot of every
+  query container's content-box size; pages without `@container` skip
+  the work entirely. Limitations: nested `@container` rules use
+  innermost-wins instead of AND-combining; style queries
+  (`@container style(...)`) are parsed but always evaluate false; we
+  don't currently iterate the relayout to a fixpoint, so a single pass
+  catches the common "container resizes its descendants based on the
+  first laid-out width" case but not pathological circular dependencies.
 - ~~`@layer`~~ — shipped on `feat/browser-has-selector`. Supports
   statement form (`@layer a, b, c;`), named block form
   (`@layer a { ... }`), and anonymous block form (`@layer { ... }`).
@@ -304,10 +320,10 @@ order is:
    smallest risk). Catches regressions automatically forever.
 2. **`html5lib-tests` integration** (catches tree-builder weirdness in
    one shot, no speculative design needed).
-3. **CSS long-tail subset: ~~`:has()`~~ + ~~`@layer`~~ + `@container` +
-   ~~CSS nesting~~** (real-world breakage on modern sites). `:has()`
-   and `@layer` shipped on `feat/browser-has-selector`; CSS nesting
-   shipped on `feat/css-nesting`. `@container` queries remain.
+3. ~~**CSS long-tail subset: `:has()` + `@layer` + `@container` +
+   CSS nesting**~~ — all shipped. `:has()` and `@layer` on
+   `feat/browser-has-selector`; CSS nesting on `feat/css-nesting`;
+   `@container` on `feat/browser-container-queries`.
 4. **Compositor overhaul** (high effort but unlocks mix-blend-mode,
    backdrop-filter, mask, isolation, filter, will-change in one
    architectural change).

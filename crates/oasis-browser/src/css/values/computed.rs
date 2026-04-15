@@ -8,14 +8,14 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, Appearance, BackfaceVisibility, BackgroundBox,
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode,
     BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
-    ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float,
-    FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight, GridTrackSize,
-    Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf, ListStylePosition,
-    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
-    PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign,
-    ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection, TextJustify,
-    TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition, TextWrap,
-    TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
+    ContainerType, ContentVisibility, Cursor, Dimension, Display, FilterFunction, FlexDirection,
+    FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant, FontWeight,
+    GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
+    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
+    OverscrollBehavior, PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior,
+    ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection,
+    TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition,
+    TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
     Visibility, WhiteSpace, WordBreak,
 };
 
@@ -336,6 +336,17 @@ pub struct ComputedStyle {
 
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
+
+    // -- Container queries ----------------------------------------------
+    /// `container-type`. Default `Normal`. When set to `InlineSize` or
+    /// `Size`, this element establishes a query container that
+    /// descendant `@container` rules can target.
+    pub container_type: ContainerType,
+    /// `container-name`. Zero or more identifiers; an `@container name (...)`
+    /// rule must match one of these names on an ancestor for its rules
+    /// to apply. Empty means the container is unnamed and only matches
+    /// nameless `@container (...)` queries.
+    pub container_name: Vec<String>,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -593,6 +604,9 @@ impl Default for ComputedStyle {
             justify_items: JustifySelf::Stretch,
 
             custom_properties: FxHashMap::default(),
+
+            container_type: ContainerType::Normal,
+            container_name: Vec::new(),
         }
     }
 }

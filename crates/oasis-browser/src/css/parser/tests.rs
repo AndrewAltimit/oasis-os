@@ -1109,7 +1109,8 @@ mod prop {
 
     #[test]
     fn supports_unrecognized_property_excludes_rules() {
-        let css = "@supports (container-type: inline-size) { .c { width: 100px; } }";
+        // `paint-order` is not in our SUPPORTED_PROPERTIES list.
+        let css = "@supports (paint-order: stroke) { .c { width: 100px; } }";
         let sheet = parse(css);
         assert!(
             sheet.rules.is_empty(),
@@ -1130,7 +1131,7 @@ mod prop {
 
     #[test]
     fn supports_not_condition() {
-        let css = "@supports not (container-type: inline-size) { p { color: red; } }";
+        let css = "@supports not (paint-order: stroke) { p { color: red; } }";
         let sheet = parse(css);
         assert_eq!(sheet.rules.len(), 1, "not unsupported should include rules");
     }
@@ -1375,5 +1376,104 @@ mod nesting_tests {
                 }
             }
         }
+    }
+}
+
+// -------------------------------------------------------------------
+// @container query parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod container_query_tests {
+    use super::*;
+
+    #[test]
+    fn parses_min_width_condition() {
+        let css = "@container (min-width: 400px) { .card { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0]
+            .container
+            .as_ref()
+            .expect("rule should carry a container condition");
+        assert!(cond.name.is_none());
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(400.0)]);
+        assert_eq!(sheet.rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn parses_named_container() {
+        let css = "@container card (min-width: 200px) { p { color: blue; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.name.as_deref(), Some("card"));
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(200.0)]);
+    }
+
+    #[test]
+    fn parses_max_width_inline_size_alias() {
+        let css = "@container (max-inline-size: 320px) { p { font-size: 12px; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MaxWidth(320.0)]);
+    }
+
+    #[test]
+    fn parses_and_joined_features() {
+        let css = "@container (min-width: 200px) and (max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_size_alias_maps_to_height() {
+        let css = "@container (min-block-size: 100px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MinHeight(100.0)]);
+    }
+
+    #[test]
+    fn multiple_inner_rules_all_tagged() {
+        let css = r#"
+            @container (min-width: 300px) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for rule in &sheet.rules {
+            let cond = rule
+                .container
+                .as_ref()
+                .expect("each child should be tagged");
+            assert_eq!(cond.features, vec![ContainerFeature::MinWidth(300.0)]);
+        }
+    }
+
+    #[test]
+    fn unrelated_rules_have_no_container() {
+        let css = "p { color: red; }";
+        let sheet = parse(css);
+        assert!(sheet.rules[0].container.is_none());
+    }
+
+    #[test]
+    fn unparseable_feature_drops_to_empty_list() {
+        // `style(--x)` style queries aren't supported; the condition
+        // should parse to an empty feature list which never matches.
+        let css = "@container style(--theme: dark) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert!(cond.features.is_empty());
     }
 }

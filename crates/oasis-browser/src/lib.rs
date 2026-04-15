@@ -384,6 +384,12 @@ pub struct BrowserWidget {
     /// Invalidated on navigation when stylesheets change.
     cached_selector_index: Option<css::cascade::SelectorIndex>,
 
+    /// Snapshot of post-layout container sizes used to evaluate
+    /// `@container` rules during cascade. Built from the layout tree
+    /// after the first layout pass and reused by hover/focus restyles
+    /// until the next full reload.
+    container_lookup: Option<css::cascade::ContainerLookup>,
+
     /// Last time a hover restyle was performed (for throttling).
     last_hover_time: Option<std::time::Instant>,
 
@@ -584,6 +590,7 @@ impl BrowserWidget {
             cached_author_sheets: Vec::new(),
             cached_inline_styles: Vec::new(),
             cached_selector_index: None,
+            container_lookup: None,
             last_hover_time: None,
             #[cfg(feature = "javascript")]
             console_output: Vec::new(),

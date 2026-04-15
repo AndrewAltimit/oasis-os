@@ -12,8 +12,9 @@ pub use super::helpers::MediaViewport;
 pub(crate) use declarations::parse_value_list;
 #[allow(unused_imports)]
 pub use types::{
-    AttrOp, Combinator, CompoundSelector, CssColor, CssValue, Declaration, KeyframeStop,
-    KeyframesRule, LengthUnit, PropertyId, Rule, Selector, SimpleSelector, Specificity, Stylesheet,
+    AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CssColor, CssValue,
+    Declaration, KeyframeStop, KeyframesRule, LengthUnit, PropertyId, Rule, Selector,
+    SimpleSelector, Specificity, Stylesheet,
 };
 
 pub(crate) use types::SelectorList;
@@ -171,6 +172,10 @@ impl CssParser {
                     }
                 } else if lc == "layer" {
                     for r in self.parse_layer_rule() {
+                        flatten_nested_rule(None, r, &mut rules);
+                    }
+                } else if lc == "container" {
+                    for r in self.parse_container_rule() {
                         flatten_nested_rule(None, r, &mut rules);
                     }
                 } else {
@@ -432,6 +437,75 @@ impl CssParser {
         }
     }
 
+    /// Parse an `@container [name?] (condition) { ... }` rule.
+    ///
+    /// The optional name precedes the condition. Conditions are joined
+    /// with `and` and may use `min-width` / `max-width` / `width` /
+    /// `min-height` / `max-height` / `height`, plus the
+    /// `inline-size` / `block-size` aliases (treated as their physical
+    /// equivalents under our LTR-only assumption). Anything we can't
+    /// parse evaluates as never-matching at cascade time.
+    fn parse_container_rule(&mut self) -> Vec<ParsedRule> {
+        self.advance(); // consume @container token
+        self.skip_whitespace();
+
+        // Optional container name comes before the condition. It's a
+        // bare ident (not introduced by `(`).
+        let name = if let CssToken::Ident(s) = self.peek().clone() {
+            self.advance();
+            self.skip_whitespace();
+            Some(s)
+        } else {
+            None
+        };
+
+        // Collect everything up to the opening brace as the condition.
+        let mut condition = String::new();
+        loop {
+            match self.peek() {
+                CssToken::OpenBrace | CssToken::Eof => break,
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => condition.push_str(&s),
+                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
+                        CssToken::Dimension(n, unit) => {
+                            condition.push_str(&format!("{n}{unit}"));
+                        },
+                        CssToken::Whitespace => condition.push(' '),
+                        CssToken::OpenParen => condition.push('('),
+                        CssToken::CloseParen => condition.push(')'),
+                        CssToken::Colon => condition.push(':'),
+                        CssToken::Comma => condition.push(','),
+                        CssToken::Delim(c) => condition.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+
+        if !self.expect(&CssToken::OpenBrace) {
+            return Vec::new();
+        }
+
+        let inner_rules = self.parse_at_rule_block();
+
+        let cond = parse_container_condition(name, &condition);
+        // Tag every emitted child rule with this condition. Inner rules
+        // that already carry a container condition (from a nested
+        // `@container`) keep theirs — innermost wins. A future
+        // refinement could AND the conditions instead.
+        let mut tagged = Vec::with_capacity(inner_rules.len());
+        for mut r in inner_rules {
+            if r.container.is_none() {
+                r.container = Some(cond.clone());
+            }
+            tagged.push(r);
+        }
+        tagged
+    }
+
     /// Parse a single layer name: an identifier optionally followed by
     /// `.ident` segments (e.g. `framework.theme`). Returns `None` if
     /// no identifier is present.
@@ -499,6 +573,10 @@ impl CssParser {
                     inner_rules.extend(self.parse_supports_rule());
                     continue;
                 }
+                if lc == "container" {
+                    inner_rules.extend(self.parse_container_rule());
+                    continue;
+                }
                 self.skip_at_rule();
                 continue;
             }
@@ -544,6 +622,7 @@ impl CssParser {
             declarations,
             nested,
             layer: self.current_layer,
+            container: None,
         })
     }
 
@@ -796,6 +875,8 @@ struct ParsedRule {
     nested: Vec<ParsedRule>,
     /// Cascade layer the rule belongs to, or `None` if unlayered.
     layer: Option<u16>,
+    /// `@container` condition the rule was nested inside, if any.
+    container: Option<ContainerCondition>,
 }
 
 /// Flatten a (possibly-nested) parsed rule into concrete [`Rule`]s,
@@ -811,6 +892,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
         declarations,
         nested,
         layer,
+        container,
     } = rule;
 
     let effective = match parent {
@@ -826,6 +908,7 @@ fn flatten_nested_rule(parent: Option<&SelectorList>, rule: ParsedRule, out: &mu
             selectors: effective.clone(),
             declarations,
             layer,
+            container: container.clone(),
         });
     }
 
@@ -924,6 +1007,58 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
     }
 
     Selector { parts: out }
+}
+
+// -------------------------------------------------------------------
+// @container condition parsing
+// -------------------------------------------------------------------
+
+/// Parse a `@container` condition string into a [`ContainerCondition`].
+///
+/// Recognises `(min-width: Npx)`, `(max-width: Npx)`, `(width: Npx)`,
+/// the `height` variants, and the `inline-size` / `block-size` aliases
+/// (treated as their physical equivalents under our LTR-only horizontal
+/// writing-mode assumption). Multiple features are joined with ` and `.
+/// Any feature we can't parse causes that predicate to be dropped — the
+/// remaining predicates still apply, and an empty feature list always
+/// evaluates true.
+fn parse_container_condition(name: Option<String>, raw: &str) -> ContainerCondition {
+    let mut features = Vec::new();
+    let raw = raw.trim();
+    if !raw.is_empty() {
+        for part in raw.split(" and ") {
+            let inner = part
+                .trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim();
+            if let Some(f) = parse_container_feature(inner) {
+                features.push(f);
+            }
+        }
+    }
+    ContainerCondition { name, features }
+}
+
+fn parse_container_feature(inner: &str) -> Option<ContainerFeature> {
+    let (key, value) = inner.split_once(':')?;
+    let key = key.trim().to_ascii_lowercase();
+    let px = parse_px_in_condition(value.trim())?;
+    Some(match key.as_str() {
+        "min-width" | "min-inline-size" => ContainerFeature::MinWidth(px),
+        "max-width" | "max-inline-size" => ContainerFeature::MaxWidth(px),
+        "width" | "inline-size" => ContainerFeature::Width(px),
+        "min-height" | "min-block-size" => ContainerFeature::MinHeight(px),
+        "max-height" | "max-block-size" => ContainerFeature::MaxHeight(px),
+        "height" | "block-size" => ContainerFeature::Height(px),
+        _ => return None,
+    })
+}
+
+fn parse_px_in_condition(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let s = s.strip_suffix("px").unwrap_or(s);
+    s.trim().parse::<f32>().ok()
 }
 
 // -------------------------------------------------------------------
@@ -1101,6 +1236,10 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "mask-position",
     "mask-size",
     "mask-repeat",
+    // Container queries.
+    "container-type",
+    "container-name",
+    "container",
 ];
 
 /// Evaluate an `@supports` condition string.

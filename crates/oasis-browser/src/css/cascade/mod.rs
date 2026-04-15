@@ -124,6 +124,86 @@ pub struct CascadeContext<'a> {
     /// The DOM node that currently has keyboard focus (for `:focus` and
     /// `:focus-visible`).
     pub focused_node: Option<NodeId>,
+    /// Snapshot of every query container's box size and name list,
+    /// keyed by `NodeId`. Used to evaluate `@container` rule
+    /// conditions during cascade. `None` on the first cascade pass
+    /// before layout has run; populated for the second pass.
+    pub containers: Option<&'a ContainerLookup>,
+}
+
+/// Per-element container metadata feeding `@container` rule evaluation.
+#[derive(Debug, Clone)]
+pub struct ContainerEntry {
+    /// `container-name` identifiers declared on the element. May be empty.
+    pub names: Vec<String>,
+    /// Border-box inline-axis size in CSS pixels.
+    pub width: f32,
+    /// Border-box block-axis size in CSS pixels.
+    pub height: f32,
+}
+
+/// Map of container `NodeId` → metadata. Built post-layout from a walk
+/// over the layout tree by [`build_container_lookup`].
+#[derive(Debug, Default, Clone)]
+pub struct ContainerLookup {
+    pub map: rustc_hash::FxHashMap<NodeId, ContainerEntry>,
+}
+
+impl ContainerLookup {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, id: NodeId) -> Option<&ContainerEntry> {
+        self.map.get(&id)
+    }
+
+    pub fn insert(&mut self, id: NodeId, entry: ContainerEntry) {
+        self.map.insert(id, entry);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// Walk a laid-out `LayoutBox` tree and snapshot every query container
+/// (any element whose computed `container-type` is not `Normal`), keyed
+/// by its DOM node id. `@container` rule conditions are evaluated
+/// against the container's content-box size.
+pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> ContainerLookup {
+    use crate::css::values::types::ContainerType;
+
+    fn walk(b: &crate::layout::box_model::LayoutBox, out: &mut ContainerLookup) {
+        if let Some(nid) = b.node
+            && b.style.container_type != ContainerType::Normal
+        {
+            out.insert(
+                nid,
+                ContainerEntry {
+                    names: b.style.container_name.clone(),
+                    width: b.dimensions.content.width,
+                    height: b.dimensions.content.height,
+                },
+            );
+        }
+        for c in &b.children {
+            walk(c, out);
+        }
+    }
+
+    let mut lookup = ContainerLookup::new();
+    walk(root, &mut lookup);
+    lookup
+}
+
+/// Return true if any rule in any of the given stylesheets is gated
+/// behind a `@container` condition. Used to skip the second cascade
+/// pass on pages that don't use container queries.
+pub fn stylesheets_use_container_queries(sheets: &[&super::parser::Stylesheet]) -> bool {
+    sheets
+        .iter()
+        .any(|s| s.rules.iter().any(|r| r.container.is_some()))
 }
 
 // -----------------------------------------------------------------------
