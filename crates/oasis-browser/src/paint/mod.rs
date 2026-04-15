@@ -619,13 +619,31 @@ pub(super) fn paint_box(
     // Propagate this element's full 4×4 screen-space matrix to
     // descendants so their backgrounds can project all 4 corners
     // directly — see the trapezoidal-background follow-up in
-    // `docs/browser-backlog.md`. When this element didn't go
-    // through the screen path (no 3D context active), we leave
-    // the inherited ambient matrix in place so deeper descendants
-    // still see their nearest 3D ancestor's matrix.
+    // `docs/browser-backlog.md`.
+    //
+    // Three cases:
+    //   • Screen-path element — use `this_element_screen_matrix`
+    //     directly; it already encodes the full parent chain plus
+    //     this element's own local 3D matrix.
+    //   • Flat-path element with its own non-trivial 2D transform
+    //     AND an inherited ambient matrix — lift the 2D affine to
+    //     4D via `Matrix3d::from_2d_affine` and compose onto the
+    //     inherited ambient so descendants see the intervening 2D
+    //     transform. Without this compose, an `<div>` with
+    //     `transform: rotate(45deg)` sitting between a 3D
+    //     ancestor and a grandchild would silently drop its
+    //     rotation from the grandchild's background projection.
+    //   • Otherwise — leave the inherited ambient matrix in place
+    //     so deeper descendants still see their nearest 3D
+    //     ancestor's matrix.
     let prev_ambient_screen_matrix = ctx.ambient_screen_matrix;
     if let Some(m) = this_element_screen_matrix {
         ctx.ambient_screen_matrix = Some(m);
+    } else if let Some(parent_ambient) = ctx.ambient_screen_matrix
+        && !child_matrix.is_translation_only()
+    {
+        let child_4d = crate::transform::Matrix3d::from_2d_affine(child_matrix);
+        ctx.ambient_screen_matrix = Some(parent_ambient.multiply(&child_4d));
     }
 
     // 3-6. Children / inline content / replaced / markers
@@ -703,16 +721,14 @@ pub(super) fn paint_box(
                 && let Some(m_parent) = this_element_screen_matrix
                 && normal_children.len() > 1
             {
-                let mut z_keys: Vec<(f32, usize)> = normal_children
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        (preserve3d_child_z(c, &m_parent, ctx, tx_offset_x, tx_offset_y), i)
-                    })
-                    .collect();
-                z_keys.sort_by(|a, b| {
-                    a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                let mut z_keys: Vec<(f32, usize)> = Vec::with_capacity(normal_children.len());
+                for (i, c) in normal_children.iter().enumerate() {
+                    z_keys.push((
+                        preserve3d_child_z(c, &m_parent, ctx, tx_offset_x, tx_offset_y),
+                        i,
+                    ));
+                }
+                z_keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
                 let sorted: Vec<&LayoutBox> =
                     z_keys.iter().map(|&(_, i)| normal_children[i]).collect();
                 normal_children = sorted;
@@ -2022,6 +2038,83 @@ mod tests {
             !green_polygons.is_empty(),
             "preserve-3d with a 2D-only parent transform should still establish a 3D \
              rendering context per CSS Transforms 2 §6",
+        );
+    }
+
+    #[test]
+    fn flat_2d_child_between_3d_ancestor_and_grandchild_composes_into_ambient() {
+        // Regression guard for a subtle `ambient_screen_matrix`
+        // propagation bug: when a `transform-style: flat` child
+        // with its own 2D transform sits between a 3D ancestor
+        // and a grandchild, the grandchild's background paint
+        // must reflect *both* the 3D ancestor chain AND the
+        // intervening 2D transform. Before this fix, ambient was
+        // inherited unchanged across the flat 2D element, so the
+        // grandchild's background dropped the child's rotation.
+        //
+        // Shape:
+        //   gp    — perspective(1_000_000) (≈ orthographic, so
+        //            ambient ≈ identity for Z=0 points; isolates
+        //            the test from real perspective distortion)
+        //   parent — rotateY(0deg) (identity math but triggers
+        //            the screen path so `ambient_screen_matrix`
+        //            gets set)
+        //   child  — rotate(90deg) 2D (flat path with own transform)
+        //   gchild — background, inside the child
+        //
+        // The grandchild's rotated-quad centroid must reflect the
+        // child's 90° rotation around the child's screen center.
+        let mut backend = MockBackend::new();
+
+        let mut gchild_style = ComputedStyle::default();
+        gchild_style.background_color = Color::rgb(200, 150, 100);
+        // Grandchild absolute screen rect (100, 100)–(120, 120),
+        // center (110, 110). Inside the child's (100, 100)–(200, 200).
+        let gchild = make_block(100.0, 100.0, 20.0, 20.0, gchild_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.transforms = vec![TransformFunction::Rotate(90.0)];
+        let mut child = make_block(100.0, 100.0, 100.0, 100.0, child_style);
+        child.children.push(gchild);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(0.0)];
+        let mut parent = make_block(50.0, 50.0, 300.0, 300.0, parent_style);
+        parent.children.push(child);
+
+        let mut gp_style = ComputedStyle::default();
+        gp_style.perspective = Some(1_000_000.0);
+        let mut gp = make_block(0.0, 0.0, 400.0, 400.0, gp_style);
+        gp.children.push(parent);
+
+        paint(&gp, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let quad = backend
+            .polygon_calls()
+            .into_iter()
+            .find_map(|c| {
+                if let DrawCall::FillPolygon { points, color } = c
+                    && *color == Color::rgb(200, 150, 100)
+                {
+                    Some(points)
+                } else {
+                    None
+                }
+            })
+            .expect("expected grandchild polygon");
+        let cx = quad.iter().map(|p| p.0).sum::<i32>() as f32 / 4.0;
+        let cy = quad.iter().map(|p| p.1).sum::<i32>() as f32 / 4.0;
+        // Grandchild's natural center (110, 110) rotated 90° CW
+        // around the child's screen center (150, 150): (190, 110).
+        assert!(
+            (cx - 190.0).abs() < 3.0,
+            "grandchild centroid x={cx} (expected ≈190) — \
+             intervening child rotate(90) should compose into ambient",
+        );
+        assert!(
+            (cy - 110.0).abs() < 3.0,
+            "grandchild centroid y={cy} (expected ≈110) — \
+             intervening child rotate(90) should compose into ambient",
         );
     }
 
