@@ -12,11 +12,11 @@ use super::types::{
     FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
     FontWeight, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
     ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, Position, ROOT_FONT_SIZE, Resize, ScrollBehavior,
-    ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration, TextDirection,
-    TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform, TextUnderlinePosition,
-    TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition, UserSelect, VerticalAlign,
-    Visibility, WhiteSpace, WordBreak,
+    OverscrollBehavior, PerspectiveOrigin, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
+    ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration,
+    TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform,
+    TextUnderlinePosition, TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition,
+    UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -330,8 +330,9 @@ pub struct ComputedStyle {
     /// Structured `clip-path` value. `None` means `clip-path: none`.
     pub clip_path: Option<ClipPath>,
     pub perspective: Option<f32>,
-    /// Raw `perspective-origin` value (e.g. `center`, `50% 50%`).
-    pub perspective_origin: Option<String>,
+    /// Resolved `perspective-origin`. `None` means the spec default
+    /// (50% 50%).
+    pub perspective_origin: Option<PerspectiveOrigin>,
     pub backface_visibility: BackfaceVisibility,
     pub transform_style: TransformStyle,
 

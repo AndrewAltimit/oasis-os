@@ -167,6 +167,7 @@ fn record_box(
     // Compute transform translation early so culling accounts for it.
     let (tx_off_x, tx_off_y) = super::compute_transform_offsets(
         &layout_box.style.transforms,
+        layout_box.style.transform_origin.as_ref(),
         &layout_box.dimensions.content,
         offset_x,
         offset_y,

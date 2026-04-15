@@ -8,7 +8,7 @@ This document is the live roadmap for closing the gap between our
 from-scratch engine and a launch-ready embedded browser. Items are
 grouped by area; ranking guidance is at the bottom.
 
-Last updated: 2026-04-14 (tracked in `feat/psp-quickjs`).
+Last updated: 2026-04-15 (3D transforms scaffolding tracked in `feat/browser-3d-transforms`).
 
 ---
 
@@ -95,20 +95,111 @@ below):
 **Effort:** 1–2 weeks. Standalone from compositor, similar
 cross-cutting nature.
 
-- Add `AffineTransform3D` alongside the existing `AffineTransform2D`.
-- Perspective projection: `perspective`, `perspective-origin` (today
-  stored opaque, ignored at paint).
-- `transform-style: preserve-3d` — parsed, ignored. Needs child z-sort
-  under parent's 3D frame and proper matrix composition.
-- `translate3d` / `rotate3d` / `rotateX` / `rotateY` / `rotateZ` /
-  `scale3d` — parsed today but flattened to 2D affine.
-- `backface-visibility: hidden` — parsed; needs paint-time normal
-  check to cull back-facing quads.
+- ~~Add `AffineTransform3D` alongside the existing `AffineTransform2D`.~~
+  Shipped on `feat/browser-3d-transforms` as `Matrix3d` (4×4
+  column-major matrix in `crates/oasis-browser/src/transform.rs`).
+  Provides `identity`, `translate`, `scale`, `rotate_x/y/z`,
+  `rotate_axis`, `perspective`, `multiply`, `apply_homogeneous`,
+  `apply_point_3d`, `from_2d_affine`, `from_css_transforms_3d`, and
+  `flatten_to_affine`. The existing
+  `AffineTransform2D::from_css_transforms` is now a thin wrapper:
+  `Matrix3d::from_css_transforms_3d(...).flatten_to_affine()`.
+- ~~`translate3d` / `rotate3d` / `rotateX` / `rotateY` / `rotateZ` /
+  `scale3d` — parsed today but flattened to 2D affine.~~ — parsed on
+  `feat/browser-3d-transforms`. `TransformFunction` gained
+  `Translate3d`, `TranslateZ`, `Scale3d`, `ScaleZ`, `RotateX`,
+  `RotateY`, `RotateZ`, `Rotate3d`, `Matrix3d`, and `Perspective`
+  variants. The CSS parser handles `translate3d()`, `translateZ()`,
+  `scale3d()`, `scaleZ()`, `rotateX/Y/Z()`, `rotate3d(x,y,z,deg)`,
+  `matrix3d(...16 values)`, and the `perspective(d)` function.
+  Evaluation runs through the new `Matrix3d` 4×4 pipeline, then
+  flattens orthographically — `rotateX(60deg)` becomes a vertical
+  squash by `cos(60°)`, `rotateY(60deg)` a horizontal squash, etc.
+  This is visually correct under orthographic projection but loses
+  the perspective trapezoid (see follow-ups below).
+- ~~`backface-visibility: hidden` — parsed; needs paint-time normal
+  check to cull back-facing quads.~~ — shipped on
+  `feat/browser-3d-transforms`. `paint_box` builds a `Matrix3d` from
+  the element's transforms when `backface_visibility == Hidden`,
+  computes the surface-normal Z of the
+  `(0,0,0)→(w,0,0)→(0,h,0)` triangle, and skips painting the entire
+  subtree when it's negative. Front-face culling test cases for
+  `rotateY(60deg)` (front) vs. `rotateY(120deg)` (back) live in
+  `transform.rs`.
 
-**Backend impact:** desktop and WASM can rasterize transformed quads
-today. UE5 and PSP need careful thought — PSP GU does have a perspective
-matrix stack (`sceGumPerspective`) but wiring it into 2D UI paint is
-non-trivial.
+- ~~**Perspective projection.**~~ — shipped on
+  `feat/browser-3d-transforms`. `PaintContext` now tracks an
+  inherited `PerspectiveContext` (distance + screen-space vanishing
+  point) which is pushed when descending into children of an element
+  with the `perspective` CSS property. When a descendant has 3D
+  transforms under an active perspective context, paint takes a
+  screen-space path: it builds the full 4×4
+  `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)`
+  matrix in screen coordinates, projects the box's three reference
+  corners through it with per-vertex perspective divide, and derives
+  a screen-space affine that maps the original screen rect to the
+  projected screen quad via `Matrix3d::project_screen_rect_affine`.
+  The 4th corner is the parallelogram completion `p1 + p2 - p0` —
+  exact for orthographic rotations, an approximation for steep
+  perspective angles. `perspective-origin` is now parsed into a
+  structured `PerspectiveOrigin { x, y, x_pct, y_pct }` (replaces
+  the opaque `String` storage) and resolved against the
+  perspective-establishing element's content box.
+- ~~**`transform-style: preserve-3d`.**~~ — shipped on
+  `feat/browser-3d-transforms`. `PaintContext` carries an ambient
+  `preserved_3d: Option<Matrix3d>` that propagates a parent's full
+  screen-space matrix to descendants when the parent has
+  `transform-style: preserve-3d`. Children compose their own local
+  3D matrix into the preserved ambient matrix instead of flattening
+  at the parent boundary, so a `translateZ(50px)` child under a
+  `rotateY(30deg)` preserve-3d ancestor with a `perspective: 800px`
+  great-grandparent now actually moves toward/away from the viewer
+  and gets perspective-divided correctly. The default `flat`
+  flushes `preserved_3d` to `None` for descendants, matching the
+  spec semantics ("the element renders as a flattened 2D image
+  inside its 3D parent"). Z-sorting of children inside a preserved
+  subtree is still a follow-up — paint order remains DOM order.
+- ~~**`transform-origin: Z`.**~~ — shipped on
+  `feat/browser-3d-transforms`. `TransformOrigin` gained a `z`
+  field, the parser accepts the three-token form
+  (e.g. `transform-origin: 25% 75% 40px`), and
+  `Matrix3d::from_css_transforms_3d` plumbs the Z component through
+  the pre/post translate pair so rotations pivot around an
+  arbitrary 3D point.
+- ~~**Reviewer-flagged: `transform-origin` resolution.**~~ — the
+  earlier scaffolding hardcoded the box centre in
+  `compute_transform_matrix` and the backface-visibility check.
+  Now both consult `style.transform_origin` via a shared
+  `resolve_transform_origin` helper that handles the `x_pct`/`y_pct`
+  percentage forms.
+
+**Follow-ups (not yet shipped):**
+
+- **Z-sorting inside preserve-3d subtrees.** When several siblings
+  are preserved in the same 3D space, paint order should reflect
+  their projected Z, not DOM order. Today we still walk DOM order.
+- **Trapezoidal background for steep perspective.** The 3-corner
+  affine fit is exact for ≤1° error at typical
+  `perspective: 800px` rotations, but at e.g.
+  `rotateY(75deg) perspective(200px)` the bottom-right corner
+  visibly diverges. A non-affine quad path (project all 4 corners
+  and fill the resulting trapezoid) would close this gap.
+- **Existing 2D transform double-translation bug.** The flat path
+  still adds `child_matrix.e/.f` to `tx_offset_x/y` AND applies the
+  matrix in `ctx.transform`, double-counting the rotation pivot
+  translation for non-origin boxes. The screen-space 3D path
+  bypasses this by skipping the offset addition (`needs_screen_path`
+  branch), but the orthographic 2D path keeps the original
+  behaviour for backwards compatibility. Worth fixing in a
+  dedicated PR.
+
+**Backend impact:** desktop and WASM rasterize the flattened 2D
+affine today via the existing `fill_polygon` path. UE5 and PSP also
+inherit the flatten transparently. The screen-space projection is
+backend-agnostic — it produces standard affines that any backend
+can consume. Trapezoidal painting (the follow-up above) would need
+a non-affine quad primitive on backends that don't already have one;
+PSP GU has `sceGumPerspective` for true perspective rendering.
 
 ---
 

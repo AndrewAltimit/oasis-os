@@ -34,6 +34,10 @@ pub enum DrawCall {
         w: u32,
         h: u32,
     },
+    FillPolygon {
+        points: Vec<(i32, i32)>,
+        color: Color,
+    },
 }
 
 /// A mock backend that records all draw calls for test assertions.
@@ -64,6 +68,24 @@ impl MockBackend {
             .iter()
             .filter(|c| matches!(c, DrawCall::DrawText { .. }))
             .count()
+    }
+
+    /// Count of `FillPolygon` calls (transformed quads).
+    #[allow(dead_code)]
+    pub fn fill_polygon_count(&self) -> usize {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c, DrawCall::FillPolygon { .. }))
+            .count()
+    }
+
+    /// Return only the `FillPolygon` entries.
+    #[allow(dead_code)]
+    pub fn polygon_calls(&self) -> Vec<&DrawCall> {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c, DrawCall::FillPolygon { .. }))
+            .collect()
     }
 
     /// Count of `Blit` calls (texture draws, e.g. images).
@@ -247,6 +269,14 @@ impl SdiAlpha for MockBackend {}
 impl SdiText for MockBackend {}
 impl SdiTextures for MockBackend {}
 impl SdiClipTransform for MockBackend {}
-impl SdiVector for MockBackend {}
+impl SdiVector for MockBackend {
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        self.calls.push(DrawCall::FillPolygon {
+            points: points.to_vec(),
+            color,
+        });
+        Ok(())
+    }
+}
 impl SdiBatch for MockBackend {}
 impl SdiRenderTarget for MockBackend {}

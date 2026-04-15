@@ -137,6 +137,14 @@ impl AffineTransform2D {
 
     /// Build an affine matrix from a list of CSS `TransformFunction`s,
     /// applying them around the given transform-origin point.
+    ///
+    /// 3D transform functions (`rotateX`, `translate3d`, `perspective`,
+    /// etc.) are evaluated in 4×4 space via [`Matrix3d`] and then
+    /// flattened orthographically — the Z column/row is dropped so
+    /// `rotateX(60deg)` becomes a vertical squash, `rotateY(60deg)` a
+    /// horizontal squash, etc. True perspective projection is a
+    /// follow-up; until it lands, `perspective()` and `perspective`
+    /// container properties only affect backface-visibility culling.
     pub fn from_css_transforms(
         transforms: &[TransformFunction],
         origin_x: f32,
@@ -145,72 +153,7 @@ impl AffineTransform2D {
         if transforms.is_empty() {
             return Self::identity();
         }
-
-        let mut m = Self::identity();
-
-        // Pre-translate: shift by -origin.
-        m.e -= m.a * origin_x + m.c * origin_y;
-        m.f -= m.b * origin_x + m.d * origin_y;
-
-        for tf in transforms {
-            match tf {
-                TransformFunction::Translate(tx, ty) => {
-                    m.e += m.a * tx + m.c * ty;
-                    m.f += m.b * tx + m.d * ty;
-                },
-                TransformFunction::Scale(sx, sy) => {
-                    m.a *= sx;
-                    m.b *= sx;
-                    m.c *= sy;
-                    m.d *= sy;
-                },
-                TransformFunction::Rotate(deg) => {
-                    let rad = deg.to_radians();
-                    let cos = rad.cos();
-                    let sin = rad.sin();
-                    let na = m.a * cos + m.c * sin;
-                    let nb = m.b * cos + m.d * sin;
-                    let nc = -m.a * sin + m.c * cos;
-                    let nd = -m.b * sin + m.d * cos;
-                    m.a = na;
-                    m.b = nb;
-                    m.c = nc;
-                    m.d = nd;
-                },
-                TransformFunction::Skew(ax, ay) => {
-                    let tan_x = ax.to_radians().tan();
-                    let tan_y = ay.to_radians().tan();
-                    let na = m.a + m.c * tan_y;
-                    let nb = m.b + m.d * tan_y;
-                    let nc = m.a * tan_x + m.c;
-                    let nd = m.b * tan_x + m.d;
-                    m.a = na;
-                    m.b = nb;
-                    m.c = nc;
-                    m.d = nd;
-                },
-                TransformFunction::Matrix(ma, mb, mc, md, me, mf) => {
-                    let na = m.a * ma + m.c * mb;
-                    let nb = m.b * ma + m.d * mb;
-                    let nc = m.a * mc + m.c * md;
-                    let nd = m.b * mc + m.d * md;
-                    let ne = m.a * me + m.c * mf + m.e;
-                    let nf = m.b * me + m.d * mf + m.f;
-                    m.a = na;
-                    m.b = nb;
-                    m.c = nc;
-                    m.d = nd;
-                    m.e = ne;
-                    m.f = nf;
-                },
-            }
-        }
-
-        // Post-translate: shift by +origin.
-        m.e += m.a * origin_x + m.c * origin_y;
-        m.f += m.b * origin_x + m.d * origin_y;
-
-        m
+        Matrix3d::from_css_transforms_3d(transforms, origin_x, origin_y, 0.0).flatten_to_affine()
     }
 
     /// Transform 4 corners of a rectangle into a quadrilateral.
@@ -225,6 +168,288 @@ impl AffineTransform2D {
             (x2 as i32, y2 as i32),
             (x3 as i32, y3 as i32),
         ]
+    }
+}
+
+// -------------------------------------------------------------------
+// 4x4 matrix for 3D transforms
+// -------------------------------------------------------------------
+
+/// A 4×4 transform matrix in column-major order.
+///
+/// Storage matches the CSS `matrix3d(...)` function arg order:
+/// `m[0..4]` is column 0, `m[4..8]` is column 1, etc. Reading as a
+/// mathematical matrix `M[row][col]` corresponds to `m[row + 4*col]`.
+///
+/// Used to compose CSS 3D transforms (`rotateX`, `translate3d`,
+/// `perspective`, `matrix3d`, …) before flattening to a 2D affine for
+/// paint. A full perspective-correct paint path is a follow-up — for
+/// now we evaluate the 3D pipeline so the math is correct, then drop
+/// the Z column/row at the end.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Matrix3d {
+    pub m: [f32; 16],
+}
+
+impl Matrix3d {
+    pub fn identity() -> Self {
+        let mut m = [0.0f32; 16];
+        m[0] = 1.0;
+        m[5] = 1.0;
+        m[10] = 1.0;
+        m[15] = 1.0;
+        Self { m }
+    }
+
+    pub fn translate(tx: f32, ty: f32, tz: f32) -> Self {
+        let mut m = Self::identity();
+        m.m[12] = tx;
+        m.m[13] = ty;
+        m.m[14] = tz;
+        m
+    }
+
+    pub fn scale(sx: f32, sy: f32, sz: f32) -> Self {
+        let mut m = Self::identity();
+        m.m[0] = sx;
+        m.m[5] = sy;
+        m.m[10] = sz;
+        m
+    }
+
+    pub fn rotate_x(deg: f32) -> Self {
+        let r = deg.to_radians();
+        let (s, c) = (r.sin(), r.cos());
+        let mut m = Self::identity();
+        m.m[5] = c;
+        m.m[6] = s;
+        m.m[9] = -s;
+        m.m[10] = c;
+        m
+    }
+
+    pub fn rotate_y(deg: f32) -> Self {
+        let r = deg.to_radians();
+        let (s, c) = (r.sin(), r.cos());
+        let mut m = Self::identity();
+        m.m[0] = c;
+        m.m[2] = -s;
+        m.m[8] = s;
+        m.m[10] = c;
+        m
+    }
+
+    pub fn rotate_z(deg: f32) -> Self {
+        let r = deg.to_radians();
+        let (s, c) = (r.sin(), r.cos());
+        let mut m = Self::identity();
+        m.m[0] = c;
+        m.m[1] = s;
+        m.m[4] = -s;
+        m.m[5] = c;
+        m
+    }
+
+    /// Rotate `deg` around an arbitrary axis `(x, y, z)`. The axis is
+    /// normalised internally; a zero-length axis returns the identity.
+    pub fn rotate_axis(x: f32, y: f32, z: f32, deg: f32) -> Self {
+        let len = (x * x + y * y + z * z).sqrt();
+        if len < 1e-6 {
+            return Self::identity();
+        }
+        let (x, y, z) = (x / len, y / len, z / len);
+        let r = deg.to_radians();
+        let (s, c) = (r.sin(), r.cos());
+        let omc = 1.0 - c;
+        // Standard Rodrigues / axis-angle to matrix, then transposed
+        // for column-major storage.
+        let mut m = Self::identity();
+        m.m[0] = c + x * x * omc;
+        m.m[1] = y * x * omc + z * s;
+        m.m[2] = z * x * omc - y * s;
+        m.m[4] = x * y * omc - z * s;
+        m.m[5] = c + y * y * omc;
+        m.m[6] = z * y * omc + x * s;
+        m.m[8] = x * z * omc + y * s;
+        m.m[9] = y * z * omc - x * s;
+        m.m[10] = c + z * z * omc;
+        m
+    }
+
+    /// CSS `perspective(d)` — viewer at distance `d` along +Z. Points
+    /// further from the viewer (more negative z) shrink toward the
+    /// origin under the eventual perspective divide.
+    pub fn perspective(d: f32) -> Self {
+        let mut m = Self::identity();
+        if d > 0.0 {
+            m.m[11] = -1.0 / d;
+        }
+        m
+    }
+
+    pub fn from_2d_affine(a: AffineTransform2D) -> Self {
+        let mut m = Self::identity();
+        m.m[0] = a.a;
+        m.m[1] = a.b;
+        m.m[4] = a.c;
+        m.m[5] = a.d;
+        m.m[12] = a.e;
+        m.m[13] = a.f;
+        m
+    }
+
+    /// Compose two matrices: `self * other`.
+    pub fn multiply(&self, other: &Self) -> Self {
+        let mut out = [0.0f32; 16];
+        for col in 0..4 {
+            for row in 0..4 {
+                let mut sum = 0.0;
+                for k in 0..4 {
+                    sum += self.m[row + 4 * k] * other.m[k + 4 * col];
+                }
+                out[row + 4 * col] = sum;
+            }
+        }
+        Self { m: out }
+    }
+
+    /// Transform a 3D point. Returns the homogeneous coordinates
+    /// `(x', y', z', w')` so callers can do their own perspective
+    /// divide if they want a screen position.
+    pub fn apply_homogeneous(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32, f32) {
+        let m = &self.m;
+        let xo = m[0] * x + m[4] * y + m[8] * z + m[12];
+        let yo = m[1] * x + m[5] * y + m[9] * z + m[13];
+        let zo = m[2] * x + m[6] * y + m[10] * z + m[14];
+        let wo = m[3] * x + m[7] * y + m[11] * z + m[15];
+        (xo, yo, zo, wo)
+    }
+
+    /// Transform a point and return its 3D position after perspective
+    /// divide. Only used for normal-vector / backface checks where we
+    /// care about the actual post-transform geometry.
+    pub fn apply_point_3d(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        let (xo, yo, zo, wo) = self.apply_homogeneous(x, y, z);
+        if wo.abs() < 1e-6 {
+            (xo, yo, zo)
+        } else {
+            (xo / wo, yo / wo, zo / wo)
+        }
+    }
+
+    /// Drop the Z column/row to produce a 2D affine. This is an
+    /// orthographic projection — `rotateX(deg)` becomes
+    /// `scale(1, cos(deg))`, etc. True perspective projection is a
+    /// follow-up.
+    pub fn flatten_to_affine(&self) -> AffineTransform2D {
+        let m = &self.m;
+        // Apply the perspective divide using the homogeneous w from
+        // (0,0,0) so that `perspective(d)` followed by a translation
+        // doesn't silently shift the origin off-screen during the
+        // flatten. For a pure-affine matrix w=1 and this is a no-op.
+        let w0 = m[15];
+        let inv_w = if w0.abs() < 1e-6 { 1.0 } else { 1.0 / w0 };
+        AffineTransform2D {
+            a: m[0] * inv_w,
+            b: m[1] * inv_w,
+            c: m[4] * inv_w,
+            d: m[5] * inv_w,
+            e: m[12] * inv_w,
+            f: m[13] * inv_w,
+        }
+    }
+
+    /// Build a `Matrix3d` from a list of CSS `TransformFunction`s,
+    /// pre/post-translated by the given 3D transform-origin point.
+    /// Pass `origin_z = 0.0` for the common case where
+    /// `transform-origin` has no third component.
+    pub fn from_css_transforms_3d(
+        transforms: &[TransformFunction],
+        origin_x: f32,
+        origin_y: f32,
+        origin_z: f32,
+    ) -> Self {
+        let pre = Self::translate(-origin_x, -origin_y, -origin_z);
+        let post = Self::translate(origin_x, origin_y, origin_z);
+        let mut m = Self::identity();
+        for tf in transforms {
+            let step = match *tf {
+                TransformFunction::Translate(tx, ty) => Self::translate(tx, ty, 0.0),
+                TransformFunction::Scale(sx, sy) => Self::scale(sx, sy, 1.0),
+                TransformFunction::Rotate(deg) => Self::rotate_z(deg),
+                TransformFunction::Skew(ax, ay) => {
+                    let mut sk = Self::identity();
+                    sk.m[4] = ax.to_radians().tan();
+                    sk.m[1] = ay.to_radians().tan();
+                    sk
+                },
+                TransformFunction::Matrix(a, b, c, d, e, f) => {
+                    Self::from_2d_affine(AffineTransform2D { a, b, c, d, e, f })
+                },
+                TransformFunction::Translate3d(tx, ty, tz) => Self::translate(tx, ty, tz),
+                TransformFunction::TranslateZ(tz) => Self::translate(0.0, 0.0, tz),
+                TransformFunction::Scale3d(sx, sy, sz) => Self::scale(sx, sy, sz),
+                TransformFunction::ScaleZ(sz) => Self::scale(1.0, 1.0, sz),
+                TransformFunction::RotateX(deg) => Self::rotate_x(deg),
+                TransformFunction::RotateY(deg) => Self::rotate_y(deg),
+                TransformFunction::RotateZ(deg) => Self::rotate_z(deg),
+                TransformFunction::Rotate3d(x, y, z, deg) => Self::rotate_axis(x, y, z, deg),
+                TransformFunction::Matrix3d(values) => Self { m: values },
+                TransformFunction::Perspective(d) => Self::perspective(d),
+            };
+            m = m.multiply(&step);
+        }
+        post.multiply(&m).multiply(&pre)
+    }
+
+    /// Project four screen-space corners of a rectangle through this
+    /// matrix and return the best-fit 2D affine that maps the
+    /// original rectangle to the projected quad.
+    ///
+    /// The affine is exact for the top-left, top-right, and
+    /// bottom-left corners; the bottom-right is approximated as the
+    /// parallelogram completion `p1 + p2 - p0`. With pure rotations
+    /// (no perspective divide) this is exact for all four corners;
+    /// with perspective, the bottom-right deviates from the true
+    /// trapezoid by at most a few pixels for typical
+    /// `perspective: 800px` pages.
+    ///
+    /// Inputs are in screen space. The returned affine is also in
+    /// screen space — applying it to `(sx, sy)` reproduces the
+    /// projected top-left, etc. This makes it a drop-in replacement
+    /// for [`AffineTransform2D::transform_rect_to_quad`] in the
+    /// existing paint pipeline.
+    pub fn project_screen_rect_affine(
+        &self,
+        sx: f32,
+        sy: f32,
+        w: f32,
+        h: f32,
+    ) -> AffineTransform2D {
+        let p0 = self.apply_point_3d(sx, sy, 0.0);
+        let p1 = self.apply_point_3d(sx + w, sy, 0.0);
+        let p2 = self.apply_point_3d(sx, sy + h, 0.0);
+        let inv_w = if w.abs() < 1e-6 { 0.0 } else { 1.0 / w };
+        let inv_h = if h.abs() < 1e-6 { 0.0 } else { 1.0 / h };
+        let a = (p1.0 - p0.0) * inv_w;
+        let b = (p1.1 - p0.1) * inv_w;
+        let c = (p2.0 - p0.0) * inv_h;
+        let d = (p2.1 - p0.1) * inv_h;
+        let e = p0.0 - a * sx - c * sy;
+        let f = p0.1 - b * sx - d * sy;
+        AffineTransform2D { a, b, c, d, e, f }
+    }
+
+    /// Returns the surface-normal Z component of the transformed
+    /// front-face triangle `(0,0,0) → (w,0,0) → (0,h,0)`. Negative
+    /// values mean the face has rotated away from the viewer.
+    pub fn front_face_normal_z(&self, w: f32, h: f32) -> f32 {
+        let p0 = self.apply_point_3d(0.0, 0.0, 0.0);
+        let p1 = self.apply_point_3d(w, 0.0, 0.0);
+        let p2 = self.apply_point_3d(0.0, h, 0.0);
+        let v1 = (p1.0 - p0.0, p1.1 - p0.1, p1.2 - p0.2);
+        let v2 = (p2.0 - p0.0, p2.1 - p0.1, p2.2 - p0.2);
+        v1.0 * v2.1 - v1.1 * v2.0
     }
 }
 
@@ -471,6 +696,273 @@ mod tests {
         ];
         let tris = ear_clip_triangulate(&pts);
         assert_eq!(tris.len(), 4); // n-2 = 4
+    }
+
+    // -------------------------------------------------------------
+    // 3D transform tests
+    // -------------------------------------------------------------
+
+    #[test]
+    fn matrix3d_identity_is_no_op() {
+        let m = Matrix3d::identity();
+        let (x, y, z) = m.apply_point_3d(3.0, 4.0, 5.0);
+        assert!((x - 3.0).abs() < 1e-5);
+        assert!((y - 4.0).abs() < 1e-5);
+        assert!((z - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn matrix3d_rotate_x_90_swaps_y_and_z() {
+        let m = Matrix3d::rotate_x(90.0);
+        let (x, y, z) = m.apply_point_3d(0.0, 1.0, 0.0);
+        assert!(x.abs() < 1e-5);
+        assert!(y.abs() < 1e-5);
+        assert!((z - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn matrix3d_rotate_y_90_swaps_x_and_z() {
+        let m = Matrix3d::rotate_y(90.0);
+        let (x, y, z) = m.apply_point_3d(1.0, 0.0, 0.0);
+        assert!(x.abs() < 1e-5);
+        assert!(y.abs() < 1e-5);
+        assert!((z + 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn matrix3d_rotate_z_matches_2d_rotate() {
+        let m3 = Matrix3d::rotate_z(45.0);
+        let a2 = AffineTransform2D::rotate(45.0);
+        let (x3, y3, _) = m3.apply_point_3d(10.0, 0.0, 0.0);
+        let (x2, y2) = a2.apply(10.0, 0.0);
+        assert!((x3 - x2).abs() < 1e-4);
+        assert!((y3 - y2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn matrix3d_scale3d_independent_axes() {
+        let m = Matrix3d::scale(2.0, 3.0, 4.0);
+        let (x, y, z) = m.apply_point_3d(1.0, 1.0, 1.0);
+        assert!((x - 2.0).abs() < 1e-5);
+        assert!((y - 3.0).abs() < 1e-5);
+        assert!((z - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn matrix3d_translate3d_offsets_each_axis() {
+        let m = Matrix3d::translate(5.0, 6.0, 7.0);
+        let (x, y, z) = m.apply_point_3d(1.0, 1.0, 1.0);
+        assert!((x - 6.0).abs() < 1e-5);
+        assert!((y - 7.0).abs() < 1e-5);
+        assert!((z - 8.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn matrix3d_rotate_axis_z_matches_rotate_z() {
+        let a = Matrix3d::rotate_axis(0.0, 0.0, 1.0, 30.0);
+        let b = Matrix3d::rotate_z(30.0);
+        for i in 0..16 {
+            assert!((a.m[i] - b.m[i]).abs() < 1e-5, "slot {i}");
+        }
+    }
+
+    #[test]
+    fn flatten_to_affine_drops_z_component() {
+        // rotateX(60deg) flattened orthographically should compress
+        // the Y axis by cos(60deg) = 0.5 and leave X alone.
+        let m = Matrix3d::rotate_x(60.0);
+        let a = m.flatten_to_affine();
+        assert!((a.a - 1.0).abs() < 1e-5); // X scale
+        assert!((a.d - 0.5).abs() < 1e-4); // Y scale = cos(60)
+        assert!(a.b.abs() < 1e-5);
+        assert!(a.c.abs() < 1e-5);
+    }
+
+    #[test]
+    fn from_css_transforms_3d_translate3d() {
+        let transforms = vec![TransformFunction::Translate3d(10.0, 20.0, 30.0)];
+        let m = Matrix3d::from_css_transforms_3d(&transforms, 0.0, 0.0, 0.0);
+        let (x, y, z) = m.apply_point_3d(0.0, 0.0, 0.0);
+        assert!((x - 10.0).abs() < 1e-5);
+        assert!((y - 20.0).abs() < 1e-5);
+        assert!((z - 30.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn from_css_transforms_3d_rotate_x_around_origin() {
+        // rotateX around the box center (origin = (50, 25)) should
+        // leave the center point fixed and flip the top/bottom Y.
+        let transforms = vec![TransformFunction::RotateX(180.0)];
+        let m = Matrix3d::from_css_transforms_3d(&transforms, 50.0, 25.0, 0.0);
+        let center = m.apply_point_3d(50.0, 25.0, 0.0);
+        assert!((center.0 - 50.0).abs() < 1e-4);
+        assert!((center.1 - 25.0).abs() < 1e-4);
+        let top = m.apply_point_3d(50.0, 0.0, 0.0);
+        // top of the box (y=0) rotates to the bottom (y=50).
+        assert!((top.1 - 50.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn front_face_normal_z_positive_for_identity() {
+        let m = Matrix3d::identity();
+        assert!(m.front_face_normal_z(100.0, 50.0) > 0.0);
+    }
+
+    #[test]
+    fn front_face_normal_z_negative_when_flipped_180() {
+        let m = Matrix3d::rotate_y(180.0);
+        assert!(m.front_face_normal_z(100.0, 50.0) < 0.0);
+    }
+
+    #[test]
+    fn front_face_normal_z_positive_at_60_degrees() {
+        // 60° still shows the front face; 120° has flipped past edge-on.
+        let m60 = Matrix3d::rotate_y(60.0);
+        let m120 = Matrix3d::rotate_y(120.0);
+        assert!(m60.front_face_normal_z(100.0, 50.0) > 0.0);
+        assert!(m120.front_face_normal_z(100.0, 50.0) < 0.0);
+    }
+
+    #[test]
+    fn from_css_transforms_3d_translate_then_rotate_z_around_origin() {
+        // CSS `transform: translate(100px, 0) rotate(90deg)` with origin
+        // at (0, 0). Per spec, post-multiplying left-to-right gives
+        // M = T(100,0) * R(90). Applied to a column-vector point `p` as
+        // `p' = M * p`, the *last* listed transform applies first to the
+        // point. So local (10, 0) → R(90) → (0, 10) → T(100, 0) → (100, 10).
+        // Visually that matches "translate the box right by 100, rotate
+        // around its translated center by 90°" — local +X (point at 10,0)
+        // becomes screen +Y (offset 10 from translated center).
+        let transforms = vec![
+            TransformFunction::Translate(100.0, 0.0),
+            TransformFunction::Rotate(90.0),
+        ];
+        let m = Matrix3d::from_css_transforms_3d(&transforms, 0.0, 0.0, 0.0);
+        let (x, y, _) = m.apply_point_3d(10.0, 0.0, 0.0);
+        assert!((x - 100.0).abs() < 1e-4, "x = {x}");
+        assert!((y - 10.0).abs() < 1e-4, "y = {y}");
+    }
+
+    #[test]
+    fn from_css_transforms_3d_three_transforms_compose_left_to_right() {
+        // CSS `transform: translate(100px, 0) scale(2) translate(50px, 0)`.
+        // Per spec post-multiply: M = T(100,0) * S(2,2) * T(50,0).
+        // Applied to (0, 0):
+        //   T(50,0) * (0,0,1)   = (50,  0, 1)
+        //   S(2,2)  * (50,0,1)  = (100, 0, 1)
+        //   T(100,0)*(100,0,1)  = (200, 0, 1)
+        // Visually: the inner translate happens *inside* the scaled frame
+        // so its 50px contribution becomes 100px on screen, plus the outer
+        // 100px translate.
+        let transforms = vec![
+            TransformFunction::Translate(100.0, 0.0),
+            TransformFunction::Scale(2.0, 2.0),
+            TransformFunction::Translate(50.0, 0.0),
+        ];
+        let m = Matrix3d::from_css_transforms_3d(&transforms, 0.0, 0.0, 0.0);
+        let (x, y, _) = m.apply_point_3d(0.0, 0.0, 0.0);
+        assert!((x - 200.0).abs() < 1e-4, "x = {x}");
+        assert!(y.abs() < 1e-4);
+    }
+
+    #[test]
+    fn from_css_transforms_3d_origin_z_is_pivot_point() {
+        // rotateY(180deg) around origin Z=50 should leave the point
+        // (0, 0, 50) fixed (it's on the rotation axis), and flip the
+        // point (0, 0, 0) to (0, 0, 100).
+        let transforms = vec![TransformFunction::RotateY(180.0)];
+        let m = Matrix3d::from_css_transforms_3d(&transforms, 0.0, 0.0, 50.0);
+        let pivot = m.apply_point_3d(0.0, 0.0, 50.0);
+        assert!(pivot.0.abs() < 1e-4);
+        assert!(pivot.2 - 50.0 < 1e-4);
+        let flipped = m.apply_point_3d(0.0, 0.0, 0.0);
+        assert!((flipped.2 - 100.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn perspective_brings_near_face_closer_far_face_smaller() {
+        // A 100×100 box centred at screen (200, 200), rotated 45° around
+        // its Y axis, viewed through a perspective-800 frustum whose
+        // vanishing point is at (200, 200). After rotation the right
+        // edge moves to negative Z (further) so it shrinks toward the
+        // vanishing point; the left edge moves to positive Z (closer)
+        // so it widens away from the vanishing point.
+        let cox = 200.0; // box centre x
+        let coy = 200.0;
+        let m = Matrix3d::translate(200.0, 200.0, 0.0) // T(vp)
+            .multiply(&Matrix3d::perspective(800.0))
+            .multiply(&Matrix3d::translate(-200.0, -200.0, 0.0)) // T(-vp)
+            .multiply(&Matrix3d::translate(cox, coy, 0.0))
+            .multiply(&Matrix3d::rotate_y(45.0))
+            .multiply(&Matrix3d::translate(-cox, -coy, 0.0));
+
+        // Box screen rect spans (150, 150) → (250, 250).
+        let top_left = m.apply_point_3d(150.0, 150.0, 0.0);
+        let top_right = m.apply_point_3d(250.0, 150.0, 0.0);
+        // Left side moved closer to viewer → its X is *further* from
+        // the vanishing point (200) than the right side after the
+        // perspective divide.
+        let left_dist = (top_left.0 - 200.0).abs();
+        let right_dist = (top_right.0 - 200.0).abs();
+        assert!(
+            left_dist > right_dist,
+            "left should be further from vp than right: left={left_dist}, right={right_dist}",
+        );
+    }
+
+    #[test]
+    fn project_screen_rect_affine_round_trips_three_corners() {
+        // For a pure rotateZ around the box centre (no perspective),
+        // project_screen_rect_affine should produce an affine that
+        // exactly maps three corners.
+        let cox = 100.0;
+        let coy = 50.0;
+        let m = Matrix3d::translate(cox, coy, 0.0)
+            .multiply(&Matrix3d::rotate_z(90.0))
+            .multiply(&Matrix3d::translate(-cox, -coy, 0.0));
+        let a = m.project_screen_rect_affine(50.0, 0.0, 100.0, 100.0);
+        // Apply the affine to the original screen corners — should
+        // match the matrix's projected output.
+        let (x0, y0) = a.apply(50.0, 0.0);
+        let m_p0 = m.apply_point_3d(50.0, 0.0, 0.0);
+        assert!((x0 - m_p0.0).abs() < 1e-3);
+        assert!((y0 - m_p0.1).abs() < 1e-3);
+        let (x1, y1) = a.apply(150.0, 0.0);
+        let m_p1 = m.apply_point_3d(150.0, 0.0, 0.0);
+        assert!((x1 - m_p1.0).abs() < 1e-3);
+        assert!((y1 - m_p1.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn perspective_identity_when_distance_is_huge() {
+        // perspective(infinity) should approach an orthographic
+        // projection. Compare a small perspective contribution against
+        // the limit case.
+        let m_inf = Matrix3d::translate(100.0, 100.0, 0.0)
+            .multiply(&Matrix3d::perspective(100_000.0))
+            .multiply(&Matrix3d::translate(-100.0, -100.0, 0.0))
+            .multiply(&Matrix3d::translate(100.0, 100.0, 0.0))
+            .multiply(&Matrix3d::rotate_y(30.0))
+            .multiply(&Matrix3d::translate(-100.0, -100.0, 0.0));
+        let m_ortho = Matrix3d::translate(100.0, 100.0, 0.0)
+            .multiply(&Matrix3d::rotate_y(30.0))
+            .multiply(&Matrix3d::translate(-100.0, -100.0, 0.0));
+        let a = m_inf.apply_point_3d(150.0, 100.0, 0.0);
+        let b = m_ortho.apply_point_3d(150.0, 100.0, 0.0);
+        assert!((a.0 - b.0).abs() < 0.5, "x diverged: {a:?} vs {b:?}");
+        assert!((a.1 - b.1).abs() < 0.5);
+    }
+
+    #[test]
+    fn from_css_transforms_2d_path_unchanged_by_3d_pipeline() {
+        // The 2D affine from from_css_transforms must still be exactly
+        // a translation when only translate() is in the list — the
+        // is_translation_only fast path in paint depends on this.
+        let transforms = vec![TransformFunction::Translate(10.0, 20.0)];
+        let m = AffineTransform2D::from_css_transforms(&transforms, 50.0, 25.0);
+        assert!(m.is_translation_only());
+        assert!((m.e - 10.0).abs() < 1e-4);
+        assert!((m.f - 20.0).abs() < 1e-4);
     }
 
     #[test]

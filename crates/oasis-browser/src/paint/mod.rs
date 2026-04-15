@@ -33,6 +33,9 @@ pub(crate) mod tiling;
 
 use std::collections::HashMap;
 
+use crate::css::values::types::{
+    BackfaceVisibility, PerspectiveOrigin, TransformOrigin, TransformStyle,
+};
 use crate::css::values::{
     BackgroundImage, ClipLength, ClipPath, Dimension, Overflow, Position, TextOverflow,
     TransformFunction, Visibility, WhiteSpace,
@@ -120,6 +123,28 @@ pub(super) struct PaintContext {
     text_overflow_ellipsis: bool,
     /// Accumulated CSS transform from ancestor elements.
     transform: crate::transform::AffineTransform2D,
+    /// Inherited perspective frame from a `perspective:` ancestor.
+    /// Children of an element with `perspective: d` see their 3D
+    /// transforms projected through `Persp(d)` centred at the
+    /// ancestor's `perspective-origin`.
+    perspective_context: Option<PerspectiveContext>,
+    /// Accumulated 3D matrix from `transform-style: preserve-3d`
+    /// ancestors, in screen-space (post-translated to the ancestor's
+    /// transform origin). `None` means "no preserved 3D context active".
+    preserved_3d: Option<crate::transform::Matrix3d>,
+}
+
+/// A perspective frustum inherited from a `perspective:` ancestor.
+///
+/// `vanishing_x`/`vanishing_y` are the absolute screen-space
+/// coordinates of the perspective vanishing point (typically the
+/// centre of the ancestor's content box, offset by
+/// `perspective-origin`).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PerspectiveContext {
+    pub distance: f32,
+    pub vanishing_x: f32,
+    pub vanishing_y: f32,
 }
 
 // -------------------------------------------------------------------
@@ -148,6 +173,8 @@ pub fn paint(
         clip_rect: None,
         text_overflow_ellipsis: false,
         transform: crate::transform::AffineTransform2D::identity(),
+        perspective_context: None,
+        preserved_3d: None,
     };
 
     if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
@@ -255,6 +282,36 @@ pub(super) fn paint_box(
     }
     if box_right < 0.0 || screen_x > ctx.viewport_width {
         return Ok(());
+    }
+
+    // backface-visibility: hidden — when the element's effective 3D
+    // transform flips its front face away from the viewer, skip
+    // painting the entire subtree. The effective matrix includes
+    // both the element's own transforms and any inherited preserve-3d
+    // ancestor matrix.
+    if layout_box.style.backface_visibility == BackfaceVisibility::Hidden
+        && (!layout_box.style.transforms.is_empty() || ctx.preserved_3d.is_some())
+    {
+        let content = &layout_box.dimensions.content;
+        let (ox, oy, oz) =
+            resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        let local_m3d = if layout_box.style.transforms.is_empty() {
+            crate::transform::Matrix3d::identity()
+        } else {
+            crate::transform::Matrix3d::from_css_transforms_3d(
+                &layout_box.style.transforms,
+                ox,
+                oy,
+                oz,
+            )
+        };
+        let effective = match ctx.preserved_3d {
+            Some(p) => p.multiply(&local_m3d),
+            None => local_m3d,
+        };
+        if effective.front_face_normal_z(content.width, content.height) < 0.0 {
+            return Ok(());
+        }
     }
 
     let is_visible = layout_box.style.visibility == Visibility::Visible;
@@ -387,17 +444,142 @@ pub(super) fn paint_box(
     };
 
     // Compute transform matrix for this element.
-    let child_matrix =
-        compute_transform_matrix(&layout_box.style.transforms, &layout_box.dimensions.content);
+    //
+    // Two paths:
+    //   • Screen-space 3D path — when this element is participating
+    //     in a 3D rendering context (it has 3D transforms under a
+    //     perspective ancestor, OR an ancestor has
+    //     `transform-style: preserve-3d` and propagated a 4×4 matrix),
+    //     build the full screen-space chain and project the box's
+    //     screen rect through it.
+    //   • Flat path — the existing 2D affine flatten via
+    //     `compute_transform_matrix`. Used for plain 2D rotates,
+    //     2D scales, or 3D transforms with no perspective ancestor
+    //     and no inherited preserve-3d context.
+    let content = &layout_box.dimensions.content;
+    let has_3d_transforms = transforms_have_3d(&layout_box.style.transforms);
+    // Per CSS Transforms 2 §6, `transform-style: preserve-3d`
+    // unconditionally establishes a 3D rendering context — independent
+    // of whether the element itself has 3D transforms. So a parent
+    // with `transform: rotate(45deg); transform-style: preserve-3d`
+    // and a child with `rotateY(60deg)` should compose the 2D
+    // rotation with the 3D rotation in 3D space, not flatten the
+    // parent first. We enter the screen path whenever the element
+    // (or any ancestor) is participating in 3D rendering.
+    let needs_screen_path = ctx.preserved_3d.is_some()
+        || (ctx.perspective_context.is_some() && has_3d_transforms)
+        || layout_box.style.transform_style == TransformStyle::Preserve3d;
+    // Box top-left in screen coordinates (matching the background.rs
+    // convention: layout coord - scroll + offset). Used by the screen
+    // path and below by the children walk.
+    let sx = content.x - ctx.scroll_x + offset_x as f32;
+    let sy = content.y - ctx.scroll_y + offset_y as f32;
+    // The full 4×4 screen-space matrix for this element, retained for
+    // `transform-style: preserve-3d` propagation to descendants.
+    let mut this_element_screen_matrix: Option<crate::transform::Matrix3d> = None;
+    let child_matrix = if needs_screen_path {
+        let (ox_l, oy_l, oz_l) =
+            resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        // Screen-space transform-origin pivot for this element.
+        let cox = sx + ox_l;
+        let coy = sy + oy_l;
+        // Local 3D transforms expressed without origin pre/post
+        // translate — we apply origin in screen space below so that
+        // composition with preserved/perspective matrices stays in
+        // a single coordinate system.
+        let local_no_origin = crate::transform::Matrix3d::from_css_transforms_3d(
+            &layout_box.style.transforms,
+            0.0,
+            0.0,
+            0.0,
+        );
+        // Element-local screen-space matrix: pivot at (cox, coy, oz_l).
+        let m_local_screen = crate::transform::Matrix3d::translate(cox, coy, oz_l)
+            .multiply(&local_no_origin)
+            .multiply(&crate::transform::Matrix3d::translate(-cox, -coy, -oz_l));
+        // Compose with the inherited `preserve-3d` ambient matrix.
+        let m_preserved = match ctx.preserved_3d {
+            Some(p) => p.multiply(&m_local_screen),
+            None => m_local_screen,
+        };
+        // Apply the perspective frustum (if any) on the outside — but
+        // skip when inheriting a preserve-3d matrix that already
+        // contains the frustum.
+        let m_screen = if ctx.preserved_3d.is_none()
+            && let Some(persp) = ctx.perspective_context
+        {
+            crate::transform::Matrix3d::translate(persp.vanishing_x, persp.vanishing_y, 0.0)
+                .multiply(&crate::transform::Matrix3d::perspective(persp.distance))
+                .multiply(&crate::transform::Matrix3d::translate(
+                    -persp.vanishing_x,
+                    -persp.vanishing_y,
+                    0.0,
+                ))
+                .multiply(&m_preserved)
+        } else {
+            m_preserved
+        };
+        this_element_screen_matrix = Some(m_screen);
+        m_screen.project_screen_rect_affine(sx, sy, content.width, content.height)
+    } else {
+        compute_transform_matrix(
+            &layout_box.style.transforms,
+            layout_box.style.transform_origin.as_ref(),
+            content,
+        )
+    };
     // Compose with parent transform.
     let prev_transform = ctx.transform;
     let composed = ctx.transform.multiply(&child_matrix);
     if !child_matrix.is_translation_only() {
         ctx.transform = composed;
     }
-    // For child offsets, always use translation component.
-    let tx_offset_x = offset_x + child_matrix.e as i32;
-    let tx_offset_y = offset_y + child_matrix.f as i32;
+    // For child offsets we add the translation component of the
+    // matrix — except in the screen-space path, where the affine
+    // already maps un-transformed screen coordinates to projected
+    // screen coordinates. Adding the translation there would
+    // double-count (the offset shift is already inside the affine).
+    let (tx_offset_x, tx_offset_y) = if needs_screen_path {
+        (offset_x, offset_y)
+    } else {
+        (
+            offset_x + child_matrix.e as i32,
+            offset_y + child_matrix.f as i32,
+        )
+    };
+
+    // If this element establishes a perspective frame, push it for
+    // the duration of the children walk. The vanishing point is
+    // resolved against this element's content box and offset to
+    // absolute screen coordinates.
+    let prev_perspective_context = ctx.perspective_context;
+    if let Some(d) = layout_box.style.perspective
+        && d > 0.0
+    {
+        let (po_x, po_y) =
+            resolve_perspective_origin(layout_box.style.perspective_origin.as_ref(), content);
+        let parent_screen_x = content.x - ctx.scroll_x + tx_offset_x as f32;
+        let parent_screen_y = content.y - ctx.scroll_y + tx_offset_y as f32;
+        ctx.perspective_context = Some(PerspectiveContext {
+            distance: d,
+            vanishing_x: parent_screen_x + po_x,
+            vanishing_y: parent_screen_y + po_y,
+        });
+    }
+
+    // `transform-style: preserve-3d` propagates this element's full
+    // 4×4 screen-space matrix to descendants so they render in the
+    // same 3D space. The default `flat` flushes the preserved
+    // context: descendants render onto this element's flattened
+    // 2D image, not in the ancestor's 3D frame.
+    let prev_preserved_3d = ctx.preserved_3d;
+    if layout_box.style.transform_style == TransformStyle::Preserve3d
+        && let Some(m) = this_element_screen_matrix
+    {
+        ctx.preserved_3d = Some(m);
+    } else {
+        ctx.preserved_3d = None;
+    }
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -573,10 +755,13 @@ pub(super) fn paint_box(
         }
     }
 
-    // Restore previous clip rect, ellipsis flag, and transform.
+    // Restore previous clip rect, ellipsis flag, transform,
+    // perspective context, and preserved-3d ambient matrix.
     ctx.clip_rect = prev_clip;
     ctx.text_overflow_ellipsis = prev_ellipsis;
     ctx.transform = prev_transform;
+    ctx.perspective_context = prev_perspective_context;
+    ctx.preserved_3d = prev_preserved_3d;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -641,16 +826,74 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     }
 }
 
+/// Returns `true` if the transform list contains any 3D function.
+/// Used to gate the perspective projection path: the orthographic
+/// flatten is the right choice for pure 2D transforms even when an
+/// ancestor has `perspective`.
+pub(crate) fn transforms_have_3d(transforms: &[TransformFunction]) -> bool {
+    transforms.iter().any(|t| {
+        matches!(
+            t,
+            TransformFunction::Translate3d(..)
+                | TransformFunction::TranslateZ(_)
+                | TransformFunction::Scale3d(..)
+                | TransformFunction::ScaleZ(_)
+                | TransformFunction::RotateX(_)
+                | TransformFunction::RotateY(_)
+                | TransformFunction::Rotate3d(..)
+                | TransformFunction::Matrix3d(_)
+                | TransformFunction::Perspective(_)
+        )
+    })
+}
+
+/// Resolve a CSS `transform-origin` against an element's content box.
+///
+/// Returns absolute pixel offsets `(ox, oy, oz)` from the content
+/// box's top-left corner. When `origin` is `None`, defaults to the
+/// spec's `50% 50% 0` (box center, Z = 0).
+pub(crate) fn resolve_transform_origin(
+    origin: Option<&TransformOrigin>,
+    content: &Rect,
+) -> (f32, f32, f32) {
+    match origin {
+        None => (content.width / 2.0, content.height / 2.0, 0.0),
+        Some(o) => {
+            let ox = o.x_pct.map(|p| content.width * p).unwrap_or(o.x);
+            let oy = o.y_pct.map(|p| content.height * p).unwrap_or(o.y);
+            (ox, oy, o.z)
+        },
+    }
+}
+
+/// Resolve a CSS `perspective-origin` against an element's border box.
+///
+/// Defaults to the spec's `50% 50%` when `origin` is `None`.
+pub(crate) fn resolve_perspective_origin(
+    origin: Option<&PerspectiveOrigin>,
+    container: &Rect,
+) -> (f32, f32) {
+    match origin {
+        None => (container.width / 2.0, container.height / 2.0),
+        Some(o) => {
+            let ox = o.x_pct.map(|p| container.width * p).unwrap_or(o.x);
+            let oy = o.y_pct.map(|p| container.height * p).unwrap_or(o.y);
+            (ox, oy)
+        },
+    }
+}
+
 /// Compute the full 2D affine transform from CSS transforms.
 ///
 /// Returns the composed matrix which callers use either as a simple
 /// translation offset (fast path) or for full geometry transformation.
+/// `transform_origin` defaults to `50% 50% 0` when `None`.
 pub(crate) fn compute_transform_matrix(
     transforms: &[TransformFunction],
+    transform_origin: Option<&TransformOrigin>,
     content: &Rect,
 ) -> crate::transform::AffineTransform2D {
-    let ox = content.width / 2.0;
-    let oy = content.height / 2.0;
+    let (ox, oy, _oz) = resolve_transform_origin(transform_origin, content);
     crate::transform::AffineTransform2D::from_css_transforms(transforms, ox, oy)
 }
 
@@ -662,6 +905,7 @@ pub(crate) fn compute_transform_matrix(
 /// [`compute_transform_matrix`].
 pub(crate) fn compute_transform_offsets(
     transforms: &[TransformFunction],
+    transform_origin: Option<&TransformOrigin>,
     content: &Rect,
     base_x: i32,
     base_y: i32,
@@ -669,7 +913,7 @@ pub(crate) fn compute_transform_offsets(
     if transforms.is_empty() {
         return (base_x, base_y);
     }
-    let m = compute_transform_matrix(transforms, content);
+    let m = compute_transform_matrix(transforms, transform_origin, content);
     (base_x + m.e as i32, base_y + m.f as i32)
 }
 
@@ -1353,6 +1597,294 @@ mod tests {
 
         // Should draw exactly 4 fill_rect calls (one per edge).
         assert_eq!(backend.fill_rect_count(), 4);
+    }
+
+    // ---------------------------------------------------------------
+    // 3D transforms / perspective integration tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn perspective_ancestor_routes_3d_child_through_polygon_path() {
+        // The existing paint pipeline applies an element's transform
+        // to its DESCENDANTS (the element's own background paints
+        // before child_matrix is composed). So to exercise the
+        // perspective projection path we need 3 levels:
+        //   grandparent  – perspective: 800px (no own transform)
+        //   parent       – rotateY(45deg)     (no background)
+        //   child        – background: red    (no transform)
+        // The parent's rotation under the grandparent's perspective
+        // composes into ctx.transform, so child's paint_background
+        // sees a non-trivial transform and goes through fill_polygon.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(255, 0, 0);
+        let child = make_block(60.0, 60.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(45.0)];
+        let mut parent = make_block(50.0, 50.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        let mut grandparent_style = ComputedStyle::default();
+        grandparent_style.perspective = Some(800.0);
+        let mut grandparent = make_block(0.0, 0.0, 200.0, 200.0, grandparent_style);
+        grandparent.children.push(parent);
+
+        paint(&grandparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let polygon = backend
+            .polygon_calls()
+            .into_iter()
+            .find_map(|c| {
+                if let DrawCall::FillPolygon { points, color } = c
+                    && *color == Color::rgb(255, 0, 0)
+                {
+                    Some(points)
+                } else {
+                    None
+                }
+            })
+            .expect("expected red fill_polygon from perspective path");
+        assert_eq!(polygon.len(), 4);
+        // Under perspective(800) with rotateY(45), the right edge of
+        // the rotated box is further from the viewer and should
+        // shrink toward the parent's vanishing point. The right-most
+        // projected x must be strictly less than the un-projected
+        // right edge (60 + 80 = 140 in screen coords).
+        let max_x = polygon.iter().map(|p| p.0).max().unwrap();
+        assert!(
+            max_x < 140,
+            "expected perspective shrink past x=140, got max_x={max_x}",
+        );
+    }
+
+    #[test]
+    fn flat_3d_child_without_perspective_uses_orthographic_path() {
+        // Without an ancestor `perspective`, a 3D-transformed parent
+        // still flattens orthographically — `rotateY(60deg)` becomes
+        // a horizontal squash by cos(60°)=0.5, which is non-trivial,
+        // so the child's background should hit fill_polygon.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(0, 255, 0);
+        let child = make_block(10.0, 10.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(60.0)];
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        assert!(
+            backend.fill_polygon_count() > 0,
+            "expected fill_polygon for orthographically flattened rotateY",
+        );
+    }
+
+    #[test]
+    fn backface_visibility_hidden_culls_rotated_subtree() {
+        // rotateY(180deg) flips the front face away from the viewer;
+        // backface-visibility: hidden should skip painting the entire
+        // subtree (including any background-bearing children).
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(0, 0, 255);
+        let child = make_block(0.0, 0.0, 100.0, 100.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(180.0)];
+        parent_style.backface_visibility = BackfaceVisibility::Hidden;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        // No background draw at all — the entire subtree is culled.
+        assert_eq!(backend.fill_rect_count(), 0);
+        assert_eq!(backend.fill_polygon_count(), 0);
+    }
+
+    #[test]
+    fn backface_hidden_child_culled_by_inherited_preserve_3d() {
+        // Parent: rotateY(180deg) + preserve-3d
+        // Child:  backface-visibility: hidden, no own transforms
+        // The child faces away via the inherited matrix and must be culled.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(255, 0, 0);
+        child_style.backface_visibility = BackfaceVisibility::Hidden;
+        let child = make_block(0.0, 0.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(180.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.perspective = Some(800.0);
+        let mut gparent = make_block(0.0, 0.0, 200.0, 200.0, gparent_style);
+        gparent.children.push(parent);
+
+        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        assert_eq!(backend.fill_rect_count(), 0);
+        assert_eq!(backend.fill_polygon_count(), 0);
+    }
+
+    #[test]
+    fn preserve_3d_propagates_parent_matrix_to_children() {
+        // Four-level structure:
+        //   ggparent  – perspective: 800px
+        //   gparent   – rotateY(30deg) + transform-style: preserve-3d
+        //   parent    – translateZ(50px)        (would be a no-op under
+        //                                        orthographic flatten;
+        //                                        becomes visible under
+        //                                        preserve-3d perspective)
+        //   inner     – background: yellow      (no transform)
+        // The yellow background should be painted via fill_polygon.
+        let mut backend = MockBackend::new();
+
+        let mut inner_style = ComputedStyle::default();
+        inner_style.background_color = Color::rgb(255, 255, 0);
+        let inner = make_block(10.0, 10.0, 40.0, 40.0, inner_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::TranslateZ(50.0)];
+        let mut parent = make_block(20.0, 20.0, 60.0, 60.0, parent_style);
+        parent.children.push(inner);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.transforms = vec![TransformFunction::RotateY(30.0)];
+        gparent_style.transform_style = TransformStyle::Preserve3d;
+        let mut gparent = make_block(50.0, 50.0, 100.0, 100.0, gparent_style);
+        gparent.children.push(parent);
+
+        let mut ggparent_style = ComputedStyle::default();
+        ggparent_style.perspective = Some(800.0);
+        let mut ggparent = make_block(0.0, 0.0, 200.0, 200.0, ggparent_style);
+        ggparent.children.push(gparent);
+
+        paint(&ggparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let yellow_polygons: Vec<_> = backend
+            .polygon_calls()
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DrawCall::FillPolygon { color, .. } if *color == Color::rgb(255, 255, 0)
+                )
+            })
+            .collect();
+        assert!(
+            !yellow_polygons.is_empty(),
+            "expected the inner child to be projected via fill_polygon under preserve-3d",
+        );
+    }
+
+    #[test]
+    fn preserve_3d_propagates_without_ancestor_perspective() {
+        // Reviewer-flagged regression risk: a `preserve-3d` element
+        // with NO ancestor `perspective` would previously fall back
+        // to orthographic flatten, leaving descendants in a flat
+        // coordinate system. The fix routes preserve-3d through the
+        // screen path unconditionally so descendants inherit the
+        // parent's screen-space matrix.
+        //
+        // Structure:
+        //   parent — rotateY(60deg) + transform-style: preserve-3d
+        //     child — background red, no transform
+        // The child should be painted via fill_polygon — proving
+        // the parent's rotation propagates as a 3D context even
+        // without a `perspective:` ancestor.
+        let mut backend = MockBackend::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(255, 0, 0);
+        let child = make_block(10.0, 10.0, 80.0, 80.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::RotateY(60.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let red_polygons: Vec<_> = backend
+            .polygon_calls()
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DrawCall::FillPolygon { color, .. } if *color == Color::rgb(255, 0, 0)
+                )
+            })
+            .collect();
+        assert!(
+            !red_polygons.is_empty(),
+            "preserve-3d parent without ancestor perspective should still propagate \
+             its 3D matrix to descendants — regression guard",
+        );
+    }
+
+    #[test]
+    fn preserve_3d_with_2d_only_transform_still_propagates() {
+        // CSS Transforms 2 §6 — `transform-style: preserve-3d`
+        // unconditionally establishes a 3D rendering context, even
+        // when the element has no 3D transforms of its own. A 2D
+        // rotation on a preserve-3d parent must still be composed
+        // with a 3D-transformed child in 3D space, not flattened
+        // first.
+        //
+        // Structure:
+        //   parent — rotate(45deg) (2D!) + transform-style: preserve-3d
+        //     child — rotateY(60deg) (3D)
+        //       grandchild — background green
+        // The grandchild should be painted via fill_polygon —
+        // proving the parent's 2D transform propagated as a 3D
+        // context (otherwise the child would have flattened
+        // independently and the chain would break).
+        let mut backend = MockBackend::new();
+
+        let mut grandchild_style = ComputedStyle::default();
+        grandchild_style.background_color = Color::rgb(0, 255, 0);
+        let grandchild = make_block(5.0, 5.0, 30.0, 30.0, grandchild_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.transforms = vec![TransformFunction::RotateY(60.0)];
+        let mut child = make_block(20.0, 20.0, 40.0, 40.0, child_style);
+        child.children.push(grandchild);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transforms = vec![TransformFunction::Rotate(45.0)];
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let green_polygons: Vec<_> = backend
+            .polygon_calls()
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DrawCall::FillPolygon { color, .. } if *color == Color::rgb(0, 255, 0)
+                )
+            })
+            .collect();
+        assert!(
+            !green_polygons.is_empty(),
+            "preserve-3d with a 2D-only parent transform should still establish a 3D \
+             rendering context per CSS Transforms 2 §6",
+        );
     }
 
     // ---------------------------------------------------------------

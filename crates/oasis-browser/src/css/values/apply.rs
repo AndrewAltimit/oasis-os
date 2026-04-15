@@ -1892,7 +1892,7 @@ impl ComputedStyle {
                 }
             },
             "perspective-origin" => {
-                self.perspective_origin = string_or_keyword(value);
+                self.perspective_origin = Some(parse_perspective_origin(value, parent_font_size));
             },
             "backface-visibility" => {
                 if let Some(kw) = as_keyword(value) {
@@ -2654,6 +2654,79 @@ fn parse_transform(
                     result.push(TransformFunction::Matrix(a, b, c, d, e, f));
                 }
             },
+            "translate3d" => {
+                let x =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                let y =
+                    parse_transform_length(args.get(1).copied().unwrap_or("0"), parent_font_size);
+                let z =
+                    parse_transform_length(args.get(2).copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::Translate3d(x, y, z));
+            },
+            "translateZ" | "translatez" => {
+                let z =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::TranslateZ(z));
+            },
+            "scale3d" => {
+                let sx = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let sy = args
+                    .get(1)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let sz = args
+                    .get(2)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::Scale3d(sx, sy, sz));
+            },
+            "scaleZ" | "scalez" => {
+                let sz = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::ScaleZ(sz));
+            },
+            "rotateX" | "rotatex" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateX(angle));
+            },
+            "rotateY" | "rotatey" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateY(angle));
+            },
+            "rotateZ" | "rotatez" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::RotateZ(angle));
+            },
+            "rotate3d" => {
+                if args.len() >= 4 {
+                    let x = args[0].parse::<f32>().unwrap_or(0.0);
+                    let y = args[1].parse::<f32>().unwrap_or(0.0);
+                    let z = args[2].parse::<f32>().unwrap_or(0.0);
+                    let angle = parse_angle(args[3]);
+                    result.push(TransformFunction::Rotate3d(x, y, z, angle));
+                }
+            },
+            "matrix3d" => {
+                if args.len() >= 16 {
+                    let mut m = [0.0f32; 16];
+                    for (i, slot) in m.iter_mut().enumerate() {
+                        *slot = args[i].parse::<f32>().unwrap_or(0.0);
+                    }
+                    result.push(TransformFunction::Matrix3d(m));
+                }
+            },
+            "perspective" => {
+                let d =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                if d > 0.0 {
+                    result.push(TransformFunction::Perspective(d));
+                }
+            },
             _ => {},
         }
     }
@@ -2704,6 +2777,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: px,
                 y: 0.0,
+                z: 0.0,
                 x_pct: None,
                 y_pct: None,
             };
@@ -2712,6 +2786,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: 0.0,
                 y: 0.0,
+                z: 0.0,
                 x_pct: Some(*p / 100.0),
                 y_pct: Some(0.5),
             };
@@ -2720,6 +2795,7 @@ fn parse_transform_origin(
             return TransformOrigin {
                 x: 0.0,
                 y: 0.0,
+                z: 0.0,
                 x_pct: Some(0.5),
                 y_pct: Some(0.5),
             };
@@ -2731,6 +2807,7 @@ fn parse_transform_origin(
     let y_pct: Option<f32>;
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
+    let mut z: f32 = 0.0;
 
     let resolve_part = |s: &str| -> (f32, Option<f32>) {
         match s {
@@ -2772,7 +2849,119 @@ fn parse_transform_origin(
         y_pct = Some(0.5);
     }
 
-    TransformOrigin { x, y, x_pct, y_pct }
+    // Optional third token is the Z origin in pixels (no percentage form).
+    if let Some(p2) = parts.get(2) {
+        z = parse_origin_length(p2, parent_font_size);
+    }
+
+    TransformOrigin {
+        x,
+        y,
+        z,
+        x_pct,
+        y_pct,
+    }
+}
+
+/// Parse a CSS length used in transform-origin Z position. Accepts
+/// `px`, `em`, `rem`, and bare numbers (treated as px).
+fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
+    let s = s.trim();
+    if let Some(px) = s.strip_suffix("px") {
+        px.trim().parse::<f32>().unwrap_or(0.0)
+    } else if let Some(em) = s.strip_suffix("em") {
+        em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
+    } else if let Some(rem) = s.strip_suffix("rem") {
+        rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::ROOT_FONT_SIZE
+    } else {
+        s.parse::<f32>().unwrap_or(0.0)
+    }
+}
+
+/// Parse a CSS `perspective-origin` value into a structured
+/// [`super::types::PerspectiveOrigin`]. Supports the same `keyword`,
+/// `<percentage>`, `<length>`, and one/two-token forms as
+/// `transform-origin`, but without a Z component.
+fn parse_perspective_origin(
+    value: &CssValue,
+    parent_font_size: f32,
+) -> super::types::PerspectiveOrigin {
+    use super::types::PerspectiveOrigin;
+
+    let raw = match value {
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        CssValue::Length(_, _) => {
+            let px = resolve_length(value, parent_font_size);
+            return PerspectiveOrigin {
+                x: px,
+                y: 0.0,
+                x_pct: None,
+                y_pct: Some(0.5),
+            };
+        },
+        CssValue::Percentage(p) => {
+            return PerspectiveOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(*p / 100.0),
+                y_pct: Some(0.5),
+            };
+        },
+        _ => {
+            return PerspectiveOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(0.5),
+                y_pct: Some(0.5),
+            };
+        },
+    };
+
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+
+    let resolve_part = |s: &str| -> (f32, Option<f32>) {
+        match s {
+            "left" | "top" => (0.0, Some(0.0)),
+            "center" => (0.0, Some(0.5)),
+            "right" | "bottom" => (0.0, Some(1.0)),
+            _ => {
+                if let Some(pct) = s.strip_suffix('%')
+                    && let Ok(v) = pct.trim().parse::<f32>()
+                {
+                    return (0.0, Some(v / 100.0));
+                }
+                if let Some(px) = s.strip_suffix("px")
+                    && let Ok(v) = px.trim().parse::<f32>()
+                {
+                    return (v, None);
+                }
+                if let Ok(v) = s.parse::<f32>() {
+                    return (v, None);
+                }
+                (0.0, Some(0.5))
+            },
+        }
+    };
+
+    let mut x_pct: Option<f32> = None;
+    let mut x: f32 = 0.0;
+    let mut y: f32 = 0.0;
+    let y_pct: Option<f32>;
+
+    if let Some(p0) = parts.first() {
+        let (px, pct) = resolve_part(p0);
+        x = px;
+        x_pct = pct;
+    }
+    if let Some(p1) = parts.get(1) {
+        let (px, pct) = resolve_part(p1);
+        y = px;
+        y_pct = pct;
+    } else {
+        y_pct = Some(0.5);
+    }
+
+    PerspectiveOrigin { x, y, x_pct, y_pct }
 }
 
 /// Parse a CSS `clip-path` value into a structured [`ClipPath`].
@@ -3648,6 +3837,92 @@ mod tests {
             16.0,
         );
         assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_transform_origin_three_value_includes_z() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform-origin",
+            &CssValue::String("25% 75% 40px".into()),
+            16.0,
+        );
+        let origin = s.transform_origin.expect("transform-origin parsed");
+        assert_eq!(origin.x_pct, Some(0.25));
+        assert_eq!(origin.y_pct, Some(0.75));
+        assert!((origin.z - 40.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_perspective_origin_to_structured_value() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "perspective-origin",
+            &CssValue::String("left center".into()),
+            16.0,
+        );
+        let origin = s.perspective_origin.expect("perspective-origin parsed");
+        assert_eq!(origin.x_pct, Some(0.0));
+        assert_eq!(origin.y_pct, Some(0.5));
+    }
+
+    #[test]
+    fn parse_transform_3d_functions() {
+        use super::super::types::TransformFunction;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform",
+            &CssValue::String(
+                "translate3d(10px, 20px, 30px) rotateX(45deg) rotateY(60deg) scale3d(1, 2, 3) \
+                 perspective(500px)"
+                    .into(),
+            ),
+            16.0,
+        );
+        assert_eq!(s.transforms.len(), 5);
+        assert!(matches!(
+            s.transforms[0],
+            TransformFunction::Translate3d(10.0, 20.0, 30.0)
+        ));
+        assert!(
+            matches!(s.transforms[1], TransformFunction::RotateX(d) if (d - 45.0).abs() < 1e-4)
+        );
+        assert!(
+            matches!(s.transforms[2], TransformFunction::RotateY(d) if (d - 60.0).abs() < 1e-4)
+        );
+        assert!(matches!(
+            s.transforms[3],
+            TransformFunction::Scale3d(1.0, 2.0, 3.0)
+        ));
+        assert!(
+            matches!(s.transforms[4], TransformFunction::Perspective(d) if (d - 500.0).abs() < 1e-4)
+        );
+    }
+
+    #[test]
+    fn parse_transform_rotate3d_and_matrix3d() {
+        use super::super::types::TransformFunction;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transform",
+            &CssValue::String(
+                "rotate3d(0, 1, 0, 90deg) matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,7,1)".into(),
+            ),
+            16.0,
+        );
+        assert_eq!(s.transforms.len(), 2);
+        assert!(matches!(
+            s.transforms[0],
+            TransformFunction::Rotate3d(0.0, 1.0, 0.0, d) if (d - 90.0).abs() < 1e-4
+        ));
+        if let TransformFunction::Matrix3d(values) = &s.transforms[1] {
+            assert_eq!(values[12], 5.0);
+            assert_eq!(values[13], 6.0);
+            assert_eq!(values[14], 7.0);
+            assert_eq!(values[15], 1.0);
+        } else {
+            panic!("expected Matrix3d, got {:?}", s.transforms[1]);
+        }
     }
 
     #[test]

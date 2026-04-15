@@ -134,10 +134,37 @@ scroll tick.
 A surprising amount of CSS is parsed and cascaded but not yet honored
 by the painter. See the **Storage vs. rendering** section in
 [`css-coverage.md`](css-coverage.md). Notable: `clip-path`, `mask-*`,
-`backdrop-filter`, `mix-blend-mode`, `content-visibility`, full
-`scroll-snap-*` behaviour, and the 3D transform stack
-(`perspective`, `transform-style: preserve-3d`,
-`backface-visibility`).
+`backdrop-filter`, `mix-blend-mode`, `content-visibility`, and full
+`scroll-snap-*` behaviour.
+
+The 3D transform stack **is** painted end-to-end via the new
+screen-space projection path:
+
+- 3D transform functions (`rotateX/Y/Z`, `rotate3d`, `translate3d`,
+  `scale3d`, `matrix3d`, `perspective(d)`) compose through the
+  `Matrix3d` 4×4 pipeline in `transform.rs`.
+- `perspective` and `perspective-origin` on a parent establish a
+  `PerspectiveContext` in `PaintContext` that descendants pick up.
+  When a 3D-transformed descendant is painted, the painter builds
+  the full `T(vp) * Persp(d) * T(-vp) * T(origin) * local *
+  T(-origin)` matrix in screen space and projects the box's three
+  reference corners through it (with per-vertex perspective divide)
+  via `Matrix3d::project_screen_rect_affine`. The result is a
+  parallelogram approximation of the true trapezoid — exact for the
+  top-left/top-right/bottom-left corners.
+- `transform-style: preserve-3d` propagates the parent's full
+  screen-space matrix to descendants via `PaintContext.preserved_3d`
+  so a child's `translateZ(50px)` actually moves toward the viewer
+  inside an ancestor's 3D rendering context. `flat` flushes the
+  ambient matrix, matching the spec.
+- `backface-visibility: hidden` is honored via the surface-normal Z
+  test on the transformed front face.
+
+Pure 2D transforms keep the existing orthographic flatten via
+`AffineTransform2D::from_css_transforms`. The screen-space 3D path
+also skips the long-standing `child_matrix.e/.f → tx_offset_x/y`
+double-translation bug in the 2D path (gated by `needs_screen_path`)
+— the existing 2D path still has that bug for backwards compat.
 
 When wiring one of these into the painter:
 

@@ -44,8 +44,8 @@ The cascade pipeline lives in `src/css/`:
 ### Visual effects
 `opacity` · `box-shadow` · `filter` (blur / brightness / contrast / grayscale / invert / opacity / saturate / sepia / hue-rotate) · `backdrop-filter` · `mix-blend-mode` · `isolation` · `content-visibility`
 
-### Transforms (2D + 3D scaffolding)
-`transform` (translate / scale / rotate / skew / matrix) · `transform-origin` · `transform-style` · `perspective` · `perspective-origin` · `backface-visibility`
+### Transforms (2D + 3D)
+`transform` (translate / scale / rotate / skew / matrix / translate3d / translateZ / scale3d / scaleZ / rotateX / rotateY / rotateZ / rotate3d / matrix3d / perspective) · `transform-origin` · `transform-style` · `perspective` · `perspective-origin` · `backface-visibility`
 
 ### Animation & transitions
 `transition` · `animation` (+ `-name` / `-duration` / `-timing-function` / `-delay` / `-iteration-count` / `-direction` / `-fill-mode` / `-play-state`) · `will-change`
@@ -82,12 +82,20 @@ These are recognised by the parser but **not yet stored or applied**:
 ## Storage vs. rendering
 
 Many of the newer properties (`backdrop-filter`, `mix-blend-mode`, `clip-path`,
-`perspective`, `transform-style`, `scroll-snap-*`, `content-visibility`, …)
-are parsed and stored on `ComputedStyle` so cascading and `getComputedStyle()`
-work, but the **paint pipeline doesn't yet honour them**. They're useful as
-groundwork — the painter can opt in to a property without re-touching the
-parser. When wiring one of these into the compositor, search for the field
-name in `src/paint/` and `src/css/values/computed.rs`.
+`perspective`, `perspective-origin`, `transform-style`, `scroll-snap-*`,
+`content-visibility`, …) are parsed and stored on `ComputedStyle` so cascading
+and `getComputedStyle()` work, but the **paint pipeline doesn't yet honour
+them**. They're useful as groundwork — the painter can opt in to a property
+without re-touching the parser. When wiring one of these into the compositor,
+search for the field name in `src/paint/` and `src/css/values/computed.rs`.
+
+Notable: 3D transform *functions* (`rotateX`, `rotate3d`, `translate3d`,
+`matrix3d`, `perspective(d)`, …) **are** painted — they go through the new
+`Matrix3d` pipeline in `src/transform.rs` and are flattened orthographically
+to a 2D affine for the existing paint path. `backface-visibility: hidden` is
+also honored. The unimplemented half is the `perspective` *property* on
+ancestor containers, which would let the flatten produce a true perspective
+trapezoid instead of a parallelogram.
 
 ## How to add a property
 
