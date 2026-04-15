@@ -101,10 +101,8 @@ impl TreeBuilder {
                 }
             },
             Token::Eof => {
-                // Let the normal InBody EOF handling run via the
-                // outer process_token path after we clear the
-                // foreign subtree.
                 self.break_out_of_foreign_content();
+                self.process_token(Token::Eof);
             },
         }
     }
