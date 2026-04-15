@@ -43,13 +43,31 @@ pub(super) fn paint_background(
             let p1 = m3d.apply_point_3d(sx + w, sy, 0.0);
             let p2 = m3d.apply_point_3d(sx + w, sy + h, 0.0);
             let p3 = m3d.apply_point_3d(sx, sy + h, 0.0);
-            let quad = [
-                (p0.0 as i32, p0.1 as i32),
-                (p1.0 as i32, p1.1 as i32),
-                (p2.0 as i32, p2.1 as i32),
-                (p3.0 as i32, p3.1 as i32),
-            ];
-            backend.fill_polygon(&quad, bg)?;
+            // Guard against points at/behind the camera plane.
+            // When `w` falls just above `apply_point_3d`'s 1e-6
+            // divide-by-zero threshold, the perspective divide
+            // produces finite-but-astronomical screen coordinates
+            // (think `10000 / 2e-6 ≈ 5e9`) that saturate on the
+            // `as i32` cast below — `NaN → 0`, `±Inf → i32::MIN/MAX`,
+            // huge finite → `i32::MAX`. Without this check, an
+            // element grazing the camera plane paints a full-screen
+            // garbage polygon or a degenerate line instead of just
+            // silently disappearing. Skip the polygon when any
+            // corner's projection is non-finite or outside a
+            // sane screen-range bound — elements fully clipped by
+            // the camera frustum should not paint a background.
+            let safe = |p: (f32, f32, f32)| -> bool {
+                p.0.is_finite() && p.1.is_finite() && p.0.abs() < 1.0e7 && p.1.abs() < 1.0e7
+            };
+            if safe(p0) && safe(p1) && safe(p2) && safe(p3) {
+                let quad = [
+                    (p0.0 as i32, p0.1 as i32),
+                    (p1.0 as i32, p1.1 as i32),
+                    (p2.0 as i32, p2.1 as i32),
+                    (p3.0 as i32, p3.1 as i32),
+                ];
+                backend.fill_polygon(&quad, bg)?;
+            }
         } else if !ctx.transform.is_translation_only() && layout_box.style.border_radius.is_zero() {
             // Non-trivial 2D transform: render as transformed quadrilateral.
             let quad = ctx

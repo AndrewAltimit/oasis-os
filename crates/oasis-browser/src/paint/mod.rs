@@ -2048,6 +2048,64 @@ mod tests {
     }
 
     #[test]
+    fn near_camera_plane_background_skipped_not_saturated() {
+        // Regression guard for the non-finite / overflow cast in
+        // `paint_background`'s 3D projection path. When a point's
+        // homogeneous `w` lands just above `apply_point_3d`'s
+        // `1e-6` divide-by-zero threshold, the perspective divide
+        // produces finite-but-astronomical coordinates that
+        // saturate on the `as i32` cast to `i32::MAX`, painting a
+        // screen-spanning garbage polygon.
+        //
+        // We construct this by hand with `matrix3d(...)`: an
+        // otherwise-identity matrix with `m[15] = 2e-6` and a
+        // large translation component. `transform-style:
+        // preserve-3d` forces the screen path so the matrix lands
+        // in `ambient_screen_matrix`; the child has no transforms
+        // and paints a coloured background. With the guard,
+        // `fill_polygon` must NOT be called with the child's
+        // color — the element grazing the camera plane silently
+        // skips instead of flashing the whole viewport.
+        let mut backend = MockBackend::new();
+
+        // Column-major: [col0|col1|col2|col3]. Mostly identity
+        // but with a large x-translation (10000) and a tiny m[15]
+        // (2e-6) so `wo = 2e-6` for inputs at Z=0 and the divided
+        // x-coordinate is ~5e9 — well past `i32::MAX`.
+        #[rustfmt::skip]
+        let pathological = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            10000.0, 0.0, 0.0, 2.0e-6_f32,
+        ];
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Color::rgb(77, 88, 99);
+        let child = make_block(50.0, 50.0, 100.0, 100.0, child_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        parent_style.transforms = vec![TransformFunction::Matrix3d(pathological)];
+        let mut parent = make_block(0.0, 0.0, 300.0, 300.0, parent_style);
+        parent.children.push(child);
+
+        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+
+        let offending = backend.polygon_calls().into_iter().find(|c| {
+            matches!(
+                c,
+                DrawCall::FillPolygon { color, .. } if *color == Color::rgb(77, 88, 99)
+            )
+        });
+        assert!(
+            offending.is_none(),
+            "element near the camera plane must skip `fill_polygon` \
+             instead of painting a saturated-cast garbage quad",
+        );
+    }
+
+    #[test]
     fn flat_2d_child_between_3d_ancestor_and_grandchild_composes_into_ambient() {
         // Regression guard for a subtle `ambient_screen_matrix`
         // propagation bug: when a `transform-style: flat` child
