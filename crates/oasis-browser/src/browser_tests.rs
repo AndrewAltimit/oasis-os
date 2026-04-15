@@ -2205,11 +2205,7 @@ fn image_eviction_respects_budget() {
     let mut browser = BrowserWidget::new(config);
 
     // Create a fake 1x1 image (4 bytes). Set a tiny budget.
-    let small_img = image::DecodedImage {
-        width: 1,
-        height: 1,
-        pixels: vec![255, 0, 0, 255],
-    };
+    let small_img = image::DecodedImage::new(1, 1, vec![255, 0, 0, 255]);
 
     // Manually insert decoded images to test eviction.
     for i in 0..5 {

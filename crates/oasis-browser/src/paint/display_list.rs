@@ -212,10 +212,8 @@ fn rasterize_linear_mask(
     for y in 0..h {
         for x in 0..w {
             let proj = x as f32 * dx + y as f32 * dy;
-            let mut t = ((proj - min_proj) / len).clamp(0.0, 1.0);
-            if grad.repeating {
-                t = t.fract();
-            }
+            let raw = (proj - min_proj) / len;
+            let t = if grad.repeating { raw.fract().clamp(0.0, 1.0) } else { raw.clamp(0.0, 1.0) };
             let color = sample_gradient_stops(&grad.stops, t);
             out[(y * w + x) as usize] = color_to_mask_channel(color, use_alpha);
         }
@@ -291,7 +289,7 @@ fn rasterize_url_mask(layer_w: u32, layer_h: u32, src: &DecodedImage, mode: Mask
     let use_alpha = match mode {
         MaskMode::Alpha => true,
         MaskMode::Luminance => false,
-        MaskMode::MatchSource => src.pixels.chunks_exact(4).any(|px| px[3] < 255),
+        MaskMode::MatchSource => src.has_transparency,
     };
     let sx_scale = src.width as f32 / layer_w as f32;
     let sy_scale = src.height as f32 / layer_h as f32;
@@ -3359,13 +3357,9 @@ mod tests {
         // 2x2 mask source: opaque white on the left column,
         // transparent white on the right column. Alpha mode should
         // keep the left column and drop the right.
-        let src = Arc::new(DecodedImage {
-            width: 2,
-            height: 2,
-            pixels: vec![
+        let src = Arc::new(DecodedImage::new(2, 2, vec![
                 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0,
-            ],
-        });
+            ]));
         let mut layer: Vec<u8> = (0..4).flat_map(|_| [255u8, 0, 0, 255]).collect();
         let mask = MaskParams {
             image: CssBgImage::Url("left-half.png".to_string()),
@@ -3387,11 +3381,7 @@ mod tests {
         // fully opaque. Luminance mode should keep the right (white)
         // half and drop the left (black) half, even though both
         // alphas are identical.
-        let src = Arc::new(DecodedImage {
-            width: 2,
-            height: 1,
-            pixels: vec![0, 0, 0, 255, 255, 255, 255, 255],
-        });
+        let src = Arc::new(DecodedImage::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]));
         let mut layer: Vec<u8> = (0..2).flat_map(|_| [0u8, 128, 255, 255]).collect();
         let mask = MaskParams {
             image: CssBgImage::Url("bw.png".to_string()),
@@ -3408,11 +3398,7 @@ mod tests {
     fn rasterize_url_mask_stretches_to_layer_bounds() {
         // 1x1 opaque white source stretched to a 4x4 layer — every
         // output pixel should be 255.
-        let src = DecodedImage {
-            width: 1,
-            height: 1,
-            pixels: vec![255, 255, 255, 255],
-        };
+        let src = DecodedImage::new(1, 1, vec![255, 255, 255, 255]);
         let buf = rasterize_url_mask(4, 4, &src, MaskMode::Alpha);
         assert!(buf.iter().all(|&v| v == 255));
     }

@@ -324,11 +324,7 @@ impl BrowserWidget {
                     } else if result_tx
                         .send((
                             url,
-                            image::DecodedImage {
-                                width: 0,
-                                height: 0,
-                                pixels: Vec::new(),
-                            },
+                            image::DecodedImage::new(0, 0, Vec::new()),
                         ))
                         .is_err()
                     {
