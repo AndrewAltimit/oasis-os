@@ -1825,7 +1825,14 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         renderer: &mut dyn WebFontRenderer,
     ) -> Result<()> {
-        self.replay_dirty_inner(backend, dirty, scroll_dx, scroll_dy, base_clip, Some(renderer))
+        self.replay_dirty_inner(
+            backend,
+            dirty,
+            scroll_dx,
+            scroll_dy,
+            base_clip,
+            Some(renderer),
+        )
     }
 
     fn replay_dirty_inner(
