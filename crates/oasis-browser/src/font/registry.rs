@@ -192,8 +192,9 @@ impl FontRegistry {
         let key = family.to_ascii_lowercase();
         self.families.get(&key).is_some_and(|ids| {
             ids.iter().any(|id| {
-                let f = &self.fonts[id.0 as usize];
-                f.weight == weight && f.style == style
+                self.fonts
+                    .get(id.0 as usize)
+                    .is_some_and(|f| f.weight == weight && f.style == style)
             })
         })
     }
@@ -237,7 +238,10 @@ impl FontRegistry {
     /// Returns the width in pixels if the font is available, or `None`
     /// if no web font matches (caller should fall back to bitmap font).
     pub fn measure_text(&self, text: &str, font_size: f32, font_id: FontId) -> u32 {
-        let font = &self.fonts[font_id.0 as usize].font;
+        let Some(entry) = self.fonts.get(font_id.0 as usize) else {
+            return 0;
+        };
+        let font = &entry.font;
         let mut width = 0.0f32;
         for ch in text.chars() {
             let metrics = font.metrics(ch, font_size);
@@ -248,7 +252,10 @@ impl FontRegistry {
 
     /// Get the line height for a font at a given size.
     pub fn line_metrics(&self, font_id: FontId, font_size: f32) -> (f32, f32) {
-        let font = &self.fonts[font_id.0 as usize].font;
+        let Some(entry) = self.fonts.get(font_id.0 as usize) else {
+            return (font_size * 0.85, font_size * 0.15);
+        };
+        let font = &entry.font;
         if let Some(lm) = font.horizontal_line_metrics(font_size) {
             (lm.ascent, -lm.descent)
         } else {
@@ -257,12 +264,15 @@ impl FontRegistry {
     }
 
     /// Rasterize a single glyph, returning cached results when available.
+    ///
+    /// Returns `None` if `font_id` is out of bounds (e.g. stale after
+    /// a registry rebuild on navigation).
     pub fn rasterize_glyph(
         &mut self,
         font_id: FontId,
         ch: char,
         font_size: f32,
-    ) -> &RasterizedGlyph {
+    ) -> Option<&RasterizedGlyph> {
         let key = GlyphKey {
             font_id,
             codepoint: ch,
@@ -271,7 +281,7 @@ impl FontRegistry {
 
         // Check cache.
         if self.glyph_cache.contains_key(&key) {
-            return &self.glyph_cache[&key];
+            return Some(&self.glyph_cache[&key]);
         }
 
         // Evict if cache is full.
@@ -280,7 +290,7 @@ impl FontRegistry {
         }
 
         // Rasterize.
-        let font = &self.fonts[font_id.0 as usize].font;
+        let font = &self.fonts.get(font_id.0 as usize)?.font;
         let (metrics, bitmap) = font.rasterize(ch, font_size);
 
         let glyph = RasterizedGlyph {
@@ -293,7 +303,7 @@ impl FontRegistry {
         };
 
         self.glyph_cache.insert(key, glyph);
-        &self.glyph_cache[&key]
+        Some(&self.glyph_cache[&key])
     }
 
     /// Number of loaded font faces.
@@ -409,13 +419,13 @@ fn is_supported_format(format: &str) -> bool {
     )
 }
 
-/// Attempt to unwrap a WOFF/WOFF2 container to get raw sfnt/TTF data.
+/// Placeholder for future WOFF/WOFF2 container unwrapping.
 ///
-/// WOFF is a thin wrapper around sfnt with table-level compression.
-/// WOFF2 uses Brotli compression. For now we only support raw TTF/OTF
-/// and WOFF (simple zlib table decompression). WOFF2 requires a
-/// specialized decoder which we don't yet have — fontdue can often
-/// parse the raw bytes if they're not actually WOFF2-compressed.
+/// WOFF is a thin wrapper around sfnt with table-level zlib compression.
+/// WOFF2 uses Brotli compression. Neither is implemented yet — this
+/// function is a no-op that passes raw bytes through unchanged. Only
+/// raw TTF/OTF (sfnt) bytes are accepted; `is_supported_format` rejects
+/// WOFF/WOFF2 before data reaches this point.
 fn unwrap_font_container(data: &[u8]) -> &[u8] {
     // WOFF signature: 0x774F4646 ("wOFF")
     // WOFF2 signature: 0x774F4632 ("wOF2")

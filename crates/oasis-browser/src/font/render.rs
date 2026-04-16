@@ -93,7 +93,9 @@ pub fn render_web_font_text(
         );
 
         // Rasterize glyph (cached inside FontRegistry).
-        let glyph = reg.rasterize_glyph(font_id, ch, fs);
+        let Some(glyph) = reg.rasterize_glyph(font_id, ch, fs) else {
+            continue;
+        };
         let advance = glyph.advance_width;
         let glyph_w = glyph.width;
         let glyph_h = glyph.height;

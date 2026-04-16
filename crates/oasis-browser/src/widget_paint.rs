@@ -254,8 +254,9 @@ impl BrowserWidget {
                     }
 
                     // Replay only items intersecting the dirty rectangles.
-                    for dirty in &self.dirty_rects {
-                        self.display_list.replay_dirty(
+                    let dirty_copy: Vec<_> = self.dirty_rects.clone();
+                    for dirty in &dirty_copy {
+                        self.replay_dirty_display_list(
                             backend,
                             dirty,
                             self.display_list_scroll_y - self.scroll.scroll_y,
@@ -290,8 +291,9 @@ impl BrowserWidget {
                     self.link_map_scroll_y = self.scroll.scroll_y;
                     self.link_map_scroll_x = self.scroll.scroll_x;
 
-                    for dirty in &self.dirty_rects {
-                        self.display_list.replay_dirty(
+                    let dirty_copy2: Vec<_> = self.dirty_rects.clone();
+                    for dirty in &dirty_copy2 {
+                        self.replay_dirty_display_list(
                             backend,
                             dirty,
                             0,
@@ -497,6 +499,41 @@ impl BrowserWidget {
         clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
         self.display_list.replay(backend, dx, dy, clip)
+    }
+
+    /// Helper: replay dirty rects with web font support when available.
+    #[cfg(feature = "web-fonts")]
+    fn replay_dirty_display_list(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        dirty: &crate::layout::box_model::Rect,
+        dx: i32,
+        dy: i32,
+        clip: Option<(i32, i32, u32, u32)>,
+    ) -> Result<()> {
+        if self.font_registry.borrow().has_fonts() {
+            let mut renderer = crate::font::BrowserWebFontRenderer {
+                registry: &self.font_registry,
+                tex_cache: &mut self.glyph_tex_cache,
+            };
+            self.display_list
+                .replay_dirty_with_fonts(backend, dirty, dx, dy, clip, &mut renderer)
+        } else {
+            self.display_list.replay_dirty(backend, dirty, dx, dy, clip)
+        }
+    }
+
+    /// Helper: replay dirty rects (no web font support).
+    #[cfg(not(feature = "web-fonts"))]
+    fn replay_dirty_display_list(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        dirty: &crate::layout::box_model::Rect,
+        dx: i32,
+        dy: i32,
+        clip: Option<(i32, i32, u32, u32)>,
+    ) -> Result<()> {
+        self.display_list.replay_dirty(backend, dirty, dx, dy, clip)
     }
 
     /// Paint only the browser chrome (URL bar + status bar), skipping page
