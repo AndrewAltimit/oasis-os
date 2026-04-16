@@ -13,8 +13,9 @@ pub(crate) use declarations::parse_value_list;
 #[allow(unused_imports)]
 pub use types::{
     AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CounterStyleRule,
-    CssColor, CssValue, Declaration, KeyframeStop, KeyframesRule, LengthUnit, PropertyId,
-    PropertyRule, Rule, ScopeCondition, Selector, SimpleSelector, Specificity, Stylesheet,
+    CssColor, CssValue, Declaration, FontDisplay, FontFaceRule, FontFaceSrc, FontFaceStyle,
+    KeyframeStop, KeyframesRule, LengthUnit, PropertyId, PropertyRule, Rule, ScopeCondition,
+    Selector, SimpleSelector, Specificity, Stylesheet, UnicodeRange,
 };
 
 pub(crate) use types::SelectorList;
@@ -146,6 +147,7 @@ impl CssParser {
         let mut keyframes = Vec::new();
         let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
         let mut properties: Vec<PropertyRule> = Vec::new();
+        let mut font_faces: Vec<types::FontFaceRule> = Vec::new();
         loop {
             self.skip_whitespace();
             if self.at_eof() {
@@ -192,6 +194,10 @@ impl CssParser {
                     if let Some(pr) = self.parse_property_rule() {
                         properties.push(pr);
                     }
+                } else if lc == "font-face" {
+                    if let Some(ff) = self.parse_font_face_rule() {
+                        font_faces.push(ff);
+                    }
                 } else {
                     // Other at-rules: skip.
                     self.skip_at_rule();
@@ -212,6 +218,7 @@ impl CssParser {
             layers: std::mem::take(&mut self.layers),
             counter_styles,
             properties,
+            font_faces,
         }
     }
 
@@ -801,6 +808,312 @@ impl CssParser {
         Some(rule)
     }
 
+    /// Parse an `@font-face { ... }` rule into a [`FontFaceRule`].
+    ///
+    /// CSS `@font-face` has no prelude — it goes straight to a
+    /// declaration block of descriptors:
+    ///
+    /// ```css
+    /// @font-face {
+    ///   font-family: "Open Sans";
+    ///   src: url("open-sans.woff2") format("woff2"),
+    ///        url("open-sans.woff") format("woff");
+    ///   font-weight: 400;
+    ///   font-style: normal;
+    ///   font-display: swap;
+    ///   unicode-range: U+0020-007F;
+    /// }
+    /// ```
+    fn parse_font_face_rule(&mut self) -> Option<types::FontFaceRule> {
+        self.advance(); // consume @font-face
+        self.skip_whitespace();
+        if !self.expect(&CssToken::OpenBrace) {
+            return None;
+        }
+
+        let mut family: Option<String> = None;
+        let mut src: Vec<types::FontFaceSrc> = Vec::new();
+        let mut weight_lo: u16 = 400;
+        let mut weight_hi: u16 = 400;
+        let mut style = types::FontFaceStyle::Normal;
+        let mut display = types::FontDisplay::Auto;
+        let mut unicode_range: Vec<types::UnicodeRange> = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            let key = match self.peek().clone() {
+                CssToken::Ident(s) => {
+                    self.advance();
+                    s.to_ascii_lowercase()
+                },
+                _ => {
+                    self.advance();
+                    continue;
+                },
+            };
+            self.skip_whitespace();
+            if !self.expect(&CssToken::Colon) {
+                self.skip_to_semicolon_or_close_brace();
+                continue;
+            }
+            self.skip_whitespace();
+
+            match key.as_str() {
+                "font-family" => {
+                    let raw = self.collect_descriptor_value();
+                    family = Some(unquote(raw.trim()));
+                },
+                "src" => {
+                    src = self.parse_font_face_src_list();
+                },
+                "font-weight" => {
+                    let raw = self.collect_descriptor_value();
+                    let (lo, hi) = parse_font_weight_descriptor(raw.trim());
+                    weight_lo = lo;
+                    weight_hi = hi;
+                },
+                "font-style" => {
+                    let raw = self.collect_descriptor_value();
+                    style = match raw.trim().to_ascii_lowercase().as_str() {
+                        "italic" => types::FontFaceStyle::Italic,
+                        "oblique" => types::FontFaceStyle::Oblique,
+                        _ => types::FontFaceStyle::Normal,
+                    };
+                },
+                "font-display" => {
+                    let raw = self.collect_descriptor_value();
+                    display = match raw.trim().to_ascii_lowercase().as_str() {
+                        "block" => types::FontDisplay::Block,
+                        "swap" => types::FontDisplay::Swap,
+                        "fallback" => types::FontDisplay::Fallback,
+                        "optional" => types::FontDisplay::Optional,
+                        _ => types::FontDisplay::Auto,
+                    };
+                },
+                "unicode-range" => {
+                    // Unicode ranges like U+0020-007F use hex notation
+                    // that the CSS tokenizer doesn't preserve. Collect
+                    // the raw token text manually.
+                    unicode_range = self.parse_unicode_range_descriptor();
+                },
+                _ => {
+                    // Unrecognized descriptor — skip.
+                    let _raw = self.collect_descriptor_value();
+                },
+            }
+            if self.peek() == &CssToken::Semicolon {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+
+        // `font-family` and `src` are both required.
+        let family = family?;
+        if src.is_empty() {
+            return None;
+        }
+
+        Some(types::FontFaceRule {
+            family,
+            src,
+            weight: (weight_lo, weight_hi),
+            style,
+            display,
+            unicode_range,
+        })
+    }
+
+    /// Parse the value of a `src:` descriptor inside `@font-face`.
+    ///
+    /// The grammar is a comma-separated list of `url()` or `local()`
+    /// entries, each optionally followed by `format()` / `tech()`.
+    fn parse_font_face_src_list(&mut self) -> Vec<types::FontFaceSrc> {
+        let mut sources = Vec::new();
+        loop {
+            self.skip_whitespace();
+            match self.peek() {
+                CssToken::Eof | CssToken::CloseBrace | CssToken::Semicolon => break,
+                CssToken::Function(name) => {
+                    let name_lc = name.to_ascii_lowercase();
+                    match name_lc.as_str() {
+                        "url" => {
+                            self.advance(); // consume url(
+                            self.skip_whitespace();
+                            let url = match self.peek().clone() {
+                                CssToken::String(s) => {
+                                    self.advance();
+                                    s
+                                },
+                                CssToken::Ident(s) => {
+                                    self.advance();
+                                    s
+                                },
+                                _ => {
+                                    // Malformed url() — collect to closing paren.
+                                    self.skip_to_close_paren();
+                                    self.skip_past_comma_or_semi();
+                                    continue;
+                                },
+                            };
+                            self.skip_whitespace();
+                            if self.peek() == &CssToken::CloseParen {
+                                self.advance();
+                            }
+                            // Check for format() hint after the url().
+                            self.skip_whitespace();
+                            let format = self.try_parse_format_hint();
+                            sources.push(types::FontFaceSrc::Url { url, format });
+                        },
+                        "local" => {
+                            self.advance(); // consume local(
+                            self.skip_whitespace();
+                            let name = match self.peek().clone() {
+                                CssToken::String(s) => {
+                                    self.advance();
+                                    s
+                                },
+                                CssToken::Ident(s) => {
+                                    // Collect multi-word local names.
+                                    self.advance();
+                                    let mut full = s;
+                                    while let CssToken::Ident(next) = self.peek() {
+                                        full.push(' ');
+                                        full.push_str(next);
+                                        self.advance();
+                                    }
+                                    full
+                                },
+                                _ => {
+                                    self.skip_to_close_paren();
+                                    self.skip_past_comma_or_semi();
+                                    continue;
+                                },
+                            };
+                            self.skip_whitespace();
+                            if self.peek() == &CssToken::CloseParen {
+                                self.advance();
+                            }
+                            sources.push(types::FontFaceSrc::Local(name));
+                        },
+                        _ => {
+                            // Unknown function — skip past it.
+                            self.advance();
+                            self.skip_to_close_paren();
+                        },
+                    }
+                },
+                CssToken::Comma => {
+                    self.advance();
+                },
+                _ => {
+                    // Recovery: skip unexpected token.
+                    self.advance();
+                },
+            }
+        }
+        // Don't consume the semicolon/closebrace — the caller handles it.
+        sources
+    }
+
+    /// Try to parse a `format("woff2", ...)` hint after a `url()` in
+    /// `@font-face src:`. Returns the list of format strings (may be empty).
+    fn try_parse_format_hint(&mut self) -> Vec<String> {
+        let mut formats = Vec::new();
+        if let CssToken::Function(f) = self.peek() {
+            if f.eq_ignore_ascii_case("format") {
+                self.advance(); // consume format(
+                loop {
+                    self.skip_whitespace();
+                    match self.peek().clone() {
+                        CssToken::String(s) => {
+                            self.advance();
+                            formats.push(s);
+                        },
+                        CssToken::Ident(s) => {
+                            self.advance();
+                            formats.push(s);
+                        },
+                        CssToken::Comma => {
+                            self.advance();
+                        },
+                        CssToken::CloseParen => {
+                            self.advance();
+                            break;
+                        },
+                        _ => {
+                            self.skip_to_close_paren();
+                            break;
+                        },
+                    }
+                }
+            } else if f.eq_ignore_ascii_case("tech") {
+                // Skip tech() hints — not actionable.
+                self.advance();
+                self.skip_to_close_paren();
+            }
+        }
+        formats
+    }
+
+    /// Parse the `unicode-range` descriptor value by collecting raw
+    /// token text. Unicode range notation (U+XXXX) uses hex which the
+    /// CSS tokenizer doesn't preserve in its typed tokens.
+    fn parse_unicode_range_descriptor(&mut self) -> Vec<types::UnicodeRange> {
+        // Collect raw text from tokens until semicolon or close-brace.
+        let raw = self.collect_descriptor_value();
+        // The raw text now has pieces like "U" "+20" "-7F" which we
+        // need to reassemble. But collect_descriptor_value loses hex
+        // digits via Number parsing. Let's use a different approach:
+        // since we already consumed the tokens, parse from the raw text.
+        // Actually, Numbers like 0020 become "20" — we need to handle that.
+        // For robustness, just try to parse what we got.
+        parse_unicode_range_list(raw.trim())
+    }
+
+    /// Skip tokens until (and including) the next `)`.
+    fn skip_to_close_paren(&mut self) {
+        let mut depth = 1;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::OpenParen => {
+                    depth += 1;
+                    self.advance();
+                },
+                CssToken::CloseParen => {
+                    depth -= 1;
+                    self.advance();
+                    if depth == 0 {
+                        break;
+                    }
+                },
+                _ => {
+                    self.advance();
+                },
+            }
+        }
+    }
+
+    /// Skip past the next comma or semicolon (for error recovery in
+    /// `@font-face src:` lists).
+    fn skip_past_comma_or_semi(&mut self) {
+        loop {
+            match self.peek() {
+                CssToken::Comma => {
+                    self.advance();
+                    break;
+                },
+                CssToken::Semicolon | CssToken::CloseBrace | CssToken::Eof => break,
+                _ => {
+                    self.advance();
+                },
+            }
+        }
+    }
+
     /// Read tokens up to (but not consuming) the next semicolon /
     /// close-brace at brace-depth 0, reassembling them as raw text.
     /// Used by `@counter-style` / `@property` descriptor bodies.
@@ -849,6 +1162,7 @@ impl CssParser {
                         },
                         CssToken::Colon => out.push(':'),
                         CssToken::Comma => out.push(','),
+                        CssToken::Plus => out.push('+'),
                         CssToken::Delim(c) => out.push(c),
                         _ => {},
                     }
@@ -1489,6 +1803,73 @@ fn unquote(s: &str) -> String {
         return s[1..s.len() - 1].to_string();
     }
     s.to_string()
+}
+
+// -------------------------------------------------------------------
+// @font-face helpers
+// -------------------------------------------------------------------
+
+/// Parse a `font-weight` descriptor value for `@font-face`.
+///
+/// Supports single values (`400`, `bold`) and ranges (`100 900`).
+fn parse_font_weight_descriptor(raw: &str) -> (u16, u16) {
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+    let parse_one = |s: &str| -> u16 {
+        match s.to_ascii_lowercase().as_str() {
+            "normal" => 400,
+            "bold" => 700,
+            _ => s.parse::<u16>().unwrap_or(400).clamp(1, 1000),
+        }
+    };
+    if parts.len() >= 2 {
+        let lo = parse_one(parts[0]);
+        let hi = parse_one(parts[1]);
+        (lo.min(hi), lo.max(hi))
+    } else if let Some(v) = parts.first() {
+        let w = parse_one(v);
+        (w, w)
+    } else {
+        (400, 400)
+    }
+}
+
+/// Parse a comma-separated `unicode-range` descriptor value.
+///
+/// Supports `U+XXXX`, `U+XXXX-YYYY`, and `U+XX??` wildcard forms.
+fn parse_unicode_range_list(raw: &str) -> Vec<types::UnicodeRange> {
+    let mut ranges = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if let Some(r) = parse_single_unicode_range(part) {
+            ranges.push(r);
+        }
+    }
+    ranges
+}
+
+/// Parse a single Unicode range like `U+0020-007F` or `U+4?`.
+fn parse_single_unicode_range(s: &str) -> Option<types::UnicodeRange> {
+    let s = s.trim();
+    // Must start with U+ or u+
+    let hex_part = s.strip_prefix("U+").or_else(|| s.strip_prefix("u+"))?;
+
+    if let Some((start_s, end_s)) = hex_part.split_once('-') {
+        // Range form: U+XXXX-YYYY
+        let start = u32::from_str_radix(start_s.trim(), 16).ok()?;
+        let end = u32::from_str_radix(end_s.trim(), 16).ok()?;
+        Some(types::UnicodeRange { start, end })
+    } else if hex_part.contains('?') {
+        // Wildcard form: U+4?  →  U+40-4F, U+4?? → U+400-4FF
+        let lo = hex_part.replace('?', "0");
+        let hi = hex_part.replace('?', "F");
+        let start = u32::from_str_radix(&lo, 16).ok()?;
+        let end = u32::from_str_radix(&hi, 16).ok()?;
+        Some(types::UnicodeRange { start, end })
+    } else {
+        // Single codepoint: U+XXXX
+        let cp = u32::from_str_radix(hex_part.trim(), 16).ok()?;
+        Some(types::UnicodeRange { start: cp, end: cp })
+    }
 }
 
 /// Split a `symbols` descriptor value into individual entries, treating

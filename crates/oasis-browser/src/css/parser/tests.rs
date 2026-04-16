@@ -1731,4 +1731,173 @@ mod field_sizing_tests {
         }
         assert_eq!(style.field_sizing, FieldSizing::Fixed);
     }
+
+    // -- @font-face ------------------------------------------------
+
+    #[test]
+    fn font_face_basic() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Open Sans";
+                src: url("open-sans.woff2") format("woff2"),
+                     url("open-sans.woff") format("woff");
+                font-weight: 400;
+                font-style: normal;
+                font-display: swap;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        let ff = &sheet.font_faces[0];
+        assert_eq!(ff.family, "Open Sans");
+        assert_eq!(ff.src.len(), 2);
+        assert_eq!(ff.weight, (400, 400));
+        assert_eq!(ff.style, types::FontFaceStyle::Normal);
+        assert_eq!(ff.display, types::FontDisplay::Swap);
+        assert!(ff.unicode_range.is_empty());
+
+        // Check src entries.
+        match &ff.src[0] {
+            types::FontFaceSrc::Url { url, format } => {
+                assert_eq!(url, "open-sans.woff2");
+                assert_eq!(format, &["woff2"]);
+            },
+            _ => panic!("expected Url src"),
+        }
+        match &ff.src[1] {
+            types::FontFaceSrc::Url { url, format } => {
+                assert_eq!(url, "open-sans.woff");
+                assert_eq!(format, &["woff"]);
+            },
+            _ => panic!("expected Url src"),
+        }
+    }
+
+    #[test]
+    fn font_face_weight_range() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Variable";
+                src: url("var.woff2");
+                font-weight: 100 900;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].weight, (100, 900));
+    }
+
+    #[test]
+    fn font_face_bold_keyword() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "MyFont";
+                src: url("bold.ttf");
+                font-weight: bold;
+                font-style: italic;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].weight, (700, 700));
+        assert_eq!(sheet.font_faces[0].style, types::FontFaceStyle::Italic);
+    }
+
+    #[test]
+    fn font_face_local_src() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "SystemFont";
+                src: local("Helvetica Neue"), url("fallback.woff2");
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].src.len(), 2);
+        match &sheet.font_faces[0].src[0] {
+            types::FontFaceSrc::Local(name) => assert_eq!(name, "Helvetica Neue"),
+            _ => panic!("expected Local src"),
+        }
+    }
+
+    #[test]
+    fn font_face_unicode_range() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Latin";
+                src: url("latin.woff2");
+                unicode-range: U+0020-007F, U+2000-206F;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        let ranges = &sheet.font_faces[0].unicode_range;
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].start, 0x0020);
+        assert_eq!(ranges[0].end, 0x007F);
+        assert_eq!(ranges[1].start, 0x2000);
+        assert_eq!(ranges[1].end, 0x206F);
+    }
+
+    #[test]
+    fn font_face_missing_family_skipped() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                src: url("no-family.woff2");
+            }
+        "#,
+        );
+        // Missing font-family → rule is invalid and skipped.
+        assert_eq!(sheet.font_faces.len(), 0);
+    }
+
+    #[test]
+    fn font_face_missing_src_skipped() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "NoSrc";
+            }
+        "#,
+        );
+        // Missing src → rule is invalid and skipped.
+        assert_eq!(sheet.font_faces.len(), 0);
+    }
+
+    #[test]
+    fn font_face_multiple_rules() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "MyFont";
+                src: url("regular.woff2");
+                font-weight: 400;
+            }
+            @font-face {
+                font-family: "MyFont";
+                src: url("bold.woff2");
+                font-weight: 700;
+            }
+            body { color: red; }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 2);
+        assert_eq!(sheet.font_faces[0].weight, (400, 400));
+        assert_eq!(sheet.font_faces[1].weight, (700, 700));
+        // Regular rules should also parse.
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn font_family_named_in_declaration() {
+        let decls = first_decls(r#"body { font-family: "Open Sans", Helvetica, sans-serif; }"#);
+        let ff_decl = decls.iter().find(|d| d.property == "font-family");
+        assert!(ff_decl.is_some(), "font-family should be in declarations");
+    }
 }

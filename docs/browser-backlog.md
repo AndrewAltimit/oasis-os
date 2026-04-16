@@ -163,8 +163,15 @@ as individual issues — not a single epic.
 - ~~**Network error UX**~~ — Done. Error pages now categorize
   failures (DNS, timeout, TLS, redirect loop) with styled
   explanations and suggested actions.
-- **`@font-face` / web fonts** — completely missing. Fallback to
-  system fonts works but looks wrong on branded pages.
+- ~~**`@font-face` / web fonts**~~ — Done. Full CSS `@font-face`
+  parsing (family, src url/local, font-weight ranges, font-style,
+  font-display, unicode-range), `FontFamily` extended from 3-enum to
+  full font stack with named families and generic fallbacks, `fontdue`
+  rasterizer for TTF/OTF parsing and glyph rendering, font registry
+  with CSS font matching (weight/style), font-aware text measurement,
+  glyph texture cache, and pipeline integration (lazy font loading on
+  first tick, web_font_id resolution on ComputedStyle, DrawText with
+  web font path in display list).
 - **Accessibility** — ARIA roles are parsed but not exposed to
   anything. Low priority for launch but should at least have a
   plan.

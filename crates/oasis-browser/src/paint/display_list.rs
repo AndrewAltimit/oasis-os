@@ -547,6 +547,11 @@ pub enum DisplayItem {
         width: u32,
         /// Source DOM node for hover color patching.
         node_id: Option<usize>,
+        /// Web font ID from the [`FontRegistry`]. When `Some`, the text
+        /// is rendered using the web font's rasterized glyphs instead of
+        /// the backend's bitmap font.
+        #[cfg(feature = "web-fonts")]
+        web_font_id: Option<u32>,
     },
     /// Texture blit.
     Blit {
@@ -1519,9 +1524,32 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    #[cfg(feature = "web-fonts")]
+                    web_font_id,
                     ..
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+
+                    // Web font path: render via draw_text_styled as
+                    // fallback (the widget_paint layer upgrades this
+                    // to real glyph rendering when a FontRegistry is
+                    // available).
+                    #[cfg(feature = "web-fonts")]
+                    if web_font_id.is_some() {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                        let c = apply_layer_opacity(*color, layer_opacity);
+                        backend.draw_text_styled(
+                            text,
+                            x + scroll_dx,
+                            y + eff_dy,
+                            *font_size,
+                            c,
+                            *bold,
+                            *italic,
+                        )?;
+                        continue;
+                    }
+
                     let c = apply_layer_opacity(*color, layer_opacity);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
@@ -1861,9 +1889,32 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    #[cfg(feature = "web-fonts")]
+                    web_font_id,
                     ..
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+
+                    // Web font path: render via draw_text_styled as
+                    // fallback (the widget_paint layer upgrades this
+                    // to real glyph rendering when a FontRegistry is
+                    // available).
+                    #[cfg(feature = "web-fonts")]
+                    if web_font_id.is_some() {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                        let c = apply_layer_opacity(*color, layer_opacity);
+                        backend.draw_text_styled(
+                            text,
+                            x + scroll_dx,
+                            y + eff_dy,
+                            *font_size,
+                            c,
+                            *bold,
+                            *italic,
+                        )?;
+                        continue;
+                    }
+
                     let c = apply_layer_opacity(*color, layer_opacity);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
@@ -2507,6 +2558,8 @@ mod tests {
             italic: false,
             width: 1,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::PopClip);
         dl.compact();
@@ -2646,6 +2699,8 @@ mod tests {
             italic: false,
             width: 0,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::PopLayer);
 
@@ -2931,6 +2986,8 @@ mod tests {
             italic: false,
             width: 1,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 10,

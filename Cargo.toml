@@ -124,6 +124,9 @@ rayon = "1.10"
 # Fast hashing
 rustc-hash = "2.1"
 
+# Font rendering (TTF/OTF parsing + rasterization)
+fontdue = "0.9"
+
 # Audio decoding
 rmp3 = { version = "0.3", default-features = false, features = ["simd"] }
 

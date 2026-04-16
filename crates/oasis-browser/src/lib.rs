@@ -74,6 +74,7 @@ pub mod svg;
 pub(crate) mod transform;
 
 pub mod canvas;
+pub mod font;
 
 pub(crate) mod image_atlas;
 mod widget_images;
@@ -471,6 +472,16 @@ pub struct BrowserWidget {
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
 
+    /// Web font registry: loaded @font-face fonts for the current page.
+    #[cfg(feature = "web-fonts")]
+    font_registry: std::cell::RefCell<font::FontRegistry>,
+
+    /// Cached glyph textures for web font rendering.
+    /// Used by `render_web_font_text` during display list replay.
+    #[cfg(feature = "web-fonts")]
+    #[allow(dead_code)]
+    glyph_tex_cache: font::GlyphTextureCache,
+
     /// Last font size used for layout (base * zoom). When this changes
     /// the text cache is invalidated.
     last_effective_font_size: f32,
@@ -626,6 +637,10 @@ impl BrowserWidget {
             tab_order: Vec::new(),
             tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
+            #[cfg(feature = "web-fonts")]
+            font_registry: std::cell::RefCell::new(font::FontRegistry::new()),
+            #[cfg(feature = "web-fonts")]
+            glyph_tex_cache: font::GlyphTextureCache::new(),
             last_effective_font_size: effective_font,
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),

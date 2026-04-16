@@ -175,12 +175,107 @@ pub enum FontStyle {
     Italic,
 }
 
-/// CSS `font-family` generic families.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontFamily {
+/// A single entry in a `font-family` stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontFamilyName {
+    /// A named font (e.g. `"Open Sans"`, `Roboto`).
+    Named(String),
+    /// `sans-serif` generic family.
     SansSerif,
+    /// `serif` generic family.
     Serif,
+    /// `monospace` generic family.
     Monospace,
+    /// `cursive` generic family.
+    Cursive,
+    /// `fantasy` generic family.
+    Fantasy,
+    /// `system-ui` generic family.
+    SystemUi,
+}
+
+impl FontFamilyName {
+    /// Returns `true` if this is a generic family (sans-serif, etc.).
+    pub fn is_generic(&self) -> bool {
+        !matches!(self, FontFamilyName::Named(_))
+    }
+}
+
+/// CSS `font-family` property — an ordered list of family names with
+/// generic fallbacks. The browser tries each entry in order until it
+/// finds one that can render the requested glyphs.
+///
+/// For backward compatibility, the `SansSerif`, `Serif`, and `Monospace`
+/// associated constants provide quick access to single-family stacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFamily {
+    /// Ordered list of font family names, tried left to right.
+    pub families: Vec<FontFamilyName>,
+}
+
+impl FontFamily {
+    /// `sans-serif` (the default).
+    pub const SANS_SERIF: FontFamily = FontFamily {
+        families: Vec::new(), // empty = sans-serif default
+    };
+
+    /// Create a font family from a single generic name.
+    pub fn generic(name: FontFamilyName) -> Self {
+        FontFamily {
+            families: vec![name],
+        }
+    }
+
+    /// Create a font family stack from an ordered list.
+    pub fn stack(names: Vec<FontFamilyName>) -> Self {
+        FontFamily { families: names }
+    }
+
+    /// Resolve the effective generic fallback — the last generic entry
+    /// in the stack, or `SansSerif` if none.
+    pub fn generic_fallback(&self) -> &FontFamilyName {
+        self.families
+            .iter()
+            .rev()
+            .find(|f| f.is_generic())
+            .unwrap_or(&FontFamilyName::SansSerif)
+    }
+
+    /// Iterate over all named (non-generic) families in order.
+    pub fn named_families(&self) -> impl Iterator<Item = &str> {
+        self.families.iter().filter_map(|f| match f {
+            FontFamilyName::Named(n) => Some(n.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Returns `true` if this is the monospace generic.
+    pub fn is_monospace(&self) -> bool {
+        self.families
+            .iter()
+            .any(|f| matches!(f, FontFamilyName::Monospace))
+    }
+
+    /// `SansSerif` convenience (backward compat).
+    pub fn sans_serif() -> Self {
+        FontFamily::generic(FontFamilyName::SansSerif)
+    }
+
+    /// `Serif` convenience.
+    pub fn serif() -> Self {
+        FontFamily::generic(FontFamilyName::Serif)
+    }
+
+    /// `Monospace` convenience.
+    pub fn monospace() -> Self {
+        FontFamily::generic(FontFamilyName::Monospace)
+    }
+}
+
+impl Default for FontFamily {
+    fn default() -> Self {
+        FontFamily::sans_serif()
+    }
 }
 
 /// CSS `text-align` property.

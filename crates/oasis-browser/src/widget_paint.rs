@@ -31,6 +31,10 @@ impl BrowserWidget {
 
         self.load_next_image_batch(vfs, 8);
 
+        // Load pending web fonts (first tick after page load).
+        #[cfg(feature = "web-fonts")]
+        self.load_web_fonts(vfs);
+
         // Compute frame delta for animations/transitions.
         let now = std::time::Instant::now();
         let dt_ms = self

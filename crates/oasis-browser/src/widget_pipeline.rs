@@ -696,6 +696,21 @@ impl BrowserWidget {
         let selector_index = css::cascade::SelectorIndex::build(&all_sheets);
         self.diag(&format!("[BR] cascade done: {} styles", styles.len()));
 
+        // 4b. Web fonts: collect @font-face rules from stylesheets.
+        //     Actual font data loading happens in `load_web_fonts()`
+        //     which is called with VFS access before the first paint.
+        #[cfg(feature = "web-fonts")]
+        {
+            let mut font_reg = self.font_registry.borrow_mut();
+            // Clear previous page's fonts.
+            *font_reg = crate::font::FontRegistry::new();
+
+            // Collect @font-face rules from all stylesheets.
+            for sheet in &all_sheets {
+                font_reg.collect_font_faces(&sheet.font_faces);
+            }
+        }
+
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
 
@@ -836,6 +851,59 @@ impl BrowserWidget {
             }
         }
         map
+    }
+
+    /// Load pending web fonts and resolve `web_font_id` on styles.
+    ///
+    /// Called from `tick()` when VFS access is available. This triggers
+    /// the actual network/VFS fetch of font data, parses it with fontdue,
+    /// and then resolves `web_font_id` on each `ComputedStyle`. If any
+    /// fonts are loaded, the layout and display list are rebuilt.
+    #[cfg(feature = "web-fonts")]
+    pub(crate) fn load_web_fonts(&mut self, vfs: &dyn oasis_vfs::Vfs) {
+        let needs_load = {
+            let reg = self.font_registry.borrow();
+            !reg.has_fonts() && reg.font_count() == 0
+        };
+
+        // Check if there are pending font face rules to load.
+        let has_pending = {
+            let reg = self.font_registry.borrow();
+            // The pending list is private, but we can check if font_count is 0
+            // and there were @font-face rules collected.
+            reg.font_count() == 0
+        };
+
+        if !needs_load || !has_pending {
+            return;
+        }
+
+        let base_url = self.nav.current_url().map(|s| s.to_string());
+        {
+            let mut reg = self.font_registry.borrow_mut();
+            reg.load_fonts(base_url.as_deref(), vfs, self.tls.as_deref());
+        }
+
+        // If fonts were loaded, resolve web_font_id on styles and
+        // trigger relayout.
+        let font_count = self.font_registry.borrow().font_count();
+        if font_count > 0 {
+            self.diag(&format!("[BR] web fonts loaded: {} faces", font_count));
+            // Resolve web_font_id on cached styles.
+            let reg = self.font_registry.borrow();
+            for style in self.styles.iter_mut().flatten() {
+                let bold = style.font_weight.is_bold();
+                let italic = style.font_style == crate::css::values::FontStyle::Italic;
+                let weight = if bold { 700u16 } else { 400 };
+                if let Some(font_id) = reg.resolve_font(&style.font_family.families, weight, italic)
+                {
+                    style.web_font_id = Some(font_id.as_raw());
+                }
+            }
+            drop(reg);
+            // Force display list rebuild on next paint.
+            self.layout_dirty = true;
+        }
     }
 
     /// Walk the DOM to collect text from `<style>` elements and parse
