@@ -592,11 +592,12 @@ pub fn compute_style(
     // Pass 2a: Apply `direction` before any other properties so that
     // inline-axis logical properties (margin-inline-start, etc.)
     // resolve to the correct physical side in RTL contexts.
-    for entry in &matched {
-        if entry.property == "direction" {
-            let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
-            style.apply_declaration("direction", &resolved, parent_font_size);
-        }
+    // `matched` is sorted ascending by cascade order (origin, layer,
+    // specificity, source order), so the last `direction` entry is
+    // the cascade winner — apply only that one.
+    if let Some(entry) = matched.iter().rfind(|e| e.property == "direction") {
+        let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
+        style.apply_declaration("direction", &resolved, parent_font_size);
     }
 
     // Pass 2b: Apply font-size first so that em units in subsequent
