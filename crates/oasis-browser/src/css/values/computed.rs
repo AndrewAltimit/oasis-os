@@ -66,6 +66,11 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
     pub font_family: FontFamily,
+    /// Resolved web font ID from the font registry, if a web font
+    /// was matched for this element's font-family/weight/style combo.
+    /// `None` means fall back to the bitmap font.
+    #[cfg(feature = "web-fonts")]
+    pub web_font_id: Option<u32>,
     pub text_align: TextAlign,
     pub direction: TextDirection,
     pub text_decoration: TextDecoration,
@@ -409,7 +414,9 @@ impl Default for ComputedStyle {
             font_size: base_font_size,
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
-            font_family: FontFamily::SansSerif,
+            font_family: FontFamily::default(),
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
             text_align: TextAlign::Left,
             direction: TextDirection::Ltr,
             text_decoration: TextDecoration::NONE,
@@ -801,7 +808,9 @@ impl ComputedStyle {
             font_size: parent.font_size,
             font_weight: parent.font_weight,
             font_style: parent.font_style,
-            font_family: parent.font_family,
+            font_family: parent.font_family.clone(),
+            #[cfg(feature = "web-fonts")]
+            web_font_id: parent.web_font_id,
             text_align: parent.text_align,
             direction: parent.direction,
             text_decoration: parent.text_decoration,
@@ -860,7 +869,7 @@ mod tests {
         assert!((s.font_size - ROOT_FONT_SIZE).abs() < f32::EPSILON);
         assert_eq!(s.font_weight, FontWeight::NORMAL);
         assert_eq!(s.font_style, FontStyle::Normal);
-        assert_eq!(s.font_family, FontFamily::SansSerif);
+        assert_eq!(s.font_family, FontFamily::default());
         assert!((s.line_height - ROOT_FONT_SIZE * 1.5).abs() < 0.01);
         assert!((s.margin_top).abs() < f32::EPSILON);
         assert!((s.padding_top).abs() < f32::EPSILON);

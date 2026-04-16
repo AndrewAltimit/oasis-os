@@ -974,10 +974,12 @@ mod tests {
     }
 
     #[test]
-    fn font_unknown_single_passthrough() {
+    fn font_unknown_single_treated_as_family() {
+        // Unknown keywords like `caption` (system font) are now treated
+        // as a font-family name rather than passed through as raw `font`.
         let result = expand("font", kw("caption"));
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], decl("font", kw("caption")));
+        assert_eq!(result[0], decl("font-family", kw("caption")));
     }
 
     #[test]

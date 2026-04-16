@@ -696,6 +696,22 @@ impl BrowserWidget {
         let selector_index = css::cascade::SelectorIndex::build(&all_sheets);
         self.diag(&format!("[BR] cascade done: {} styles", styles.len()));
 
+        // 4b. Web fonts: collect @font-face rules from stylesheets.
+        //     Actual font data loading happens in `load_web_fonts()`
+        //     which is called with VFS access before the first paint.
+        #[cfg(feature = "web-fonts")]
+        {
+            let mut font_reg = self.font_registry.borrow_mut();
+            // Clear previous page's fonts.
+            *font_reg = crate::font::FontRegistry::new();
+            self.fonts_load_attempted = false;
+
+            // Collect @font-face rules from all stylesheets.
+            for sheet in &all_sheets {
+                font_reg.collect_font_faces(&sheet.font_faces);
+            }
+        }
+
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
 
@@ -836,6 +852,49 @@ impl BrowserWidget {
             }
         }
         map
+    }
+
+    /// Load pending web fonts and resolve `web_font_id` on styles.
+    ///
+    /// Called from `tick()` when VFS access is available. This triggers
+    /// the actual network/VFS fetch of font data, parses it with fontdue,
+    /// and then resolves `web_font_id` on each `ComputedStyle`. If any
+    /// fonts are loaded, the layout and display list are rebuilt.
+    #[cfg(feature = "web-fonts")]
+    pub(crate) fn load_web_fonts(&mut self, vfs: &dyn oasis_vfs::Vfs) {
+        // Only attempt font loading once per page. After the first call,
+        // `pending` is drained inside `load_fonts`, so repeated calls
+        // would be harmless but wasteful no-ops.
+        if self.fonts_load_attempted || self.font_registry.borrow().has_fonts() {
+            return;
+        }
+        self.fonts_load_attempted = true;
+
+        let base_url = self.nav.current_url().map(|s| s.to_string());
+        {
+            let mut reg = self.font_registry.borrow_mut();
+            reg.load_fonts(base_url.as_deref(), vfs, self.tls.as_deref());
+        }
+
+        // If fonts were loaded, resolve web_font_id on styles and
+        // trigger relayout.
+        let font_count = self.font_registry.borrow().font_count();
+        if font_count > 0 {
+            self.diag(&format!("[BR] web fonts loaded: {} faces", font_count));
+            // Resolve web_font_id on cached styles.
+            let reg = self.font_registry.borrow();
+            for style in self.styles.iter_mut().flatten() {
+                let italic = style.font_style == crate::css::values::FontStyle::Italic;
+                let weight = style.font_weight.0;
+                if let Some(font_id) = reg.resolve_font(&style.font_family.families, weight, italic)
+                {
+                    style.web_font_id = Some(font_id.as_raw());
+                }
+            }
+            drop(reg);
+            // Force display list rebuild on next paint.
+            self.layout_dirty = true;
+        }
     }
 
     /// Walk the DOM to collect text from `<style>` elements and parse

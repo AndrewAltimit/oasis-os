@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Font Family Stacks</title>
+<style>
+body {
+    margin: 8px;
+    font-size: 10px;
+    color: #222;
+    background: #fff;
+}
+h2 { font-size: 12px; margin: 8px 0 4px; color: #333; }
+.sample { margin: 2px 0; padding: 2px 4px; background: #f5f5f5; }
+.label { font-size: 8px; color: #888; margin-bottom: 1px; }
+
+/* Generic families */
+.sans       { font-family: sans-serif; }
+.serif      { font-family: serif; }
+.mono       { font-family: monospace; }
+.cursive    { font-family: cursive; }
+.fantasy    { font-family: fantasy; }
+.system-ui  { font-family: system-ui; }
+
+/* Named fonts with fallbacks */
+.arial-stack    { font-family: Arial, Helvetica, sans-serif; }
+.georgia-stack  { font-family: Georgia, "Times New Roman", serif; }
+.code-stack     { font-family: "Fira Code", "Source Code Pro", monospace; }
+.brand-stack    { font-family: "CustomBrand", "Helvetica Neue", Arial, sans-serif; }
+
+/* Multi-word unquoted names */
+.trebuchet  { font-family: Trebuchet MS, sans-serif; }
+.courier    { font-family: Courier New, monospace; }
+
+/* Weight + family combos */
+.light  { font-family: "Open Sans", sans-serif; font-weight: 300; }
+.bold   { font-family: "Open Sans", sans-serif; font-weight: 700; }
+.black  { font-family: "Open Sans", sans-serif; font-weight: 900; }
+
+/* Italic + family */
+.italic-serif { font-family: Georgia, serif; font-style: italic; }
+.italic-sans  { font-family: Helvetica, sans-serif; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h2>Generic Families</h2>
+<div class="label">sans-serif (default)</div>
+<div class="sample sans">The quick brown fox jumps over the lazy dog. 0123456789</div>
+<div class="label">serif</div>
+<div class="sample serif">The quick brown fox jumps over the lazy dog. 0123456789</div>
+<div class="label">monospace</div>
+<div class="sample mono">The quick brown fox jumps over the lazy dog. 0123456789</div>
+<div class="label">cursive</div>
+<div class="sample cursive">The quick brown fox jumps over the lazy dog.</div>
+<div class="label">fantasy</div>
+<div class="sample fantasy">The quick brown fox jumps over the lazy dog.</div>
+<div class="label">system-ui</div>
+<div class="sample system-ui">The quick brown fox jumps over the lazy dog.</div>
+
+<h2>Named Stacks with Fallbacks</h2>
+<div class="label">Arial, Helvetica, sans-serif</div>
+<div class="sample arial-stack">Named font stack falls back to sans-serif generic.</div>
+<div class="label">Georgia, "Times New Roman", serif</div>
+<div class="sample georgia-stack">Serif fallback stack for body text rendering.</div>
+<div class="label">"Fira Code", "Source Code Pro", monospace</div>
+<div class="sample code-stack">let x = 42; // code font stack</div>
+<div class="label">"CustomBrand", "Helvetica Neue", Arial, sans-serif</div>
+<div class="sample brand-stack">Brand font with deep fallback chain.</div>
+
+<h2>Multi-word Unquoted Names</h2>
+<div class="label">Trebuchet MS, sans-serif</div>
+<div class="sample trebuchet">Unquoted multi-word font name.</div>
+<div class="label">Courier New, monospace</div>
+<div class="sample courier">Another multi-word name with monospace fallback.</div>
+
+<h2>Weight Variants</h2>
+<div class="sample light">Light (300): The quick brown fox jumps.</div>
+<div class="sample">Regular (400): The quick brown fox jumps.</div>
+<div class="sample bold">Bold (700): The quick brown fox jumps.</div>
+<div class="sample black">Black (900): The quick brown fox jumps.</div>
+
+<h2>Italic Variants</h2>
+<div class="sample italic-serif">Italic serif: The quick brown fox jumps.</div>
+<div class="sample italic-sans">Italic sans: The quick brown fox jumps.</div>
+
+</body>
+</html>

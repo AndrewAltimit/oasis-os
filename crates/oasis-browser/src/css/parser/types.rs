@@ -682,6 +682,76 @@ pub struct PropertyRule {
     pub initial_value: Option<String>,
 }
 
+/// A single `src:` entry in an `@font-face` rule.
+///
+/// Represents one font source — either a URL (`url("...")`) with
+/// optional `format()` hints, or a local font name (`local("...")`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FontFaceSrc {
+    /// `url("path/to/font.woff2") format("woff2")`
+    Url {
+        url: String,
+        /// Optional format hints (e.g. `"woff2"`, `"truetype"`).
+        format: Vec<String>,
+    },
+    /// `local("Helvetica Neue")`
+    Local(String),
+}
+
+/// CSS `font-display` descriptor for `@font-face`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontDisplay {
+    /// Invisible fallback for a short period, then swap.
+    #[default]
+    Auto,
+    /// Invisible for a long time, then swap.
+    Block,
+    /// Very short invisible period, then fallback forever.
+    Swap,
+    /// Very short invisible period, then fallback, late swap.
+    Fallback,
+    /// Use fallback immediately; only swap if font loads fast.
+    Optional,
+}
+
+/// A single Unicode range, e.g. `U+0020-007F` or `U+4?`.
+///
+/// Stored as an inclusive `[start, end]` codepoint range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnicodeRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// A parsed `@font-face { ... }` rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontFaceRule {
+    /// `font-family` descriptor — the name authors use to reference
+    /// this font in `font-family:` declarations (required).
+    pub family: String,
+    /// `src:` descriptor — ordered list of font sources.
+    pub src: Vec<FontFaceSrc>,
+    /// `font-weight` descriptor. Stored as numeric values (100–900).
+    /// A single value `(w, w)` or a range `(w1, w2)`.
+    pub weight: (u16, u16),
+    /// `font-style` descriptor.
+    pub style: FontFaceStyle,
+    /// `font-display` descriptor.
+    pub display: FontDisplay,
+    /// `unicode-range` descriptor — restricts which codepoints this
+    /// font covers. Empty means the full Unicode range.
+    pub unicode_range: Vec<UnicodeRange>,
+}
+
+/// `font-style` values for `@font-face`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontFaceStyle {
+    #[default]
+    Normal,
+    Italic,
+    Oblique,
+}
+
 /// A complete parsed stylesheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stylesheet {
@@ -701,4 +771,8 @@ pub struct Stylesheet {
     /// into the element's custom-properties map before resolving any
     /// `var()` references that target the registered property.
     pub properties: Vec<PropertyRule>,
+    /// `@font-face` rules declared in this stylesheet. Each registers
+    /// a web font with family name, source URL(s), weight/style ranges,
+    /// and optional unicode-range/font-display descriptors.
+    pub font_faces: Vec<FontFaceRule>,
 }

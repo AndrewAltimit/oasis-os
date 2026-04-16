@@ -79,6 +79,14 @@ pub enum ContentType {
     Gif,
     GeminiText,
     PlainText,
+    /// TrueType font (.ttf).
+    FontTtf,
+    /// OpenType font (.otf).
+    FontOtf,
+    /// WOFF font (.woff).
+    FontWoff,
+    /// WOFF2 font (.woff2).
+    FontWoff2,
     Unknown,
 }
 
@@ -94,6 +102,10 @@ impl ContentType {
             "gif" => ContentType::Gif,
             "gmi" | "gemini" => ContentType::GeminiText,
             "txt" => ContentType::PlainText,
+            "ttf" => ContentType::FontTtf,
+            "otf" => ContentType::FontOtf,
+            "woff" => ContentType::FontWoff,
+            "woff2" => ContentType::FontWoff2,
             _ => ContentType::Unknown,
         }
     }
@@ -110,6 +122,10 @@ impl ContentType {
             "image/gif" => ContentType::Gif,
             "text/gemini" => ContentType::GeminiText,
             "text/plain" => ContentType::PlainText,
+            "font/ttf" | "application/x-font-ttf" => ContentType::FontTtf,
+            "font/otf" | "application/x-font-opentype" => ContentType::FontOtf,
+            "font/woff" | "application/font-woff" => ContentType::FontWoff,
+            "font/woff2" => ContentType::FontWoff2,
             _ => ContentType::Unknown,
         }
     }
@@ -119,6 +135,17 @@ impl ContentType {
         matches!(
             self,
             ContentType::Jpeg | ContentType::Png | ContentType::Bmp | ContentType::Gif
+        )
+    }
+
+    /// Is this a font content type?
+    pub fn is_font(&self) -> bool {
+        matches!(
+            self,
+            ContentType::FontTtf
+                | ContentType::FontOtf
+                | ContentType::FontWoff
+                | ContentType::FontWoff2
         )
     }
 }

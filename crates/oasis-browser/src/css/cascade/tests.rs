@@ -251,6 +251,7 @@ fn specificity_ordering() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -288,6 +289,7 @@ fn inheritance_of_color_and_font() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -323,6 +325,7 @@ fn important_overrides_specificity() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -343,6 +346,7 @@ fn multiple_stylesheets_merged() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let sheet2 = Stylesheet {
         rules: vec![make_rule(
@@ -353,6 +357,7 @@ fn multiple_stylesheets_merged() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
 
     let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
@@ -375,6 +380,7 @@ fn inline_style_override() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
 
     // Inline style says color: blue.
@@ -445,6 +451,7 @@ fn non_element_nodes_get_no_style() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -2063,6 +2070,7 @@ fn specificity_id_vs_many_classes() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -2106,6 +2114,7 @@ fn important_on_inherited_vs_direct() {
         layers: vec![],
         counter_styles: vec![],
         properties: vec![],
+        font_faces: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -2376,6 +2385,7 @@ mod prop_tests {
                 layers: vec![],
                 counter_styles: vec![],
                 properties: vec![],
+                font_faces: vec![],
             };
             let doc = super::make_doc(vec![(TagName::Div, vec![])]);
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
@@ -2447,6 +2457,7 @@ mod prop_tests {
                 layers: vec![],
                 counter_styles: vec![],
                 properties: vec![],
+                font_faces: vec![],
             };
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
             let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -2516,6 +2527,7 @@ mod prop_tests {
                 layers: vec![],
                 counter_styles: vec![],
                 properties: vec![],
+                font_faces: vec![],
             };
 
             // Build element with id="main" and all the extra classes.
