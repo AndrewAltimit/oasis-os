@@ -104,7 +104,7 @@ model_overrides:
 
   # OpenRouter models (for openrouter agent)
   openrouter:
-    default_model: "qwen/qwen3.6-plus"
+    model: "qwen/qwen3.6-plus"
 
 # OpenRouter configuration
 openrouter:

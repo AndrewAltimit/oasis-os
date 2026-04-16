@@ -76,6 +76,8 @@ case "$STAGE" in
         run_deny
         ;;
     full)
+        echo "=== Autoformat ==="
+        run_autoformat
         echo "=== Format Check ==="
         run_format_check
         echo "=== Clippy ==="
