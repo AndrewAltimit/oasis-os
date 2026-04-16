@@ -12,6 +12,7 @@ use crate::css::values::{
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
+use crate::transform::Matrix3d;
 use oasis_types::backend::Color;
 
 use super::display_list::{DisplayItem, DisplayList};
@@ -54,6 +55,14 @@ struct RecordContext<'a> {
     focused_node: Option<NodeId>,
     /// `@counter-style` rules for custom list markers.
     counter_styles: Vec<crate::css::parser::CounterStyleRule>,
+    /// Accumulated 4x4 screen-space matrix from 3D-transformed ancestors.
+    /// When `Some`, background rects are projected through this matrix
+    /// to produce `FillPolygon` items for true perspective rendering.
+    ambient_screen_matrix: Option<Matrix3d>,
+    /// `perspective:` distance from an ancestor element.
+    perspective_distance: Option<f32>,
+    /// Absolute screen-space vanishing point from `perspective-origin`.
+    perspective_vanishing: Option<(f32, f32)>,
 }
 
 // -------------------------------------------------------------------
@@ -102,6 +111,9 @@ pub fn record_with_scroll(
         nested_scroll_offsets,
         focused_node: viewport.focused_node,
         counter_styles: viewport.counter_styles.clone(),
+        ambient_screen_matrix: None,
+        perspective_distance: None,
+        perspective_vanishing: None,
     };
 
     record_box(
@@ -175,6 +187,60 @@ fn record_box(
         offset_x,
         offset_y,
     );
+
+    // 3D transform context: when this element has 3D transforms or a
+    // `perspective:` property, compute the screen-space 4x4 matrix and
+    // propagate it so descendants emit FillPolygon items for perspective
+    // rendering.
+    let prev_ambient = ctx.ambient_screen_matrix;
+    let prev_persp_distance = ctx.perspective_distance;
+    let prev_persp_vanish = ctx.perspective_vanishing;
+    let has_3d = super::transforms_have_3d(&layout_box.style.transforms);
+    if has_3d || layout_box.style.perspective.is_some() {
+        let content = &layout_box.dimensions.content;
+        let sx = content.x - ctx.scroll_x + offset_x as f32;
+        let sy = content.y - ctx.scroll_y + offset_y as f32;
+        let (ox, oy, oz) =
+            super::resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        if has_3d {
+            let local_m3d =
+                Matrix3d::from_css_transforms_3d(&layout_box.style.transforms, 0.0, 0.0, oz);
+            // Apply origin in screen-space.
+            let origin_x = sx + ox;
+            let origin_y = sy + oy;
+            let pre = Matrix3d::translate(origin_x, origin_y, oz);
+            let post = Matrix3d::translate(-origin_x, -origin_y, -oz);
+            let screen_m = pre.multiply(&local_m3d).multiply(&post);
+            // Apply perspective if set on an ancestor.
+            let screen_m = if let Some(d) = ctx.perspective_distance {
+                let (vx, vy) = ctx
+                    .perspective_vanishing
+                    .unwrap_or((sx + content.width / 2.0, sy + content.height / 2.0));
+                let persp = Matrix3d::translate(vx, vy, 0.0)
+                    .multiply(&Matrix3d::perspective(d))
+                    .multiply(&Matrix3d::translate(-vx, -vy, 0.0));
+                persp.multiply(&screen_m)
+            } else {
+                screen_m
+            };
+            // Compose with inherited context.
+            ctx.ambient_screen_matrix = Some(match prev_ambient {
+                Some(parent) => parent.multiply(&screen_m),
+                None => screen_m,
+            });
+        }
+        // Propagate `perspective:` for children.
+        if let Some(d) = layout_box.style.perspective {
+            ctx.perspective_distance = Some(d);
+            let (pox, poy) = super::resolve_perspective_origin(
+                layout_box.style.perspective_origin.as_ref(),
+                &layout_box.dimensions.border_box(),
+            );
+            let bx = layout_box.dimensions.border_box().x - ctx.scroll_x + offset_x as f32;
+            let by = layout_box.dimensions.border_box().y - ctx.scroll_y + offset_y as f32;
+            ctx.perspective_vanishing = Some((bx + pox, by + poy));
+        }
+    }
 
     // Screen-space culling (includes CSS transform translation).
     let screen_y = layout_box.dimensions.content.y - ctx.scroll_y
@@ -538,6 +604,11 @@ fn record_box(
         }
     }
 
+    // Restore 3D transform context.
+    ctx.ambient_screen_matrix = prev_ambient;
+    ctx.perspective_distance = prev_persp_distance;
+    ctx.perspective_vanishing = prev_persp_vanish;
+
     // Reset link tracking.
     if entered_link {
         if let Some(node_id) = layout_box.node {
@@ -586,6 +657,32 @@ fn record_background(
                 color: bg,
                 node_id: ctx.current_node,
             });
+        } else if let Some(m3d) = ctx.ambient_screen_matrix.as_ref() {
+            // 3D-transformed ancestor: project all 4 padding-box corners
+            // through the full 4x4 matrix for true perspective rendering.
+            let sx = padding.x - ctx.scroll_x + offset_x as f32;
+            let sy = padding.y - ctx.scroll_y + offset_y as f32;
+            let fw = padding.width;
+            let fh = padding.height;
+            let p0 = m3d.apply_point_3d(sx, sy, 0.0);
+            let p1 = m3d.apply_point_3d(sx + fw, sy, 0.0);
+            let p2 = m3d.apply_point_3d(sx + fw, sy + fh, 0.0);
+            let p3 = m3d.apply_point_3d(sx, sy + fh, 0.0);
+            let safe = |p: (f32, f32, f32)| -> bool {
+                p.0.is_finite() && p.1.is_finite() && p.0.abs() < 1.0e7 && p.1.abs() < 1.0e7
+            };
+            if safe(p0) && safe(p1) && safe(p2) && safe(p3) {
+                dl.push(DisplayItem::FillPolygon {
+                    points: [
+                        (p0.0 as i32, p0.1 as i32),
+                        (p1.0 as i32, p1.1 as i32),
+                        (p2.0 as i32, p2.1 as i32),
+                        (p3.0 as i32, p3.1 as i32),
+                    ],
+                    color: bg,
+                    node_id: ctx.current_node,
+                });
+            }
         } else {
             dl.push(DisplayItem::FillRect {
                 x,

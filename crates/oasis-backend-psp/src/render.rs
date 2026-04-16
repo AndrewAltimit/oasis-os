@@ -229,13 +229,17 @@ impl PspBackend {
     }
 
     /// Draw text using the embedded 8x8 bitmap font via the GU font atlas.
+    ///
+    /// Uses proportional glyph advances from `oasis_types::bitmap_font`
+    /// so character spacing matches `bitmap_measure_text`. The atlas
+    /// stores each glyph at a fixed 8x8 cell; advance widths vary per
+    /// character (e.g. space = 4px, 'W' = 8px at base scale).
     fn draw_text_bitmap(&mut self, text: &str, x: i32, y: i32, font_size: u16, abgr: u32) {
         let scale = if font_size >= 8 {
             (font_size / 8) as f32
         } else {
             1.0
         };
-        let glyph_w = (crate::font::GLYPH_WIDTH as f32) * scale;
         let glyph_h = 8.0 * scale;
 
         let mut batch = psp::gu_ext::SpriteBatch::new(text.len());
@@ -251,10 +255,19 @@ impl PspBackend {
                 (0.0, 0.0)
             };
 
+            // Use proportional advance width so character spacing matches
+            // `bitmap_measure_text`. This fixes space characters (advance=4)
+            // rendering at full 8px width.
+            let advance = oasis_core::bitmap_font::glyph_advance_scaled(ch, font_size) as f32;
+
+            // Blit the full 8x8 atlas cell but only advance by the
+            // proportional width. The atlas cell's rightmost columns are
+            // blank for narrow glyphs, so the visual result is correct.
+            let blit_w = (crate::font::GLYPH_WIDTH as f32) * scale;
             batch.draw_rect(
                 cx,
                 y as f32,
-                glyph_w,
+                blit_w,
                 glyph_h,
                 u0,
                 v0,
@@ -262,7 +275,7 @@ impl PspBackend {
                 v0 + 8.0,
                 abgr,
             );
-            cx += glyph_w;
+            cx += advance;
         }
 
         // SAFETY: Binds the font atlas texture (RAM pointer via uncached

@@ -21,6 +21,7 @@
 //! backend, which keeps the pixel-golden tests cross-platform stable.
 
 use crate::css::values::types::FilterFunction;
+use oasis_types::backend::BlendMode;
 
 /// Apply a filter chain to a mutable RGBA8 pixel buffer.
 ///
@@ -258,6 +259,229 @@ fn box_blur_v(src: &[u8], dst: &mut [u8], width: u32, height: u32, half: i32) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CPU blend-mode compositing (CSS Compositing and Blending Level 1)
+// ---------------------------------------------------------------------------
+
+/// Composite the `src` layer onto `dst` using a CSS `BlendMode`.
+///
+/// Both buffers are RGBA8, row-major, `w * h * 4` bytes. `src` is the
+/// offscreen layer (already filtered / masked); `dst` is the parent
+/// surface pixels beneath it. The blended result is written into `dst`.
+///
+/// Implements all 16 blend modes from the W3C Compositing and Blending
+/// Level 1 specification. Separable modes (Normal through Exclusion)
+/// operate per-channel; non-separable modes (Hue, Saturation, Color,
+/// Luminosity) convert to HSL.
+///
+/// The composite formula per the spec:
+///   Co = αs * B(Cs, Cb) + (1 - αs) * Cb
+///   αo = αs + αb * (1 - αs)
+pub fn cpu_blend_composite(src: &[u8], dst: &mut [u8], w: u32, h: u32, blend: BlendMode) {
+    let count = (w * h * 4) as usize;
+    if src.len() < count || dst.len() < count {
+        return;
+    }
+    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        let sa = s[3] as f32 / 255.0;
+        if sa < 1.0 / 512.0 {
+            continue; // fully transparent source — no change
+        }
+        let sr = s[0] as f32 / 255.0;
+        let sg = s[1] as f32 / 255.0;
+        let sb = s[2] as f32 / 255.0;
+        let dr = d[0] as f32 / 255.0;
+        let dg = d[1] as f32 / 255.0;
+        let db = d[2] as f32 / 255.0;
+        let da = d[3] as f32 / 255.0;
+
+        let (br, bg, bb) = blend_channels(sr, sg, sb, dr, dg, db, blend);
+
+        // Composite: Co = αs * B(Cs, Cb) + (1 - αs) * Cb
+        let or = (sa * br + (1.0 - sa) * dr).clamp(0.0, 1.0);
+        let og = (sa * bg + (1.0 - sa) * dg).clamp(0.0, 1.0);
+        let ob = (sa * bb + (1.0 - sa) * db).clamp(0.0, 1.0);
+        let oa = (sa + da * (1.0 - sa)).clamp(0.0, 1.0);
+
+        d[0] = (or * 255.0).round() as u8;
+        d[1] = (og * 255.0).round() as u8;
+        d[2] = (ob * 255.0).round() as u8;
+        d[3] = (oa * 255.0).round() as u8;
+    }
+}
+
+/// Apply the blend function B(Cs, Cb) for a given blend mode.
+/// Returns the blended (r, g, b) in [0, 1].
+fn blend_channels(
+    sr: f32,
+    sg: f32,
+    sb: f32,
+    dr: f32,
+    dg: f32,
+    db: f32,
+    blend: BlendMode,
+) -> (f32, f32, f32) {
+    match blend {
+        BlendMode::Normal => (sr, sg, sb),
+        BlendMode::Multiply => (sr * dr, sg * dg, sb * db),
+        BlendMode::Screen => (sr + dr - sr * dr, sg + dg - sg * dg, sb + db - sb * db),
+        BlendMode::Overlay => (overlay_ch(dr, sr), overlay_ch(dg, sg), overlay_ch(db, sb)),
+        BlendMode::Darken => (sr.min(dr), sg.min(dg), sb.min(db)),
+        BlendMode::Lighten => (sr.max(dr), sg.max(dg), sb.max(db)),
+        BlendMode::ColorDodge => (
+            color_dodge_ch(dr, sr),
+            color_dodge_ch(dg, sg),
+            color_dodge_ch(db, sb),
+        ),
+        BlendMode::ColorBurn => (
+            color_burn_ch(dr, sr),
+            color_burn_ch(dg, sg),
+            color_burn_ch(db, sb),
+        ),
+        BlendMode::HardLight => (overlay_ch(sr, dr), overlay_ch(sg, dg), overlay_ch(sb, db)),
+        BlendMode::SoftLight => (
+            soft_light_ch(dr, sr),
+            soft_light_ch(dg, sg),
+            soft_light_ch(db, sb),
+        ),
+        BlendMode::Difference => ((sr - dr).abs(), (sg - dg).abs(), (sb - db).abs()),
+        BlendMode::Exclusion => (
+            sr + dr - 2.0 * sr * dr,
+            sg + dg - 2.0 * sg * dg,
+            sb + db - 2.0 * sb * db,
+        ),
+        // Non-separable blend modes operate on HSL.
+        BlendMode::Hue => {
+            let (sh, ss, _) = rgb_to_hsl(sr, sg, sb);
+            let (_, _, dl) = rgb_to_hsl(dr, dg, db);
+            hsl_to_rgb(sh, ss, dl)
+        },
+        BlendMode::Saturation => {
+            let (_, ss, _) = rgb_to_hsl(sr, sg, sb);
+            let (dh, _, dl) = rgb_to_hsl(dr, dg, db);
+            hsl_to_rgb(dh, ss, dl)
+        },
+        BlendMode::Color => {
+            let (sh, ss, _) = rgb_to_hsl(sr, sg, sb);
+            let (_, _, dl) = rgb_to_hsl(dr, dg, db);
+            hsl_to_rgb(sh, ss, dl)
+        },
+        BlendMode::Luminosity => {
+            let (_, _, sl) = rgb_to_hsl(sr, sg, sb);
+            let (dh, ds, _) = rgb_to_hsl(dr, dg, db);
+            hsl_to_rgb(dh, ds, sl)
+        },
+    }
+}
+
+// --- Separable blend helpers ---
+
+fn overlay_ch(cb: f32, cs: f32) -> f32 {
+    if cb <= 0.5 {
+        2.0 * cb * cs
+    } else {
+        1.0 - 2.0 * (1.0 - cb) * (1.0 - cs)
+    }
+}
+
+fn color_dodge_ch(cb: f32, cs: f32) -> f32 {
+    if cb < 1.0 / 512.0 {
+        0.0
+    } else if cs >= 1.0 - 1.0 / 512.0 {
+        1.0
+    } else {
+        (cb / (1.0 - cs)).min(1.0)
+    }
+}
+
+fn color_burn_ch(cb: f32, cs: f32) -> f32 {
+    if cb >= 1.0 - 1.0 / 512.0 {
+        1.0
+    } else if cs < 1.0 / 512.0 {
+        0.0
+    } else {
+        1.0 - ((1.0 - cb) / cs).min(1.0)
+    }
+}
+
+fn soft_light_ch(cb: f32, cs: f32) -> f32 {
+    // W3C Compositing Level 1 soft-light formula.
+    if cs <= 0.5 {
+        cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+    } else {
+        let d = if cb <= 0.25 {
+            ((16.0 * cb - 12.0) * cb + 4.0) * cb
+        } else {
+            cb.sqrt()
+        };
+        cb + (2.0 * cs - 1.0) * (d - cb)
+    }
+}
+
+// --- Non-separable blend helpers (HSL) ---
+
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) * 0.5;
+    if (max - min).abs() < 1.0 / 512.0 {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if (max - r).abs() < 1e-6 {
+        let mut h = (g - b) / d;
+        if g < b {
+            h += 6.0;
+        }
+        h
+    } else if (max - g).abs() < 1e-6 {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, l)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    if s < 1.0 / 512.0 {
+        return (l, l, l);
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    (
+        hue_to_rgb(p, q, h + 1.0 / 3.0),
+        hue_to_rgb(p, q, h),
+        hue_to_rgb(p, q, h - 1.0 / 3.0),
+    )
+}
+
+fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 0.5 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +588,68 @@ mod tests {
             &[FilterFunction::Brightness(0.5), FilterFunction::Invert(1.0)],
         );
         assert_eq!(pixels[0], 155);
+    }
+
+    // --- CPU blend compositing tests ---
+
+    #[test]
+    fn blend_multiply_darkens() {
+        let src = solid_rgba(1, 1, 128, 128, 128, 255);
+        let mut dst = solid_rgba(1, 1, 200, 200, 200, 255);
+        cpu_blend_composite(&src, &mut dst, 1, 1, BlendMode::Multiply);
+        // Multiply: 128/255 * 200/255 ≈ 0.3922, → ~100
+        assert!((dst[0] as i32 - 100).abs() <= 1);
+    }
+
+    #[test]
+    fn blend_screen_lightens() {
+        let src = solid_rgba(1, 1, 128, 0, 0, 255);
+        let mut dst = solid_rgba(1, 1, 128, 0, 0, 255);
+        cpu_blend_composite(&src, &mut dst, 1, 1, BlendMode::Screen);
+        // Screen: 0.502 + 0.502 - 0.502*0.502 ≈ 0.752 → ~192
+        assert!(dst[0] > 180);
+    }
+
+    #[test]
+    fn blend_difference_produces_abs_diff() {
+        let src = solid_rgba(1, 1, 200, 50, 100, 255);
+        let mut dst = solid_rgba(1, 1, 100, 150, 100, 255);
+        cpu_blend_composite(&src, &mut dst, 1, 1, BlendMode::Difference);
+        // |200-100|=100, |50-150|=100, |100-100|=0
+        assert!((dst[0] as i32 - 100).abs() <= 1);
+        assert!((dst[1] as i32 - 100).abs() <= 1);
+        assert!(dst[2] <= 1);
+    }
+
+    #[test]
+    fn blend_normal_with_semitransparent_source() {
+        let src = solid_rgba(1, 1, 255, 0, 0, 128);
+        let mut dst = solid_rgba(1, 1, 0, 0, 255, 255);
+        cpu_blend_composite(&src, &mut dst, 1, 1, BlendMode::Normal);
+        // αs ≈ 0.502; Co = 0.502*1.0 + 0.498*0.0 ≈ 0.502 → ~128
+        assert!((dst[0] as i32 - 128).abs() <= 1);
+        assert!((dst[2] as i32 - 127).abs() <= 1);
+    }
+
+    #[test]
+    fn blend_overlay_splits_at_half() {
+        let src = solid_rgba(1, 1, 255, 255, 255, 255);
+        let mut dst_dark = solid_rgba(1, 1, 64, 64, 64, 255);
+        let mut dst_light = solid_rgba(1, 1, 200, 200, 200, 255);
+        cpu_blend_composite(&src, &mut dst_dark, 1, 1, BlendMode::Overlay);
+        cpu_blend_composite(&src, &mut dst_light, 1, 1, BlendMode::Overlay);
+        // Dark dst (< 0.5): Multiply path → 2*0.251*1.0 ≈ 0.502 → ~128
+        assert!((dst_dark[0] as i32 - 128).abs() <= 2);
+        // Light dst (> 0.5): Screen path → 1 - 2*(1-0.784)*(1-1.0) = 1.0 → 255
+        assert_eq!(dst_light[0], 255);
+    }
+
+    #[test]
+    fn blend_transparent_source_is_noop() {
+        let src = solid_rgba(1, 1, 255, 0, 0, 0);
+        let mut dst = solid_rgba(1, 1, 100, 100, 100, 255);
+        let original = dst.clone();
+        cpu_blend_composite(&src, &mut dst, 1, 1, BlendMode::Multiply);
+        assert_eq!(dst, original);
     }
 }
