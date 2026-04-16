@@ -398,10 +398,14 @@ fn fetch_font_data(
 }
 
 /// Check if a `format()` hint is one we can parse.
+///
+/// Only raw TTF/OTF (sfnt) is supported. WOFF/WOFF2 containers
+/// require decompression that is not yet implemented — admitting
+/// them here would pass opaque bytes to fontdue which silently fails.
 fn is_supported_format(format: &str) -> bool {
     matches!(
         format.to_ascii_lowercase().as_str(),
-        "truetype" | "opentype" | "woff" | "woff2"
+        "truetype" | "opentype"
     )
 }
 
@@ -416,7 +420,8 @@ fn unwrap_font_container(data: &[u8]) -> &[u8] {
     // WOFF signature: 0x774F4646 ("wOFF")
     // WOFF2 signature: 0x774F4632 ("wOF2")
     // We pass through to fontdue which handles raw TTF/OTF directly.
-    // fontdue 0.9 can parse WOFF natively, so we just return the data.
+    // WOFF/WOFF2 decompression is not yet implemented — fontdue only
+    // accepts raw sfnt (TTF/OTF) bytes.
     data
 }
 
@@ -487,8 +492,9 @@ mod tests {
     fn supported_formats() {
         assert!(is_supported_format("truetype"));
         assert!(is_supported_format("opentype"));
-        assert!(is_supported_format("woff"));
-        assert!(is_supported_format("woff2"));
+        // WOFF/WOFF2 require decompression we don't implement yet.
+        assert!(!is_supported_format("woff"));
+        assert!(!is_supported_format("woff2"));
         assert!(!is_supported_format("svg"));
         assert!(!is_supported_format("embedded-opentype"));
     }

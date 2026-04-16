@@ -1060,16 +1060,11 @@ impl CssParser {
 
     /// Parse the `unicode-range` descriptor value by collecting raw
     /// token text. Unicode range notation (U+XXXX) uses hex which the
-    /// CSS tokenizer doesn't preserve in its typed tokens.
+    /// CSS tokenizer emits as separate tokens (Ident "U", Plus, Number).
+    /// `collect_descriptor_value` reassembles the text representation;
+    /// `from_str_radix` handles any leading-zero differences.
     fn parse_unicode_range_descriptor(&mut self) -> Vec<types::UnicodeRange> {
-        // Collect raw text from tokens until semicolon or close-brace.
         let raw = self.collect_descriptor_value();
-        // The raw text now has pieces like "U" "+20" "-7F" which we
-        // need to reassemble. But collect_descriptor_value loses hex
-        // digits via Number parsing. Let's use a different approach:
-        // since we already consumed the tokens, parse from the raw text.
-        // Actually, Numbers like 0020 become "20" — we need to handle that.
-        // For robustness, just try to parse what we got.
         parse_unicode_range_list(raw.trim())
     }
 

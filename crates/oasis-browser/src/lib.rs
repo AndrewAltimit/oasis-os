@@ -482,6 +482,12 @@ pub struct BrowserWidget {
     #[allow(dead_code)]
     glyph_tex_cache: font::GlyphTextureCache,
 
+    /// Whether `load_web_fonts` has already been attempted for the
+    /// current page. Prevents re-issuing network fetches every tick
+    /// when font loading fails (404, parse error).
+    #[cfg(feature = "web-fonts")]
+    fonts_load_attempted: bool,
+
     /// Last font size used for layout (base * zoom). When this changes
     /// the text cache is invalidated.
     last_effective_font_size: f32,
@@ -641,6 +647,8 @@ impl BrowserWidget {
             font_registry: std::cell::RefCell::new(font::FontRegistry::new()),
             #[cfg(feature = "web-fonts")]
             glyph_tex_cache: font::GlyphTextureCache::new(),
+            #[cfg(feature = "web-fonts")]
+            fonts_load_attempted: false,
             last_effective_font_size: effective_font,
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),

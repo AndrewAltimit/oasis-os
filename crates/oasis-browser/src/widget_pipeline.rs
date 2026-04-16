@@ -704,6 +704,7 @@ impl BrowserWidget {
             let mut font_reg = self.font_registry.borrow_mut();
             // Clear previous page's fonts.
             *font_reg = crate::font::FontRegistry::new();
+            self.fonts_load_attempted = false;
 
             // Collect @font-face rules from all stylesheets.
             for sheet in &all_sheets {
@@ -861,22 +862,13 @@ impl BrowserWidget {
     /// fonts are loaded, the layout and display list are rebuilt.
     #[cfg(feature = "web-fonts")]
     pub(crate) fn load_web_fonts(&mut self, vfs: &dyn oasis_vfs::Vfs) {
-        let needs_load = {
-            let reg = self.font_registry.borrow();
-            !reg.has_fonts() && reg.font_count() == 0
-        };
-
-        // Check if there are pending font face rules to load.
-        let has_pending = {
-            let reg = self.font_registry.borrow();
-            // The pending list is private, but we can check if font_count is 0
-            // and there were @font-face rules collected.
-            reg.font_count() == 0
-        };
-
-        if !needs_load || !has_pending {
+        // Only attempt font loading once per page. After the first call,
+        // `pending` is drained inside `load_fonts`, so repeated calls
+        // would be harmless but wasteful no-ops.
+        if self.fonts_load_attempted || self.font_registry.borrow().has_fonts() {
             return;
         }
+        self.fonts_load_attempted = true;
 
         let base_url = self.nav.current_url().map(|s| s.to_string());
         {
