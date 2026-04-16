@@ -884,9 +884,8 @@ impl BrowserWidget {
             // Resolve web_font_id on cached styles.
             let reg = self.font_registry.borrow();
             for style in self.styles.iter_mut().flatten() {
-                let bold = style.font_weight.is_bold();
                 let italic = style.font_style == crate::css::values::FontStyle::Italic;
-                let weight = if bold { 700u16 } else { 400 };
+                let weight = style.font_weight.0;
                 if let Some(font_id) = reg.resolve_font(&style.font_family.families, weight, italic)
                 {
                     style.web_font_id = Some(font_id.as_raw());

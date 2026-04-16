@@ -479,7 +479,6 @@ pub struct BrowserWidget {
     /// Cached glyph textures for web font rendering.
     /// Used by `render_web_font_text` during display list replay.
     #[cfg(feature = "web-fonts")]
-    #[allow(dead_code)]
     glyph_tex_cache: font::GlyphTextureCache,
 
     /// Whether `load_web_fonts` has already been attempted for the

@@ -223,7 +223,7 @@ impl BrowserWidget {
                 }
 
                 // Replay from the freshly built display list.
-                self.display_list.replay(
+                self.replay_display_list(
                     backend,
                     0,
                     0,
@@ -341,7 +341,7 @@ impl BrowserWidget {
                         // offset. display_list_scroll_y/x is NOT updated here
                         // — it stays at the recording-time value so the
                         // cumulative offset remains correct across frames.
-                        self.display_list.replay(
+                        self.replay_display_list(
                             backend,
                             dx,
                             dy,
@@ -375,7 +375,7 @@ impl BrowserWidget {
                         self.link_map_scroll_y = self.scroll.scroll_y;
                         self.link_map_scroll_x = self.scroll.scroll_x;
 
-                        self.display_list.replay(
+                        self.replay_display_list(
                             backend,
                             0,
                             0,
@@ -396,7 +396,7 @@ impl BrowserWidget {
                     }
                 } else {
                     // Same scroll, same layout — replay cached display list.
-                    self.display_list.replay(
+                    self.replay_display_list(
                         backend,
                         0,
                         0,
@@ -462,7 +462,41 @@ impl BrowserWidget {
         self.paint_status_bar(backend)?;
 
         backend.reset_clip_rect()?;
+
         Ok(())
+    }
+
+    /// Helper: replay the display list with web font support when available.
+    #[cfg(feature = "web-fonts")]
+    fn replay_display_list(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        dx: i32,
+        dy: i32,
+        clip: Option<(i32, i32, u32, u32)>,
+    ) -> Result<()> {
+        if self.font_registry.borrow().has_fonts() {
+            let mut renderer = crate::font::BrowserWebFontRenderer {
+                registry: &self.font_registry,
+                tex_cache: &mut self.glyph_tex_cache,
+            };
+            self.display_list
+                .replay_with_fonts(backend, dx, dy, clip, &mut renderer)
+        } else {
+            self.display_list.replay(backend, dx, dy, clip)
+        }
+    }
+
+    /// Helper: replay the display list (no web font support).
+    #[cfg(not(feature = "web-fonts"))]
+    fn replay_display_list(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        dx: i32,
+        dy: i32,
+        clip: Option<(i32, i32, u32, u32)>,
+    ) -> Result<()> {
+        self.display_list.replay(backend, dx, dy, clip)
     }
 
     /// Paint only the browser chrome (URL bar + status bar), skipping page
