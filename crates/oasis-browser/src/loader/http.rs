@@ -311,11 +311,18 @@ fn do_request_with_method(
         let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
         let stream = tcp_connect(host, port)?;
-        // Wrap the TcpStream as a NetworkStream, then upgrade to TLS.
+        // Wrap the TcpStream as a NetworkStream, then upgrade to TLS
+        // while offering ALPN. If the server picks `h2`, route the
+        // request through the HTTP/2 driver; otherwise fall through
+        // to the HTTP/1.1 path.
         let net_stream: Box<dyn NetworkStream> = Box::new(oasis_net::StdNetworkStream::new(stream));
-        let tls_stream = tls_provider.connect_tls(net_stream, host)?;
+        let tls_conn =
+            tls_provider.connect_tls_with_alpn(net_stream, host, &[b"h2", b"http/1.1"])?;
 
-        let mut adapter = NetworkStreamAdapter(tls_stream);
+        let mut adapter = NetworkStreamAdapter(tls_conn.stream);
+        if tls_conn.alpn.as_deref() == Some(b"h2") {
+            return super::http2::h2_request(&mut adapter, method, url, body, extra_headers);
+        }
         send_request(&mut adapter, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut adapter)?;
         parse_response(&raw)
@@ -641,6 +648,12 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
         headers,
         body,
     })
+}
+
+/// Public wrapper for [`decode_body`] so the HTTP/2 driver can reuse
+/// the same gzip/deflate/brotli plumbing.
+pub(super) fn decode_body_public(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
+    decode_body(headers, body)
 }
 
 /// Decompress the response body based on the `Content-Encoding` header.

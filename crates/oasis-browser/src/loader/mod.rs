@@ -7,7 +7,11 @@ pub mod csp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gemini_fetch;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod hpack;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod http2;
 #[cfg(feature = "psp")]
 pub mod http_psp;
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]

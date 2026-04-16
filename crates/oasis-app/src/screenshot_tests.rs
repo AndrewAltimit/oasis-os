@@ -157,6 +157,21 @@ fn all_scenarios() -> Vec<Scenario> {
         });
     }
 
+    // Live network scenarios. Opt-in via `OASIS_NETWORK_SCREENSHOTS=1`
+    // so normal runs never flake on DNS / latency.
+    if std::env::var("OASIS_NETWORK_SCREENSHOTS").ok().as_deref() == Some("1") {
+        let live_urls = [
+            ("wikipedia_live", "https://www.wikipedia.org/"),
+            ("github_live", "https://github.com/"),
+        ];
+        for (name, _url) in &live_urls {
+            scenarios.push(Scenario {
+                name: format!("browser_{name}"),
+                category: "browser_live",
+            });
+        }
+    }
+
     // Widget gallery.
     scenarios.push(Scenario {
         name: "widget_gallery".to_string(),
@@ -847,6 +862,66 @@ fn run_browser_scenario(
     Ok(())
 }
 
+/// Fetch a real-world URL over the network and render the result.
+///
+/// Sets up a `RustlsTlsProvider` on the widget, kicks off a
+/// `navigate_vfs` against an HTTPS URL, then spins calling `tick()`
+/// until the I/O thread completes (or a 30s deadline elapses). Verifies
+/// that the final state is not an error — the underlying reason this
+/// exists is the HTTP/2 landing, which only takes effect when the
+/// `SharedTlsProvider` forwarder in `widget_pipeline.rs` forwards ALPN
+/// into the real rustls provider.
+fn run_browser_live_scenario(
+    backend: &mut SdlBackend,
+    page_name: &str,
+    out_dir: &Path,
+    w: u32,
+    h: u32,
+) -> anyhow::Result<()> {
+    use oasis_core::browser::LoadingState;
+    use oasis_core::net::RustlsTlsProvider;
+
+    let url = match page_name {
+        "wikipedia_live" => "https://www.wikipedia.org/",
+        "github_live" => "https://github.com/",
+        other => anyhow::bail!("unknown live scenario: {other}"),
+    };
+
+    let mut browser = BrowserWidget::new(BrowserConfig::default());
+    browser.set_window(0, 0, w, h);
+    browser.set_tls_provider(Box::new(RustlsTlsProvider::new()));
+
+    // The navigate_vfs entry point handles http(s) URLs by routing
+    // through the I/O thread when TLS is configured. An empty VFS is
+    // fine — it will miss and fall through to network.
+    let empty_vfs = MemoryVfs::new();
+    browser.navigate_vfs(url, &empty_vfs);
+
+    // Pump tick() until the load resolves or we time out.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        browser.tick(&empty_vfs);
+        match browser.loading_state() {
+            LoadingState::Idle => break,
+            LoadingState::Error => {
+                anyhow::bail!(
+                    "live load for {url} failed: {}",
+                    browser.error_message().unwrap_or("(no message)")
+                );
+            },
+            LoadingState::Loading => {},
+        }
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("live load for {url} timed out after 30s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Final paint + capture.
+    render_browser_and_save(backend, &mut browser, w, h, &out_dir.join("actual.png"))?;
+    Ok(())
+}
+
 /// Build a VFS for the images screenshot test with an inline BMP and
 /// the HTML fixture from test-fixtures/html/images.html.
 fn make_image_test_vfs() -> MemoryVfs {
@@ -1533,6 +1608,13 @@ fn main() -> anyhow::Result<()> {
                     .strip_prefix("browser_")
                     .unwrap_or(&scenario.name);
                 run_browser_scenario(&mut backend, page, &out_dir, w, h, args.full_page)
+            },
+            "browser_live" => {
+                let page = scenario
+                    .name
+                    .strip_prefix("browser_")
+                    .unwrap_or(&scenario.name);
+                run_browser_live_scenario(&mut backend, page, &out_dir, w, h)
             },
             "widget" => run_widget_gallery(&mut backend, &out_dir, w, h),
             "wm" => run_wm_scenario(&mut backend, &scenario.name, &out_dir, w, h),

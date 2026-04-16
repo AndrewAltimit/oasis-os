@@ -49,6 +49,21 @@ impl oasis_net::tls::TlsProvider for SharedTlsProvider {
         // SAFETY: pointer is valid for our lifetime (see above).
         unsafe { &*self.0 }.connect_tls(stream, server_name)
     }
+
+    fn connect_tls_with_alpn(
+        &self,
+        stream: Box<dyn oasis_types::backend::NetworkStream>,
+        server_name: &str,
+        alpn_protocols: &[&[u8]],
+    ) -> oasis_types::error::Result<oasis_types::tls::TlsConnection> {
+        // SAFETY: pointer is valid for our lifetime (see above).
+        // Forwarding this is load-bearing: without it the default
+        // trait impl silently drops the ALPN offer and the HTTP/2
+        // path in the loader never gets taken, which makes sites
+        // like wikipedia.org (h2-only) fail with "malformed HTTP
+        // response" when the HTTP/1.1 parser sees an h2 frame.
+        unsafe { &*self.0 }.connect_tls_with_alpn(stream, server_name, alpn_protocols)
+    }
 }
 
 impl BrowserWidget {
