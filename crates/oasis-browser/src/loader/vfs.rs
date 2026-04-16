@@ -85,13 +85,93 @@ pub fn not_found_page(url: &str) -> ResourceResponse {
     }
 }
 
-/// Generate an error page HTML response.
+/// Generate an error page HTML response with categorized error UX.
+///
+/// Detects the error category from the message (DNS failure, connection
+/// timeout, TLS error, HTTP error) and produces a styled page with an
+/// explanation and suggested actions.
 pub fn error_page(url: &str, message: &str) -> ResourceResponse {
+    let msg_lower = message.to_ascii_lowercase();
+    let (title, explanation, suggestions) = if msg_lower.contains("dns")
+        || msg_lower.contains("resolve")
+        || msg_lower.contains("no addresses")
+        || msg_lower.contains("name or service not known")
+    {
+        (
+            "DNS Lookup Failed",
+            "The browser could not find the server's address. The domain \
+             name could not be resolved to an IP address.",
+            "<li>Check that the URL is spelled correctly.</li>\
+             <li>Verify your network connection is active.</li>\
+             <li>The site may not exist or its DNS records may be missing.</li>",
+        )
+    } else if msg_lower.contains("timed out")
+        || msg_lower.contains("timeout")
+        || msg_lower.contains("connect failed")
+        || msg_lower.contains("connection refused")
+    {
+        (
+            "Connection Failed",
+            "The browser could not establish a connection to the server. \
+             The server may be down, unreachable, or rejecting connections.",
+            "<li>Check your network connection.</li>\
+             <li>The server may be temporarily unavailable — try again later.</li>\
+             <li>A firewall may be blocking the connection.</li>",
+        )
+    } else if msg_lower.contains("tls")
+        || msg_lower.contains("ssl")
+        || msg_lower.contains("certificate")
+        || msg_lower.contains("handshake")
+    {
+        (
+            "Secure Connection Failed",
+            "The browser could not establish a secure (TLS/SSL) connection \
+             to the server.",
+            "<li>The server's certificate may be invalid or expired.</li>\
+             <li>Try accessing the site over plain HTTP if available.</li>\
+             <li>The server may require a TLS version that is not supported.</li>",
+        )
+    } else if msg_lower.contains("too many redirects") {
+        (
+            "Too Many Redirects",
+            "The page redirected too many times. This usually means the \
+             server is misconfigured and has created a redirect loop.",
+            "<li>Try clearing cookies for this site.</li>\
+             <li>The site may be misconfigured — contact the site owner.</li>",
+        )
+    } else {
+        (
+            "Page Load Error",
+            "The browser encountered an error while loading the page.",
+            "<li>Check that the URL is correct.</li>\
+             <li>Verify your network connection.</li>\
+             <li>Try again later.</li>",
+        )
+    };
+
     let html = format!(
-        "<html><body><h1>Error</h1>\
-         <p>{message}</p>\
+        "<html><head><style>\
+         body {{ font-family: sans-serif; margin: 40px; color: #333; \
+                background: #f8f8f8; }}\
+         .error-box {{ background: white; border: 1px solid #ddd; \
+                       border-radius: 8px; padding: 24px; max-width: 480px; }}\
+         h1 {{ color: #c33; font-size: 18px; margin: 0 0 12px 0; }}\
+         p {{ font-size: 13px; line-height: 1.5; margin: 8px 0; }}\
+         ul {{ font-size: 13px; line-height: 1.6; padding-left: 20px; }}\
+         code {{ background: #eee; padding: 2px 4px; border-radius: 3px; \
+                 font-size: 12px; word-break: break-all; }}\
+         .detail {{ color: #888; font-size: 11px; margin-top: 16px; \
+                    border-top: 1px solid #eee; padding-top: 12px; }}\
+         </style></head>\
+         <body><div class=\"error-box\">\
+         <h1>{title}</h1>\
+         <p>{explanation}</p>\
+         <p><strong>Try:</strong></p>\
+         <ul>{suggestions}</ul>\
+         <div class=\"detail\">\
          <p>URL: <code>{url}</code></p>\
-         </body></html>"
+         <p>Details: {message}</p>\
+         </div></div></body></html>"
     );
     ResourceResponse {
         url: url.to_string(),
@@ -211,6 +291,51 @@ mod tests {
         assert_eq!(resp.status, 500);
         let body = String::from_utf8(resp.body).unwrap();
         assert!(body.contains("timeout"));
+    }
+
+    #[test]
+    fn error_page_dns_failure_categorized() {
+        let resp = error_page("http://bad.example", "DNS resolution failed: not found");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("DNS Lookup Failed"));
+        assert!(body.contains("domain name"));
+    }
+
+    #[test]
+    fn error_page_timeout_categorized() {
+        let resp = error_page("http://slow.example", "TCP connect failed: timed out");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Connection Failed"));
+        assert!(body.contains("connection"));
+    }
+
+    #[test]
+    fn error_page_tls_categorized() {
+        let resp = error_page("https://secure.example", "TLS handshake failed");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Secure Connection Failed"));
+    }
+
+    #[test]
+    fn error_page_redirect_loop_categorized() {
+        let resp = error_page("http://loop.example", "too many redirects");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Too Many Redirects"));
+    }
+
+    #[test]
+    fn error_page_generic_fallback() {
+        let resp = error_page("http://x.example", "some unknown error");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Page Load Error"));
+    }
+
+    #[test]
+    fn error_page_includes_url_and_details() {
+        let resp = error_page("http://test.example/path", "connection refused");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("http://test.example/path"));
+        assert!(body.contains("connection refused"));
     }
 
     #[test]

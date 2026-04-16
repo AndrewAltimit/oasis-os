@@ -25,7 +25,8 @@ use oasis_types::error::Result;
 
 use crate::css::values::BorderStyle;
 use crate::css::values::types::{
-    BackgroundImage, BlendMode as CssBlendMode, FilterFunction, MaskComposite, MaskMode,
+    BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BlendMode as CssBlendMode, FilterFunction, MaskComposite, MaskMode,
 };
 use crate::image::DecodedImage;
 use crate::layout::box_model::Rect;
@@ -60,6 +61,13 @@ pub struct MaskParams {
     /// produced a texture. Shared via `Arc` so recording cost is a
     /// pointer copy.
     pub texture: Option<Arc<DecodedImage>>,
+    /// `mask-size` — sizing for URL-backed masks. Reuses the
+    /// background-size vocabulary (auto / cover / contain / explicit).
+    pub size: BackgroundSize,
+    /// `mask-position` — placement within the layer bounds.
+    pub position: BackgroundPosition,
+    /// `mask-repeat` — tiling behavior for URL-backed masks.
+    pub repeat: BackgroundRepeat,
 }
 
 impl PartialEq for MaskParams {
@@ -70,6 +78,9 @@ impl PartialEq for MaskParams {
         self.image == other.image
             && self.mode == other.mode
             && self.composite == other.composite
+            && self.size == other.size
+            && self.position == other.position
+            && self.repeat == other.repeat
             && match (self.texture.as_ref(), other.texture.as_ref()) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -126,7 +137,15 @@ fn apply_mask(buf: &mut [u8], w: u32, h: u32, mask: &MaskParams) {
     let mask_alpha: Vec<u8> = match &mask.image {
         BackgroundImage::None => return,
         BackgroundImage::Url(_) => match mask.texture.as_ref() {
-            Some(tex) => rasterize_url_mask(w, h, tex, mask.mode),
+            Some(tex) => rasterize_url_mask(
+                w,
+                h,
+                tex,
+                mask.mode,
+                &mask.size,
+                &mask.position,
+                mask.repeat,
+            ),
             // URL masks with no resolved texture — the fetch/decode
             // pipeline hasn't produced pixels yet (or the decode
             // failed). Composite unchanged; a later frame picks the
@@ -307,47 +326,79 @@ fn rasterize_radial_mask(
 
 /// Rasterize a URL-backed mask into a per-pixel 0..=255 grid.
 ///
-/// The image is stretched to fit the full layer rect using nearest-
-/// neighbor sampling. `mask-position` / `mask-size` / `mask-repeat`
-/// are intentionally ignored here — CSS positioning and tiling are a
-/// follow-up that will reuse the existing `background_image_tiles`
-/// helper at record time and pass a set of sample rects through to
-/// `MaskParams`. The stretched-to-fit path covers the common "PNG
-/// alpha channel as clip mask" case (rounded avatars, logo badges,
-/// icon masks) without that extra plumbing.
+/// Uses `background_image_tiles` to compute tile positions based on
+/// `mask-size`, `mask-position`, and `mask-repeat`. Each tile is
+/// sampled from the source image via nearest-neighbor scaling. Pixels
+/// not covered by any tile remain at 0 (fully transparent mask).
 ///
 /// `mask-mode: alpha` reads the source's alpha channel; `luminance`
 /// converts RGB via Rec.601 scaled by alpha. `match-source` chooses
 /// alpha when the source has any non-opaque pixel, else luminance.
-fn rasterize_url_mask(layer_w: u32, layer_h: u32, src: &DecodedImage, mode: MaskMode) -> Vec<u8> {
+fn rasterize_url_mask(
+    layer_w: u32,
+    layer_h: u32,
+    src: &DecodedImage,
+    mode: MaskMode,
+    size: &BackgroundSize,
+    position: &BackgroundPosition,
+    repeat: BackgroundRepeat,
+) -> Vec<u8> {
+    use super::background::background_image_tiles;
+
     let mut out = vec![0u8; (layer_w * layer_h) as usize];
     if src.width == 0 || src.height == 0 || src.pixels.len() < (src.width * src.height * 4) as usize
     {
         return out;
     }
-    // Pick alpha vs luminance once for the whole rasterize pass so
-    // the inner loop stays branch-free.
+
     let use_alpha = match mode {
         MaskMode::Alpha => true,
         MaskMode::Luminance => false,
         MaskMode::MatchSource => src.has_transparency,
     };
-    let sx_scale = src.width as f32 / layer_w as f32;
-    let sy_scale = src.height as f32 / layer_h as f32;
-    for y in 0..layer_h {
-        let sy = ((y as f32 + 0.5) * sy_scale) as u32;
-        let sy = sy.min(src.height - 1);
-        let row_start = (sy * src.width * 4) as usize;
-        for x in 0..layer_w {
-            let sx = ((x as f32 + 0.5) * sx_scale) as u32;
-            let sx = sx.min(src.width - 1);
-            let i = row_start + (sx * 4) as usize;
-            let r = src.pixels[i];
-            let g = src.pixels[i + 1];
-            let b = src.pixels[i + 2];
-            let a = src.pixels[i + 3];
-            let c = Color { r, g, b, a };
-            out[(y * layer_w + x) as usize] = color_to_mask_channel(c, use_alpha);
+
+    let tiles = background_image_tiles(
+        0,
+        0,
+        layer_w,
+        layer_h,
+        (src.width, src.height),
+        size,
+        position,
+        repeat,
+    );
+
+    for tile in &tiles {
+        if tile.w == 0 || tile.h == 0 {
+            continue;
+        }
+        let sx_scale = src.width as f32 / tile.w as f32;
+        let sy_scale = src.height as f32 / tile.h as f32;
+
+        // Clamp tile to layer bounds.
+        let x_start = tile.x.max(0) as u32;
+        let y_start = tile.y.max(0) as u32;
+        let x_end = ((tile.x + tile.w as i32) as u32).min(layer_w);
+        let y_end = ((tile.y + tile.h as i32) as u32).min(layer_h);
+
+        for y in y_start..y_end {
+            let local_y = (y as i32 - tile.y) as f32;
+            let sy = ((local_y + 0.5) * sy_scale) as u32;
+            let sy = sy.min(src.height - 1);
+            let row_start = (sy * src.width * 4) as usize;
+
+            for x in x_start..x_end {
+                let local_x = (x as i32 - tile.x) as f32;
+                let sx = ((local_x + 0.5) * sx_scale) as u32;
+                let sx = sx.min(src.width - 1);
+                let i = row_start + (sx * 4) as usize;
+                let r = src.pixels[i];
+                let g = src.pixels[i + 1];
+                let b = src.pixels[i + 2];
+                let a = src.pixels[i + 3];
+                let c = Color { r, g, b, a };
+                out[(y * layer_w + x) as usize] = color_to_mask_channel(c, use_alpha);
+            }
         }
     }
     out
@@ -3412,6 +3463,9 @@ mod tests {
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
             texture: None,
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 1, 8, &mask);
         // Top row keeps full alpha (mask=255).
@@ -3433,6 +3487,9 @@ mod tests {
             mode: MaskMode::Alpha,
             composite: MaskComposite::Subtract,
             texture: None,
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 1, 8, &mask);
         // Subtract = destination-out: opaque mask REMOVES the layer.
@@ -3454,6 +3511,9 @@ mod tests {
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
             texture: None,
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 2, 2, &mask);
         assert_eq!(layer, original);
@@ -3470,6 +3530,9 @@ mod tests {
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
             texture: None,
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 2, 2, &mask);
         assert_eq!(layer, original);
@@ -3493,6 +3556,9 @@ mod tests {
             mode: MaskMode::Alpha,
             composite: MaskComposite::Add,
             texture: Some(src),
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 2, 2, &mask);
         // Left column opaque, right column cleared.
@@ -3519,6 +3585,9 @@ mod tests {
             mode: MaskMode::Luminance,
             composite: MaskComposite::Add,
             texture: Some(src),
+            size: BackgroundSize::Auto,
+            position: BackgroundPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
         };
         apply_mask(&mut layer, 2, 1, &mask);
         assert_eq!(layer[3], 0, "black→mask 0→layer cleared");
@@ -3527,10 +3596,18 @@ mod tests {
 
     #[test]
     fn rasterize_url_mask_stretches_to_layer_bounds() {
-        // 1x1 opaque white source stretched to a 4x4 layer — every
-        // output pixel should be 255.
+        // 1x1 opaque white source with auto size + no-repeat — the mask
+        // covers only the 1x1 intrinsic region. Use Cover to stretch.
         let src = DecodedImage::new(1, 1, vec![255, 255, 255, 255]);
-        let buf = rasterize_url_mask(4, 4, &src, MaskMode::Alpha);
+        let buf = rasterize_url_mask(
+            4,
+            4,
+            &src,
+            MaskMode::Alpha,
+            &BackgroundSize::Cover,
+            &BackgroundPosition::default(),
+            BackgroundRepeat::NoRepeat,
+        );
         assert!(buf.iter().all(|&v| v == 255));
     }
 
@@ -3559,5 +3636,120 @@ mod tests {
         for pair in buf.windows(2) {
             assert!(pair[0] <= pair[1], "luminance monotonic: {buf:?}");
         }
+    }
+
+    #[test]
+    fn url_mask_auto_size_no_repeat_covers_intrinsic_area_only() {
+        // 2x2 opaque white source on a 4x4 layer with auto size and
+        // no-repeat: only the top-left 2x2 should be opaque.
+        let src = DecodedImage::new(2, 2, vec![255u8; 2 * 2 * 4]);
+        let buf = rasterize_url_mask(
+            4,
+            4,
+            &src,
+            MaskMode::Alpha,
+            &BackgroundSize::Auto,
+            &BackgroundPosition::default(),
+            BackgroundRepeat::NoRepeat,
+        );
+        // Top-left 2x2 should be 255.
+        for y in 0..2u32 {
+            for x in 0..2u32 {
+                assert_eq!(buf[(y * 4 + x) as usize], 255, "({x},{y}) should be opaque");
+            }
+        }
+        // Bottom-right 2x2 should be 0 (not covered by the mask).
+        for y in 2..4u32 {
+            for x in 2..4u32 {
+                assert_eq!(
+                    buf[(y * 4 + x) as usize],
+                    0,
+                    "({x},{y}) should be transparent"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn url_mask_repeat_tiles_across_layer() {
+        // 2x2 opaque white source repeated across a 4x4 layer:
+        // every pixel should be covered.
+        let src = DecodedImage::new(2, 2, vec![255u8; 2 * 2 * 4]);
+        let buf = rasterize_url_mask(
+            4,
+            4,
+            &src,
+            MaskMode::Alpha,
+            &BackgroundSize::Auto,
+            &BackgroundPosition::default(),
+            BackgroundRepeat::Repeat,
+        );
+        assert!(
+            buf.iter().all(|&v| v == 255),
+            "all pixels covered by repeat"
+        );
+    }
+
+    #[test]
+    fn url_mask_contain_scales_within_bounds() {
+        // 4x2 source on a 4x4 layer with contain: should scale to 4x2,
+        // leaving the bottom 2 rows uncovered.
+        let src = DecodedImage::new(4, 2, vec![255u8; 4 * 2 * 4]);
+        let buf = rasterize_url_mask(
+            4,
+            4,
+            &src,
+            MaskMode::Alpha,
+            &BackgroundSize::Contain,
+            &BackgroundPosition::default(),
+            BackgroundRepeat::NoRepeat,
+        );
+        // Top 2 rows covered.
+        for y in 0..2u32 {
+            for x in 0..4u32 {
+                assert_eq!(buf[(y * 4 + x) as usize], 255, "({x},{y}) should be opaque");
+            }
+        }
+        // Bottom 2 rows uncovered.
+        for y in 2..4u32 {
+            for x in 0..4u32 {
+                assert_eq!(
+                    buf[(y * 4 + x) as usize],
+                    0,
+                    "({x},{y}) should be transparent"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn url_mask_position_centers_mask() {
+        // 2x2 opaque source on a 6x6 layer with center position.
+        let src = DecodedImage::new(2, 2, vec![255u8; 2 * 2 * 4]);
+        let buf = rasterize_url_mask(
+            6,
+            6,
+            &src,
+            MaskMode::Alpha,
+            &BackgroundSize::Auto,
+            &BackgroundPosition {
+                x: 0.5,
+                y: 0.5,
+                x_is_px: false,
+                y_is_px: false,
+            },
+            BackgroundRepeat::NoRepeat,
+        );
+        // Center of 6x6 with 2x2 image: offset = (6-2)*0.5 = 2.
+        // Pixels at (2,2), (3,2), (2,3), (3,3) should be opaque.
+        assert_eq!(buf[2 * 6 + 2], 255, "(2,2) opaque");
+        assert_eq!(buf[2 * 6 + 3], 255, "(3,2) opaque");
+        assert_eq!(buf[3 * 6 + 2], 255, "(2,3) opaque");
+        assert_eq!(buf[3 * 6 + 3], 255, "(3,3) opaque");
+        // Corners should be transparent.
+        assert_eq!(buf[0], 0, "(0,0) transparent");
+        assert_eq!(buf[5], 0, "(5,0) transparent");
+        assert_eq!(buf[5 * 6], 0, "(0,5) transparent");
+        assert_eq!(buf[5 * 6 + 5], 0, "(5,5) transparent");
     }
 }

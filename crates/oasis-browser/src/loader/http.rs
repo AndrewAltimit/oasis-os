@@ -826,15 +826,32 @@ fn oasis_err_to_io(e: OasisError) -> io::Error {
 /// Generate a user-friendly error page when a site requires HTTPS.
 fn https_error_page(original_url: &Url, https_url: &Url) -> ResourceResponse {
     let html = format!(
-        "<html><body>\
+        "<html><head><style>\
+         body {{ font-family: sans-serif; margin: 40px; color: #333; \
+                background: #f8f8f8; }}\
+         .error-box {{ background: white; border: 1px solid #ddd; \
+                       border-radius: 8px; padding: 24px; max-width: 480px; }}\
+         h1 {{ color: #c33; font-size: 18px; margin: 0 0 12px 0; }}\
+         p {{ font-size: 13px; line-height: 1.5; margin: 8px 0; }}\
+         ul {{ font-size: 13px; line-height: 1.6; padding-left: 20px; }}\
+         code {{ background: #eee; padding: 2px 4px; border-radius: 3px; \
+                 font-size: 12px; word-break: break-all; }}\
+         .detail {{ color: #888; font-size: 11px; margin-top: 16px; \
+                    border-top: 1px solid #eee; padding-top: 12px; }}\
+         </style></head>\
+         <body><div class=\"error-box\">\
          <h1>HTTPS Required</h1>\
-         <p>This site redirected to a secure (HTTPS) connection:</p>\
-         <p>{https_url}</p>\
-         <p>OASIS browser only supports plain HTTP. \
-         TLS/SSL is not available.</p>\
-         <p>Try a site that serves plain HTTP, such as:</p>\
-         <p>http://example.com</p>\
-         </body></html>"
+         <p>This site requires a secure (HTTPS) connection, but TLS/SSL \
+         is not available in this browser configuration.</p>\
+         <p>The site redirected to: <code>{https_url}</code></p>\
+         <p><strong>Try:</strong></p>\
+         <ul>\
+         <li>Access a site that serves plain HTTP.</li>\
+         <li>Enable TLS support if your platform supports it.</li>\
+         </ul>\
+         <div class=\"detail\">\
+         <p>Original URL: <code>{original_url}</code></p>\
+         </div></div></body></html>"
     );
     ResourceResponse {
         url: original_url.to_string(),

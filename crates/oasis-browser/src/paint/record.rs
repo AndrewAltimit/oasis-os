@@ -267,6 +267,9 @@ fn record_box(
                         mode: layout_box.style.mask_mode,
                         composite: layout_box.style.mask_composite,
                         texture,
+                        size: layout_box.style.mask_size,
+                        position: layout_box.style.mask_position,
+                        repeat: layout_box.style.mask_repeat,
                     })
                 },
             };

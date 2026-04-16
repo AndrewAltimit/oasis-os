@@ -358,10 +358,13 @@ impl BrowserWidget {
                 },
             };
             self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
-            // Skip sentinel (failed decode) entries.
-            if decoded.width == 0 && decoded.height == 0 {
-                continue;
-            }
+            // Replace sentinel (failed decode) with a broken-image placeholder
+            // so the user sees a visual indicator instead of nothing.
+            let decoded = if decoded.width == 0 && decoded.height == 0 {
+                image::broken_image_placeholder(24, 24)
+            } else {
+                decoded
+            };
             if self.decoded_images.contains_key(&url) {
                 continue;
             }
@@ -478,7 +481,10 @@ impl BrowserWidget {
                     };
                     if sent {
                         self.image_decode_in_flight += 1;
-                    } else if let Some(decoded) = image::decode_image(&vfs_resp.body) {
+                    } else {
+                        // Sync fallback — use placeholder on decode failure.
+                        let decoded = image::decode_image(&vfs_resp.body)
+                            .unwrap_or_else(|| image::broken_image_placeholder(24, 24));
                         let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                         self.decoded_image_bytes += img_bytes;
                         self.decoded_image_lru.push_front(resolved.clone());
@@ -534,7 +540,16 @@ impl BrowserWidget {
                     any_decoded = true;
                 } else {
                     #[cfg(any(target_arch = "wasm32", feature = "psp"))]
-                    self.diag("[BR] image decode failed");
+                    self.diag("[BR] image decode failed, using placeholder");
+                    // Insert a broken-image placeholder so the user
+                    // sees a visual indicator instead of a blank space.
+                    let placeholder = image::broken_image_placeholder(24, 24);
+                    let img_bytes = placeholder.width as usize * placeholder.height as usize * 4;
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, placeholder);
+                    self.image_info_dirty = true;
+                    any_decoded = true;
                 }
             } else {
                 #[cfg(any(target_arch = "wasm32", feature = "psp"))]
@@ -563,9 +578,12 @@ impl BrowserWidget {
                 match rx.recv_timeout(remaining) {
                     Ok((url, decoded)) => {
                         self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
-                        if decoded.width == 0 && decoded.height == 0 {
-                            continue;
-                        }
+                        // Replace sentinel (failed decode) with placeholder.
+                        let decoded = if decoded.width == 0 && decoded.height == 0 {
+                            image::broken_image_placeholder(24, 24)
+                        } else {
+                            decoded
+                        };
                         if self.decoded_images.contains_key(&url) {
                             continue;
                         }
