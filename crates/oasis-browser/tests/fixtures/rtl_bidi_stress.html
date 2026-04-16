@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>RTL / Bidi Stress Test</title>
+<style>
+/* Base RTL layout */
+body {
+    direction: rtl;
+    font-size: 16px;
+    margin: 0;
+    padding: 20px;
+    background: #f5f5f5;
+    color: #333;
+}
+
+/* Logical properties — should resolve to physical RTL equivalents */
+.card {
+    margin-inline-start: 16px;
+    margin-inline-end: 8px;
+    padding-inline: 12px 20px;
+    padding-block: 8px;
+    border-inline-start-width: 4px;
+    border-inline-start-style: solid;
+    border-inline-start-color: #0066cc;
+    border-inline-end-width: 1px;
+    border-inline-end-style: solid;
+    border-inline-end-color: #ccc;
+    background: white;
+    margin-bottom: 16px;
+}
+
+/* Explicit LTR override for embedded content */
+.ltr-embed {
+    direction: ltr;
+    unicode-bidi: embed;
+    text-align: left;
+    margin-inline-start: 24px;
+    padding-inline-start: 8px;
+    border-inline-start-width: 2px;
+    border-inline-start-style: dashed;
+    border-inline-start-color: #090;
+}
+
+/* Bidirectional text mixing */
+.bidi-mixed {
+    padding: 8px;
+    border: 1px solid #999;
+    margin-bottom: 8px;
+}
+
+/* Inset logical properties */
+.positioned {
+    position: relative;
+    background: #e0e0ff;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.positioned .badge {
+    position: absolute;
+    inset-inline-start: 8px;
+    inset-block-start: 4px;
+    background: #cc0000;
+    color: white;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+
+/* Table with RTL cell order */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+    direction: rtl;
+}
+
+th, td {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: right;
+}
+
+th {
+    background: #0066cc;
+    color: white;
+}
+
+/* Flex with RTL flow */
+.flex-row {
+    display: flex;
+    direction: rtl;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.flex-item {
+    flex: 1;
+    padding: 12px;
+    background: #e8f4ff;
+    border: 1px solid #b0d0ff;
+    text-align: center;
+}
+
+/* Nested direction changes */
+.rtl-outer {
+    direction: rtl;
+    background: #fff8e0;
+    padding: 12px;
+    margin-bottom: 16px;
+    border: 1px solid #e0d080;
+}
+
+.ltr-inner {
+    direction: ltr;
+    background: #e0ffe0;
+    padding: 8px;
+    margin-inline: 16px;
+    border: 1px solid #80c080;
+}
+
+/* Lists with logical margins */
+ul.rtl-list {
+    padding-inline-start: 24px;
+    margin-inline-end: 8px;
+    list-style-position: inside;
+}
+
+.rtl-list li {
+    margin-block-end: 4px;
+    padding-inline-start: 4px;
+}
+
+/* Grid with logical sizing */
+.grid-container {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.grid-item {
+    padding-inline: 8px;
+    padding-block: 6px;
+    background: #f0e0ff;
+    border-inline-start-width: 3px;
+    border-inline-start-style: solid;
+    border-inline-start-color: #8040c0;
+}
+</style>
+</head>
+<body>
+
+<h1>اختبار إجهاد RTL / Bidi</h1>
+
+<!-- Card with logical properties in RTL -->
+<div class="card">
+    <h2>بطاقة مع خصائص منطقية</h2>
+    <p>هذه بطاقة تستخدم خصائص CSS المنطقية. الحواف يجب أن تنعكس في سياق RTL.</p>
+    <p>margin-inline-start يجب أن يكون على اليمين، و margin-inline-end على اليسار.</p>
+</div>
+
+<!-- LTR embed inside RTL -->
+<div class="card">
+    <h2>محتوى LTR مدمج</h2>
+    <div class="ltr-embed">
+        <p>This paragraph is explicitly LTR inside an RTL context.</p>
+        <p>margin-inline-start here should be on the LEFT (because direction: ltr).</p>
+        <code>const result = calculate(x + y);</code>
+    </div>
+</div>
+
+<!-- Bidirectional text mixing -->
+<div class="card">
+    <h2>نص ثنائي الاتجاه</h2>
+    <div class="bidi-mixed">
+        <p>هذا نص عربي مع English words مدمجة في الوسط.</p>
+    </div>
+    <div class="bidi-mixed">
+        <p>JavaScript هي لغة البرمجة الأكثر شيوعًا في العالم.</p>
+    </div>
+    <div class="bidi-mixed">
+        <p>تم إصدار CSS3 في عام 2011 وأضاف العديد من الميزات الجديدة.</p>
+    </div>
+    <div class="bidi-mixed">
+        <p>שלום! זהו טקסט בעברית עם English mixed in.</p>
+    </div>
+</div>
+
+<!-- Positioned element with logical insets -->
+<div class="positioned">
+    <span class="badge">جديد</span>
+    <h3>عنصر مع inset-inline-start</h3>
+    <p>الشارة يجب أن تكون على اليمين (inset-inline-start في RTL = right).</p>
+</div>
+
+<!-- Table with RTL cell order -->
+<table>
+    <thead>
+        <tr>
+            <th>الإجراء</th>
+            <th>الحالة</th>
+            <th>التاريخ</th>
+            <th>الاسم</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>تم</td>
+            <td>نشط</td>
+            <td>2026-04-16</td>
+            <td>أحمد محمد</td>
+        </tr>
+        <tr>
+            <td>قيد الانتظار</td>
+            <td>معلق</td>
+            <td>2026-04-15</td>
+            <td>فاطمة علي</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- Flex row in RTL -->
+<div class="flex-row">
+    <div class="flex-item">الأول (يمين في RTL)</div>
+    <div class="flex-item">الثاني</div>
+    <div class="flex-item">الثالث (يسار في RTL)</div>
+</div>
+
+<!-- Nested direction changes -->
+<div class="rtl-outer">
+    <p>هذا النص في سياق RTL خارجي.</p>
+    <div class="ltr-inner">
+        <p>This text is in an LTR inner context.</p>
+        <div class="rtl-outer" style="direction: rtl;">
+            <p>والعودة مرة أخرى إلى RTL المتداخل.</p>
+        </div>
+    </div>
+</div>
+
+<!-- RTL list with logical padding -->
+<ul class="rtl-list">
+    <li>العنصر الأول في القائمة</li>
+    <li>العنصر الثاني مع <strong>نص غامق</strong></li>
+    <li>العنصر الثالث مع <a href="#">رابط</a></li>
+    <li>العنصر الرابع: نهاية القائمة</li>
+</ul>
+
+<!-- Grid with logical properties -->
+<div class="grid-container">
+    <div class="grid-item">عمود 1</div>
+    <div class="grid-item">عمود 2 (أوسع)</div>
+    <div class="grid-item">عمود 3</div>
+</div>
+
+</body>
+</html>

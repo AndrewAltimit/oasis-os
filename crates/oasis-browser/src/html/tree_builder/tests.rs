@@ -1723,4 +1723,130 @@ mod prop {
             prop_assert!(tc.contains("cell"));
         }
     }
+
+    // ---- Template DocumentFragment scope isolation ----
+
+    #[test]
+    fn template_inside_table_isolates_insertion_mode() {
+        // A <template> opened inside a <table> should parse its
+        // contents in InBody mode, not InTable. Content like <div>
+        // inside the template should be a direct child of <template>,
+        // not foster-parented before the table.
+        let tokens = vec![
+            start("html"),
+            start("body"),
+            start("table"),
+            start("tbody"),
+            start("tr"),
+            start("td"),
+            start("template"),
+            start("div"),
+            text("inside template"),
+            end("div"),
+            end("template"),
+            end("td"),
+            end("tr"),
+            end("tbody"),
+            end("table"),
+            end("body"),
+            end("html"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+
+        // Find the <template> element.
+        let body = doc.body().expect("body");
+        let table = doc.nodes[body]
+            .children
+            .iter()
+            .find(|&&id| tag_at(&doc, id) == Some(&TagName::Table))
+            .copied()
+            .expect("table");
+
+        // Walk into table > tbody > tr > td > template.
+        let tbody = doc.nodes[table].children[0];
+        let tr = doc.nodes[tbody].children[0];
+        let td = doc.nodes[tr].children[0];
+        let template = doc.nodes[td]
+            .children
+            .iter()
+            .find(|&&id| tag_at(&doc, id) == Some(&TagName::Template))
+            .copied()
+            .expect("template");
+
+        // The <div> should be a child of the template, not
+        // foster-parented elsewhere.
+        let div_in_template = doc.nodes[template]
+            .children
+            .iter()
+            .find(|&&id| tag_at(&doc, id) == Some(&TagName::Div))
+            .copied();
+        assert!(
+            div_in_template.is_some(),
+            "div should be a child of <template>, not foster-parented",
+        );
+
+        // Verify text content is inside the template.
+        let tc = doc.text_content(template);
+        assert!(
+            tc.contains("inside template"),
+            "template should contain its text content",
+        );
+    }
+
+    #[test]
+    fn template_restores_table_mode_on_close() {
+        // After </template>, the parser should return to the table
+        // insertion mode it was in before. Subsequent <tr>/<td> tokens
+        // should be handled correctly by the table modes.
+        let tokens = vec![
+            start("html"),
+            start("body"),
+            start("table"),
+            start("tbody"),
+            start("tr"),
+            start("td"),
+            start("template"),
+            start("p"),
+            text("template content"),
+            end("p"),
+            end("template"),
+            // After template closes, we should be back in InCell.
+            text("cell text after template"),
+            end("td"),
+            // New cell in the same row.
+            start("td"),
+            text("second cell"),
+            end("td"),
+            end("tr"),
+            end("tbody"),
+            end("table"),
+            end("body"),
+            end("html"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+
+        let body = doc.body().expect("body");
+        let table = doc.nodes[body]
+            .children
+            .iter()
+            .find(|&&id| tag_at(&doc, id) == Some(&TagName::Table))
+            .copied()
+            .expect("table");
+
+        // Walk into table > tbody > tr — should have 2 <td> children.
+        let tbody = doc.nodes[table].children[0];
+        let tr = doc.nodes[tbody].children[0];
+        let td_count = doc.nodes[tr]
+            .children
+            .iter()
+            .filter(|&&id| matches!(tag_at(&doc, id), Some(&TagName::Td) | Some(&TagName::Th)))
+            .count();
+        assert_eq!(
+            td_count, 2,
+            "should have 2 table cells — mode should have \
+         restored to InCell after </template>",
+        );
+    }
 }

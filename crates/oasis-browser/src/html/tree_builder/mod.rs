@@ -125,15 +125,17 @@ pub struct TreeBuilder {
     pub(crate) frameset_ok: bool,
     /// Saved mode for returning from `Text` insertion mode.
     pub(crate) original_mode: InsertionMode,
-    /// Saved `form_element` pointers captured when a `<template>`
-    /// start tag is processed. The spec puts template contents into a
-    /// separate "template contents owner" DocumentFragment; any
-    /// `form_element` pointer visible outside the template does not
-    /// leak in, and forms opened inside the template do not leak out.
-    /// We mimic that isolation by saving and restoring the pointer on
-    /// `<template>` / `</template>` instead of introducing a real
-    /// DocumentFragment node kind.
-    pub(crate) template_form_stack: Vec<Option<NodeId>>,
+    /// Saved parser state captured when a `<template>` start tag is
+    /// processed. The spec puts template contents into a separate
+    /// DocumentFragment; the form pointer and insertion mode visible
+    /// outside the template do not leak in, and state opened inside
+    /// the template does not leak out. We mimic that isolation by
+    /// saving and restoring on `<template>` / `</template>` instead
+    /// of introducing a real DocumentFragment node kind.
+    ///
+    /// Each entry stores `(form_element, insertion_mode)` at the
+    /// point the template was opened.
+    pub(crate) template_form_stack: Vec<(Option<NodeId>, InsertionMode)>,
     /// Count of open foreign-content elements (svg / math subtree
     /// descendants) on the open elements stack. When non-zero, the
     /// tree builder dispatches incoming tokens through the simplified

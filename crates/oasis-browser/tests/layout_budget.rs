@@ -84,7 +84,9 @@ const BUDGETS: &[(&str, f32, f32, u64)] = &[
     ("forum_thread.html", 800.0, 600.0, 500),
     ("commerce_product.html", 800.0, 600.0, 500),
     ("substack_post.html", 800.0, 600.0, 750),
-    // PSP viewport — 480x272 — narrow reflow target. All ten
+    ("rtl_bidi_stress.html", 800.0, 600.0, 500),
+    ("responsive_grid.html", 800.0, 600.0, 500),
+    // PSP viewport — 480x272 — narrow reflow target. All twelve
     // fixtures are gated here so a narrow-width regression in any
     // one of them (e.g. a `flex-basis: 0` loop or a text-wrap
     // O(n²)) fails `cargo test`, not just the four biggest pages.
@@ -98,6 +100,8 @@ const BUDGETS: &[(&str, f32, f32, u64)] = &[
     ("forum_thread.html", 480.0, 272.0, 500),
     ("commerce_product.html", 480.0, 272.0, 500),
     ("substack_post.html", 480.0, 272.0, 750),
+    ("rtl_bidi_stress.html", 480.0, 272.0, 500),
+    ("responsive_grid.html", 480.0, 272.0, 500),
 ];
 
 #[test]

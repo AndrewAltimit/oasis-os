@@ -689,7 +689,25 @@ pub(super) fn paint_box(
 
             for (idx, child) in layout_box.children.iter().enumerate() {
                 if preserve3d_flatten {
-                    normal_children.push(child);
+                    // Per CSS Transforms L2 §6.1: a child with an
+                    // explicit `z-index` (not auto) inside a
+                    // `preserve-3d` parent opts out of the 3D
+                    // rendering context — its `transform-style` is
+                    // treated as `flat` and it participates in the
+                    // regular CSS 2.1 stacking tiers instead of the
+                    // projected-Z sort. Only children that stay in
+                    // the 3D context (z-index: auto, which is the
+                    // default for transformed elements) join the
+                    // Z-sorted `normal_children` list.
+                    if !child.style.z_index_auto && creates_stacking_context(child) {
+                        if child.style.z_index < 0 {
+                            stacking_neg.push((child.style.z_index, idx, child));
+                        } else {
+                            stacking_pos.push((child.style.z_index, idx, child));
+                        }
+                    } else {
+                        normal_children.push(child);
+                    }
                 } else if creates_stacking_context(child) {
                     if child.style.z_index < 0 {
                         stacking_neg.push((child.style.z_index, idx, child));
@@ -2843,6 +2861,97 @@ mod tests {
         assert!(
             yellow_idx < red_idx,
             "positioned-auto (yellow) should paint before positive z-index (red)",
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: z-index opt-out inside preserve-3d subtrees
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn preserve_3d_explicit_z_index_opts_out_of_z_sort() {
+        // Inside a preserve-3d parent, a child with an explicit
+        // z-index opts out of the 3D Z-sort and participates in
+        // the regular CSS 2.1 stacking tiers instead.
+        //
+        // Setup: preserve-3d parent with 3 children:
+        //   A — translateZ(100), z-index: auto (green) → Z-sorted
+        //   B — translateZ(-100), z-index: auto (red) → Z-sorted
+        //   C — no transform, z-index: 5 explicit (blue) → stacking tier
+        //
+        // Expected paint order:
+        //   B (back, red, from Z-sort)
+        //   A (front, green, from Z-sort)
+        //   C (blue, from positive stacking tier — paints last)
+        let mut backend = MockBackend::new();
+
+        let mut a_style = ComputedStyle::default();
+        a_style.background_color = Color::rgb(0, 255, 0);
+        a_style.transforms = vec![TransformFunction::TranslateZ(100.0)];
+        let child_a = make_block(10.0, 10.0, 50.0, 50.0, a_style);
+
+        let mut b_style = ComputedStyle::default();
+        b_style.background_color = Color::rgb(255, 0, 0);
+        b_style.transforms = vec![TransformFunction::TranslateZ(-100.0)];
+        let child_b = make_block(10.0, 70.0, 50.0, 50.0, b_style);
+
+        let mut c_style = ComputedStyle::default();
+        c_style.background_color = Color::rgb(0, 0, 255);
+        c_style.position = Position::Relative;
+        c_style.z_index = 5;
+        c_style.z_index_auto = false;
+        let child_c = make_block(10.0, 130.0, 50.0, 50.0, c_style);
+
+        let mut parent_style = ComputedStyle::default();
+        parent_style.transform_style = TransformStyle::Preserve3d;
+        let mut parent = make_block(0.0, 0.0, 200.0, 200.0, parent_style);
+        parent.children.push(child_a);
+        parent.children.push(child_b);
+        parent.children.push(child_c);
+
+        let mut gparent_style = ComputedStyle::default();
+        gparent_style.perspective = Some(800.0);
+        let mut gparent = make_block(0.0, 0.0, 400.0, 400.0, gparent_style);
+        gparent.children.push(parent);
+
+        paint(&gparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
+
+        // Collect all fill_rect and fill_polygon calls.
+        let fills: Vec<Color> = backend
+            .calls
+            .iter()
+            .filter_map(|c| match c {
+                DrawCall::FillRect { color, .. } => Some(*color),
+                DrawCall::FillPolygon { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+
+        let blue_idx = fills
+            .iter()
+            .position(|c| *c == Color::rgb(0, 0, 255))
+            .expect("blue (z-index:5) should paint");
+        let red_idx = fills
+            .iter()
+            .position(|c| *c == Color::rgb(255, 0, 0))
+            .expect("red (back) should paint");
+        let green_idx = fills
+            .iter()
+            .position(|c| *c == Color::rgb(0, 255, 0))
+            .expect("green (front) should paint");
+
+        // Red (back) must paint before green (front) via Z-sort.
+        assert!(
+            red_idx < green_idx,
+            "back child (red, translateZ(-100)) must paint before \
+             front child (green, translateZ(+100)): red={red_idx}, green={green_idx}",
+        );
+        // Blue (z-index:5) must paint after both Z-sorted children
+        // because it opts out into the positive stacking tier.
+        assert!(
+            blue_idx > green_idx,
+            "explicit z-index child (blue, z-index:5) must paint after \
+             Z-sorted children: blue={blue_idx}, green={green_idx}",
         );
     }
 }

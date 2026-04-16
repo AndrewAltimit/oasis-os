@@ -52,18 +52,26 @@ so you can `git show` for specifics.
   only triage binary for bucket-sorting arbitrary HTML snapshots.
 - **WHATWG HTML conformance** (`feat/browser-whatwg-epic-completion`
   + earlier `feat/browser-whatwg-conformance`). Full adoption agency
-  algorithm, foster parenting, `<template>` with form-scope
-  isolation, foreign content subset (SVG/MathML), parser error
-  reporting, and a vendored-subset `html5lib-tests` harness.
+  algorithm, foster parenting, `<template>` with full DocumentFragment
+  scope isolation (form + insertion mode), foreign content subset
+  (SVG/MathML), parser error reporting, and a vendored-subset
+  `html5lib-tests` harness.
 - **CSS long tail** (`feat/browser-has-selector`,
-  `feat/browser-container-queries`, `feat/css-nesting`). `:has()`,
-  `@layer`, `@container`, CSS nesting, `@scope`, `@property`,
-  `@counter-style` (parse-only), `color-mix()` / `oklch()` /
-  `color()` / `light-dark()`, logical properties, `aspect-ratio`
-  for non-replaced blocks, `text-wrap` parsing, `field-sizing:
+  `feat/browser-container-queries`, `feat/css-nesting`,
+  `feat/browser-backlog-batch`). `:has()`, `@layer`, `@container`
+  (incl. nested AND-combining + `style(...)` queries), CSS nesting,
+  `@scope`, `@property`, `@counter-style` (full system support
+  driving list markers), `color-mix()` / `oklch()` / `color()` /
+  `light-dark()`, RTL-aware logical properties (direction-resolved
+  at cascade time), `aspect-ratio` for replaced + non-replaced
+  elements, `text-wrap: balance` / `pretty`, `field-sizing:
   content`, `accent-color`, `caret-color`.
 - **PSP JavaScript** (`feat/psp-quickjs`). QuickJS-NG via `rquickjs`
   on real PSP hardware, same DOM bindings as desktop/WASM/UE5.
+- **Follow-up batch** (`feat/browser-backlog-batch`). Preserve-3d
+  z-index opt-outs, template scope isolation for table/select,
+  RTL/bidi + responsive grid corpus fixtures, triage `--parallel`
+  flag, benchmark CI gate.
 
 ---
 
@@ -91,60 +99,12 @@ is small enough to handle as a drive-by on a related PR.
   because it reads back, composites via a plain alpha-over blit,
   then throws the texture away. A GPU-side path would keep blend
   mode + filter + opacity composable.
-- ~~**Nested `@container` rules: AND-combining.**~~ Done — nested
-  conditions now AND-combine features at parse time.
-- ~~**`@container style(...)` queries**~~ Done — `style(--prop: val)`
-  evaluates against container custom properties.
 
 ### 3D transforms
 
-- **Z-index opt-outs inside `preserve-3d` subtrees.** Explicit
-  `z-index` on a child inside a preserved 3D container currently
-  flattens into the Z-sort instead of leaving the preserved plane.
 - **Real perspective rendering on GPU backends.** PSP GU has
   `sceGumPerspective` for true perspective projection; the
   software path uses a 3-corner-fit affine.
-
-### WHATWG HTML
-
-- **Full DocumentFragment scope isolation for table + select**
-  (currently form-scope isolation only).
-- ~~**SVG camelCase identifier round-trip**~~ Done — WHATWG case
-  fixup table applied during foreign content insertion (40 tag
-  names, 60 attribute names).
-
-### CSS long tail
-
-- ~~**Custom counter styles wired to `<ol>` markers.**~~ Done —
-  `@counter-style` systems (cyclic, numeric, alphabetic, symbolic,
-  additive, fixed) drive list marker rendering. Built-in
-  `lower-alpha`, `upper-alpha`, `lower-roman`, `upper-roman`,
-  `decimal-leading-zero` also added.
-- ~~**`text-wrap: balance` / `pretty` layout-side algorithm.**~~ Done
-  — `balance` binary-searches for the narrowest width that keeps
-  the same line count; `pretty` pulls a word from the penultimate
-  line to avoid orphans.
-- ~~**Replaced-element `aspect-ratio`**~~ Done — CSS `aspect-ratio`
-  applies to both block-level and inline replaced elements,
-  overriding the intrinsic ratio when set.
-- ~~**Cross-stylesheet `@layer` name merging.**~~ Done — a global
-  layer name map is built before cascade so the same layer name
-  in different sheets shares a cascade position.
-- ~~**Color-space-aware `color-mix`.**~~ Done — `oklch`, `oklab`,
-  `hsl`, and `srgb-linear` interpolation spaces are supported.
-- ~~**`light-dark()` color-scheme tracking.**~~ Done — deferred
-  `CssValue::LightDark` resolves at computed-value time against
-  `color-scheme: dark`.
-- **RTL support** anywhere in the engine. Logical properties
-  rewrite to physical LTR at parse time.
-
-### Real-world compatibility
-
-- **RTL / bidi stress fixture** in the corpus.
-- **`@media` responsive grid fixture** in the corpus.
-- **Bench baseline as a CI gate.** Currently manual save via
-  `cargo bench -- --save-baseline main`.
-- **Triage tool `--parallel` flag** via rayon.
 
 ### PSP
 
@@ -153,9 +113,6 @@ is small enough to handle as a drive-by on a related PR.
   only. Likely a `glyph_advance(' ')` returning 0 in the PSP
   bitmap font table (`oasis-backend-psp/src/font.rs`) or the text
   layout step collapsing whitespace after JS-triggered relayout.
-- ~~**`js_dom.rs` bootstrap bloat.**~~ Done — `JS_CANVAS_BOOTSTRAP`
-  and `install_canvas_bindings` gated behind `canvas` feature
-  (included in default features, omittable on PSP).
 
 ---
 

@@ -41,6 +41,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "parallel-style")]
+use rayon::prelude::*;
+#[cfg(feature = "parallel-style")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use oasis_browser::SimpleTextMeasurer;
 use oasis_browser::internals::{
     CascadeContext, PaintViewport, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree,
@@ -85,6 +90,7 @@ struct Args {
     slow_budget_ms: u64,
     viewport_w: f32,
     viewport_h: f32,
+    parallel: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -93,6 +99,7 @@ fn parse_args() -> Result<Args, String> {
     let mut slow_budget_ms: u64 = 2000;
     let mut viewport_w: f32 = 800.0;
     let mut viewport_h: f32 = 600.0;
+    let mut parallel = false;
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut it = raw.into_iter();
@@ -119,6 +126,9 @@ fn parse_args() -> Result<Args, String> {
                 viewport_w = w.parse().map_err(|e| format!("--viewport W: {e}"))?;
                 viewport_h = h.parse().map_err(|e| format!("--viewport H: {e}"))?;
             },
+            "--parallel" => {
+                parallel = true;
+            },
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -133,6 +143,7 @@ fn parse_args() -> Result<Args, String> {
         slow_budget_ms,
         viewport_w,
         viewport_h,
+        parallel,
     })
 }
 
@@ -158,6 +169,8 @@ OPTIONS:
     --output <path>        Report path (default: stdout).
     --slow-budget-ms <ms>  Mark pages exceeding this as `slow`.
     --viewport <WxH>       Viewport used for layout + paint.
+    --parallel             Process pages in parallel via rayon
+                           (requires `parallel-style` feature).
 "
     );
 }
@@ -385,6 +398,43 @@ fn render_report(outcomes: &[Outcome], args: &Args) -> String {
     out
 }
 
+/// Process pages in parallel via rayon. Falls back to sequential
+/// when the `parallel-style` feature is not enabled.
+fn run_parallel(
+    files: &[PathBuf],
+    viewport_w: f32,
+    viewport_h: f32,
+    slow_budget: Duration,
+) -> Vec<Outcome> {
+    #[cfg(feature = "parallel-style")]
+    {
+        let counter = AtomicUsize::new(0);
+        let total = files.len();
+        let outcomes: Vec<Outcome> = files
+            .par_iter()
+            .map(|path| {
+                let i = counter.fetch_add(1, Ordering::Relaxed);
+                eprintln!("  [{:4}/{}] {}", i + 1, total, path.display());
+                triage_one(path, viewport_w, viewport_h, slow_budget)
+            })
+            .collect();
+        outcomes
+    }
+    #[cfg(not(feature = "parallel-style"))]
+    {
+        eprintln!(
+            "warning: --parallel requires the `parallel-style` feature; \
+             falling back to sequential processing"
+        );
+        let mut outcomes = Vec::with_capacity(files.len());
+        for (i, path) in files.iter().enumerate() {
+            eprint!("\r  [{:4}/{}] {}", i + 1, files.len(), path.display());
+            outcomes.push(triage_one(path, viewport_w, viewport_h, slow_budget));
+        }
+        outcomes
+    }
+}
+
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
@@ -406,12 +456,18 @@ fn main() {
 
     eprintln!("oasis-browser-triage: processing {} pages...", files.len());
     let slow_budget = Duration::from_millis(args.slow_budget_ms);
-    let mut outcomes = Vec::with_capacity(files.len());
-    for (i, path) in files.iter().enumerate() {
-        eprint!("\r  [{:4}/{}] {}", i + 1, files.len(), path.display());
-        let outcome = triage_one(path, args.viewport_w, args.viewport_h, slow_budget);
-        outcomes.push(outcome);
-    }
+
+    let outcomes = if args.parallel {
+        run_parallel(&files, args.viewport_w, args.viewport_h, slow_budget)
+    } else {
+        let mut outcomes = Vec::with_capacity(files.len());
+        for (i, path) in files.iter().enumerate() {
+            eprint!("\r  [{:4}/{}] {}", i + 1, files.len(), path.display());
+            let outcome = triage_one(path, args.viewport_w, args.viewport_h, slow_budget);
+            outcomes.push(outcome);
+        }
+        outcomes
+    };
     eprintln!("\n");
 
     let report = render_report(&outcomes, &args);

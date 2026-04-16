@@ -125,5 +125,10 @@ if [ "$HAS_REGRESSION" -eq 1 ]; then
   echo "> This is advisory only and does not block the PR."
 fi
 
-# Exit 0 always -- this is advisory, not a gate
+# Gate mode: exit 1 on regression when BENCH_GATE=1
+if [ "$HAS_REGRESSION" -eq 1 ] && [ "${BENCH_GATE:-0}" = "1" ]; then
+  echo "> Benchmark gate FAILED: regressions exceed ${THRESHOLD}% threshold."
+  exit 1
+fi
+
 exit 0

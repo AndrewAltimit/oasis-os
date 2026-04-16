@@ -134,20 +134,24 @@ impl TreeBuilder {
             },
             Token::StartTag(tag) if tag.name == "template" => {
                 // Template contents live in a notional DocumentFragment
-                // — any enclosing form pointer is hidden from them.
-                // Save+clear on entry, restore on exit (see the
-                // matching </template> arm below and
-                // `handle_start_tag_in_body`'s Template branch).
+                // — form pointer AND insertion mode are isolated. This
+                // prevents table/select context from leaking into the
+                // template and vice versa.
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.template_form_stack.push(self.form_element);
+                self.template_form_stack
+                    .push((self.form_element, self.mode));
                 self.form_element = None;
+                // Per WHATWG §13.2.6.4.18, template contents start in
+                // InBody regardless of the enclosing insertion mode.
+                self.mode = InsertionMode::InBody;
             },
             Token::EndTag(tag) if tag.name == "template" => {
                 if self.has_in_scope(&TagName::Template) {
                     self.close_to_tag_any_scope(&TagName::Template);
-                    if let Some(saved) = self.template_form_stack.pop() {
-                        self.form_element = saved;
+                    if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
+                        self.form_element = saved_form;
+                        self.mode = saved_mode;
                     }
                 } else {
                     log::trace!("html parse error: stray </template>");
@@ -371,8 +375,10 @@ impl TreeBuilder {
                 // See InHead `<template>` for isolation notes.
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.template_form_stack.push(self.form_element);
+                self.template_form_stack
+                    .push((self.form_element, self.mode));
                 self.form_element = None;
+                self.mode = InsertionMode::InBody;
             },
             TagName::Svg => {
                 self.reconstruct_formatting();
@@ -458,8 +464,9 @@ impl TreeBuilder {
             TagName::Template => {
                 if self.has_in_scope(&TagName::Template) {
                     self.close_to_tag_any_scope(&TagName::Template);
-                    if let Some(saved) = self.template_form_stack.pop() {
-                        self.form_element = saved;
+                    if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
+                        self.form_element = saved_form;
+                        self.mode = saved_mode;
                     }
                 } else {
                     log::trace!("html parse error: stray </template>");
