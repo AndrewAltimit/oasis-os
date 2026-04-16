@@ -204,9 +204,9 @@ fn paint_splash_screen(
     ];
     paint_vertical_gradient(backend, 0, 0, screen_w, sky_h, sky_stops, splash_opacity)?;
 
-    // Ground gradient (4 stops, vertical).
+    // Ground gradient (4 stops, vertical) — extends to screen bottom.
     let ground_y = sky_h as i32;
-    let ground_h = (220.0 * sy) as u32;
+    let ground_h = screen_h.saturating_sub(sky_h);
     let ground_stops: &[(f32, Color)] = &[
         (0.00, Color::rgb(255, 255, 255)),
         (0.05, Color::rgb(106, 0, 204)),
@@ -223,31 +223,76 @@ fn paint_splash_screen(
         splash_opacity,
     )?;
 
-    // Horizon line.
+    // Horizon heavy glow (layered bloom behind the crisp line).
+    // Outer soft glow — wide, dim.
     let horizon_y = (500.0 * sy) as i32;
-    let line_c = apply_alpha(Color::rgb(255, 255, 255), splash_opacity);
-    backend.fill_rect(
-        0,
-        horizon_y,
-        screen_w,
-        (2.0 * scale).max(1.0) as u32,
-        line_c,
-    )?;
-
-    // Horizon glow (pulsing, starts at 3.8s).
     if elapsed >= 3.8 {
         let pulse_t = elapsed - 3.8;
         let glow_alpha = 0.6 + 0.4 * (pulse_t * std::f32::consts::PI / 4.0).sin();
-        let glow_c = apply_alpha(Color::rgb(255, 255, 255), glow_alpha * splash_opacity);
-        let glow_h = (4.0 * scale).max(2.0) as u32;
-        backend.fill_rect(0, horizon_y - glow_h as i32, screen_w, glow_h * 2, glow_c)?;
+
+        // Outermost bloom layer (8px std-dev equivalent).
+        let bloom_h = (16.0 * scale).max(4.0) as u32;
+        let bloom_c = apply_alpha(
+            Color::rgb(255, 255, 255),
+            0.15 * glow_alpha * splash_opacity,
+        );
+        backend.fill_rect(
+            0,
+            horizon_y - bloom_h as i32,
+            screen_w,
+            bloom_h * 2,
+            bloom_c,
+        )?;
+
+        // Mid bloom layer (4px std-dev equivalent).
+        let mid_h = (8.0 * scale).max(2.0) as u32;
+        let mid_c = apply_alpha(
+            Color::rgb(255, 255, 255),
+            0.25 * glow_alpha * splash_opacity,
+        );
+        backend.fill_rect(0, horizon_y - mid_h as i32, screen_w, mid_h * 2, mid_c)?;
+
+        // Inner bright glow.
+        let inner_h = (3.0 * scale).max(1.0) as u32;
+        let inner_c = apply_alpha(Color::rgb(255, 255, 255), 0.5 * glow_alpha * splash_opacity);
+        backend.fill_rect(
+            0,
+            horizon_y - inner_h as i32,
+            screen_w,
+            inner_h * 2,
+            inner_c,
+        )?;
     }
 
-    // Logo group (appears at 4.0s).
+    // Crisp horizon line (1.5px stroke-width in SVG).
+    let line_c = apply_alpha(Color::rgb(255, 255, 255), splash_opacity);
+    let line_h = (1.5 * scale).max(1.0) as u32;
+    backend.fill_rect(0, horizon_y, screen_w, line_h, line_c)?;
+
+    // Logo group (appears at 4.0s with scale-in and glow).
     if elapsed >= 4.0 {
         let logo_t = (elapsed - 4.0) / 0.6;
         let logo_opacity = logo_t.clamp(0.0, 1.0) * splash_opacity;
-        paint_logo(backend, sx, sy, scale, logo_opacity)?;
+        // Glow layer behind the logo (approximates feGaussianBlur stdDeviation=4).
+        // Render at lower opacity with thicker strokes for soft bloom.
+        let glow_opacity = logo_opacity * 0.4;
+        paint_logo(
+            backend,
+            sx,
+            sy,
+            scale,
+            glow_opacity,
+            (14.0 * scale).max(4.0) as u32,
+        )?;
+        // Crisp logo on top.
+        paint_logo(
+            backend,
+            sx,
+            sy,
+            scale,
+            logo_opacity,
+            (7.0 * scale).max(2.0) as u32,
+        )?;
     }
 
     // Subtitle "OPERATING SYSTEMS" (appears at 4.8s).
@@ -272,21 +317,42 @@ fn paint_splash_screen(
         }
     }
 
-    // Loading text (appears at 5.5s).
+    // Loading text (appears at 5.5s, base opacity 0.8 per SVG).
     if elapsed >= 5.5 {
         let load_t = (elapsed - 5.5) / 0.5;
-        let load_opacity = load_t.clamp(0.0, 1.0) * splash_opacity;
+        let load_opacity = load_t.clamp(0.0, 1.0) * splash_opacity * 0.8;
         let fs = (14.0 * scale).max(8.0) as u16;
         let text = "SYSTEM MODULES INITIALIZED";
-        let tw = backend.measure_text(text, fs);
-        let x = (screen_w as i32 - tw as i32) / 2;
+        // Letter-spacing rendering (letter-spacing="2" in SVG).
+        let ls = (2.0 * scale) as i32;
+        // Measure total width with letter-spacing for centering.
+        let total_w: i32 = text
+            .chars()
+            .map(|ch| {
+                let mut buf = [0u8; 4];
+                let s = ch.encode_utf8(&mut buf);
+                backend.measure_text(s, fs) as i32 + ls
+            })
+            .sum::<i32>()
+            - ls; // don't count trailing space
+        let mut cx = (screen_w as i32 - total_w) / 2;
         let y = (660.0 * sy) as i32;
         let c = apply_alpha(Color::rgb(170, 136, 255), load_opacity);
-        backend.draw_text(text, x, y, fs, c)?;
+        for ch in text.chars() {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            backend.draw_text(s, cx, y, fs, c)?;
+            let cw = backend.measure_text(s, fs) as i32;
+            cx += cw + ls;
+        }
     }
 
     // Scanline overlay (subtle).
     paint_scanlines(backend, screen_w, screen_h, sy, splash_opacity * 0.35)?;
+
+    // CRT vignette overlay — dark edges, clear center.
+    // Matches <radialGradient id="vignette" r="75%"> with stop-opacity 0→0.85.
+    paint_vignette(backend, screen_w, screen_h)?;
 
     Ok(())
 }
@@ -301,9 +367,9 @@ fn paint_logo(
     sy: f32,
     scale: f32,
     opacity: f32,
+    sw: u32,
 ) -> Result<()> {
     let c = apply_alpha(Color::rgb(255, 255, 255), opacity);
-    let sw = (7.0 * scale).max(2.0) as u32;
 
     // Left bracket: [
     draw_line_thick(backend, 315.0, 290.0, 275.0, 290.0, sx, sy, sw, c)?;
@@ -318,20 +384,12 @@ fn paint_logo(
     draw_line_thick(backend, 465.0, 290.0, 465.0, 410.0, sx, sy, sw, c)?;
     draw_line_thick(backend, 465.0, 410.0, 515.0, 410.0, sx, sy, sw, c)?;
 
-    // Aperture O (simplified as hexagon outline)
+    // Aperture O — hexagonal camera shutter icon.
+    // SVG: <polygon points="0,-25 21.65,-12.5 21.65,12.5 0,25 -21.65,12.5 -21.65,-12.5">
+    // Centered at (555, 350) with mask cutting shutter lines.
     let ocx = 555.0 * sx;
     let ocy = 350.0 * sy;
-    let or = 25.0 * scale;
-    let hex_r = or as u16;
-    if hex_r > 0 {
-        backend.fill_circle(ocx as i32, ocy as i32, hex_r, c)?;
-        // Inner hole.
-        let inner_c = apply_alpha(Color::rgb(5, 0, 68), opacity);
-        let inner_r = (5.0 * scale) as u16;
-        if inner_r > 0 {
-            backend.fill_circle(ocx as i32, ocy as i32, inner_r, inner_c)?;
-        }
-    }
+    paint_aperture_icon(backend, ocx, ocy, scale, c, opacity)?;
 
     // T (first)
     draw_line_thick(backend, 595.0, 290.0, 655.0, 290.0, sx, sy, sw, c)?;
@@ -357,6 +415,64 @@ fn paint_logo(
     draw_line_thick(backend, 965.0, 290.0, 1005.0, 290.0, sx, sy, sw, c)?;
     draw_line_thick(backend, 1005.0, 290.0, 1005.0, 445.0, sx, sy, sw, c)?;
     draw_line_thick(backend, 1005.0, 445.0, 860.0, 445.0, sx, sy, sw, c)?;
+
+    Ok(())
+}
+
+/// Render the hexagonal aperture/shutter icon centered at (cx, cy).
+///
+/// Draws a filled hexagon with a center hole and six radiating
+/// shutter cut lines, matching the SVG's `<polygon>` + `<mask>` combo.
+fn paint_aperture_icon(
+    backend: &mut dyn SdiBackend,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    color: Color,
+    opacity: f32,
+) -> Result<()> {
+    let r = 25.0 * scale;
+    // Hexagon vertices: 6 points at 60-degree increments starting from top.
+    let hex_pts: Vec<(i32, i32)> = (0..6)
+        .map(|i| {
+            let angle = std::f32::consts::FRAC_PI_3 * i as f32 - std::f32::consts::FRAC_PI_2;
+            ((cx + r * angle.cos()) as i32, (cy + r * angle.sin()) as i32)
+        })
+        .collect();
+    backend.fill_polygon(&hex_pts, color)?;
+
+    // Center hole (r=5 in SVG).
+    let hole_r = (5.0 * scale).max(1.0) as u16;
+    // Use a dark color matching the background behind the aperture.
+    let hole_c = apply_alpha(Color::rgb(21, 0, 136), opacity);
+    backend.fill_circle(cx as i32, cy as i32, hole_r, hole_c)?;
+
+    // Shutter cut lines — 6 lines radiating from near-center outward,
+    // each rotated by 60 degrees. SVG: <line x1="4" y1="2" x2="30" y2="10">
+    // with transform="rotate(N)" for N=0,60,120,180,240,300.
+    let cut_c = apply_alpha(Color::rgb(21, 0, 136), opacity);
+    let cut_sw = (2.5 * scale).max(1.0) as u32;
+    for i in 0..6 {
+        let angle = std::f32::consts::FRAC_PI_3 * i as f32;
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        // Inner point (4, 2) rotated.
+        let ix = cx + (4.0 * cos_a - 2.0 * sin_a) * scale;
+        let iy = cy + (4.0 * sin_a + 2.0 * cos_a) * scale;
+        // Outer point (30, 10) rotated — clamped to hexagon radius.
+        let ox = cx + (25.0 * cos_a - 8.0 * sin_a) * scale;
+        let oy = cy + (25.0 * sin_a + 8.0 * cos_a) * scale;
+        // Draw via Bresenham.
+        let steps = ((ox - ix).abs().max((oy - iy).abs())) as i32;
+        if steps > 0 {
+            for s in 0..=steps {
+                let t = s as f32 / steps as f32;
+                let px = (ix + (ox - ix) * t) as i32;
+                let py = (iy + (oy - iy) * t) as i32;
+                backend.fill_rect(px, py, cut_sw, cut_sw, cut_c)?;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -487,6 +603,65 @@ fn paint_scanlines(
     while y < screen_h {
         backend.fill_rect(0, y as i32, screen_w, line_h, c)?;
         y += step;
+    }
+    Ok(())
+}
+
+/// CRT vignette: dark shadow around screen edges, clear in center.
+///
+/// Matches `<radialGradient id="vignette" cx="50%" cy="50%" r="75%">`
+/// with stops at 50% (transparent) and 100% (0.85 black).
+fn paint_vignette(backend: &mut dyn SdiBackend, screen_w: u32, screen_h: u32) -> Result<()> {
+    let cx = screen_w as f32 / 2.0;
+    let cy = screen_h as f32 / 2.0;
+    let max_r = (cx * cx + cy * cy).sqrt(); // corner distance
+    let inner_r = max_r * 0.5; // 50% stop = fully transparent
+    let outer_r = max_r; // 100% stop = 0.85 opacity black
+
+    // Render as concentric rectangular bands from outside-in.
+    // Each band's opacity is based on its distance from center.
+    let bands = 24u32;
+    for i in 0..bands {
+        let t = 1.0 - (i as f32 / bands as f32); // 1.0 = outermost
+        let dist = inner_r + (outer_r - inner_r) * t;
+        // Only draw outside the inner radius (50% stop).
+        if dist < inner_r {
+            continue;
+        }
+        let alpha_t = ((dist - inner_r) / (outer_r - inner_r)).clamp(0.0, 1.0);
+        let alpha = (alpha_t * 0.85 * 255.0) as u8;
+        if alpha == 0 {
+            continue;
+        }
+
+        let band_w = (dist / max_r * cx) as i32;
+        let band_h = (dist / max_r * cy) as i32;
+        let bx = cx as i32 - band_w;
+        let by = cy as i32 - band_h;
+        let bw = (band_w * 2) as u32;
+        let _bh = (band_h * 2) as u32;
+
+        // Draw 4 edge bands (top, bottom, left, right) rather than
+        // a full-screen fill — the center stays untouched.
+        let next_t = 1.0 - ((i as f32 + 1.0) / bands as f32);
+        let next_dist = inner_r + (outer_r - inner_r) * next_t;
+        let next_w = (next_dist / max_r * cx) as i32;
+        let next_h = (next_dist / max_r * cy) as i32;
+        let nbx = cx as i32 - next_w;
+        let nby = cy as i32 - next_h;
+
+        let c = Color::rgba(0, 0, 0, alpha);
+        let thickness_x = (nbx - bx).max(1) as u32;
+        let thickness_y = (nby - by).max(1) as u32;
+
+        // Top band.
+        backend.fill_rect(bx, by, bw, thickness_y, c)?;
+        // Bottom band.
+        backend.fill_rect(bx, cy as i32 + next_h, bw, thickness_y, c)?;
+        // Left band (between top and bottom).
+        backend.fill_rect(bx, nby, thickness_x, (next_h * 2) as u32, c)?;
+        // Right band.
+        backend.fill_rect(cx as i32 + next_w, nby, thickness_x, (next_h * 2) as u32, c)?;
     }
     Ok(())
 }
