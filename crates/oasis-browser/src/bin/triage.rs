@@ -426,7 +426,6 @@ fn run_parallel(
             "warning: --parallel requires the `parallel-style` feature; \
              falling back to sequential processing"
         );
-        let _ = (&files, viewport_w, viewport_h, slow_budget);
         let mut outcomes = Vec::with_capacity(files.len());
         for (i, path) in files.iter().enumerate() {
             eprint!("\r  [{:4}/{}] {}", i + 1, files.len(), path.display());
