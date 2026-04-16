@@ -4,10 +4,22 @@ Forward-looking gap analysis for `oasis-browser`. Open work only —
 shipped epics are summarised in a single "Recently shipped" section
 and otherwise tracked via `git log`.
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
-## Shipped this cycle
+## Recently shipped (pointers only)
 
+The big compatibility and architecture epics are done. See git log
+for the detailed commit history; each bullet names the merge branch
+so you can `git show` for specifics.
+
+- **`@font-face` / web fonts** (`feat/browser-font-face`). Full
+  `@font-face` CSS parsing (family, src url/local, font-weight
+  ranges, font-style, font-display, unicode-range). `FontFamily`
+  extended from 3-variant enum to ordered name stack with generic
+  fallbacks. `fontdue` TTF/OTF rasterizer behind `web-fonts` feature.
+  Font registry with CSS font matching, font-aware text measurement,
+  glyph texture cache, lazy font loading on first tick with
+  `web_font_id` resolution on `ComputedStyle`.
 - **HTTP/2** (`feat/browser-http2`). ALPN-negotiated `h2` on the
   existing rustls TLS path. Full HPACK (RFC 7541) — static + dynamic
   table, integer codec, string literals, Huffman decoder, verified
@@ -16,15 +28,12 @@ Last updated: 2026-04-15
   `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY, and `PUSH_PROMISE`
   refusal. One request per connection — no multiplexing, but
   unblocks every CDN that hard-requires `h2` for the initial GET.
-
----
-
-## Recently shipped (pointers only)
-
-The big compatibility and architecture epics are done. See git log
-for the detailed commit history; each bullet names the merge branch
-so you can `git show` for specifics.
-
+- **Image decoding error recovery + network error UX**
+  (`feat/browser-image-error-recovery`). `catch_unwind` wraps all
+  format-specific decoders; decode failures produce a broken-image
+  placeholder. Error pages categorize failures (DNS, timeout, TLS,
+  redirect loop) with styled explanations and suggested actions.
+  `mask-size`/`mask-position`/`mask-repeat` wired for URL masks.
 - **Compositor overhaul** (`feat/browser-compositor-overhaul`).
   `mix-blend-mode`, `backdrop-filter`, `filter:`, `isolation:
   isolate`, `will-change:`, and `mask-*` (including URL-backed
@@ -32,7 +41,7 @@ so you can `git show` for specifics.
   `PopCompositingLayer` pair backed by the `SdiRenderTarget` trait.
   Backends without render-target support fall back to `PushLayer`.
 - **3D transforms** (`feat/browser-3d-transforms` + follow-ups).
-  4×4 `Matrix3d`, screen-space perspective projection, `transform-
+  4x4 `Matrix3d`, screen-space perspective projection, `transform-
   style: preserve-3d` with Z-sorted children, `backface-visibility`,
   `transform-origin: Z`, and a trapezoidal background path for
   steep perspective angles.
@@ -42,10 +51,10 @@ so you can `git show` for specifics.
   gating `cargo test`, criterion corpus bench group, and a local-
   only triage binary for bucket-sorting arbitrary HTML snapshots.
 - **WHATWG HTML conformance** (`feat/browser-whatwg-epic-completion`
-  + earlier `feat/browser-whatwg-conformance`). Full §13.2.6.4.7
-  adoption agency algorithm, foster parenting, `<template>` with
-  form-scope isolation, foreign content subset (SVG/MathML), parser
-  error reporting, and a vendored-subset `html5lib-tests` harness.
+  + earlier `feat/browser-whatwg-conformance`). Full adoption agency
+  algorithm, foster parenting, `<template>` with form-scope
+  isolation, foreign content subset (SVG/MathML), parser error
+  reporting, and a vendored-subset `html5lib-tests` harness.
 - **CSS long tail** (`feat/browser-has-selector`,
   `feat/browser-container-queries`, `feat/css-nesting`). `:has()`,
   `@layer`, `@container`, CSS nesting, `@scope`, `@property`,
@@ -77,9 +86,6 @@ is small enough to handle as a drive-by on a related PR.
 
 ### Compositor / mask
 
-- ~~**`mask-size` / `mask-position` / `mask-repeat` for URL masks.**~~
-  Done — `background_image_tiles` wired through `MaskParams` for
-  positioned / tiled / sized URL masks.
 - **Real GPU read-modify-write for layer filters.** The filter
   + mask pop path drops the CSS blend mode (becomes `Normal`)
   because it reads back, composites via a plain alpha-over blit,
@@ -116,7 +122,7 @@ is small enough to handle as a drive-by on a related PR.
 - **`text-wrap: balance` / `pretty` layout-side algorithm.** Parsed
   and stored; fall through to `wrap` at layout time.
 - **Replaced-element `aspect-ratio`** (`<img>`, `<video>`).
-  Non-replaced blocks derive height from width × ratio; replaced
+  Non-replaced blocks derive height from width x ratio; replaced
   elements don't yet.
 - **Cross-stylesheet `@layer` name merging.** Layer names are
   sheet-local; cross-stylesheet ordering falls through to source
@@ -157,21 +163,6 @@ as individual issues — not a single epic.
 - **Font rendering quality across skins** — kerning, hinting,
   subpixel positioning. Especially on PSP where we have system
   TrueType fonts via `psp::font`.
-- ~~**Image decoding error recovery**~~ — Done. `catch_unwind`
-  wraps all format-specific decoders; decode failures produce a
-  broken-image placeholder instead of a blank space or crash.
-- ~~**Network error UX**~~ — Done. Error pages now categorize
-  failures (DNS, timeout, TLS, redirect loop) with styled
-  explanations and suggested actions.
-- ~~**`@font-face` / web fonts**~~ — Done. Full CSS `@font-face`
-  parsing (family, src url/local, font-weight ranges, font-style,
-  font-display, unicode-range), `FontFamily` extended from 3-enum to
-  full font stack with named families and generic fallbacks, `fontdue`
-  rasterizer for TTF/OTF parsing and glyph rendering, font registry
-  with CSS font matching (weight/style), font-aware text measurement,
-  glyph texture cache, and pipeline integration (lazy font loading on
-  first tick, web_font_id resolution on ComputedStyle, DrawText with
-  web font path in display list).
 - **Accessibility** — ARIA roles are parsed but not exposed to
   anything. Low priority for launch but should at least have a
   plan.
