@@ -70,11 +70,27 @@ fn validate_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// HTML-escape a string to prevent injection when interpolating into HTML.
+pub(super) fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Generate a "page not found" HTML response.
 pub fn not_found_page(url: &str) -> ResourceResponse {
+    let escaped_url = escape_html(url);
     let html = format!(
         "<html><body><h1>Page Not Found</h1>\
-         <p>The page <code>{url}</code> could not be found.</p>\
+         <p>The page <code>{escaped_url}</code> could not be found.</p>\
          </body></html>"
     );
     ResourceResponse {
@@ -91,6 +107,8 @@ pub fn not_found_page(url: &str) -> ResourceResponse {
 /// timeout, TLS error, HTTP error) and produces a styled page with an
 /// explanation and suggested actions.
 pub fn error_page(url: &str, message: &str) -> ResourceResponse {
+    let url = &escape_html(url);
+    let message = &escape_html(message);
     let msg_lower = message.to_ascii_lowercase();
     let (title, explanation, suggestions) = if msg_lower.contains("dns")
         || msg_lower.contains("resolve")

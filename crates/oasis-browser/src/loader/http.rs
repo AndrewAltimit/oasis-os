@@ -17,6 +17,7 @@ use oasis_net::tls::TlsProvider;
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
 
+use super::vfs::escape_html;
 use super::{ContentType, ResourceResponse, Url};
 
 /// Maximum response body size (8 MB).
@@ -825,6 +826,8 @@ fn oasis_err_to_io(e: OasisError) -> io::Error {
 
 /// Generate a user-friendly error page when a site requires HTTPS.
 fn https_error_page(original_url: &Url, https_url: &Url) -> ResourceResponse {
+    let escaped_https = escape_html(&https_url.to_string());
+    let escaped_original = escape_html(&original_url.to_string());
     let html = format!(
         "<html><head><style>\
          body {{ font-family: sans-serif; margin: 40px; color: #333; \
@@ -843,14 +846,14 @@ fn https_error_page(original_url: &Url, https_url: &Url) -> ResourceResponse {
          <h1>HTTPS Required</h1>\
          <p>This site requires a secure (HTTPS) connection, but TLS/SSL \
          is not available in this browser configuration.</p>\
-         <p>The site redirected to: <code>{https_url}</code></p>\
+         <p>The site redirected to: <code>{escaped_https}</code></p>\
          <p><strong>Try:</strong></p>\
          <ul>\
          <li>Access a site that serves plain HTTP.</li>\
          <li>Enable TLS support if your platform supports it.</li>\
          </ul>\
          <div class=\"detail\">\
-         <p>Original URL: <code>{original_url}</code></p>\
+         <p>Original URL: <code>{escaped_original}</code></p>\
          </div></div></body></html>"
     );
     ResourceResponse {

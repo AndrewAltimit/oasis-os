@@ -372,14 +372,23 @@ fn rasterize_url_mask(
         if tile.w == 0 || tile.h == 0 {
             continue;
         }
+        // Skip tiles entirely outside the layer bounds.
+        if tile.x + tile.w as i32 <= 0 || tile.y + tile.h as i32 <= 0 {
+            continue;
+        }
+        if tile.x >= layer_w as i32 || tile.y >= layer_h as i32 {
+            continue;
+        }
         let sx_scale = src.width as f32 / tile.w as f32;
         let sy_scale = src.height as f32 / tile.h as f32;
 
         // Clamp tile to layer bounds.
         let x_start = tile.x.max(0) as u32;
         let y_start = tile.y.max(0) as u32;
-        let x_end = ((tile.x + tile.w as i32) as u32).min(layer_w);
-        let y_end = ((tile.y + tile.h as i32) as u32).min(layer_h);
+        let x_end = (tile.x + tile.w as i32).max(0) as u32;
+        let x_end = x_end.min(layer_w);
+        let y_end = (tile.y + tile.h as i32).max(0) as u32;
+        let y_end = y_end.min(layer_h);
 
         for y in y_start..y_end {
             let local_y = (y as i32 - tile.y) as f32;
