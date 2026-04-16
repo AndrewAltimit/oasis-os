@@ -213,18 +213,23 @@ fn format_alphabetic(symbols: &[String], n: usize) -> String {
 }
 
 /// Symbolic system: repeat each symbol N times where N = ceil(counter/len).
+/// Capped at 100 repeats to prevent unbounded allocation from
+/// programmatically large counters.
 fn format_symbolic(symbols: &[String], n: usize) -> String {
     if n == 0 {
         return "".into();
     }
     let idx = (n - 1) % symbols.len();
     let repeats = (n - 1) / symbols.len() + 1;
+    if repeats > 100 {
+        return n.to_string();
+    }
     symbols[idx].repeat(repeats)
 }
 
 /// Additive system: greedy decomposition with (weight, symbol) pairs.
 fn format_additive(symbols: &[(i32, String)], n: usize) -> String {
-    if symbols.is_empty() {
+    if symbols.is_empty() || n > i32::MAX as usize {
         return n.to_string();
     }
     let mut val = n as i32;

@@ -494,7 +494,7 @@ pub(crate) fn try_parse_light_dark(tokens: &[CssToken]) -> Option<(CssColor, Css
 /// Internal: extract both arguments of `light-dark()`.
 fn parse_light_dark_pair(body: &[&CssToken]) -> Option<(CssColor, CssColor)> {
     let args = split_top_level_commas(body);
-    if args.len() < 2 {
+    if args.len() != 2 {
         return None;
     }
     let light_owned: Vec<CssToken> = args[0].iter().copied().cloned().collect();
