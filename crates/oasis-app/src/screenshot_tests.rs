@@ -149,6 +149,10 @@ fn all_scenarios() -> Vec<Scenario> {
         "google",
         "wiki_article",
         "news_article",
+        "font_stack",
+        "font_face",
+        "font_inherit",
+        "web_fonts",
     ];
     for page in &pages {
         scenarios.push(Scenario {
@@ -837,6 +841,16 @@ fn run_browser_scenario(
             browser.navigate_vfs("vfs://test/images.html", &vfs);
             String::new() // Already loaded.
         },
+        "web_fonts" => {
+            // Use navigate_vfs so the TTF font file resolves from VFS.
+            let vfs = make_web_fonts_test_vfs();
+            browser.navigate_vfs("vfs://test/web_fonts.html", &vfs);
+            // Pump tick() to trigger font loading.
+            for _ in 0..5 {
+                browser.tick(&vfs);
+            }
+            String::new() // Already loaded.
+        },
         _ => {
             let fixture_path = format!("test-fixtures/html/{page_name}.html");
             let content = fs::read_to_string(&fixture_path).unwrap_or_else(|_| {
@@ -973,6 +987,25 @@ fn make_test_bmp_16x16() -> Vec<u8> {
         }
     }
     bmp
+}
+
+/// Build a VFS for the web_fonts screenshot test with the HTML fixture
+/// and the minimal test TTF.
+fn make_web_fonts_test_vfs() -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/test").ok();
+
+    // Read the fixture HTML.
+    let html = fs::read_to_string("test-fixtures/html/web_fonts.html").unwrap_or_else(|_| {
+        "<html><body><p>Missing web_fonts.html fixture</p></body></html>".into()
+    });
+    vfs.write("/test/web_fonts.html", html.as_bytes()).unwrap();
+
+    // Include the minimal test TTF from oasis-browser's test data.
+    let ttf = include_bytes!("../../oasis-browser/test_data/minimal.ttf");
+    vfs.write("/test/test-font.ttf", ttf).unwrap();
+
+    vfs
 }
 
 // ---------------------------------------------------------------------------

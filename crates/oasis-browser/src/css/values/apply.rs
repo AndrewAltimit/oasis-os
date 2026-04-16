@@ -12,14 +12,14 @@ use super::types::{
     AnimationPlayState, Appearance, BackfaceVisibility, BackgroundBox, BackgroundImage,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderCollapse, BorderRadius,
     BorderStyle, BoxSizing, Clear, ColorScheme, ContainerType, ContentVisibility, Cursor, Display,
-    FieldSizing, FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle,
-    FontVariant, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
-    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, Position, Resize, ScrollBehavior, ScrollSnapAlign,
-    ScrollSnapStop, TextAlign, TextAlignLast, TextDecorationLine, TextDecorationStyle,
-    TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform,
-    TextUnderlinePosition, TextWrap, TimingFunction, TouchAction, TransformStyle, Transition,
-    UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    FieldSizing, FlexDirection, FlexWrap, Float, FontFamily, FontFamilyName, FontKerning,
+    FontStretch, FontStyle, FontVariant, Hyphens, ImageRendering, Isolation, JustifyContent,
+    JustifySelf, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow,
+    OverflowWrap, OverscrollBehavior, PointerEvents, Position, Resize, ScrollBehavior,
+    ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecorationLine,
+    TextDecorationStyle, TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow,
+    TextTransform, TextUnderlinePosition, TextWrap, TimingFunction, TouchAction, TransformStyle,
+    Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -385,14 +385,7 @@ impl ComputedStyle {
                 }
             },
             "font-family" => {
-                if let Some(kw) = as_keyword(value) {
-                    self.font_family = match kw {
-                        "serif" => FontFamily::Serif,
-                        "sans-serif" => FontFamily::SansSerif,
-                        "monospace" => FontFamily::Monospace,
-                        _ => return,
-                    };
-                }
+                self.font_family = parse_font_family_value(value);
             },
 
             // -- Text ---------------------------------------------------
@@ -3259,6 +3252,99 @@ fn parse_grid_template_areas(value: &CssValue) -> Vec<Vec<String>> {
         }
     }
     areas
+}
+
+/// Parse a `font-family` CSS value into a [`FontFamily`] stack.
+///
+/// Handles comma-separated lists of quoted names, unquoted multi-word
+/// names, and generic family keywords:
+///
+/// ```css
+/// font-family: "Open Sans", Helvetica, Arial, sans-serif;
+/// ```
+fn parse_font_family_value(value: &CssValue) -> FontFamily {
+    let names = match value {
+        CssValue::Keyword(kw) => {
+            // Single keyword — either a generic or a bare font name.
+            return FontFamily::generic(keyword_to_family_name(kw));
+        },
+        CssValue::String(s) => {
+            // Single quoted string — a named font.
+            return FontFamily::stack(vec![FontFamilyName::Named(s.clone())]);
+        },
+        CssValue::Multiple(vs) => {
+            // Comma-separated list. The parser may group tokens between
+            // commas into sub-Multiple nodes, or present them flat
+            // separated by Keyword(",") or simply as sequential items.
+            // We collect all entries, splitting on commas.
+            collect_font_family_names(vs)
+        },
+        _ => return FontFamily::default(),
+    };
+    if names.is_empty() {
+        FontFamily::default()
+    } else {
+        FontFamily::stack(names)
+    }
+}
+
+/// Map a single keyword to a [`FontFamilyName`].
+fn keyword_to_family_name(kw: &str) -> FontFamilyName {
+    match kw.to_ascii_lowercase().as_str() {
+        "serif" => FontFamilyName::Serif,
+        "sans-serif" => FontFamilyName::SansSerif,
+        "monospace" => FontFamilyName::Monospace,
+        "cursive" => FontFamilyName::Cursive,
+        "fantasy" => FontFamilyName::Fantasy,
+        "system-ui" => FontFamilyName::SystemUi,
+        other => FontFamilyName::Named(other.to_string()),
+    }
+}
+
+/// Walk a flat list of [`CssValue`]s (from a comma-separated font-family
+/// declaration) and produce an ordered list of [`FontFamilyName`]s.
+fn collect_font_family_names(values: &[CssValue]) -> Vec<FontFamilyName> {
+    let mut result = Vec::new();
+    let mut pending_idents: Vec<String> = Vec::new();
+
+    for v in values {
+        match v {
+            CssValue::String(s) => {
+                // Flush any accumulated bare idents as a single name.
+                flush_pending_idents(&mut pending_idents, &mut result);
+                result.push(FontFamilyName::Named(s.clone()));
+            },
+            CssValue::Keyword(kw) if kw == "," => {
+                // Comma separator — flush accumulated idents.
+                flush_pending_idents(&mut pending_idents, &mut result);
+            },
+            CssValue::Keyword(kw) => {
+                // Bare ident — could be a multi-word name or a generic.
+                pending_idents.push(kw.clone());
+            },
+            CssValue::Multiple(sub) => {
+                // Nested grouping — recurse.
+                flush_pending_idents(&mut pending_idents, &mut result);
+                result.extend(collect_font_family_names(sub));
+            },
+            _ => {},
+        }
+    }
+    flush_pending_idents(&mut pending_idents, &mut result);
+    result
+}
+
+/// Flush accumulated bare ident tokens into a single font family name.
+///
+/// Multi-word unquoted names like `Trebuchet MS` come through as
+/// separate Keyword tokens; this joins them with spaces.
+fn flush_pending_idents(idents: &mut Vec<String>, result: &mut Vec<FontFamilyName>) {
+    if idents.is_empty() {
+        return;
+    }
+    let joined = idents.join(" ");
+    idents.clear();
+    result.push(keyword_to_family_name(&joined));
 }
 
 #[cfg(test)]

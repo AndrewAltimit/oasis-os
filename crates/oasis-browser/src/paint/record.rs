@@ -1208,6 +1208,10 @@ fn record_text(
     }
     let text_width = text_w.max(0.0) as u32;
 
+    // Resolve web font ID from the computed style.
+    #[cfg(feature = "web-fonts")]
+    let wf_id = style.web_font_id;
+
     // Text shadow.
     if let Some(ref shadow) = style.text_shadow {
         let shadow_color = apply_opacity(shadow.color, 1.0);
@@ -1221,6 +1225,8 @@ fn record_text(
             italic,
             width: text_width,
             node_id: ctx.current_node,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: wf_id,
         });
     }
 
@@ -1234,6 +1240,8 @@ fn record_text(
         italic,
         width: text_width,
         node_id: ctx.current_node,
+        #[cfg(feature = "web-fonts")]
+        web_font_id: wf_id,
     });
 
     if !style.text_decoration.line.is_none() {
@@ -1302,6 +1310,8 @@ fn record_list_marker(
         italic: false,
         width: marker_w,
         node_id: ctx.current_node,
+        #[cfg(feature = "web-fonts")]
+        web_font_id: None,
     });
 }
 
@@ -1408,6 +1418,8 @@ fn record_replaced(
                 italic: false,
                 width: label_w,
                 node_id: ctx.current_node,
+                #[cfg(feature = "web-fonts")]
+                web_font_id: None,
             });
         },
         ReplacedContent::HorizontalRule => {
@@ -1622,6 +1634,8 @@ fn record_text_input(
             italic: false,
             width: value_w,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
     } else if !placeholder.is_empty() {
         let ph_w = oasis_types::backend::bitmap_measure_text(placeholder, font_size);
@@ -1635,6 +1649,8 @@ fn record_text_input(
             italic: false,
             width: ph_w,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
     }
     // Draw a one-pixel caret after the value when the field has focus.
@@ -1934,6 +1950,8 @@ fn record_textarea(
                     italic: false,
                     width: lw,
                     node_id: None,
+                    #[cfg(feature = "web-fonts")]
+                    web_font_id: None,
                 });
             }
             last_line_index = i as i32;
@@ -2040,6 +2058,8 @@ fn record_select_box(
         italic: false,
         width: label_w,
         node_id: None,
+        #[cfg(feature = "web-fonts")]
+        web_font_id: None,
     });
     let arrow_w = oasis_types::backend::bitmap_measure_text("v", font_size);
     dl.push(DisplayItem::DrawText {
@@ -2052,6 +2072,8 @@ fn record_select_box(
         italic: false,
         width: arrow_w,
         node_id: None,
+        #[cfg(feature = "web-fonts")]
+        web_font_id: None,
     });
     if open && !options.is_empty() {
         let line_h = font_size as u32 + 4;
@@ -2126,6 +2148,8 @@ fn record_select_box(
                 italic: false,
                 width: opt_w,
                 node_id: None,
+                #[cfg(feature = "web-fonts")]
+                web_font_id: None,
             });
         }
     }
@@ -2245,6 +2269,8 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
         italic: false,
         width: text_w,
         node_id: None,
+        #[cfg(feature = "web-fonts")]
+        web_font_id: None,
     });
 }
 

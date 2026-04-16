@@ -31,6 +31,27 @@ use crate::css::values::types::{
 use crate::image::DecodedImage;
 use crate::layout::box_model::Rect;
 
+/// Trait for rendering web font text during display list replay.
+///
+/// Implementors rasterize individual glyphs from a font registry and
+/// blit them to the backend. The display list calls this instead of
+/// `draw_text_styled` when a `DrawText` item carries a `web_font_id`.
+#[cfg(feature = "web-fonts")]
+#[allow(clippy::too_many_arguments)]
+pub trait WebFontRenderer {
+    /// Render a text string using the web font identified by `font_id`.
+    fn render(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        font_id: u32,
+    ) -> Result<()>;
+}
+
 /// Parameters for a CSS `mask-*` pass applied on `PopCompositingLayer`.
 ///
 /// Captured at display-list recording time so the replay path can
@@ -547,6 +568,11 @@ pub enum DisplayItem {
         width: u32,
         /// Source DOM node for hover color patching.
         node_id: Option<usize>,
+        /// Web font ID from the [`FontRegistry`]. When `Some`, the text
+        /// is rendered using the web font's rasterized glyphs instead of
+        /// the backend's bitmap font.
+        #[cfg(feature = "web-fonts")]
+        web_font_id: Option<u32>,
     },
     /// Texture blit.
     Blit {
@@ -1232,6 +1258,37 @@ impl DisplayList {
         scroll_dy: i32,
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
+        #[cfg(feature = "web-fonts")]
+        return self.replay_inner(backend, scroll_dx, scroll_dy, base_clip, None);
+        #[cfg(not(feature = "web-fonts"))]
+        return self.replay_inner(backend, scroll_dx, scroll_dy, base_clip);
+    }
+
+    /// Replay with a web font renderer for glyph-level rendering.
+    ///
+    /// When `renderer` is provided, `DrawText` items carrying a
+    /// `web_font_id` are routed through the renderer instead of the
+    /// backend's bitmap `draw_text_styled`.
+    #[cfg(feature = "web-fonts")]
+    pub fn replay_with_fonts(
+        &self,
+        backend: &mut dyn SdiBackend,
+        scroll_dx: i32,
+        scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
+        renderer: &mut dyn WebFontRenderer,
+    ) -> Result<()> {
+        self.replay_inner(backend, scroll_dx, scroll_dy, base_clip, Some(renderer))
+    }
+
+    fn replay_inner(
+        &self,
+        backend: &mut dyn SdiBackend,
+        scroll_dx: i32,
+        scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
+        #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
+    ) -> Result<()> {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
@@ -1519,9 +1576,43 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    #[cfg(feature = "web-fonts")]
+                    web_font_id,
                     ..
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+
+                    // Web font path: render glyphs via the font
+                    // registry when a renderer is attached.
+                    #[cfg(feature = "web-fonts")]
+                    if let Some(font_id) = web_font_id {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                        let c = apply_layer_opacity(*color, layer_opacity);
+                        if let Some(ref mut renderer) = web_font_renderer {
+                            renderer.render(
+                                backend,
+                                text,
+                                x + scroll_dx,
+                                y + eff_dy,
+                                *font_size,
+                                c,
+                                *font_id,
+                            )?;
+                        } else {
+                            // No renderer attached — bitmap fallback.
+                            backend.draw_text_styled(
+                                text,
+                                x + scroll_dx,
+                                y + eff_dy,
+                                *font_size,
+                                c,
+                                *bold,
+                                *italic,
+                            )?;
+                        }
+                        continue;
+                    }
+
                     let c = apply_layer_opacity(*color, layer_opacity);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
@@ -1717,6 +1808,42 @@ impl DisplayList {
         scroll_dy: i32,
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
+        #[cfg(feature = "web-fonts")]
+        return self.replay_dirty_inner(backend, dirty, scroll_dx, scroll_dy, base_clip, None);
+        #[cfg(not(feature = "web-fonts"))]
+        return self.replay_dirty_inner(backend, dirty, scroll_dx, scroll_dy, base_clip);
+    }
+
+    /// Replay dirty items with a web font renderer for glyph-level rendering.
+    #[cfg(feature = "web-fonts")]
+    pub fn replay_dirty_with_fonts(
+        &self,
+        backend: &mut dyn SdiBackend,
+        dirty: &Rect,
+        scroll_dx: i32,
+        scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
+        renderer: &mut dyn WebFontRenderer,
+    ) -> Result<()> {
+        self.replay_dirty_inner(
+            backend,
+            dirty,
+            scroll_dx,
+            scroll_dy,
+            base_clip,
+            Some(renderer),
+        )
+    }
+
+    fn replay_dirty_inner(
+        &self,
+        backend: &mut dyn SdiBackend,
+        dirty: &Rect,
+        scroll_dx: i32,
+        scroll_dy: i32,
+        base_clip: Option<(i32, i32, u32, u32)>,
+        #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
+    ) -> Result<()> {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
@@ -1861,9 +1988,40 @@ impl DisplayList {
                     color,
                     bold,
                     italic,
+                    #[cfg(feature = "web-fonts")]
+                    web_font_id,
                     ..
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
+
+                    #[cfg(feature = "web-fonts")]
+                    if let Some(font_id) = web_font_id {
+                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
+                        let c = apply_layer_opacity(*color, layer_opacity);
+                        if let Some(ref mut renderer) = web_font_renderer {
+                            renderer.render(
+                                backend,
+                                text,
+                                x + scroll_dx,
+                                y + eff_dy,
+                                *font_size,
+                                c,
+                                *font_id,
+                            )?;
+                        } else {
+                            backend.draw_text_styled(
+                                text,
+                                x + scroll_dx,
+                                y + eff_dy,
+                                *font_size,
+                                c,
+                                *bold,
+                                *italic,
+                            )?;
+                        }
+                        continue;
+                    }
+
                     let c = apply_layer_opacity(*color, layer_opacity);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
@@ -2507,6 +2665,8 @@ mod tests {
             italic: false,
             width: 1,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::PopClip);
         dl.compact();
@@ -2646,6 +2806,8 @@ mod tests {
             italic: false,
             width: 0,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::PopLayer);
 
@@ -2931,6 +3093,8 @@ mod tests {
             italic: false,
             width: 1,
             node_id: None,
+            #[cfg(feature = "web-fonts")]
+            web_font_id: None,
         });
         dl.push(DisplayItem::FillRect {
             x: 10,

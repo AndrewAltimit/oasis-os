@@ -61,7 +61,7 @@ pub(super) fn expand_font(value: &CssValue, important: bool) -> Vec<Declaration>
                             property_id: PropertyId::from_name("font-style"),
                         });
                     },
-                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" => {
+                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui" => {
                         result.push(Declaration {
                             property: "font-family".into(),
                             value: CssValue::Keyword(kw_lower),
@@ -69,7 +69,15 @@ pub(super) fn expand_font(value: &CssValue, important: bool) -> Vec<Declaration>
                             property_id: PropertyId::from_name("font-family"),
                         });
                     },
-                    _ => {},
+                    _ => {
+                        // Treat unrecognized keywords as a named font family.
+                        result.push(Declaration {
+                            property: "font-family".into(),
+                            value: CssValue::Keyword(kw_lower),
+                            important,
+                            property_id: PropertyId::from_name("font-family"),
+                        });
+                    },
                 }
             },
             _ => {},

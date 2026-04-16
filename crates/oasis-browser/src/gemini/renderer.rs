@@ -270,7 +270,7 @@ fn render_gemini_line(
         GeminiLine::Preformatted { lines, .. } => {
             let mut style = ComputedStyle::default();
             style.display = Display::Block;
-            style.font_family = FontFamily::Monospace;
+            style.font_family = FontFamily::monospace();
             style.font_size = theme.font_size - 1.0;
             style.color = theme.text_color;
             style.background_color = theme.pre_background;
@@ -299,7 +299,7 @@ fn render_gemini_line(
             let pre_font_size = theme.font_size - 1.0;
             for (i, code_line) in lines.iter().enumerate() {
                 let mut text_style = ComputedStyle::default();
-                text_style.font_family = FontFamily::Monospace;
+                text_style.font_family = FontFamily::monospace();
                 text_style.font_size = pre_font_size;
                 text_style.color = theme.text_color;
                 let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
@@ -449,7 +449,7 @@ mod tests {
 
         assert_eq!(root.children.len(), 1);
         let pre_block = &root.children[0];
-        assert_eq!(pre_block.style.font_family, FontFamily::Monospace);
+        assert_eq!(pre_block.style.font_family, FontFamily::monospace());
         assert_eq!(pre_block.style.white_space, WhiteSpace::Pre);
         assert_eq!(pre_block.style.background_color, theme.pre_background);
     }

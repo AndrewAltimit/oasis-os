@@ -20,11 +20,14 @@ use super::*;
 /// the same port. Callers that immediately rebind the returned port
 /// should use [`bind_listener_retry`] instead, which re-picks a fresh
 /// port if the race fires.
-fn free_port() -> u16 {
-    let tmp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = tmp.local_addr().unwrap().port();
+///
+/// Returns `None` if the OS cannot allocate an ephemeral port (e.g.
+/// port exhaustion under heavy parallel test load).
+fn free_port() -> Option<u16> {
+    let tmp = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = tmp.local_addr().ok()?.port();
     drop(tmp);
-    port
+    Some(port)
 }
 
 /// Start a `RemoteListener` on a free port, retrying on bind failure.
@@ -42,12 +45,17 @@ fn bind_listener_retry(
 ) -> (u16, RemoteListener) {
     let mut last_err = None;
     for _ in 0..20 {
-        let port = free_port();
+        let Some(port) = free_port() else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        };
         let mut listener = RemoteListener::new(config_template(port));
         match listener.start(backend) {
             Ok(()) => return (port, listener),
             Err(e) => last_err = Some(e),
         }
+        // Brief pause before retry to let ephemeral ports recycle.
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!(
         "bind_listener_retry: failed to bind a free port after 20 attempts: {:?}",
@@ -64,11 +72,13 @@ fn listen_and_accept() {
     let port = {
         let mut bound = None;
         for _ in 0..20 {
-            let p = free_port();
-            if backend.listen(p).is_ok() {
-                bound = Some(p);
-                break;
+            if let Some(p) = free_port() {
+                if backend.listen(p).is_ok() {
+                    bound = Some(p);
+                    break;
+                }
             }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         bound.expect("failed to bind a free port after 20 attempts")
     };
