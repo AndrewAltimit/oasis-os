@@ -25,7 +25,7 @@
 //! | Loading text          | 5.5       | opacity 0 → 1    |
 //! | End                  | 6.5       | fade to dashboard |
 
-use oasis_core::backend::{Color, InputBackend, SdiBackend};
+use oasis_core::backend::{Color, InputBackend, SdiBackend, TextureId};
 use oasis_core::error::Result;
 
 /// Total duration of the boot splash in seconds.
@@ -33,6 +33,259 @@ const SPLASH_DURATION_S: f32 = 6.5;
 
 /// Minimum frame time to cap at ~60 FPS.
 const MIN_FRAME_MS: u128 = 16;
+
+/// Pre-computed GPU textures for splash effects.
+struct SplashTextures {
+    /// Full-screen CRT vignette (dark edges, clear center).
+    vignette: Option<TextureId>,
+    /// Blurred logo strokes for glow effect.
+    logo_glow: Option<TextureId>,
+    logo_glow_w: u32,
+    logo_glow_h: u32,
+    /// Screen-space position of the glow texture.
+    logo_glow_x: i32,
+    logo_glow_y: i32,
+}
+
+impl SplashTextures {
+    /// Pre-compute and upload effect textures.
+    fn create(backend: &mut dyn SdiBackend, screen_w: u32, screen_h: u32, scale: f32) -> Self {
+        let vignette = generate_vignette_texture(backend, screen_w, screen_h);
+        let (logo_glow, gw, gh, gx, gy) =
+            generate_logo_glow_texture(backend, screen_w, screen_h, scale);
+        SplashTextures {
+            vignette,
+            logo_glow,
+            logo_glow_w: gw,
+            logo_glow_h: gh,
+            logo_glow_x: gx,
+            logo_glow_y: gy,
+        }
+    }
+
+    /// Release GPU textures.
+    fn destroy(&self, backend: &mut dyn SdiBackend) {
+        if let Some(tex) = self.vignette {
+            let _ = backend.destroy_texture(tex);
+        }
+        if let Some(tex) = self.logo_glow {
+            let _ = backend.destroy_texture(tex);
+        }
+    }
+}
+
+/// Generate a full-screen vignette texture with per-pixel radial alpha.
+///
+/// Matches SVG: `<radialGradient id="vignette" cx="50%" cy="50%" r="75%">`
+/// with stops at 50% (transparent) → 100% (black at 0.85 opacity).
+fn generate_vignette_texture(
+    backend: &mut dyn SdiBackend,
+    screen_w: u32,
+    screen_h: u32,
+) -> Option<TextureId> {
+    // Render at half resolution to save memory + upload time.
+    let w = screen_w / 2;
+    let h = screen_h / 2;
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let max_r = (cx * cx + cy * cy).sqrt();
+    let inner_frac = 0.50; // 50% stop — fully transparent
+    let outer_frac = 1.00; // 100% stop — 0.85 black
+    let inner_r = max_r * inner_frac;
+
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let alpha = if dist <= inner_r {
+                0.0
+            } else {
+                let t = ((dist - inner_r) / (max_r * outer_frac - inner_r)).clamp(0.0, 1.0);
+                // Smooth ease-in for natural vignette falloff.
+                t * t * 0.85
+            };
+            let idx = ((y * w + x) * 4) as usize;
+            pixels[idx] = 0; // R
+            pixels[idx + 1] = 0; // G
+            pixels[idx + 2] = 0; // B
+            pixels[idx + 3] = (alpha * 255.0) as u8; // A
+        }
+    }
+    backend.load_texture(w, h, &pixels).ok()
+}
+
+/// Generate a blurred logo glow texture.
+///
+/// Renders the logo letter strokes into a buffer, applies 3-pass box
+/// blur (approximating Gaussian stdDeviation=4), and uploads as a
+/// texture with alpha for additive-style glow compositing.
+fn generate_logo_glow_texture(
+    backend: &mut dyn SdiBackend,
+    screen_w: u32,
+    screen_h: u32,
+    scale: f32,
+) -> (Option<TextureId>, u32, u32, i32, i32) {
+    let sx = screen_w as f32 / 1280.0;
+    let sy = screen_h as f32 / 720.0;
+
+    // Logo bounding box in SVG coords: x=265..1015, y=280..455.
+    // Add padding for blur spread.
+    let pad = 20.0 * scale;
+    let logo_x = (265.0 * sx - pad) as i32;
+    let logo_y = (280.0 * sy - pad) as i32;
+    let logo_w = ((1015.0 - 265.0) * sx + pad * 2.0) as u32;
+    let logo_h = ((455.0 - 280.0) * sy + pad * 2.0) as u32;
+
+    if logo_w == 0 || logo_h == 0 {
+        return (None, 0, 0, 0, 0);
+    }
+
+    // Render logo strokes into a local buffer.
+    let mut buf = vec![0u8; (logo_w * logo_h * 4) as usize];
+    let sw = (7.0 * scale).max(2.0) as i32;
+
+    // Helper: draw a thick line into the buffer.
+    let mut draw_line = |x1: f32, y1: f32, x2: f32, y2: f32| {
+        let px1 = (x1 * sx) as i32 - logo_x;
+        let py1 = (y1 * sy) as i32 - logo_y;
+        let px2 = (x2 * sx) as i32 - logo_x;
+        let py2 = (y2 * sy) as i32 - logo_y;
+        let dx = (px2 - px1).abs();
+        let dy = (py2 - py1).abs();
+        let steps = dx.max(dy).max(1);
+        for s in 0..=steps {
+            let t = s as f32 / steps as f32;
+            let px = px1 + ((px2 - px1) as f32 * t) as i32;
+            let py = py1 + ((py2 - py1) as f32 * t) as i32;
+            for oy in 0..sw {
+                for ox in 0..sw {
+                    let bx = (px + ox) as u32;
+                    let by = (py + oy) as u32;
+                    if bx < logo_w && by < logo_h {
+                        let idx = ((by * logo_w + bx) * 4) as usize;
+                        buf[idx] = 255;
+                        buf[idx + 1] = 255;
+                        buf[idx + 2] = 255;
+                        buf[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+    };
+
+    // Render all logo strokes into buffer (same coordinates as paint_logo).
+    // Left bracket
+    draw_line(315.0, 290.0, 275.0, 290.0);
+    draw_line(275.0, 290.0, 275.0, 445.0);
+    draw_line(275.0, 445.0, 420.0, 445.0);
+    // A
+    draw_line(355.0, 410.0, 395.0, 290.0);
+    draw_line(395.0, 290.0, 435.0, 410.0);
+    // L
+    draw_line(465.0, 290.0, 465.0, 410.0);
+    draw_line(465.0, 410.0, 515.0, 410.0);
+    // T (first)
+    draw_line(595.0, 290.0, 655.0, 290.0);
+    draw_line(625.0, 290.0, 625.0, 410.0);
+    // I (first)
+    draw_line(685.0, 290.0, 685.0, 410.0);
+    // M
+    draw_line(715.0, 410.0, 715.0, 290.0);
+    draw_line(715.0, 290.0, 760.0, 355.0);
+    draw_line(760.0, 355.0, 805.0, 290.0);
+    draw_line(805.0, 290.0, 805.0, 410.0);
+    // I (second)
+    draw_line(835.0, 290.0, 835.0, 410.0);
+    // T (second)
+    draw_line(865.0, 290.0, 925.0, 290.0);
+    draw_line(895.0, 290.0, 895.0, 410.0);
+    // Right bracket
+    draw_line(965.0, 290.0, 1005.0, 290.0);
+    draw_line(1005.0, 290.0, 1005.0, 445.0);
+    draw_line(1005.0, 445.0, 860.0, 445.0);
+
+    // Aperture circle at center.
+    let acx = (555.0 * sx) as i32 - logo_x;
+    let acy = (350.0 * sy) as i32 - logo_y;
+    let ar = (25.0 * scale) as i32;
+    for dy in -ar..=ar {
+        for dx in -ar..=ar {
+            if dx * dx + dy * dy <= ar * ar {
+                let bx = (acx + dx) as u32;
+                let by = (acy + dy) as u32;
+                if bx < logo_w && by < logo_h {
+                    let idx = ((by * logo_w + bx) * 4) as usize;
+                    buf[idx] = 255;
+                    buf[idx + 1] = 255;
+                    buf[idx + 2] = 255;
+                    buf[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    // Apply 3-pass separable box blur (approximates Gaussian stdDeviation≈4).
+    let blur_radius = (4.0 * scale).max(2.0) as i32;
+    box_blur_rgba(&mut buf, logo_w, logo_h, blur_radius);
+    box_blur_rgba(&mut buf, logo_w, logo_h, blur_radius);
+    box_blur_rgba(&mut buf, logo_w, logo_h, blur_radius);
+
+    let tex = backend.load_texture(logo_w, logo_h, &buf).ok();
+    (tex, logo_w, logo_h, logo_x, logo_y)
+}
+
+/// 1-pass separable box blur on an RGBA buffer (horizontal then vertical).
+fn box_blur_rgba(buf: &mut [u8], w: u32, h: u32, half: i32) {
+    let mut tmp = buf.to_vec();
+    let wi = w as i32;
+    let hi = h as i32;
+
+    // Horizontal pass: buf → tmp.
+    for y in 0..hi {
+        for x in 0..wi {
+            let (mut r, mut g, mut b, mut a) = (0u32, 0u32, 0u32, 0u32);
+            let mut n = 0u32;
+            for dx in -half..=half {
+                let sx = (x + dx).clamp(0, wi - 1) as usize;
+                let off = (y as usize) * (w as usize) * 4 + sx * 4;
+                r += buf[off] as u32;
+                g += buf[off + 1] as u32;
+                b += buf[off + 2] as u32;
+                a += buf[off + 3] as u32;
+                n += 1;
+            }
+            let off = (y as usize) * (w as usize) * 4 + (x as usize) * 4;
+            tmp[off] = (r / n) as u8;
+            tmp[off + 1] = (g / n) as u8;
+            tmp[off + 2] = (b / n) as u8;
+            tmp[off + 3] = (a / n) as u8;
+        }
+    }
+
+    // Vertical pass: tmp → buf.
+    for x in 0..wi {
+        for y in 0..hi {
+            let (mut r, mut g, mut b, mut a) = (0u32, 0u32, 0u32, 0u32);
+            let mut n = 0u32;
+            for dy in -half..=half {
+                let sy = (y + dy).clamp(0, hi - 1) as usize;
+                let off = sy * (w as usize) * 4 + (x as usize) * 4;
+                r += tmp[off] as u32;
+                g += tmp[off + 1] as u32;
+                b += tmp[off + 2] as u32;
+                a += tmp[off + 3] as u32;
+                n += 1;
+            }
+            let off = (y as usize) * (w as usize) * 4 + (x as usize) * 4;
+            buf[off] = (r / n) as u8;
+            buf[off + 1] = (g / n) as u8;
+            buf[off + 2] = (b / n) as u8;
+            buf[off + 3] = (a / n) as u8;
+        }
+    }
+}
 
 /// Run the boot splash animation, blocking until complete.
 ///
@@ -50,6 +303,9 @@ pub fn run_boot_splash(
     let sx = screen_w as f32 / 1280.0;
     let sy = screen_h as f32 / 720.0;
     let scale = sx.min(sy);
+
+    // Pre-compute GPU textures for vignette and logo glow.
+    let textures = SplashTextures::create(backend, screen_w, screen_h, scale);
 
     loop {
         let frame_start = std::time::Instant::now();
@@ -98,7 +354,9 @@ pub fn run_boot_splash(
 
         // Phase 2: Splash screen (3.5s+)
         if elapsed >= 3.5 {
-            paint_splash_screen(backend, elapsed, screen_w, screen_h, sx, sy, scale)?;
+            paint_splash_screen(
+                backend, elapsed, screen_w, screen_h, sx, sy, scale, &textures,
+            )?;
         }
 
         backend.swap_buffers()?;
@@ -124,6 +382,9 @@ pub fn run_boot_splash(
     }
     backend.clear(Color::rgb(0, 0, 0))?;
     backend.swap_buffers()?;
+
+    // Release GPU textures.
+    textures.destroy(backend);
 
     Ok(())
 }
@@ -188,6 +449,7 @@ fn paint_splash_screen(
     sx: f32,
     sy: f32,
     scale: f32,
+    textures: &SplashTextures,
 ) -> Result<()> {
     let splash_t = elapsed - 3.5;
     let splash_opacity = (splash_t / 0.01).clamp(0.0, 1.0); // instant reveal
@@ -269,30 +531,26 @@ fn paint_splash_screen(
     let line_h = (1.5 * scale).max(1.0) as u32;
     backend.fill_rect(0, horizon_y, screen_w, line_h, line_c)?;
 
-    // Logo group (appears at 4.0s with scale-in and glow).
+    // Logo group (appears at 4.0s with glow).
     if elapsed >= 4.0 {
         let logo_t = (elapsed - 4.0) / 0.6;
         let logo_opacity = logo_t.clamp(0.0, 1.0) * splash_opacity;
-        // Glow layer behind the logo (approximates feGaussianBlur stdDeviation=4).
-        // Render at lower opacity with thicker strokes for soft bloom.
-        let glow_opacity = logo_opacity * 0.4;
-        paint_logo(
-            backend,
-            sx,
-            sy,
-            scale,
-            glow_opacity,
-            (14.0 * scale).max(4.0) as u32,
-        )?;
-        // Crisp logo on top.
-        paint_logo(
-            backend,
-            sx,
-            sy,
-            scale,
-            logo_opacity,
-            (7.0 * scale).max(2.0) as u32,
-        )?;
+
+        // Pre-computed blurred glow texture behind the sharp strokes.
+        if let Some(glow_tex) = textures.logo_glow {
+            let _ = backend.blit_tinted(
+                glow_tex,
+                textures.logo_glow_x,
+                textures.logo_glow_y,
+                textures.logo_glow_w,
+                textures.logo_glow_h,
+                Color::rgba(255, 255, 255, (logo_opacity * 255.0) as u8),
+            );
+        }
+
+        // Crisp logo strokes on top.
+        let sw = (7.0 * scale).max(2.0) as u32;
+        paint_logo(backend, sx, sy, scale, logo_opacity, sw)?;
     }
 
     // Subtitle "OPERATING SYSTEMS" (appears at 4.8s).
@@ -350,9 +608,11 @@ fn paint_splash_screen(
     // Scanline overlay (subtle).
     paint_scanlines(backend, screen_w, screen_h, sy, splash_opacity * 0.35)?;
 
-    // CRT vignette overlay — dark edges, clear center.
-    // Matches <radialGradient id="vignette" r="75%"> with stop-opacity 0→0.85.
-    paint_vignette(backend, screen_w, screen_h)?;
+    // CRT vignette overlay — pre-computed per-pixel radial texture.
+    if let Some(vig_tex) = textures.vignette {
+        // Blit at 2x size since vignette was rendered at half resolution.
+        let _ = backend.blit(vig_tex, 0, 0, screen_w, screen_h);
+    }
 
     Ok(())
 }
@@ -603,65 +863,6 @@ fn paint_scanlines(
     while y < screen_h {
         backend.fill_rect(0, y as i32, screen_w, line_h, c)?;
         y += step;
-    }
-    Ok(())
-}
-
-/// CRT vignette: dark shadow around screen edges, clear in center.
-///
-/// Matches `<radialGradient id="vignette" cx="50%" cy="50%" r="75%">`
-/// with stops at 50% (transparent) and 100% (0.85 black).
-fn paint_vignette(backend: &mut dyn SdiBackend, screen_w: u32, screen_h: u32) -> Result<()> {
-    let cx = screen_w as f32 / 2.0;
-    let cy = screen_h as f32 / 2.0;
-    let max_r = (cx * cx + cy * cy).sqrt(); // corner distance
-    let inner_r = max_r * 0.5; // 50% stop = fully transparent
-    let outer_r = max_r; // 100% stop = 0.85 opacity black
-
-    // Render as concentric rectangular bands from outside-in.
-    // Each band's opacity is based on its distance from center.
-    let bands = 24u32;
-    for i in 0..bands {
-        let t = 1.0 - (i as f32 / bands as f32); // 1.0 = outermost
-        let dist = inner_r + (outer_r - inner_r) * t;
-        // Only draw outside the inner radius (50% stop).
-        if dist < inner_r {
-            continue;
-        }
-        let alpha_t = ((dist - inner_r) / (outer_r - inner_r)).clamp(0.0, 1.0);
-        let alpha = (alpha_t * 0.85 * 255.0) as u8;
-        if alpha == 0 {
-            continue;
-        }
-
-        let band_w = (dist / max_r * cx) as i32;
-        let band_h = (dist / max_r * cy) as i32;
-        let bx = cx as i32 - band_w;
-        let by = cy as i32 - band_h;
-        let bw = (band_w * 2) as u32;
-        let _bh = (band_h * 2) as u32;
-
-        // Draw 4 edge bands (top, bottom, left, right) rather than
-        // a full-screen fill — the center stays untouched.
-        let next_t = 1.0 - ((i as f32 + 1.0) / bands as f32);
-        let next_dist = inner_r + (outer_r - inner_r) * next_t;
-        let next_w = (next_dist / max_r * cx) as i32;
-        let next_h = (next_dist / max_r * cy) as i32;
-        let nbx = cx as i32 - next_w;
-        let nby = cy as i32 - next_h;
-
-        let c = Color::rgba(0, 0, 0, alpha);
-        let thickness_x = (nbx - bx).max(1) as u32;
-        let thickness_y = (nby - by).max(1) as u32;
-
-        // Top band.
-        backend.fill_rect(bx, by, bw, thickness_y, c)?;
-        // Bottom band.
-        backend.fill_rect(bx, cy as i32 + next_h, bw, thickness_y, c)?;
-        // Left band (between top and bottom).
-        backend.fill_rect(bx, nby, thickness_x, (next_h * 2) as u32, c)?;
-        // Right band.
-        backend.fill_rect(cx as i32 + next_w, nby, thickness_x, (next_h * 2) as u32, c)?;
     }
     Ok(())
 }
