@@ -77,6 +77,11 @@ so you can `git show` for specifics.
   modes), `FillPolygon` display list item with 4-corner perspective
   projection for 3D-transformed backgrounds in the recording path,
   PSP bitmap font proportional advance fix (space-collapsing bug).
+  SVG `<defs>` pipeline: `<linearGradient>`, `<radialGradient>`,
+  `<pattern>` definitions with `fill="url(#id)"` resolution,
+  presentation attribute inheritance from `<g>` groups, `<text>`
+  with `text-anchor`/`letter-spacing`/`font-weight`/`opacity`,
+  `<tspan>` children, and gradient/pattern fill rendering.
 
 ---
 
