@@ -268,6 +268,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                     let sw = measure_space(style.font_size, style.word_spacing, measurer);
                     *width += sw;
                 }
+                // Remove the penultimate line if it's now empty to avoid
+                // a phantom blank line in vertical layout.
+                if lines[last_idx - 1].fragments.is_empty() {
+                    lines.remove(last_idx - 1);
+                }
+                let last_idx = lines.len() - 1;
                 lines[last_idx].fragments.insert(0, frag);
             }
         }
