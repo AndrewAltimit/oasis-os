@@ -45,6 +45,11 @@ struct SplashTextures {
     /// Screen-space position of the glow texture.
     logo_glow_x: i32,
     logo_glow_y: i32,
+    /// Blurred horizon line for bloom effect.
+    horizon_glow: Option<TextureId>,
+    horizon_glow_w: u32,
+    horizon_glow_h: u32,
+    horizon_glow_y: i32,
 }
 
 impl SplashTextures {
@@ -53,6 +58,8 @@ impl SplashTextures {
         let vignette = generate_vignette_texture(backend, screen_w, screen_h);
         let (logo_glow, gw, gh, gx, gy) =
             generate_logo_glow_texture(backend, screen_w, screen_h, scale);
+        let (horizon_glow, hw, hh, hy) =
+            generate_horizon_glow_texture(backend, screen_w, screen_h, scale);
         SplashTextures {
             vignette,
             logo_glow,
@@ -60,6 +67,10 @@ impl SplashTextures {
             logo_glow_h: gh,
             logo_glow_x: gx,
             logo_glow_y: gy,
+            horizon_glow,
+            horizon_glow_w: hw,
+            horizon_glow_h: hh,
+            horizon_glow_y: hy,
         }
     }
 
@@ -69,6 +80,9 @@ impl SplashTextures {
             let _ = backend.destroy_texture(tex);
         }
         if let Some(tex) = self.logo_glow {
+            let _ = backend.destroy_texture(tex);
+        }
+        if let Some(tex) = self.horizon_glow {
             let _ = backend.destroy_texture(tex);
         }
     }
@@ -234,6 +248,67 @@ fn generate_logo_glow_texture(
 
     let tex = backend.load_texture(logo_w, logo_h, &buf).ok();
     (tex, logo_w, logo_h, logo_x, logo_y)
+}
+
+/// Generate a blurred horizon line texture for bloom effect.
+///
+/// Renders a bright white line at the center of the texture, applies
+/// two blur passes (stdDeviation=8 and stdDeviation=2 from heavyGlow
+/// filter), and merges the results.
+fn generate_horizon_glow_texture(
+    backend: &mut dyn SdiBackend,
+    screen_w: u32,
+    _screen_h: u32,
+    scale: f32,
+) -> (Option<TextureId>, u32, u32, i32) {
+    let sy = _screen_h as f32 / 720.0;
+    let w = screen_w;
+    let h = (64.0 * scale).max(16.0) as u32; // tall enough for blur spread
+    let center_y = h / 2;
+    let horizon_screen_y = (500.0 * sy) as i32 - center_y as i32;
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+
+    // Draw a bright white line at the center (4px wide for the source).
+    let line_hw = (4.0 * scale).max(2.0) as u32;
+    for x in 0..w {
+        for dy in 0..line_hw {
+            let y = center_y + dy - line_hw / 2;
+            if y < h {
+                let idx = ((y * w + x) * 4) as usize;
+                buf[idx] = 255;
+                buf[idx + 1] = 255;
+                buf[idx + 2] = 255;
+                buf[idx + 3] = 255;
+            }
+        }
+    }
+
+    // Blur pass 1: stdDeviation=8 (heavyGlow's first feGaussianBlur).
+    let mut blur1 = buf.clone();
+    let r1 = (8.0 * scale).max(2.0) as i32;
+    box_blur_rgba(&mut blur1, w, h, r1);
+    box_blur_rgba(&mut blur1, w, h, r1);
+    box_blur_rgba(&mut blur1, w, h, r1);
+
+    // Blur pass 2: stdDeviation=2 (heavyGlow's second feGaussianBlur).
+    let mut blur2 = buf.clone();
+    let r2 = (2.0 * scale).max(1.0) as i32;
+    box_blur_rgba(&mut blur2, w, h, r2);
+    box_blur_rgba(&mut blur2, w, h, r2);
+    box_blur_rgba(&mut blur2, w, h, r2);
+
+    // feMerge: blur1 + blur2 + source (additive alpha blending).
+    for i in (0..buf.len()).step_by(4) {
+        let a = (blur1[i + 3] as u16 + blur2[i + 3] as u16 + buf[i + 3] as u16).min(255) as u8;
+        buf[i] = 255; // white
+        buf[i + 1] = 255;
+        buf[i + 2] = 255;
+        buf[i + 3] = a;
+    }
+
+    let tex = backend.load_texture(w, h, &buf).ok();
+    (tex, w, h, horizon_screen_y)
 }
 
 /// 1-pass separable box blur on an RGBA buffer (horizontal then vertical).
@@ -416,10 +491,25 @@ fn paint_bios_screen(
     let x = (40.0 * sx) as i32;
     let y_positions = [60.0, 95.0, 150.0, 185.0, 220.0, 275.0, 310.0];
 
+    let ls = (1.0 * scale).round() as i32; // SVG: letter-spacing="1"
     for (i, (text, delay)) in lines.iter().enumerate() {
         if elapsed >= *delay {
+            // Each line fades in over 100ms (SVG: animation 0.1s forwards).
+            let line_alpha = ((elapsed - *delay) / 0.1).clamp(0.0, 1.0);
+            let lc = apply_alpha(c, line_alpha);
             let py = (y_positions[i] * sy) as i32;
-            backend.draw_text(text, x, py, fs, c)?;
+            if ls > 0 {
+                let mut cx = x;
+                for ch in text.chars() {
+                    let mut buf = [0u8; 4];
+                    let s = ch.encode_utf8(&mut buf);
+                    backend.draw_text(s, cx, py, fs, lc)?;
+                    let cw = backend.measure_text(s, fs) as i32;
+                    cx += cw + ls;
+                }
+            } else {
+                backend.draw_text(text, x, py, fs, lc)?;
+            }
         }
     }
 
@@ -485,72 +575,76 @@ fn paint_splash_screen(
         splash_opacity,
     )?;
 
-    // Horizon heavy glow (layered bloom behind the crisp line).
-    // Outer soft glow — wide, dim.
+    // Horizon glow + line (SVG uses heavyGlow filter: stdDeviation 8 + 2).
     let horizon_y = (500.0 * sy) as i32;
     if elapsed >= 3.8 {
         let pulse_t = elapsed - 3.8;
         let glow_alpha = 0.6 + 0.4 * (pulse_t * std::f32::consts::PI / 4.0).sin();
-
-        // Outermost bloom layer (8px std-dev equivalent).
-        let bloom_h = (16.0 * scale).max(4.0) as u32;
-        let bloom_c = apply_alpha(
-            Color::rgb(255, 255, 255),
-            0.15 * glow_alpha * splash_opacity,
-        );
-        backend.fill_rect(
-            0,
-            horizon_y - bloom_h as i32,
-            screen_w,
-            bloom_h * 2,
-            bloom_c,
-        )?;
-
-        // Mid bloom layer (4px std-dev equivalent).
-        let mid_h = (8.0 * scale).max(2.0) as u32;
-        let mid_c = apply_alpha(
-            Color::rgb(255, 255, 255),
-            0.25 * glow_alpha * splash_opacity,
-        );
-        backend.fill_rect(0, horizon_y - mid_h as i32, screen_w, mid_h * 2, mid_c)?;
-
-        // Inner bright glow.
-        let inner_h = (3.0 * scale).max(1.0) as u32;
-        let inner_c = apply_alpha(Color::rgb(255, 255, 255), 0.5 * glow_alpha * splash_opacity);
-        backend.fill_rect(
-            0,
-            horizon_y - inner_h as i32,
-            screen_w,
-            inner_h * 2,
-            inner_c,
-        )?;
+        // Pre-computed blurred horizon texture.
+        if let Some(h_tex) = textures.horizon_glow {
+            let _ = backend.blit_tinted(
+                h_tex,
+                0,
+                textures.horizon_glow_y,
+                textures.horizon_glow_w,
+                textures.horizon_glow_h,
+                Color::rgba(255, 255, 255, (glow_alpha * splash_opacity * 255.0) as u8),
+            );
+        }
     }
-
     // Crisp horizon line (1.5px stroke-width in SVG).
     let line_c = apply_alpha(Color::rgb(255, 255, 255), splash_opacity);
     let line_h = (1.5 * scale).max(1.0) as u32;
     backend.fill_rect(0, horizon_y, screen_w, line_h, line_c)?;
 
-    // Logo group (appears at 4.0s with glow).
+    // Logo group (appears at 4.0s with scale + brightness entrance).
+    // SVG: animation logoTurnOn 0.6s 4.0s cubic-bezier(0.2,0.9,0.3,1.1)
+    //   0%: opacity 0, scale(1.05), brightness(2) blur(4px)
+    //  50%: opacity 1, brightness(1.5) blur(1px)
+    // 100%: opacity 1, scale(1), brightness(1) blur(0)
     if elapsed >= 4.0 {
-        let logo_t = (elapsed - 4.0) / 0.6;
-        let logo_opacity = logo_t.clamp(0.0, 1.0) * splash_opacity;
+        let raw_t = ((elapsed - 4.0) / 0.6).clamp(0.0, 1.0);
+        // Approximate cubic-bezier(0.2, 0.9, 0.3, 1.1) — overshoots slightly.
+        let t = cubic_bezier_approx(raw_t, 0.2, 0.9, 0.3, 1.1);
+        let logo_opacity = t.clamp(0.0, 1.0) * splash_opacity;
+
+        // Scale: 1.05 → 1.0 (interpolated, slight overshoot from bezier).
+        let logo_scale = 1.05 + (1.0 - 1.05) * t;
+
+        // Brightness: 2.0 → 1.0 (boost toward white).
+        let brightness = 2.0 + (1.0 - 2.0) * t.clamp(0.0, 1.0);
 
         // Pre-computed blurred glow texture behind the sharp strokes.
+        // Scale the glow blit to match the logo scale.
         if let Some(glow_tex) = textures.logo_glow {
+            let gw = (textures.logo_glow_w as f32 * logo_scale) as u32;
+            let gh = (textures.logo_glow_h as f32 * logo_scale) as u32;
+            let gcx = textures.logo_glow_x + textures.logo_glow_w as i32 / 2;
+            let gcy = textures.logo_glow_y + textures.logo_glow_h as i32 / 2;
+            let gx = gcx - gw as i32 / 2;
+            let gy = gcy - gh as i32 / 2;
             let _ = backend.blit_tinted(
                 glow_tex,
-                textures.logo_glow_x,
-                textures.logo_glow_y,
-                textures.logo_glow_w,
-                textures.logo_glow_h,
+                gx,
+                gy,
+                gw,
+                gh,
                 Color::rgba(255, 255, 255, (logo_opacity * 255.0) as u8),
             );
         }
 
-        // Crisp logo strokes on top.
+        // Crisp logo strokes with scale + brightness.
         let sw = (7.0 * scale).max(2.0) as u32;
-        paint_logo(backend, sx, sy, scale, logo_opacity, sw)?;
+        paint_logo_scaled(
+            backend,
+            sx,
+            sy,
+            scale,
+            logo_opacity,
+            sw,
+            logo_scale,
+            brightness,
+        )?;
     }
 
     // Subtitle "OPERATING SYSTEMS" (appears at 4.8s).
@@ -621,60 +715,100 @@ fn paint_splash_screen(
 // Logo rendering
 // -----------------------------------------------------------------------
 
-fn paint_logo(
+/// Render the logo with scale-from-center and brightness boost.
+///
+/// `logo_scale`: 1.0 = normal, 1.05 = 5% larger from center.
+/// `brightness`: 1.0 = normal white, 2.0 = double brightness (clamped).
+#[allow(clippy::too_many_arguments)]
+fn paint_logo_scaled(
     backend: &mut dyn SdiBackend,
     sx: f32,
     sy: f32,
     scale: f32,
     opacity: f32,
     sw: u32,
+    logo_scale: f32,
+    brightness: f32,
 ) -> Result<()> {
-    let c = apply_alpha(Color::rgb(255, 255, 255), opacity);
+    // Logo center in SVG coords: roughly (640, 367).
+    let center_x = 640.0;
+    let center_y = 367.0;
 
-    // Left bracket: [
-    draw_line_thick(backend, 315.0, 290.0, 275.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 275.0, 290.0, 275.0, 445.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 275.0, 445.0, 420.0, 445.0, sx, sy, sw, c)?;
+    // Scale-adjusted sx/sy: scale all coords from the logo center.
+    let adj_sx = sx * logo_scale;
+    let adj_sy = sy * logo_scale;
+    // Offset to keep the center fixed after scaling.
+    let offset_x = (center_x * sx) - (center_x * adj_sx);
+    let offset_y = (center_y * sy) - (center_y * adj_sy);
 
-    // A (inverted V)
-    draw_line_thick(backend, 355.0, 410.0, 395.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 395.0, 290.0, 435.0, 410.0, sx, sy, sw, c)?;
+    // Apply brightness: boost white toward (255,255,255) beyond 1.0.
+    // At brightness=2.0 the color is still white (clamped), but opacity
+    // effectively increases since the source is already white. To simulate
+    // brightness > 1 on a white logo against dark background, we don't
+    // need to change the color — the visual effect is from the glow layer
+    // being more prominent. We do slightly increase opacity to simulate.
+    let bright_opacity = (opacity * brightness.min(2.0)).clamp(0.0, 1.0);
+    let c = apply_alpha(Color::rgb(255, 255, 255), bright_opacity);
 
+    // Helper: draw line with adjusted scale.
+    let draw = |b: &mut dyn SdiBackend, x1: f32, y1: f32, x2: f32, y2: f32| -> Result<()> {
+        let px1 = (x1 * adj_sx + offset_x) as i32;
+        let py1 = (y1 * adj_sy + offset_y) as i32;
+        let px2 = (x2 * adj_sx + offset_x) as i32;
+        let py2 = (y2 * adj_sy + offset_y) as i32;
+        let dx = (px2 - px1).abs();
+        let dy = (py2 - py1).abs();
+        if dx == 0 || dy == 0 {
+            let lx = px1.min(px2);
+            let ly = py1.min(py2);
+            let lw = (dx as u32).max(sw);
+            let lh = (dy as u32).max(sw);
+            b.fill_rect(lx, ly, lw, lh, c)?;
+        } else {
+            let steps = dx.max(dy);
+            for s in 0..=steps {
+                let t = s as f32 / steps.max(1) as f32;
+                let px = px1 + ((px2 - px1) as f32 * t) as i32;
+                let py = py1 + ((py2 - py1) as f32 * t) as i32;
+                b.fill_rect(px, py, sw, sw, c)?;
+            }
+        }
+        Ok(())
+    };
+
+    // Left bracket
+    draw(backend, 315.0, 290.0, 275.0, 290.0)?;
+    draw(backend, 275.0, 290.0, 275.0, 445.0)?;
+    draw(backend, 275.0, 445.0, 420.0, 445.0)?;
+    // A
+    draw(backend, 355.0, 410.0, 395.0, 290.0)?;
+    draw(backend, 395.0, 290.0, 435.0, 410.0)?;
     // L
-    draw_line_thick(backend, 465.0, 290.0, 465.0, 410.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 465.0, 410.0, 515.0, 410.0, sx, sy, sw, c)?;
-
-    // Aperture O — hexagonal camera shutter icon.
-    // SVG: <polygon points="0,-25 21.65,-12.5 21.65,12.5 0,25 -21.65,12.5 -21.65,-12.5">
-    // Centered at (555, 350) with mask cutting shutter lines.
-    let ocx = 555.0 * sx;
-    let ocy = 350.0 * sy;
-    paint_aperture_icon(backend, ocx, ocy, scale, c, opacity)?;
-
-    // T (first)
-    draw_line_thick(backend, 595.0, 290.0, 655.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 625.0, 290.0, 625.0, 410.0, sx, sy, sw, c)?;
-
-    // I (first)
-    draw_line_thick(backend, 685.0, 290.0, 685.0, 410.0, sx, sy, sw, c)?;
-
+    draw(backend, 465.0, 290.0, 465.0, 410.0)?;
+    draw(backend, 465.0, 410.0, 515.0, 410.0)?;
+    // Aperture
+    let ocx = 555.0 * adj_sx + offset_x;
+    let ocy = 350.0 * adj_sy + offset_y;
+    paint_aperture_icon(backend, ocx, ocy, scale * logo_scale, c, bright_opacity)?;
+    // T
+    draw(backend, 595.0, 290.0, 655.0, 290.0)?;
+    draw(backend, 625.0, 290.0, 625.0, 410.0)?;
+    // I
+    draw(backend, 685.0, 290.0, 685.0, 410.0)?;
     // M
-    draw_line_thick(backend, 715.0, 410.0, 715.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 715.0, 290.0, 760.0, 355.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 760.0, 355.0, 805.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 805.0, 290.0, 805.0, 410.0, sx, sy, sw, c)?;
-
-    // I (second)
-    draw_line_thick(backend, 835.0, 290.0, 835.0, 410.0, sx, sy, sw, c)?;
-
-    // T (second)
-    draw_line_thick(backend, 865.0, 290.0, 925.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 895.0, 290.0, 895.0, 410.0, sx, sy, sw, c)?;
-
-    // Right bracket: ]
-    draw_line_thick(backend, 965.0, 290.0, 1005.0, 290.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 1005.0, 290.0, 1005.0, 445.0, sx, sy, sw, c)?;
-    draw_line_thick(backend, 1005.0, 445.0, 860.0, 445.0, sx, sy, sw, c)?;
+    draw(backend, 715.0, 410.0, 715.0, 290.0)?;
+    draw(backend, 715.0, 290.0, 760.0, 355.0)?;
+    draw(backend, 760.0, 355.0, 805.0, 290.0)?;
+    draw(backend, 805.0, 290.0, 805.0, 410.0)?;
+    // I
+    draw(backend, 835.0, 290.0, 835.0, 410.0)?;
+    // T
+    draw(backend, 865.0, 290.0, 925.0, 290.0)?;
+    draw(backend, 895.0, 290.0, 895.0, 410.0)?;
+    // Right bracket
+    draw(backend, 965.0, 290.0, 1005.0, 290.0)?;
+    draw(backend, 1005.0, 290.0, 1005.0, 445.0)?;
+    draw(backend, 1005.0, 445.0, 860.0, 445.0)?;
 
     Ok(())
 }
@@ -740,6 +874,20 @@ fn paint_aperture_icon(
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
+
+/// Approximate a cubic-bezier timing function.
+///
+/// Uses a simple polynomial approximation for the common case where
+/// P1 and P2 control the easing shape. Exact cubic-bezier evaluation
+/// requires iterative root-finding (Newton's method on the X curve);
+/// this approximation uses direct evaluation of the parametric curve
+/// at `t` which is close enough for animation purposes.
+fn cubic_bezier_approx(t: f32, _x1: f32, y1: f32, _x2: f32, y2: f32) -> f32 {
+    // Evaluate the Y component of the cubic Bezier at parameter t.
+    // Control points: P0=(0,0), P1=(x1,y1), P2=(x2,y2), P3=(1,1).
+    let u = 1.0 - t;
+    3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t
+}
 
 fn apply_alpha(c: Color, opacity: f32) -> Color {
     Color::rgba(
@@ -808,42 +956,6 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
         (a.b as f32 * inv + b.b as f32 * t).round() as u8,
         (a.a as f32 * inv + b.a as f32 * t).round() as u8,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_line_thick(
-    backend: &mut dyn SdiBackend,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    sx: f32,
-    sy: f32,
-    sw: u32,
-    color: Color,
-) -> Result<()> {
-    let px1 = (x1 * sx) as i32;
-    let py1 = (y1 * sy) as i32;
-    let px2 = (x2 * sx) as i32;
-    let py2 = (y2 * sy) as i32;
-    let dx = (px2 - px1).abs();
-    let dy = (py2 - py1).abs();
-    if dx == 0 || dy == 0 {
-        let lx = px1.min(px2);
-        let ly = py1.min(py2);
-        let lw = (dx as u32).max(sw);
-        let lh = (dy as u32).max(sw);
-        backend.fill_rect(lx, ly, lw, lh, color)?;
-    } else {
-        let steps = dx.max(dy);
-        for s in 0..=steps {
-            let t = s as f32 / steps.max(1) as f32;
-            let px = px1 + ((px2 - px1) as f32 * t) as i32;
-            let py = py1 + ((py2 - py1) as f32 * t) as i32;
-            backend.fill_rect(px, py, sw, sw, color)?;
-        }
-    }
-    Ok(())
 }
 
 fn paint_scanlines(
