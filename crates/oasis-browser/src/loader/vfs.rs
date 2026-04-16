@@ -107,9 +107,9 @@ pub fn not_found_page(url: &str) -> ResourceResponse {
 /// timeout, TLS error, HTTP error) and produces a styled page with an
 /// explanation and suggested actions.
 pub fn error_page(url: &str, message: &str) -> ResourceResponse {
-    let url = &escape_html(url);
-    let message = &escape_html(message);
     let msg_lower = message.to_ascii_lowercase();
+    let escaped_url = escape_html(url);
+    let escaped_message = escape_html(message);
     let (title, explanation, suggestions) = if msg_lower.contains("dns")
         || msg_lower.contains("resolve")
         || msg_lower.contains("no addresses")
@@ -187,8 +187,8 @@ pub fn error_page(url: &str, message: &str) -> ResourceResponse {
          <p><strong>Try:</strong></p>\
          <ul>{suggestions}</ul>\
          <div class=\"detail\">\
-         <p>URL: <code>{url}</code></p>\
-         <p>Details: {message}</p>\
+         <p>URL: <code>{escaped_url}</code></p>\
+         <p>Details: {escaped_message}</p>\
          </div></div></body></html>"
     );
     ResourceResponse {
