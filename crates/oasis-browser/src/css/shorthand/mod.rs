@@ -27,12 +27,11 @@ use super::parser::{CssValue, Declaration, PropertyId};
 pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
     let mut out = Vec::new();
     for decl in decls {
-        // Rewrite CSS logical properties (`margin-inline-start`,
-        // `padding-block`, `inset-inline-end`, etc.) to their physical
-        // LTR equivalents before the main shorthand pass. This keeps
-        // the rest of the engine completely unaware of logical
-        // properties, at the cost of losing RTL awareness — something
-        // we don't currently have anywhere else either.
+        // Expand CSS logical property shorthands and rewrite
+        // direction-independent logical properties (block-axis, size)
+        // to physical equivalents. Inline-axis logical longhands are
+        // passed through for direction-aware resolution at cascade
+        // time in `ComputedStyle::apply_declaration`.
         for decl in rewrite_logical_property(decl) {
             match decl.property.as_str() {
                 "margin" => {
@@ -213,16 +212,23 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
     out
 }
 
-/// Rewrite CSS logical properties into their LTR physical equivalents.
+/// Expand CSS logical shorthands and rewrite direction-independent
+/// logical properties to their physical equivalents.
 ///
-/// Longhands with a single mapping (e.g. `margin-inline-start` →
-/// `margin-left`) return a one-element vec with the property renamed.
-/// Two-side shorthands (`margin-inline`, `padding-block`,
-/// `inset-inline`, `inset-block`) expand into a pair of physical
-/// longhands, handling the one-value (both sides the same) and
-/// two-value (start + end) forms.
+/// **Inline-axis** logical longhands (`margin-inline-start`,
+/// `padding-inline-end`, `border-inline-*`, `inset-inline-*`) are
+/// passed through unchanged — they are resolved to physical properties
+/// at cascade time by `ComputedStyle::apply_declaration`, which knows
+/// the element's computed `direction` and can swap left/right for RTL.
 ///
-/// Non-logical properties pass through unchanged.
+/// **Block-axis** properties and **logical size** properties are
+/// rewritten here because they don't depend on `direction` (we don't
+/// support vertical writing modes).
+///
+/// **Two-side shorthands** (`margin-inline`, `padding-block`, etc.)
+/// are expanded into their longhand forms: inline-axis shorthands
+/// expand to `*-inline-start` / `*-inline-end` (resolved at cascade
+/// time), block-axis shorthands expand directly to physical names.
 fn rewrite_logical_property(decl: Declaration) -> Vec<Declaration> {
     let prop = decl.property.as_str();
 
@@ -233,59 +239,78 @@ fn rewrite_logical_property(decl: Declaration) -> Vec<Declaration> {
         return vec![decl];
     }
 
-    // Two-side logical shorthands. Each entry maps the shorthand name
-    // to the pair of physical longhands it expands into (start_side,
-    // end_side). Order matches CSS spec: first value = start, second
-    // value = end; single value = both sides.
-    const SHORTHAND_MAP: &[(&str, &str, &str)] = &[
-        ("margin-inline", "margin-left", "margin-right"),
+    // Two-side logical shorthands. Inline-axis shorthands expand to
+    // logical longhand names (*-start/*-end) for direction-aware
+    // resolution at cascade time. Block-axis shorthands expand
+    // directly to physical names (top/bottom).
+    const INLINE_SHORTHAND_MAP: &[(&str, &str, &str)] = &[
+        ("margin-inline", "margin-inline-start", "margin-inline-end"),
+        (
+            "padding-inline",
+            "padding-inline-start",
+            "padding-inline-end",
+        ),
+        ("inset-inline", "inset-inline-start", "inset-inline-end"),
+    ];
+    const BLOCK_SHORTHAND_MAP: &[(&str, &str, &str)] = &[
         ("margin-block", "margin-top", "margin-bottom"),
-        ("padding-inline", "padding-left", "padding-right"),
         ("padding-block", "padding-top", "padding-bottom"),
-        ("inset-inline", "left", "right"),
         ("inset-block", "top", "bottom"),
     ];
-    for (shorthand, start_side, end_side) in SHORTHAND_MAP {
-        if prop == *shorthand {
-            let vals = match &decl.value {
-                CssValue::Multiple(vs) if vs.len() >= 2 => (vs[0].clone(), vs[1].clone()),
-                other => (other.clone(), other.clone()),
-            };
-            return vec![
-                Declaration::new(start_side.to_string(), vals.0, decl.important),
-                Declaration::new(end_side.to_string(), vals.1, decl.important),
-            ];
+    for maps in [INLINE_SHORTHAND_MAP, BLOCK_SHORTHAND_MAP] {
+        for (shorthand, start_side, end_side) in maps {
+            if prop == *shorthand {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) if vs.len() >= 2 => (vs[0].clone(), vs[1].clone()),
+                    other => (other.clone(), other.clone()),
+                };
+                return vec![
+                    Declaration::new(start_side.to_string(), vals.0, decl.important),
+                    Declaration::new(end_side.to_string(), vals.1, decl.important),
+                ];
+            }
         }
     }
 
-    // Longhand logical → physical renames (LTR).
-    const LONGHAND_MAP: &[(&str, &str)] = &[
-        ("margin-inline-start", "margin-left"),
-        ("margin-inline-end", "margin-right"),
+    // Inline-axis longhands are passed through unchanged — they will
+    // be resolved to physical properties at cascade time based on the
+    // element's computed `direction`.
+    const INLINE_LONGHANDS: &[&str] = &[
+        "margin-inline-start",
+        "margin-inline-end",
+        "padding-inline-start",
+        "padding-inline-end",
+        "inset-inline-start",
+        "inset-inline-end",
+        "border-inline-start-width",
+        "border-inline-end-width",
+        "border-inline-start-color",
+        "border-inline-end-color",
+        "border-inline-start-style",
+        "border-inline-end-style",
+    ];
+    for logical in INLINE_LONGHANDS {
+        if prop == *logical {
+            return vec![decl];
+        }
+    }
+
+    // Block-axis longhands → physical (direction-independent).
+    const BLOCK_LONGHAND_MAP: &[(&str, &str)] = &[
         ("margin-block-start", "margin-top"),
         ("margin-block-end", "margin-bottom"),
-        ("padding-inline-start", "padding-left"),
-        ("padding-inline-end", "padding-right"),
         ("padding-block-start", "padding-top"),
         ("padding-block-end", "padding-bottom"),
-        ("inset-inline-start", "left"),
-        ("inset-inline-end", "right"),
         ("inset-block-start", "top"),
         ("inset-block-end", "bottom"),
-        ("border-inline-start-width", "border-left-width"),
-        ("border-inline-end-width", "border-right-width"),
         ("border-block-start-width", "border-top-width"),
         ("border-block-end-width", "border-bottom-width"),
-        ("border-inline-start-color", "border-left-color"),
-        ("border-inline-end-color", "border-right-color"),
         ("border-block-start-color", "border-top-color"),
         ("border-block-end-color", "border-bottom-color"),
-        ("border-inline-start-style", "border-left-style"),
-        ("border-inline-end-style", "border-right-style"),
         ("border-block-start-style", "border-top-style"),
         ("border-block-end-style", "border-bottom-style"),
     ];
-    for (logical, physical) in LONGHAND_MAP {
+    for (logical, physical) in BLOCK_LONGHAND_MAP {
         if prop == *logical {
             return vec![Declaration::new(
                 physical.to_string(),
@@ -1288,41 +1313,45 @@ mod tests {
     // -- Logical properties -----------------------------------------
 
     #[test]
-    fn logical_margin_inline_start_rewrites_to_left() {
+    fn logical_margin_inline_start_passes_through() {
+        // Inline-axis longhands are now passed through for
+        // direction-aware resolution at cascade time.
         let result = expand("margin-inline-start", px(10.0));
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].property, "margin-left");
+        assert_eq!(result[0].property, "margin-inline-start");
         assert_eq!(result[0].value, px(10.0));
     }
 
     #[test]
     fn logical_margin_block_end_rewrites_to_bottom() {
+        // Block-axis longhands are still rewritten at parse time
+        // (direction-independent).
         let result = expand("margin-block-end", px(4.0));
         assert_eq!(result[0].property, "margin-bottom");
     }
 
     #[test]
     fn logical_padding_inline_shorthand_single_value() {
-        // `padding-inline: 8px` → padding-left: 8px; padding-right: 8px.
+        // `padding-inline: 8px` → padding-inline-start + end.
         let result = expand("padding-inline", px(8.0));
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].property, "padding-left");
-        assert_eq!(result[1].property, "padding-right");
+        assert_eq!(result[0].property, "padding-inline-start");
+        assert_eq!(result[1].property, "padding-inline-end");
         assert_eq!(result[0].value, px(8.0));
         assert_eq!(result[1].value, px(8.0));
     }
 
     #[test]
     fn logical_padding_inline_shorthand_two_values() {
-        // `padding-inline: 4px 12px` → padding-left: 4; padding-right: 12.
+        // `padding-inline: 4px 12px` → start: 4; end: 12.
         let result = expand(
             "padding-inline",
             CssValue::Multiple(vec![px(4.0), px(12.0)]),
         );
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].property, "padding-left");
+        assert_eq!(result[0].property, "padding-inline-start");
         assert_eq!(result[0].value, px(4.0));
-        assert_eq!(result[1].property, "padding-right");
+        assert_eq!(result[1].property, "padding-inline-end");
         assert_eq!(result[1].value, px(12.0));
     }
 
@@ -1335,9 +1364,9 @@ mod tests {
     }
 
     #[test]
-    fn logical_border_inline_start_width() {
+    fn logical_border_inline_start_width_passes_through() {
         let result = expand("border-inline-start-width", px(2.0));
-        assert_eq!(result[0].property, "border-left-width");
+        assert_eq!(result[0].property, "border-inline-start-width");
     }
 
     #[test]
@@ -1353,7 +1382,7 @@ mod tests {
     #[test]
     fn logical_rewrite_preserves_important() {
         let result = expand_imp("margin-inline-end", px(6.0));
-        assert_eq!(result[0].property, "margin-right");
+        assert_eq!(result[0].property, "margin-inline-end");
         assert!(result[0].important);
     }
 

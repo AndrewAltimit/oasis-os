@@ -98,17 +98,20 @@ is small enough to handle as a drive-by on a related PR.
 
 ### 3D transforms
 
-- **Z-index opt-outs inside `preserve-3d` subtrees.** Explicit
-  `z-index` on a child inside a preserved 3D container currently
-  flattens into the Z-sort instead of leaving the preserved plane.
+- ~~**Z-index opt-outs inside `preserve-3d` subtrees.**~~ Done —
+  children with explicit `z-index` now opt out of the 3D Z-sort
+  and participate in regular CSS 2.1 stacking tiers, per CSS
+  Transforms L2 §6.1.
 - **Real perspective rendering on GPU backends.** PSP GU has
   `sceGumPerspective` for true perspective projection; the
   software path uses a 3-corner-fit affine.
 
 ### WHATWG HTML
 
-- **Full DocumentFragment scope isolation for table + select**
-  (currently form-scope isolation only).
+- ~~**Full DocumentFragment scope isolation for table + select**~~
+  Done — `<template>` now saves and restores both `form_element`
+  and `insertion_mode`, so table/select context doesn't leak into
+  template contents (parsed in InBody per WHATWG §13.2.6.4.18).
 - ~~**SVG camelCase identifier round-trip**~~ Done — WHATWG case
   fixup table applied during foreign content insertion (40 tag
   names, 60 attribute names).
@@ -135,16 +138,28 @@ is small enough to handle as a drive-by on a related PR.
 - ~~**`light-dark()` color-scheme tracking.**~~ Done — deferred
   `CssValue::LightDark` resolves at computed-value time against
   `color-scheme: dark`.
-- **RTL support** anywhere in the engine. Logical properties
-  rewrite to physical LTR at parse time.
+- ~~**RTL support**~~ Done — inline-axis logical properties
+  (`margin-inline-start`, `padding-inline-end`, etc.) now resolve
+  at cascade time based on the element's computed `direction`,
+  swapping left/right for RTL contexts. `direction` is applied
+  before other properties in the cascade.
 
 ### Real-world compatibility
 
-- **RTL / bidi stress fixture** in the corpus.
-- **`@media` responsive grid fixture** in the corpus.
-- **Bench baseline as a CI gate.** Currently manual save via
-  `cargo bench -- --save-baseline main`.
-- **Triage tool `--parallel` flag** via rayon.
+- ~~**RTL / bidi stress fixture**~~ Done — `rtl_bidi_stress.html`
+  added to the corpus with Arabic/Hebrew text, nested direction
+  changes, logical properties, and bidirectional text mixing.
+- ~~**`@media` responsive grid fixture**~~ Done —
+  `responsive_grid.html` added with multi-breakpoint grid layout,
+  `@media` queries, container queries, custom properties, and
+  aspect-ratio gallery.
+- ~~**Bench baseline as a CI gate.**~~ Done — PR benchmarks now run
+  automatically (not just on `workflow_dispatch`) with
+  `BENCH_GATE=1` and a 20% regression threshold. The
+  `bench-compare.sh` script exits non-zero on regressions.
+- ~~**Triage tool `--parallel` flag**~~ Done — `--parallel` flag
+  added to `oasis-browser-triage`, using rayon via the
+  `parallel-style` feature for concurrent page processing.
 
 ### PSP
 

@@ -252,6 +252,8 @@ fn all_fixtures_paint_at_narrow_viewport() {
         "news_homepage.html",
         "blog_post.html",
         "adversarial_malformed.html",
+        "rtl_bidi_stress.html",
+        "responsive_grid.html",
     ] {
         let html = load_fixture(name);
         let (_layout, backend, _styles, _kinds) = run_pipeline_sized(&html, 320.0, 240.0);

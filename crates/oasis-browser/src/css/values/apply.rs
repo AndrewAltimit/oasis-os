@@ -64,6 +64,16 @@ impl ComputedStyle {
             }
         }
 
+        // Resolve inline-axis logical properties to physical names
+        // based on the element's computed `direction`. Block-axis and
+        // size logical properties are already rewritten at parse time
+        // (direction-independent), but inline-axis properties need
+        // the element's direction to decide left vs. right.
+        if let Some(physical) = self.resolve_inline_logical(property) {
+            self.apply_declaration(physical, value, parent_font_size);
+            return;
+        }
+
         match property {
             // -- Display ------------------------------------------------
             "display" => {
@@ -2263,6 +2273,67 @@ impl ComputedStyle {
         })
     }
 
+    /// Map an inline-axis logical property name to its physical
+    /// equivalent based on `self.direction`. Returns `None` for
+    /// non-logical properties (i.e. most properties — fast path).
+    ///
+    /// In LTR: `*-inline-start` → left, `*-inline-end` → right.
+    /// In RTL: `*-inline-start` → right, `*-inline-end` → left.
+    fn resolve_inline_logical(&self, property: &str) -> Option<&'static str> {
+        // Fast path: skip the table scan for properties that can't be
+        // logical. The vast majority of properties don't contain "inline".
+        if !property.contains("inline") {
+            return None;
+        }
+        let is_rtl = self.direction == TextDirection::Rtl;
+
+        // (logical_name, physical_ltr, physical_rtl)
+        const MAP: &[(&str, &str, &str)] = &[
+            ("margin-inline-start", "margin-left", "margin-right"),
+            ("margin-inline-end", "margin-right", "margin-left"),
+            ("padding-inline-start", "padding-left", "padding-right"),
+            ("padding-inline-end", "padding-right", "padding-left"),
+            ("inset-inline-start", "left", "right"),
+            ("inset-inline-end", "right", "left"),
+            (
+                "border-inline-start-width",
+                "border-left-width",
+                "border-right-width",
+            ),
+            (
+                "border-inline-end-width",
+                "border-right-width",
+                "border-left-width",
+            ),
+            (
+                "border-inline-start-color",
+                "border-left-color",
+                "border-right-color",
+            ),
+            (
+                "border-inline-end-color",
+                "border-right-color",
+                "border-left-color",
+            ),
+            (
+                "border-inline-start-style",
+                "border-left-style",
+                "border-right-style",
+            ),
+            (
+                "border-inline-end-style",
+                "border-right-style",
+                "border-left-style",
+            ),
+        ];
+        for &(logical, ltr, rtl) in MAP {
+            if property == logical {
+                return Some(if is_rtl { rtl } else { ltr });
+            }
+        }
+        None
+    }
+
     /// Reset a single property to its CSS initial value.
     fn apply_initial(&mut self, property: &str) {
         let initial = ComputedStyle::default();
@@ -4146,5 +4217,91 @@ mod tests {
         assert_eq!(s.right, Dimension::Px(10.0));
         assert_eq!(s.bottom, Dimension::Px(10.0));
         assert_eq!(s.left, Dimension::Px(10.0));
+    }
+
+    // -- RTL-aware logical properties ----------------------------------
+
+    #[test]
+    fn margin_inline_start_resolves_to_left_in_ltr() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        // direction defaults to LTR
+        s.apply_declaration(
+            "margin-inline-start",
+            &CssValue::Length(10.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.margin_left, 10.0, "inline-start → left in LTR");
+        assert_eq!(s.margin_right, 0.0, "right should be untouched");
+    }
+
+    #[test]
+    fn margin_inline_start_resolves_to_right_in_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "margin-inline-start",
+            &CssValue::Length(10.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.margin_right, 10.0, "inline-start → right in RTL");
+        assert_eq!(s.margin_left, 0.0, "left should be untouched");
+    }
+
+    #[test]
+    fn margin_inline_end_resolves_to_right_in_ltr() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "margin-inline-end",
+            &CssValue::Length(20.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.margin_right, 20.0, "inline-end → right in LTR");
+    }
+
+    #[test]
+    fn margin_inline_end_resolves_to_left_in_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "margin-inline-end",
+            &CssValue::Length(20.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.margin_left, 20.0, "inline-end → left in RTL");
+    }
+
+    #[test]
+    fn padding_inline_start_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "padding-inline-start",
+            &CssValue::Length(8.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(s.padding_right, 8.0, "inline-start → right in RTL");
+        assert_eq!(s.padding_left, 0.0, "left should be untouched");
+    }
+
+    #[test]
+    fn border_inline_start_width_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "border-inline-start-width",
+            &CssValue::Length(2.0, LengthUnit::Px),
+            16.0,
+        );
+        assert_eq!(
+            s.border_right_width, 2.0,
+            "border-inline-start-width → right in RTL",
+        );
+        assert_eq!(s.border_left_width, 0.0);
     }
 }

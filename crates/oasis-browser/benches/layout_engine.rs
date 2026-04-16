@@ -146,6 +146,8 @@ fn bench_corpus_layout(c: &mut Criterion) {
         "commerce_product.html",
         "substack_post.html",
         "adversarial_malformed.html",
+        "rtl_bidi_stress.html",
+        "responsive_grid.html",
     ];
 
     let measurer = SimpleTextMeasurer;

@@ -589,7 +589,17 @@ pub fn compute_style(
         }
     }
 
-    // Pass 2: Apply font-size first so that em units in subsequent
+    // Pass 2a: Apply `direction` before any other properties so that
+    // inline-axis logical properties (margin-inline-start, etc.)
+    // resolve to the correct physical side in RTL contexts.
+    for entry in &matched {
+        if entry.property == "direction" {
+            let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
+            style.apply_declaration("direction", &resolved, parent_font_size);
+        }
+    }
+
+    // Pass 2b: Apply font-size first so that em units in subsequent
     // properties resolve relative to the element's own computed
     // font-size (CSS spec: em in font-size uses parent, em in all
     // other properties uses the element's own font-size).
@@ -604,7 +614,10 @@ pub fn compute_style(
     // Pass 3: Resolve var() references and apply all other declarations.
     let mut has_explicit_line_height = false;
     for entry in &matched {
-        if entry.property.starts_with("--") || entry.property == "font-size" {
+        if entry.property.starts_with("--")
+            || entry.property == "font-size"
+            || entry.property == "direction"
+        {
             continue;
         }
         if entry.property == "line-height" {

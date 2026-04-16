@@ -143,9 +143,8 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks (manual only via workflow_dispatch) -------------------------
+      # -- Benchmarks (regression gate) ----------------------------------------
       - name: Download main branch baseline
-        if: github.event_name == 'workflow_dispatch'
         continue-on-error: true
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -156,7 +155,6 @@ jobs:
           if_no_artifact_found: warn
 
       - name: Benchmarks
-        if: github.event_name == 'workflow_dispatch'
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -165,17 +163,16 @@ jobs:
           grep -E '(time:|bench)' bench_results.txt || true
           echo "::endgroup::"
 
-      - name: Benchmark regression check
-        if: github.event_name == 'workflow_dispatch'
+      - name: Benchmark regression gate
         run: |
-          bash scripts/bench-compare.sh \
+          BENCH_GATE=1 bash scripts/bench-compare.sh \
             baseline-criterion/ \
             target/criterion/ \
-            10 \
+            20 \
             >> $GITHUB_STEP_SUMMARY
 
       - name: Upload benchmark results
-        if: github.event_name == 'workflow_dispatch'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results

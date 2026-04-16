@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Responsive Grid / @media Stress Test</title>
+<style>
+/* CSS custom properties for theming */
+:root {
+    --primary: #0066cc;
+    --secondary: #666;
+    --accent: #ff6600;
+    --bg: #f8f8f8;
+    --card-bg: #fff;
+    --border: #ddd;
+    --gap: 16px;
+    --radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --primary: #4da6ff;
+        --secondary: #aaa;
+        --accent: #ff9944;
+        --bg: #1a1a1a;
+        --card-bg: #2a2a2a;
+        --border: #444;
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: #333;
+    line-height: 1.6;
+}
+
+/* Header — full-width with flex nav */
+.header {
+    background: var(--primary);
+    color: white;
+    padding: 12px var(--gap);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header h1 {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.nav {
+    display: flex;
+    gap: 16px;
+    list-style: none;
+}
+
+.nav a {
+    color: rgba(255,255,255,0.9);
+    text-decoration: none;
+    font-size: 14px;
+}
+
+/* Main grid layout — responsive */
+.main {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--gap);
+    padding: var(--gap);
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (min-width: 600px) {
+    .main {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 900px) {
+    .main {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .main .featured {
+        grid-column: span 2;
+    }
+}
+
+@media (min-width: 1100px) {
+    .main {
+        grid-template-columns: repeat(4, 1fr);
+    }
+
+    .main .featured {
+        grid-column: span 2;
+        grid-row: span 2;
+    }
+}
+
+/* Card component */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-image {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 32px;
+    font-weight: bold;
+}
+
+.featured .card-image {
+    height: 200px;
+    font-size: 48px;
+}
+
+.card-body {
+    padding: 12px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--primary);
+}
+
+.card-text {
+    font-size: 14px;
+    color: var(--secondary);
+    flex: 1;
+}
+
+.card-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--secondary);
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+}
+
+.badge-new { background: var(--accent); }
+.badge-popular { background: #28a745; }
+.badge-trending { background: var(--primary); }
+
+/* Sidebar — visible at wider breakpoints */
+.sidebar {
+    display: none;
+}
+
+@media (min-width: 900px) {
+    .page-layout {
+        display: grid;
+        grid-template-columns: 1fr 280px;
+        gap: var(--gap);
+        padding: var(--gap);
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .sidebar {
+        display: block;
+    }
+
+    .main {
+        padding: 0;
+    }
+}
+
+.sidebar-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: var(--gap);
+}
+
+.sidebar-section h3 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--secondary);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--primary);
+}
+
+.sidebar-list {
+    list-style: none;
+}
+
+.sidebar-list li {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+}
+
+.sidebar-list li:last-child {
+    border-bottom: none;
+}
+
+/* Stats bar — responsive grid */
+.stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    padding: var(--gap);
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (min-width: 600px) {
+    .stats {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--secondary);
+    text-transform: uppercase;
+    margin-top: 4px;
+}
+
+/* Footer */
+.footer {
+    background: #333;
+    color: #999;
+    padding: 24px var(--gap);
+    margin-top: 32px;
+    font-size: 13px;
+}
+
+.footer-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (min-width: 600px) {
+    .footer-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+.footer h4 {
+    color: white;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.footer ul {
+    list-style: none;
+}
+
+.footer li {
+    padding: 3px 0;
+}
+
+.footer a {
+    color: #999;
+    text-decoration: none;
+}
+
+/* Container queries for card variants */
+@container (min-width: 400px) {
+    .card-body {
+        padding: 16px;
+    }
+    .card-title {
+        font-size: 18px;
+    }
+}
+
+/* Aspect ratio grid items */
+.gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+    padding: var(--gap);
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.gallery-item {
+    aspect-ratio: 1;
+    background: linear-gradient(45deg, #e8e8e8 25%, transparent 25%),
+                linear-gradient(-45deg, #e8e8e8 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #e8e8e8 75%),
+                linear-gradient(-45deg, transparent 75%, #e8e8e8 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--secondary);
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+    <h1>Responsive Grid Dashboard</h1>
+    <nav>
+        <ul class="nav">
+            <li><a href="#">Home</a></li>
+            <li><a href="#">Browse</a></li>
+            <li><a href="#">Settings</a></li>
+        </ul>
+    </nav>
+</header>
+
+<div class="stats">
+    <div class="stat-card">
+        <div class="stat-value">1,247</div>
+        <div class="stat-label">Articles</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">89%</div>
+        <div class="stat-label">Coverage</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">3.2s</div>
+        <div class="stat-label">Avg Load</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">42</div>
+        <div class="stat-label">Active</div>
+    </div>
+</div>
+
+<div class="page-layout">
+<div class="main">
+    <div class="card featured">
+        <div class="card-image">Featured</div>
+        <div class="card-body">
+            <h2 class="card-title">Featured Article: Grid Layout Deep Dive</h2>
+            <p class="card-text">An in-depth exploration of CSS Grid Layout, covering everything from basic grid definitions to complex responsive patterns with auto-fill, minmax, and named grid areas.</p>
+            <div class="card-meta">
+                <span class="badge badge-popular">Popular</span>
+                <span>12 min read</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">1</div>
+        <div class="card-body">
+            <h2 class="card-title">Understanding Flexbox</h2>
+            <p class="card-text">Master the fundamentals of CSS Flexbox for one-dimensional layouts.</p>
+            <div class="card-meta">
+                <span class="badge badge-new">New</span>
+                <span>5 min</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">2</div>
+        <div class="card-body">
+            <h2 class="card-title">Container Queries</h2>
+            <p class="card-text">Component-level responsive design with CSS container queries.</p>
+            <div class="card-meta">
+                <span class="badge badge-trending">Trending</span>
+                <span>8 min</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">3</div>
+        <div class="card-body">
+            <h2 class="card-title">CSS Custom Properties</h2>
+            <p class="card-text">Dynamic theming and design tokens with CSS variables.</p>
+            <div class="card-meta">
+                <span>6 min</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">4</div>
+        <div class="card-body">
+            <h2 class="card-title">Media Queries Level 5</h2>
+            <p class="card-text">New features in modern media queries including prefers-color-scheme and prefers-reduced-motion.</p>
+            <div class="card-meta">
+                <span class="badge badge-new">New</span>
+                <span>7 min</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">5</div>
+        <div class="card-body">
+            <h2 class="card-title">Logical Properties</h2>
+            <p class="card-text">Internationalization-ready CSS with logical properties and values.</p>
+            <div class="card-meta">
+                <span>4 min</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-image">6</div>
+        <div class="card-body">
+            <h2 class="card-title">CSS Nesting</h2>
+            <p class="card-text">Native CSS nesting without preprocessors — the & selector.</p>
+            <div class="card-meta">
+                <span class="badge badge-trending">Trending</span>
+                <span>3 min</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<aside class="sidebar">
+    <div class="sidebar-section">
+        <h3>Categories</h3>
+        <ul class="sidebar-list">
+            <li>Layout (12)</li>
+            <li>Typography (8)</li>
+            <li>Color (6)</li>
+            <li>Animation (9)</li>
+            <li>Responsive (15)</li>
+            <li>Accessibility (4)</li>
+        </ul>
+    </div>
+
+    <div class="sidebar-section">
+        <h3>Recent</h3>
+        <ul class="sidebar-list">
+            <li>Subgrid Patterns</li>
+            <li>Scroll-Driven Animations</li>
+            <li>View Transitions API</li>
+            <li>Color Level 4</li>
+        </ul>
+    </div>
+</aside>
+</div>
+
+<div class="gallery">
+    <div class="gallery-item">1</div>
+    <div class="gallery-item">2</div>
+    <div class="gallery-item">3</div>
+    <div class="gallery-item">4</div>
+    <div class="gallery-item">5</div>
+    <div class="gallery-item">6</div>
+    <div class="gallery-item">7</div>
+    <div class="gallery-item">8</div>
+</div>
+
+<footer class="footer">
+    <div class="footer-grid">
+        <div>
+            <h4>About</h4>
+            <p>A comprehensive CSS reference and learning resource.</p>
+        </div>
+        <div>
+            <h4>Links</h4>
+            <ul>
+                <li><a href="#">Documentation</a></li>
+                <li><a href="#">Examples</a></li>
+                <li><a href="#">Changelog</a></li>
+            </ul>
+        </div>
+        <div>
+            <h4>Community</h4>
+            <ul>
+                <li><a href="#">Forum</a></li>
+                <li><a href="#">Discord</a></li>
+                <li><a href="#">GitHub</a></li>
+            </ul>
+        </div>
+    </div>
+</footer>
+
+</body>
+</html>
