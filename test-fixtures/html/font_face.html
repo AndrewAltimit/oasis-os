@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>@font-face Test</title>
+<style>
+/* Multiple @font-face rules for a single family at different weights */
+@font-face {
+    font-family: "TestSans";
+    src: url("test-sans-regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "TestSans";
+    src: url("test-sans-bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "TestSans";
+    src: url("test-sans-italic.ttf") format("truetype");
+    font-weight: 400;
+    font-style: italic;
+    font-display: swap;
+}
+
+/* Variable font with weight range */
+@font-face {
+    font-family: "TestVariable";
+    src: url("test-variable.woff2") format("woff2"),
+         url("test-variable.woff") format("woff");
+    font-weight: 100 900;
+    font-display: fallback;
+}
+
+/* Icon font with unicode-range */
+@font-face {
+    font-family: "TestIcons";
+    src: url("icons.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+E000-E0FF;
+}
+
+/* Local font source */
+@font-face {
+    font-family: "LocalFirst";
+    src: local("Helvetica Neue"),
+         local("Helvetica"),
+         url("helvetica-fallback.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+}
+
+/* Multiple format hints for broad compat */
+@font-face {
+    font-family: "BroadCompat";
+    src: url("font.woff2") format("woff2"),
+         url("font.woff") format("woff"),
+         url("font.ttf") format("truetype"),
+         url("font.otf") format("opentype");
+    font-weight: normal;
+    font-display: optional;
+}
+
+body {
+    margin: 8px;
+    font-size: 10px;
+    color: #222;
+    background: #fff;
+}
+h2 { font-size: 12px; margin: 8px 0 4px; color: #333; }
+.sample { margin: 2px 0; padding: 2px 4px; background: #f0f4f8; }
+.label { font-size: 8px; color: #888; margin-bottom: 1px; }
+
+/* Apply the web fonts */
+.test-sans         { font-family: "TestSans", sans-serif; }
+.test-sans-bold    { font-family: "TestSans", sans-serif; font-weight: bold; }
+.test-sans-italic  { font-family: "TestSans", sans-serif; font-style: italic; }
+.test-variable     { font-family: "TestVariable", sans-serif; }
+.test-variable-200 { font-family: "TestVariable", sans-serif; font-weight: 200; }
+.test-variable-600 { font-family: "TestVariable", sans-serif; font-weight: 600; }
+.test-icons        { font-family: "TestIcons", sans-serif; }
+.local-first       { font-family: "LocalFirst", sans-serif; }
+.broad-compat      { font-family: "BroadCompat", sans-serif; }
+
+/* Nested: web font in heading, different in body */
+.mixed-heading { font-family: "TestSans", serif; font-size: 14px; font-weight: bold; }
+.mixed-body    { font-family: Georgia, serif; }
+</style>
+</head>
+<body>
+
+<h2>@font-face: Named Web Font (swap)</h2>
+<div class="label">TestSans regular (400)</div>
+<div class="sample test-sans">The quick brown fox jumps over the lazy dog.</div>
+<div class="label">TestSans bold (700)</div>
+<div class="sample test-sans-bold">Bold text should match the bold @font-face variant.</div>
+<div class="label">TestSans italic</div>
+<div class="sample test-sans-italic">Italic text should match the italic @font-face variant.</div>
+
+<h2>@font-face: Variable Font (weight range)</h2>
+<div class="label">TestVariable weight 200</div>
+<div class="sample test-variable-200">Light variable font weight.</div>
+<div class="label">TestVariable weight 400 (default)</div>
+<div class="sample test-variable">Regular variable font weight.</div>
+<div class="label">TestVariable weight 600</div>
+<div class="sample test-variable-600">Semi-bold variable font weight.</div>
+
+<h2>@font-face: unicode-range (block display)</h2>
+<div class="label">TestIcons: only U+E000-E0FF range</div>
+<div class="sample test-icons">Normal text &#xE001; icon &#xE002; mixed.</div>
+
+<h2>@font-face: local() source</h2>
+<div class="label">LocalFirst: local("Helvetica Neue"), url(...)</div>
+<div class="sample local-first">Tries system font first, then URL fallback.</div>
+
+<h2>@font-face: Multiple formats (optional display)</h2>
+<div class="label">BroadCompat: woff2 + woff + ttf + otf</div>
+<div class="sample broad-compat">Broadest compatibility format list.</div>
+
+<h2>Mixed: Web Font Heading + System Body</h2>
+<div class="mixed-heading">Article Title in TestSans Bold</div>
+<div class="mixed-body">Body text in Georgia serif. This pattern is common on
+news and blog sites where the heading uses a brand font while body text
+uses a traditional reading font for legibility.</div>
+
+<h2>Fallback Behavior</h2>
+<div class="label">font-family: "NonexistentFont", "AlsoMissing", sans-serif</div>
+<div class="sample" style="font-family: 'NonexistentFont', 'AlsoMissing', sans-serif;">
+Should gracefully fall back through the stack to sans-serif.</div>
+<div class="label">font-family: "NonexistentFont" (no generic fallback)</div>
+<div class="sample" style="font-family: 'NonexistentFont';">
+No generic fallback specified -- should still render with default font.</div>
+
+</body>
+</html>

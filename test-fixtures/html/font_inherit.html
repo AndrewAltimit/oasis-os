@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Font Inheritance &amp; Shorthand</title>
+<style>
+@font-face {
+    font-family: "HeadingFont";
+    src: url("heading.woff2") format("woff2");
+    font-weight: 400 700;
+    font-display: swap;
+}
+
+body {
+    margin: 8px;
+    font-family: "HeadingFont", Georgia, serif;
+    font-size: 10px;
+    color: #222;
+    background: #fff;
+}
+
+h2 { font-size: 12px; margin: 8px 0 4px; }
+
+/* Font shorthand: style weight size/line-height family */
+.shorthand-full  { font: italic bold 11px/1.6 "HeadingFont", sans-serif; }
+.shorthand-size  { font: 14px monospace; }
+.shorthand-style { font: italic 10px serif; }
+
+/* Inheritance tests */
+.parent-serif {
+    font-family: "HeadingFont", Georgia, serif;
+    font-size: 12px;
+    color: #333;
+}
+.parent-serif .child-inherit {
+    /* Should inherit serif from parent */
+    font-weight: bold;
+}
+.parent-serif .child-override {
+    font-family: monospace;
+    font-size: 9px;
+}
+
+/* Deep nesting: font inherits through multiple levels */
+.level-1 { font-family: "HeadingFont", serif; font-size: 11px; }
+.level-2 { font-weight: bold; /* inherits family from level-1 */ }
+.level-3 { font-style: italic; /* inherits family+weight from parents */ }
+.level-3-override { font-family: monospace; font-style: normal; }
+
+/* font-weight numeric inheritance */
+.w100 { font-weight: 100; }
+.w300 { font-weight: 300; }
+.w400 { font-weight: 400; }
+.w500 { font-weight: 500; }
+.w700 { font-weight: 700; }
+.w900 { font-weight: 900; }
+
+/* Relative weights */
+.bolder  { font-weight: bolder; }
+.lighter { font-weight: lighter; }
+
+.sample { margin: 2px 0; padding: 2px 4px; background: #f5f5f5; }
+.label  { font-size: 8px; color: #888; margin-bottom: 1px; font-family: sans-serif; }
+</style>
+</head>
+<body>
+
+<h2>Font Shorthand</h2>
+<div class="label">font: italic bold 11px/1.6 "HeadingFont", sans-serif</div>
+<div class="sample shorthand-full">Full shorthand: italic, bold, 11px, 1.6 line-height.</div>
+<div class="label">font: 14px monospace</div>
+<div class="sample shorthand-size">Size + family shorthand only.</div>
+<div class="label">font: italic 10px serif</div>
+<div class="sample shorthand-style">Style + size + family shorthand.</div>
+
+<h2>Inheritance</h2>
+<div class="parent-serif">
+    <div class="label" style="font-family: sans-serif;">Parent: "HeadingFont", Georgia, serif at 12px</div>
+    <div class="sample child-inherit">Child inherits family, adds bold weight.</div>
+    <div class="sample child-override">Child overrides to monospace at 9px.</div>
+</div>
+
+<h2>Deep Nesting</h2>
+<div class="level-1">
+    Level 1: "HeadingFont", serif at 11px
+    <div class="level-2">
+        Level 2: inherits family, bold weight
+        <div class="level-3">
+            Level 3: inherits family+bold, adds italic
+        </div>
+        <div class="level-3-override">
+            Level 3 override: monospace, no italic
+        </div>
+    </div>
+</div>
+
+<h2>Numeric Font Weights</h2>
+<div class="sample w100">Weight 100 (Thin)</div>
+<div class="sample w300">Weight 300 (Light)</div>
+<div class="sample w400">Weight 400 (Normal)</div>
+<div class="sample w500">Weight 500 (Medium)</div>
+<div class="sample w700">Weight 700 (Bold)</div>
+<div class="sample w900">Weight 900 (Black)</div>
+
+<h2>Relative Weights (bolder/lighter)</h2>
+<div class="sample w300">
+    Weight 300 parent
+    <span class="bolder"> &rarr; bolder child</span>
+</div>
+<div class="sample w700">
+    Weight 700 parent
+    <span class="lighter"> &rarr; lighter child</span>
+</div>
+
+</body>
+</html>

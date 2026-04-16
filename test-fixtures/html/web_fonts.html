@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web Font Rendering (VFS-served TTF)</title>
+<style>
+@font-face {
+    font-family: "TestFont";
+    src: url("test-font.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+body {
+    margin: 8px;
+    font-size: 10px;
+    color: #222;
+    background: #fff;
+}
+
+h2 { font-size: 12px; margin: 8px 0 4px; color: #333; }
+.sample { margin: 2px 0; padding: 2px 4px; }
+.label { font-size: 8px; color: #888; margin-bottom: 1px; }
+
+/* Web font applied at different sizes */
+.wf        { font-family: "TestFont", sans-serif; }
+.wf-small  { font-family: "TestFont", sans-serif; font-size: 8px; }
+.wf-medium { font-family: "TestFont", sans-serif; font-size: 12px; }
+.wf-large  { font-family: "TestFont", sans-serif; font-size: 16px; }
+.wf-xlarge { font-family: "TestFont", sans-serif; font-size: 20px; }
+
+/* Side-by-side comparison: web font vs bitmap */
+.row { display: flex; gap: 8px; margin: 2px 0; }
+.col { flex: 1; padding: 2px 4px; background: #f5f5f5; }
+.bitmap { font-family: sans-serif; }
+
+/* Web font in various contexts */
+.wf-bold    { font-family: "TestFont", sans-serif; font-weight: bold; }
+.wf-italic  { font-family: "TestFont", sans-serif; font-style: italic; }
+.wf-colored { font-family: "TestFont", sans-serif; color: #0066cc; }
+.wf-bg      { font-family: "TestFont", sans-serif; background: #ffe0b2; padding: 4px; }
+</style>
+</head>
+<body>
+
+<h2>Web Font at Different Sizes</h2>
+<div class="sample wf-small">8px: The quick brown fox jumps over the lazy dog.</div>
+<div class="sample wf">10px: The quick brown fox jumps over the lazy dog.</div>
+<div class="sample wf-medium">12px: The quick brown fox jumps over the lazy dog.</div>
+<div class="sample wf-large">16px: The quick brown fox jumps.</div>
+<div class="sample wf-xlarge">20px: Quick brown fox.</div>
+
+<h2>Web Font vs Bitmap Comparison</h2>
+<div class="row">
+    <div class="col wf">TestFont: ABCDEFGHIJ</div>
+    <div class="col bitmap">Bitmap: ABCDEFGHIJ</div>
+</div>
+<div class="row">
+    <div class="col wf">TestFont: abcdefghij</div>
+    <div class="col bitmap">Bitmap: abcdefghij</div>
+</div>
+<div class="row">
+    <div class="col wf">TestFont: 0123456789</div>
+    <div class="col bitmap">Bitmap: 0123456789</div>
+</div>
+
+<h2>Style Variations</h2>
+<div class="sample wf">Regular: Hello World</div>
+<div class="sample wf-bold">Bold: Hello World</div>
+<div class="sample wf-italic">Italic: Hello World</div>
+
+<h2>Color and Background</h2>
+<div class="sample wf-colored">Blue web font text on white.</div>
+<div class="sample wf-bg">Web font text on orange background.</div>
+
+<h2>Mixed Content</h2>
+<p class="wf">This paragraph uses the web font.
+<span style="font-family: monospace;">This span is monospace.</span>
+Back to the web font here.</p>
+
+</body>
+</html>
