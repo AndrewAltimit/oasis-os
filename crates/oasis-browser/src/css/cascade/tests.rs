@@ -825,6 +825,7 @@ fn hover_matches_hovered_node() {
         visited_urls: None,
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -865,6 +866,7 @@ fn hover_matches_ancestor_of_hovered_node() {
         visited_urls: None,
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     // <div> (ancestor) should also match :hover.
     let __out = &doc.nodes[3].kind;
@@ -897,6 +899,7 @@ fn visited_matches_with_visited_url() {
         visited_urls: Some(&visited),
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -928,6 +931,7 @@ fn link_matches_unvisited_anchor() {
         visited_urls: Some(&visited),
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -952,6 +956,7 @@ fn hover_style_applied_via_cascade() {
         visited_urls: None,
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let style = styles[3].as_ref().expect("p should have style");
@@ -981,6 +986,7 @@ fn visited_style_applied_via_cascade() {
         visited_urls: Some(&visited),
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &vctx);
     let style = styles[3].as_ref().expect("a should have style");
@@ -1492,6 +1498,40 @@ fn layer_does_not_override_specificity_within_layer() {
     assert_eq!(style.color, Color::rgb(0, 0, 255));
 }
 
+// -- cross-stylesheet @layer merging --------------------------------
+
+#[test]
+fn cross_stylesheet_same_layer_name_shares_ordering() {
+    // Sheet 1 declares `@layer reset { p { color: red } }`.
+    // Sheet 2 declares `@layer reset { p { color: blue } }`.
+    // Both refer to the same global "reset" layer. Sheet 2 is later in
+    // source order, so blue should win (same layer, source order breaks tie).
+    let sheet1 = Stylesheet::parse("@layer reset { p { color: red; } }");
+    let sheet2 = Stylesheet::parse("@layer reset { p { color: blue; } }");
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    assert_eq!(style.color, Color::rgb(0, 0, 255));
+}
+
+#[test]
+fn cross_stylesheet_layer_order_preserved() {
+    // Sheet 1 declares `@layer reset, theme;`.
+    // Sheet 2 puts a rule in `@layer reset`.
+    // Sheet 1 also has a rule in `@layer theme`.
+    // `theme` is later than `reset`, so theme wins (normal declarations).
+    let sheet1 = Stylesheet::parse(
+        "@layer reset, theme; \
+         @layer theme { p { color: green; } }",
+    );
+    let sheet2 = Stylesheet::parse("@layer reset { p { color: red; } }");
+    let doc = make_doc(vec![(TagName::P, vec![])]);
+    let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
+    let style = styles[3].as_ref().expect("p has style");
+    // `theme` (layer 1) beats `reset` (layer 0) for normal declarations.
+    assert_eq!(style.color, Color::rgb(0, 128, 0));
+}
+
 // -- text-wrap parsing ---------------------------------------------
 
 #[test]
@@ -1998,6 +2038,7 @@ fn pseudo_class_with_type_selector() {
         visited_urls: None,
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let a_style = styles[3].as_ref().expect("a should have style");
@@ -2010,6 +2051,7 @@ fn pseudo_class_with_type_selector() {
         visited_urls: None,
         focused_node: None,
         containers: None,
+        global_layers: None,
     };
     let styles2 = style_tree(&doc, &[&sheet], &[], &hctx_p);
     let p_style = styles2[4].as_ref().unwrap();
@@ -2641,6 +2683,7 @@ mod container_query_cascade_tests {
                 width: w,
                 height: h,
                 container_type: crate::css::values::types::ContainerType::Size,
+                custom_properties: rustc_hash::FxHashMap::default(),
             },
         );
         l
@@ -2657,6 +2700,7 @@ mod container_query_cascade_tests {
             visited_urls: None,
             focused_node: None,
             containers: lookup,
+            global_layers: None,
         };
         let styles = style_tree(doc, &[sheet], &[], &ctx);
         styles[p_id].as_ref().unwrap().color
@@ -2826,5 +2870,34 @@ mod container_query_cascade_tests {
         assert_eq!(entry.names, vec!["card".to_string()]);
         assert!((entry.width - 320.0).abs() < 0.01);
         assert!((entry.height - 240.0).abs() < 0.01);
+    }
+
+    // -- light-dark() + color-scheme -----------------------------------
+
+    #[test]
+    fn light_dark_resolves_to_dark_under_dark_scheme() {
+        use super::super::super::parser::CssColor;
+        use super::super::super::values::types::ColorScheme;
+
+        let mut style = ComputedStyle::default();
+        // Simulate color-scheme: dark on the element.
+        style.color_scheme = ColorScheme::Dark;
+        let value =
+            CssValue::LightDark(CssColor::new(255, 0, 0, 255), CssColor::new(0, 0, 255, 255));
+        style.apply_declaration("color", &value, 16.0);
+        assert_eq!(style.color, Color::rgba(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn light_dark_resolves_to_light_under_light_scheme() {
+        use super::super::super::parser::CssColor;
+        use super::super::super::values::types::ColorScheme;
+
+        let mut style = ComputedStyle::default();
+        style.color_scheme = ColorScheme::Light;
+        let value =
+            CssValue::LightDark(CssColor::new(255, 0, 0, 255), CssColor::new(0, 0, 255, 255));
+        style.apply_declaration("color", &value, 16.0);
+        assert_eq!(style.color, Color::rgba(255, 0, 0, 255));
     }
 }

@@ -542,13 +542,21 @@ impl CssParser {
         let inner_rules = self.parse_at_rule_block();
 
         let cond = parse_container_condition(name, &condition);
-        // Tag every emitted child rule with this condition. Inner rules
-        // that already carry a container condition (from a nested
-        // `@container`) keep theirs — innermost wins. A future
-        // refinement could AND the conditions instead.
+        // Tag every emitted child rule with this condition. For nested
+        // `@container` rules, AND-combine by merging features so both
+        // the outer and inner conditions must hold.
         let mut tagged = Vec::with_capacity(inner_rules.len());
         for mut r in inner_rules {
-            if r.container.is_none() {
+            if let Some(ref mut inner) = r.container {
+                // AND-combine: append outer features to the inner
+                // condition. The container name, if any, comes from
+                // the inner (more specific) condition; fall back to
+                // the outer name if the inner doesn't specify one.
+                inner.features.extend(cond.features.iter().cloned());
+                if inner.name.is_none() {
+                    inner.name.clone_from(&cond.name);
+                }
+            } else {
                 r.container = Some(cond.clone());
             }
             tagged.push(r);
@@ -1748,17 +1756,35 @@ fn parse_container_condition(name: Option<String>, raw: &str) -> ContainerCondit
     let raw = raw.trim();
     if !raw.is_empty() {
         for part in split_css_and(raw) {
-            let inner = part
-                .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim();
-            if let Some(f) = parse_container_feature(inner) {
-                features.push(f);
+            let trimmed = part.trim();
+            // Check for `style(...)` query in this part.
+            if let Some(inner) = trimmed
+                .strip_prefix("style(")
+                .and_then(|s| s.strip_suffix(')'))
+            {
+                if let Some(f) = parse_style_query(inner) {
+                    features.push(f);
+                }
+            } else {
+                let inner = trimmed.trim_start_matches('(').trim_end_matches(')').trim();
+                if let Some(f) = parse_container_feature(inner) {
+                    features.push(f);
+                }
             }
         }
     }
     ContainerCondition { name, features }
+}
+
+/// Parse a `style(--prop: value)` query into a `ContainerFeature::Style`.
+fn parse_style_query(inner: &str) -> Option<ContainerFeature> {
+    let (prop, val) = inner.split_once(':')?;
+    let prop = prop.trim().to_string();
+    let val = val.trim().to_string();
+    if prop.is_empty() || val.is_empty() {
+        return None;
+    }
+    Some(ContainerFeature::Style(prop, val))
 }
 
 fn parse_container_feature(inner: &str) -> Option<ContainerFeature> {

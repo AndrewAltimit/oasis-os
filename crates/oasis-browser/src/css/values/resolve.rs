@@ -77,22 +77,45 @@ pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dime
 }
 
 /// Resolve a color value from the parser's representation.
+/// Treats `light-dark()` as light mode — use [`resolve_color_with_scheme`]
+/// when the element's `color-scheme` is known.
+#[allow(dead_code)]
 pub(super) fn resolve_color(value: &CssValue) -> Option<Color> {
+    resolve_color_with_scheme(value, false)
+}
+
+/// Resolve a color, picking the dark argument of `light-dark()` when
+/// `is_dark` is true.
+pub(super) fn resolve_color_with_scheme(value: &CssValue, is_dark: bool) -> Option<Color> {
     match value {
         CssValue::Color(css_color) => Some(css_color_to_backend(css_color)),
+        CssValue::LightDark(light, dark) => {
+            let pick = if is_dark { dark } else { light };
+            Some(css_color_to_backend(pick))
+        },
         CssValue::Keyword(name) => keyword_color(name),
         _ => None,
     }
 }
 
 /// Resolve a color value, treating `currentcolor` as the element's `color`.
+#[allow(dead_code)]
 pub(super) fn resolve_color_or_current(value: &CssValue, current_color: Color) -> Option<Color> {
+    resolve_color_or_current_with_scheme(value, current_color, false)
+}
+
+/// Like [`resolve_color_or_current`] but with `light-dark()` awareness.
+pub(super) fn resolve_color_or_current_with_scheme(
+    value: &CssValue,
+    current_color: Color,
+    is_dark: bool,
+) -> Option<Color> {
     if let CssValue::Keyword(name) = value
         && name.eq_ignore_ascii_case("currentcolor")
     {
         return Some(current_color);
     }
-    resolve_color(value)
+    resolve_color_with_scheme(value, is_dark)
 }
 
 /// Convert a parser `CssColor` to the backend `Color`.

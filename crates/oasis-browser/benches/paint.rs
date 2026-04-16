@@ -146,8 +146,9 @@ fn bench_paint(c: &mut Criterion) {
                     height: 272.0,
                     visible_height: 272.0,
                     focused_node: None,
+                    counter_styles: Vec::new(),
                 };
-                b.iter(|| paint_page(layout, &mut backend, vp, link_map));
+                b.iter(|| paint_page(layout, &mut backend, vp.clone(), link_map));
             },
         );
     }
@@ -194,6 +195,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
                         height: 272.0,
                         visible_height: 272.0,
                         focused_node: None,
+                        counter_styles: Vec::new(),
                     };
                     paint_page(&layout, &mut backend, vp, &link_map)
                 });

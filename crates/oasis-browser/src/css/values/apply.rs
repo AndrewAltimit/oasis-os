@@ -4,8 +4,9 @@ use oasis_types::backend::Color;
 
 use super::computed::ComputedStyle;
 use super::resolve::{
-    as_keyword, parse_grid_template, resolve_border_style, resolve_color, resolve_color_or_current,
-    resolve_dimension, resolve_font_size, resolve_font_weight, resolve_length, resolve_line_height,
+    as_keyword, parse_grid_template, resolve_border_style, resolve_color_or_current_with_scheme,
+    resolve_color_with_scheme, resolve_dimension, resolve_font_size, resolve_font_weight,
+    resolve_length, resolve_line_height,
 };
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
@@ -280,7 +281,8 @@ impl ComputedStyle {
 
             // -- Border color -------------------------------------------
             "border-color" => {
-                let c = resolve_color_or_current(value, self.color);
+                let c =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme());
                 if let Some(c) = c {
                     self.border_top_color = c;
                     self.border_right_color = c;
@@ -289,22 +291,30 @@ impl ComputedStyle {
                 }
             },
             "border-top-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.border_top_color = c;
                 }
             },
             "border-right-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.border_right_color = c;
                 }
             },
             "border-bottom-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.border_bottom_color = c;
                 }
             },
             "border-left-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.border_left_color = c;
                 }
             },
@@ -361,7 +371,7 @@ impl ComputedStyle {
 
             // -- Color --------------------------------------------------
             "color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_with_scheme(value, self.is_dark_scheme()) {
                     self.color = c;
                 }
             },
@@ -447,12 +457,15 @@ impl ComputedStyle {
                                     self.text_decoration.style = TextDecorationStyle::Wavy;
                                 },
                                 _ => {
-                                    if let Some(c) = resolve_color(v) {
+                                    if let Some(c) =
+                                        resolve_color_with_scheme(v, self.is_dark_scheme())
+                                    {
                                         self.text_decoration.color = Some(c);
                                     }
                                 },
                             }
-                        } else if let Some(c) = resolve_color(v) {
+                        } else if let Some(c) = resolve_color_with_scheme(v, self.is_dark_scheme())
+                        {
                             self.text_decoration.color = Some(c);
                         }
                     }
@@ -495,7 +508,9 @@ impl ComputedStyle {
                 }
             },
             "text-decoration-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.text_decoration.color = Some(c);
                 }
             },
@@ -575,7 +590,7 @@ impl ComputedStyle {
 
             // -- Background ---------------------------------------------
             "background-color" | "background" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_with_scheme(value, self.is_dark_scheme()) {
                     self.background_color = c;
                 }
             },
@@ -589,7 +604,12 @@ impl ComputedStyle {
                         "circle" => ListStyleType::Circle,
                         "square" => ListStyleType::Square,
                         "decimal" => ListStyleType::Decimal,
-                        _ => return,
+                        "decimal-leading-zero" => ListStyleType::DecimalLeadingZero,
+                        "lower-alpha" | "lower-latin" => ListStyleType::LowerAlpha,
+                        "upper-alpha" | "upper-latin" => ListStyleType::UpperAlpha,
+                        "lower-roman" => ListStyleType::LowerRoman,
+                        "upper-roman" => ListStyleType::UpperRoman,
+                        other => ListStyleType::Custom(other.to_string()),
                     };
                 }
             },
@@ -1246,7 +1266,7 @@ impl ComputedStyle {
             "accent-color" => {
                 if let Some("auto") = as_keyword(value) {
                     self.accent_color = None;
-                } else if let Some(c) = resolve_color(value) {
+                } else if let Some(c) = resolve_color_with_scheme(value, self.is_dark_scheme()) {
                     self.accent_color = Some(c);
                 }
             },
@@ -1255,7 +1275,9 @@ impl ComputedStyle {
             "caret-color" => {
                 if let Some("auto") = as_keyword(value) {
                     self.caret_color = None;
-                } else if let Some(c) = resolve_color_or_current(value, self.color) {
+                } else if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.caret_color = Some(c);
                 }
             },
@@ -1337,7 +1359,9 @@ impl ComputedStyle {
                 self.outline_width = resolve_length(value, parent_font_size);
             },
             "outline-color" => {
-                if let Some(c) = resolve_color_or_current(value, self.color) {
+                if let Some(c) =
+                    resolve_color_or_current_with_scheme(value, self.color, self.is_dark_scheme())
+                {
                     self.outline_color = c;
                 }
             },
@@ -1362,7 +1386,8 @@ impl ComputedStyle {
                     for v in vs {
                         if let Some(s) = resolve_border_style(v) {
                             self.outline_style = s;
-                        } else if let Some(c) = resolve_color(v) {
+                        } else if let Some(c) = resolve_color_with_scheme(v, self.is_dark_scheme())
+                        {
                             self.outline_color = c;
                         } else {
                             let len = resolve_length(v, parent_font_size);

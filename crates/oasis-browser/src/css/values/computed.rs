@@ -637,6 +637,12 @@ impl Default for ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Whether this element's `color-scheme` resolves to dark mode.
+    /// Used by `light-dark()` to pick the dark argument.
+    pub fn is_dark_scheme(&self) -> bool {
+        matches!(self.color_scheme, ColorScheme::Dark)
+    }
+
     /// Return the serialized CSS value for a given property name.
     ///
     /// Handles the ~20 most common properties queried via
@@ -827,7 +833,7 @@ impl ComputedStyle {
             // Inherited visibility.
             visibility: parent.visibility,
             // Inherited list properties.
-            list_style_type: parent.list_style_type,
+            list_style_type: parent.list_style_type.clone(),
             list_style_position: parent.list_style_position,
             // Inherited table properties.
             border_collapse: parent.border_collapse,

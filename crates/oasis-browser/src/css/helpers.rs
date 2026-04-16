@@ -429,10 +429,15 @@ fn parse_color_mix_function(body: &[&CssToken]) -> Option<CssColor> {
             }
         },
     };
-    // Interpolate in linear-sRGB for correctness (applies to both
-    // `in srgb` and as a sensible fallback for `in oklch` etc.).
-    let _ = space; // recorded but not yet used for space-specific mixing
-    let (r, g, b, a) = mix_srgb_linear(c1, c2, w1, w2);
+    let (r, g, b, a) = match space.as_str() {
+        "oklch" => mix_oklch(c1, c2, w1, w2),
+        "oklab" => mix_oklab(c1, c2, w1, w2),
+        "hsl" => mix_hsl(c1, c2, w1, w2),
+        "srgb-linear" => mix_srgb_linear(c1, c2, w1, w2),
+        // `in srgb` and any unrecognised space fall back to linear-sRGB
+        // interpolation which is perceptually reasonable.
+        _ => mix_srgb_linear(c1, c2, w1, w2),
+    };
     Some(CssColor::new(r, g, b, a))
 }
 
@@ -458,14 +463,45 @@ fn parse_color_mix_arg(tokens: &[&CssToken]) -> Option<(CssColor, Option<f32>)> 
     Some((color, pct))
 }
 
-/// Parse `light-dark(light-color, dark-color)`. We always resolve to
-/// the light-mode color since we don't yet track a color-scheme
-/// context at parse time.
+/// Parse `light-dark(light-color, dark-color)`. Returns the light
+/// color for backwards compatibility with callers that go through
+/// `try_parse_color`. Use [`try_parse_light_dark`] to get both colors
+/// so the cascade can defer resolution to computed-value time.
 fn parse_light_dark_function(body: &[&CssToken]) -> Option<CssColor> {
+    let (light, _dark) = parse_light_dark_pair(body)?;
+    Some(light)
+}
+
+/// Parse `light-dark(light, dark)` and return both colours so the
+/// declaration parser can store them as `CssValue::LightDark`.
+pub(crate) fn try_parse_light_dark(tokens: &[CssToken]) -> Option<(CssColor, CssColor)> {
+    let non_ws: Vec<_> = tokens
+        .iter()
+        .filter(|t| !matches!(t, CssToken::Whitespace))
+        .collect();
+    if non_ws.is_empty() {
+        return None;
+    }
+    if let CssToken::Function(name) = non_ws[0]
+        && name.eq_ignore_ascii_case("light-dark")
+    {
+        let body = function_body(&non_ws[1..]);
+        return parse_light_dark_pair(&body);
+    }
+    None
+}
+
+/// Internal: extract both arguments of `light-dark()`.
+fn parse_light_dark_pair(body: &[&CssToken]) -> Option<(CssColor, CssColor)> {
     let args = split_top_level_commas(body);
-    let first = args.first()?;
-    let owned: Vec<CssToken> = first.iter().copied().cloned().collect();
-    try_parse_color(&owned)
+    if args.len() != 2 {
+        return None;
+    }
+    let light_owned: Vec<CssToken> = args[0].iter().copied().cloned().collect();
+    let dark_owned: Vec<CssToken> = args[1].iter().copied().cloned().collect();
+    let light = try_parse_color(&light_owned)?;
+    let dark = try_parse_color(&dark_owned)?;
+    Some((light, dark))
 }
 
 // -------------------------------------------------------------------
@@ -615,6 +651,116 @@ fn mix_srgb_linear(c1: CssColor, c2: CssColor, w1: f32, w2: f32) -> (u8, u8, u8,
         (linear_to_gamma_srgb(b).clamp(0.0, 1.0) * 255.0).round() as u8,
         (a.clamp(0.0, 1.0) * 255.0).round() as u8,
     )
+}
+
+/// Convert gamma-encoded sRGB bytes to OKLab (L in 0..1, a/b around 0).
+fn srgb_to_oklab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r_lin = gamma_to_linear_srgb(r as f32 / 255.0);
+    let g_lin = gamma_to_linear_srgb(g as f32 / 255.0);
+    let b_lin = gamma_to_linear_srgb(b as f32 / 255.0);
+    // linear sRGB → LMS (inverse of the OKLab→sRGB matrix).
+    let l_ = 0.412_221_5 * r_lin + 0.536_332_55 * g_lin + 0.051_445_96 * b_lin;
+    let m_ = 0.211_903_5 * r_lin + 0.680_699_5 * g_lin + 0.107_396_96 * b_lin;
+    let s_ = 0.088_302_46 * r_lin + 0.281_718_84 * g_lin + 0.629_978_7 * b_lin;
+    // LMS → LMS' (cube root).
+    let l_cr = l_.max(0.0).cbrt();
+    let m_cr = m_.max(0.0).cbrt();
+    let s_cr = s_.max(0.0).cbrt();
+    // LMS' → OKLab.
+    let l = 0.210_454_26 * l_cr + 0.793_617_8 * m_cr - 0.004_072_047 * s_cr;
+    let a = 1.977_998_5 * l_cr - 2.428_592_2 * m_cr + 0.450_593_7 * s_cr;
+    let ob = 0.025_904_037 * l_cr + 0.782_771_77 * m_cr - 0.808_675_77 * s_cr;
+    (l, a, ob)
+}
+
+/// Convert gamma-encoded sRGB bytes to OKLCH (L 0..1, C >= 0, H degrees).
+fn srgb_to_oklch(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (l, a, b_val) = srgb_to_oklab(r, g, b);
+    let c = (a * a + b_val * b_val).sqrt();
+    let h = b_val.atan2(a).to_degrees();
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    (l, c, h)
+}
+
+/// Convert gamma-encoded sRGB bytes to HSL (H degrees, S/L 0..100).
+fn srgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < f32::EPSILON {
+        return (0.0, 0.0, l * 100.0);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if (max - rf).abs() < f32::EPSILON {
+        let mut h = (gf - bf) / d;
+        if gf < bf {
+            h += 6.0;
+        }
+        h
+    } else if (max - gf).abs() < f32::EPSILON {
+        (bf - rf) / d + 2.0
+    } else {
+        (rf - gf) / d + 4.0
+    };
+    (h * 60.0, s * 100.0, l * 100.0)
+}
+
+/// Interpolate two CssColors in OKLCH with hue interpolation (shorter arc).
+fn mix_oklch(c1: CssColor, c2: CssColor, w1: f32, w2: f32) -> (u8, u8, u8, u8) {
+    let (l1, ch1, h1) = srgb_to_oklch(c1.r, c1.g, c1.b);
+    let (l2, ch2, h2) = srgb_to_oklch(c2.r, c2.g, c2.b);
+    let l = l1 * w1 + l2 * w2;
+    let c = ch1 * w1 + ch2 * w2;
+    // Shorter-arc hue interpolation.
+    let mut dh = h2 - h1;
+    if dh > 180.0 {
+        dh -= 360.0;
+    } else if dh < -180.0 {
+        dh += 360.0;
+    }
+    let h = ((h1 + dh * w2) % 360.0 + 360.0) % 360.0;
+    let (r, g, b) = oklch_to_srgb(l, c, h);
+    let a = (c1.a as f32 / 255.0) * w1 + (c2.a as f32 / 255.0) * w2;
+    (r, g, b, (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// Interpolate two CssColors in OKLab.
+fn mix_oklab(c1: CssColor, c2: CssColor, w1: f32, w2: f32) -> (u8, u8, u8, u8) {
+    let (l1, a1, b1) = srgb_to_oklab(c1.r, c1.g, c1.b);
+    let (l2, a2, b2) = srgb_to_oklab(c2.r, c2.g, c2.b);
+    let l = l1 * w1 + l2 * w2;
+    let a = a1 * w1 + a2 * w2;
+    let b = b1 * w1 + b2 * w2;
+    let (r, g, bv) = oklab_to_srgb(l, a, b);
+    let alpha = (c1.a as f32 / 255.0) * w1 + (c2.a as f32 / 255.0) * w2;
+    (r, g, bv, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// Interpolate two CssColors in HSL with hue interpolation (shorter arc).
+fn mix_hsl(c1: CssColor, c2: CssColor, w1: f32, w2: f32) -> (u8, u8, u8, u8) {
+    let (h1, s1, l1) = srgb_to_hsl(c1.r, c1.g, c1.b);
+    let (h2, s2, l2) = srgb_to_hsl(c2.r, c2.g, c2.b);
+    let s = s1 * w1 + s2 * w2;
+    let l = l1 * w1 + l2 * w2;
+    // Shorter-arc hue interpolation.
+    let mut dh = h2 - h1;
+    if dh > 180.0 {
+        dh -= 360.0;
+    } else if dh < -180.0 {
+        dh += 360.0;
+    }
+    let h = ((h1 + dh * w2) % 360.0 + 360.0) % 360.0;
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    let alpha = (c1.a as f32 / 255.0) * w1 + (c2.a as f32 / 255.0) * w2;
+    (r, g, b, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
 pub(crate) fn parse_hex_color(hex: &str) -> Option<CssColor> {
@@ -1367,12 +1513,60 @@ mod tests {
     }
 
     #[test]
+    fn color_mix_oklch_red_blue() {
+        let tokens = lex("color-mix(in oklch, red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        // OKLCH shorter-arc hue interpolation between red (~30°) and
+        // blue (~264°) should produce a distinct result from sRGB.
+        assert!(c.r > 0 || c.g > 0 || c.b > 0, "non-black result");
+    }
+
+    #[test]
+    fn color_mix_oklab_50_50() {
+        let tokens = lex("color-mix(in oklab, red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert!(c.r > 0 && c.b > 0, "both channels present");
+    }
+
+    #[test]
+    fn color_mix_hsl_red_blue() {
+        let tokens = lex("color-mix(in hsl, red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        // HSL shorter-arc hue interpolation between red (0°) and blue
+        // (240°) goes through magenta (~300°), so green should be low.
+        assert!(c.g < 50, "HSL red+blue should not be green, got g={}", c.g);
+    }
+
+    #[test]
+    fn color_mix_srgb_linear_explicit() {
+        // Explicit `srgb-linear` should produce the same as default sRGB.
+        let tokens = lex("color-mix(in srgb-linear, red, blue)");
+        let c = try_parse_color(&tokens).unwrap();
+        assert!((c.r as i16 - 188).abs() <= 5, "red ~188, got {}", c.r);
+    }
+
+    #[test]
     fn light_dark_picks_light() {
-        // We don't yet track a color-scheme context, so light-dark()
-        // resolves to its first argument.
+        // light-dark() via try_parse_color still resolves to light.
         let tokens = lex("light-dark(red, blue)");
         let c = try_parse_color(&tokens).unwrap();
         assert_eq!(c, CssColor::new(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn light_dark_pair_both() {
+        let tokens = lex("light-dark(red, blue)");
+        let (light, dark) = try_parse_light_dark(&tokens).unwrap();
+        assert_eq!(light, CssColor::new(255, 0, 0, 255));
+        assert_eq!(dark, CssColor::new(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn light_dark_pair_hex() {
+        let tokens = lex("light-dark(#fff, #000)");
+        let (light, dark) = try_parse_light_dark(&tokens).unwrap();
+        assert_eq!(light, CssColor::new(255, 255, 255, 255));
+        assert_eq!(dark, CssColor::new(0, 0, 0, 255));
     }
 
     // ---------------------------------------------------------------

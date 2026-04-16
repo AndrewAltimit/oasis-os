@@ -245,6 +245,7 @@ fn triage_one(path: &Path, w: f32, h: f32, slow_budget: Duration) -> Outcome {
             height: h,
             visible_height: h,
             focused_node: None,
+            counter_styles: Vec::new(),
         };
         let paint_result = paint_page(&layout, &mut backend, vp, &HashMap::new());
         (layout_box_count, backend.call_count, paint_result.is_ok())

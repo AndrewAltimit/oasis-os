@@ -915,6 +915,35 @@ fn aspect_ratio_ignored_when_width_is_auto() {
 }
 
 #[test]
+fn replaced_aspect_ratio_derives_height() {
+    // A block-level <hr> with aspect-ratio should derive height from
+    // the laid-out width and the ratio.
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.aspect_ratio = Some(2.0); // width/height = 2 → h = w/2
+    let mut hr = LayoutBox::new(
+        BoxType::Replaced(ReplacedContent::HorizontalRule),
+        style,
+        None,
+    );
+    hr.children = Vec::new();
+
+    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+    parent.dimensions.content.x = 0.0;
+    parent.dimensions.content.y = 0.0;
+    parent.dimensions.content.width = 320.0;
+    parent.children = vec![hr];
+    layout_block_children(&mut parent, &m);
+    // HorizontalRule is block-level, stretches to 320px, aspect-ratio
+    // 2:1 should produce height = 160.
+    let h = parent.children[0].dimensions.content.height;
+    assert!(
+        (h - 160.0).abs() < 1.0,
+        "expected ~160 for 320px wide 2:1, got {h}"
+    );
+}
+
+#[test]
 fn parent_child_bottom_margin_collapsing() {
     let m = FixedMeasurer;
 

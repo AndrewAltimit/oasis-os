@@ -456,6 +456,7 @@ impl BrowserWidget {
             visited_urls: Some(&self.visited_urls),
             focused_node: self.focused_node,
             containers: self.container_lookup.as_ref(),
+            global_layers: None,
         };
 
         let mut any_changed = false;
@@ -892,6 +893,7 @@ impl BrowserWidget {
             visited_urls: Some(&self.visited_urls),
             focused_node: self.focused_node,
             containers: self.container_lookup.as_ref(),
+            global_layers: None,
         };
 
         let mut any_changed = false;

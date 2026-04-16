@@ -129,6 +129,38 @@ pub struct CascadeContext<'a> {
     /// conditions during cascade. `None` on the first cascade pass
     /// before layout has run; populated for the second pass.
     pub containers: Option<&'a ContainerLookup>,
+    /// Global layer name → index map for cross-stylesheet `@layer`
+    /// ordering. Built from all stylesheets before cascade.
+    /// `None` falls back to sheet-local ordering.
+    pub global_layers: Option<&'a GlobalLayerMap>,
+}
+
+/// Global layer ordering map. Maps `(sheet_idx, local_layer_idx)` to
+/// a global layer index so that the same `@layer` name in different
+/// stylesheets gets the same cascade position.
+pub type GlobalLayerMap = FxHashMap<(u16, u16), u16>;
+
+/// Build a global layer ordering table from all stylesheets.
+///
+/// Layer names are assigned global indices in the order they are first
+/// encountered across all stylesheets (which follows source order).
+/// Subsequent sheets that declare the same layer name reuse the index.
+pub fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
+    let mut name_to_global: FxHashMap<&str, u16> = FxHashMap::default();
+    let mut next_global: u16 = 0;
+    let mut map = GlobalLayerMap::default();
+
+    for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+        for (local_idx, name) in sheet.layers.iter().enumerate() {
+            let global = *name_to_global.entry(name.as_str()).or_insert_with(|| {
+                let idx = next_global;
+                next_global = next_global.saturating_add(1);
+                idx
+            });
+            map.insert((sheet_idx as u16, local_idx as u16), global);
+        }
+    }
+    map
 }
 
 /// Per-element container metadata feeding `@container` rule evaluation.
@@ -142,6 +174,8 @@ pub struct ContainerEntry {
     pub height: f32,
     /// The container type — `InlineSize` rejects block-axis queries.
     pub container_type: crate::css::values::types::ContainerType,
+    /// Custom properties on the container element, for `style()` queries.
+    pub custom_properties: FxHashMap<String, String>,
 }
 
 /// Map of container `NodeId` → metadata. Built post-layout from a walk
@@ -187,6 +221,7 @@ pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> Con
                     width: b.dimensions.content.width,
                     height: b.dimensions.content.height,
                     container_type: b.style.container_type,
+                    custom_properties: b.style.custom_properties.clone(),
                 },
             );
         }
@@ -275,6 +310,16 @@ pub fn style_tree(
     // Build selector index for O(1) bucket lookups instead of O(rules).
     let index = SelectorIndex::build(stylesheets);
     cascade_progress(101, 0); // marker: SelectorIndex built
+
+    // Build global layer ordering for cross-stylesheet @layer merging.
+    let glm = build_global_layer_map(stylesheets);
+    let ctx = &CascadeContext {
+        hover_node: ctx.hover_node,
+        visited_urls: ctx.visited_urls,
+        focused_node: ctx.focused_node,
+        containers: ctx.containers,
+        global_layers: Some(&glm),
+    };
 
     // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
     let inline_map: FxHashMap<NodeId, &[Declaration]> = inline_styles

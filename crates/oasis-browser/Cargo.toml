@@ -9,8 +9,9 @@ authors.workspace = true
 documentation = "https://docs.rs/oasis-browser"
 
 [features]
-default = ["web-fonts"]
+default = ["web-fonts", "canvas"]
 javascript = ["dep:oasis-js"]
+canvas = []
 web-fonts = ["dep:fontdue"]
 webp = ["dep:image"]
 parallel-style = ["dep:rayon"]

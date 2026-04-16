@@ -56,7 +56,7 @@ use text::paint_inline_content;
 // Public types
 
 /// Viewport and scroll parameters for painting.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PaintViewport {
     /// Vertical scroll offset in pixels.
     pub scroll_y: f32,
@@ -77,6 +77,9 @@ pub struct PaintViewport {
     /// the recorder to draw a caret in focused text inputs and pick
     /// the `caret-color` from that element's computed style.
     pub focused_node: Option<NodeId>,
+    /// `@counter-style` rules collected from stylesheets, used for
+    /// custom list-marker formatting. Empty by default.
+    pub counter_styles: Vec<crate::css::parser::CounterStyleRule>,
 }
 // -------------------------------------------------------------------
 
@@ -141,6 +144,9 @@ pub(super) struct PaintContext {
     /// perspective(200px)`. `None` means "no 3D ancestor matrix
     /// available — fall back to the 2D affine".
     ambient_screen_matrix: Option<crate::transform::Matrix3d>,
+    /// `@counter-style` rules from the stylesheets, used to format
+    /// custom list markers.
+    counter_styles: Vec<crate::css::parser::CounterStyleRule>,
 }
 
 /// A perspective frustum inherited from a `perspective:` ancestor.
@@ -185,6 +191,7 @@ pub fn paint(
         perspective_context: None,
         preserved_3d: None,
         ambient_screen_matrix: None,
+        counter_styles: viewport.counter_styles.clone(),
     };
 
     if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
@@ -1314,21 +1321,24 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
 mod tests {
     use super::*;
     use crate::css::values::{BorderStyle, ComputedStyle, TransformFunction};
-    use crate::layout::box_model::{EdgeSizes, ListMarker, Rect, ReplacedContent};
+    use crate::layout::box_model::{EdgeSizes, ListMarker, ListMarkerStyle, Rect, ReplacedContent};
     use crate::test_utils::{DrawCall, MockBackend};
     use oasis_types::backend::Color;
 
     /// Default test viewport (480x272 at origin, no scroll).
-    const TEST_VP: PaintViewport = PaintViewport {
-        scroll_y: 0.0,
-        scroll_x: 0.0,
-        x: 0,
-        y: 0,
-        width: 480.0,
-        height: 272.0,
-        visible_height: 272.0,
-        focused_node: None,
-    };
+    fn test_vp() -> PaintViewport {
+        PaintViewport {
+            scroll_y: 0.0,
+            scroll_x: 0.0,
+            x: 0,
+            y: 0,
+            width: 480.0,
+            height: 272.0,
+            visible_height: 272.0,
+            focused_node: None,
+            counter_styles: Vec::new(),
+        }
+    }
 
     // ---------------------------------------------------------------
     // Helper: build a simple block layout box
@@ -1359,7 +1369,7 @@ mod tests {
         let lb = make_block(0.0, 0.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // No fill_rect calls for the transparent background.
         assert_eq!(backend.fill_rect_count(), 0);
@@ -1374,7 +1384,7 @@ mod tests {
         let lb = make_block(10.0, 20.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert!(backend.fill_rect_count() > 0);
         // First fill_rect should be the background.
@@ -1401,7 +1411,7 @@ mod tests {
         let lb = make_block(0.0, 0.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // No calls at all (transparent bg + zero borders).
         assert_eq!(backend.fill_rect_count(), 0);
@@ -1424,7 +1434,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // Should have exactly one fill_rect for the top border.
         assert_eq!(backend.fill_rect_count(), 1);
@@ -1461,7 +1471,7 @@ mod tests {
         let mut link_map = HashMap::new();
         link_map.insert(5_usize, "https://example.com".to_string());
 
-        let result = paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
+        let result = paint(&root, &mut backend, test_vp(), &link_map).unwrap();
 
         assert!(!result.links.is_empty());
         assert_eq!(result.links[0].href, "https://example.com");
@@ -1483,7 +1493,7 @@ mod tests {
         let lb = make_block(0.0, -100.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert_eq!(
             backend.calls.len(),
@@ -1502,7 +1512,7 @@ mod tests {
         let lb = make_block(0.0, 500.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert_eq!(
             backend.calls.len(),
@@ -1520,7 +1530,7 @@ mod tests {
         let lb = make_block(0.0, 100.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert!(!backend.calls.is_empty(), "onscreen box should be painted");
     }
@@ -1544,7 +1554,7 @@ mod tests {
         let link_map = HashMap::new();
         // The box is at default (0,0) with no content -- that is
         // fine; we just check that the bullet character is drawn.
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
         assert!(
@@ -1564,13 +1574,13 @@ mod tests {
 
         let lb = LayoutBox::new(
             BoxType::ListItem {
-                marker: ListMarker::Decimal(3),
+                marker: ListMarker::Ordered(ListMarkerStyle::Decimal, 3),
             },
             style,
             Some(0),
         );
         let link_map = HashMap::new();
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
         assert!(
@@ -1612,7 +1622,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // Should have 4 fill_rects (border) + 1 draw_text (X symbol).
         let fill_count = backend.fill_rect_count();
@@ -1653,7 +1663,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // The draw_text call should use the alt text, not the X.
         let text_call = backend
@@ -1745,7 +1755,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        let result = paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        let result = paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         // margin_box height = content(500) + margin(10+10) = 520
         assert!((result.content_height - 520.0).abs() < f32::EPSILON);
@@ -1807,7 +1817,7 @@ mod tests {
         let mut grandparent = make_block(0.0, 0.0, 200.0, 200.0, grandparent_style);
         grandparent.children.push(parent);
 
-        paint(&grandparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&grandparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let polygon = backend
             .polygon_calls()
@@ -1852,7 +1862,7 @@ mod tests {
         let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         assert!(
             backend.fill_polygon_count() > 0,
@@ -1877,7 +1887,7 @@ mod tests {
         let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         // No background draw at all — the entire subtree is culled.
         assert_eq!(backend.fill_rect_count(), 0);
@@ -1907,7 +1917,7 @@ mod tests {
         let mut gparent = make_block(0.0, 0.0, 200.0, 200.0, gparent_style);
         gparent.children.push(parent);
 
-        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&gparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 0);
         assert_eq!(backend.fill_polygon_count(), 0);
@@ -1946,7 +1956,7 @@ mod tests {
         let mut ggparent = make_block(0.0, 0.0, 200.0, 200.0, ggparent_style);
         ggparent.children.push(gparent);
 
-        paint(&ggparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&ggparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let yellow_polygons: Vec<_> = backend
             .polygon_calls()
@@ -1991,7 +2001,7 @@ mod tests {
         let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let red_polygons: Vec<_> = backend
             .polygon_calls()
@@ -2044,7 +2054,7 @@ mod tests {
         let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let green_polygons: Vec<_> = backend
             .polygon_calls()
@@ -2106,7 +2116,7 @@ mod tests {
         let mut parent = make_block(0.0, 0.0, 300.0, 300.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let offending = backend.polygon_calls().into_iter().find(|c| {
             matches!(
@@ -2167,7 +2177,7 @@ mod tests {
         let mut gp = make_block(0.0, 0.0, 400.0, 400.0, gp_style);
         gp.children.push(parent);
 
-        paint(&gp, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&gp, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let quad = backend
             .polygon_calls()
@@ -2231,7 +2241,7 @@ mod tests {
         let mut gparent = make_block(0.0, 0.0, 300.0, 300.0, gparent_style);
         gparent.children.push(parent);
 
-        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&gparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let quad = backend
             .polygon_calls()
@@ -2307,7 +2317,7 @@ mod tests {
         let mut gparent = make_block(0.0, 0.0, 400.0, 400.0, gparent_style);
         gparent.children.push(parent);
 
-        paint(&gparent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&gparent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         // Each child's background projects through the preserve-3d
         // parent's `ambient_screen_matrix`, so both come out as
@@ -2373,7 +2383,7 @@ mod tests {
         let child = make_block(100.0, 50.0, 80.0, 40.0, child_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let polygon = backend
             .polygon_calls()
@@ -2433,7 +2443,7 @@ mod tests {
         let mut parent = make_block(100.0, 100.0, 100.0, 100.0, parent_style);
         parent.children.push(child);
 
-        paint(&parent, &mut backend, TEST_VP, &HashMap::new()).unwrap();
+        paint(&parent, &mut backend, test_vp(), &HashMap::new()).unwrap();
 
         let polygon = backend
             .polygon_calls()
@@ -2513,7 +2523,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&lb, &mut backend, test_vp(), &link_map).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         if let DrawCall::FillRect { w, h, color, .. } = &backend.calls[0] {
@@ -2713,7 +2723,7 @@ mod tests {
         root.children.push(child_a);
         root.children.push(child_b);
 
-        paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&root, &mut backend, test_vp(), &link_map).unwrap();
 
         // Both children create stacking contexts.
         // z-index=1 (green) should be painted before z-index=2 (red).
@@ -2790,7 +2800,7 @@ mod tests {
         root.children.push(child_neg);
         root.children.push(child_auto);
 
-        paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
+        paint(&root, &mut backend, test_vp(), &link_map).unwrap();
 
         let fill_calls: Vec<_> = backend
             .calls

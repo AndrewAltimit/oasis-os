@@ -299,11 +299,22 @@ fn box_type_for_element(_elem: &ElementData, style: &ComputedStyle) -> BoxType {
 
 /// Resolve the list marker type from the computed style.
 fn resolve_list_marker(style: &ComputedStyle) -> ListMarker {
-    match style.list_style_type {
+    use crate::layout::box_model::ListMarkerStyle;
+    match &style.list_style_type {
         ListStyleType::Disc => ListMarker::Disc,
         ListStyleType::Circle => ListMarker::Circle,
         ListStyleType::Square => ListMarker::Square,
-        ListStyleType::Decimal => ListMarker::Decimal(1),
+        ListStyleType::Decimal => ListMarker::Ordered(ListMarkerStyle::Decimal, 1),
+        ListStyleType::DecimalLeadingZero => {
+            ListMarker::Ordered(ListMarkerStyle::DecimalLeadingZero, 1)
+        },
+        ListStyleType::LowerAlpha => ListMarker::Ordered(ListMarkerStyle::LowerAlpha, 1),
+        ListStyleType::UpperAlpha => ListMarker::Ordered(ListMarkerStyle::UpperAlpha, 1),
+        ListStyleType::LowerRoman => ListMarker::Ordered(ListMarkerStyle::LowerRoman, 1),
+        ListStyleType::UpperRoman => ListMarker::Ordered(ListMarkerStyle::UpperRoman, 1),
+        ListStyleType::Custom(name) => {
+            ListMarker::Ordered(ListMarkerStyle::Custom(name.clone()), 1)
+        },
         ListStyleType::None => ListMarker::None,
     }
 }
