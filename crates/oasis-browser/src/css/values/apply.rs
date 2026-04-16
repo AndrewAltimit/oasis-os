@@ -4304,4 +4304,91 @@ mod tests {
         );
         assert_eq!(s.border_left_width, 0.0);
     }
+
+    #[test]
+    fn inset_inline_start_resolves_to_left_in_ltr() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        // direction defaults to LTR
+        s.apply_declaration(
+            "inset-inline-start",
+            &CssValue::Length(12.0, LengthUnit::Px),
+            16.0,
+        );
+        assert!(
+            matches!(s.left, Dimension::Px(v) if (v - 12.0).abs() < f32::EPSILON),
+            "inset-inline-start → left in LTR, got {:?}",
+            s.left,
+        );
+        assert!(
+            matches!(s.right, Dimension::Auto),
+            "right should be untouched in LTR, got {:?}",
+            s.right,
+        );
+    }
+
+    #[test]
+    fn inset_inline_start_resolves_to_right_in_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "inset-inline-start",
+            &CssValue::Length(12.0, LengthUnit::Px),
+            16.0,
+        );
+        assert!(
+            matches!(s.right, Dimension::Px(v) if (v - 12.0).abs() < f32::EPSILON),
+            "inset-inline-start → right in RTL, got {:?}",
+            s.right,
+        );
+        assert!(
+            matches!(s.left, Dimension::Auto),
+            "left should be untouched in RTL, got {:?}",
+            s.left,
+        );
+    }
+
+    #[test]
+    fn inset_inline_end_resolves_to_right_in_ltr() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "inset-inline-end",
+            &CssValue::Length(24.0, LengthUnit::Px),
+            16.0,
+        );
+        assert!(
+            matches!(s.right, Dimension::Px(v) if (v - 24.0).abs() < f32::EPSILON),
+            "inset-inline-end → right in LTR, got {:?}",
+            s.right,
+        );
+        assert!(
+            matches!(s.left, Dimension::Auto),
+            "left should be untouched in LTR, got {:?}",
+            s.left,
+        );
+    }
+
+    #[test]
+    fn inset_inline_end_resolves_to_left_in_rtl() {
+        use crate::css::parser::LengthUnit;
+        let mut s = ComputedStyle::default();
+        s.direction = TextDirection::Rtl;
+        s.apply_declaration(
+            "inset-inline-end",
+            &CssValue::Length(24.0, LengthUnit::Px),
+            16.0,
+        );
+        assert!(
+            matches!(s.left, Dimension::Px(v) if (v - 24.0).abs() < f32::EPSILON),
+            "inset-inline-end → left in RTL, got {:?}",
+            s.left,
+        );
+        assert!(
+            matches!(s.right, Dimension::Auto),
+            "right should be untouched in RTL, got {:?}",
+            s.right,
+        );
+    }
 }
