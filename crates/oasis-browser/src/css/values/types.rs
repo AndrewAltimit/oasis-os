@@ -216,7 +216,12 @@ pub struct FontFamily {
 impl FontFamily {
     /// `sans-serif` (the default).
     pub const SANS_SERIF: FontFamily = FontFamily {
-        families: Vec::new(), // empty = sans-serif default
+        // `const` context cannot heap-allocate, so `families` is empty.
+        // `generic_fallback()` treats empty as SansSerif.
+        // NOTE: `SANS_SERIF != FontFamily::default()` because `default()`
+        // allocates `vec![SansSerif]`. Prefer `FontFamily::default()` at
+        // runtime when equality semantics matter.
+        families: Vec::new(),
     };
 
     /// Create a font family from a single generic name.

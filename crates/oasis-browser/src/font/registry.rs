@@ -343,7 +343,9 @@ fn best_match(
 
     let mut best: Option<(FontId, u32)> = None;
     for &id in ids {
-        let f = &fonts[id.0 as usize];
+        let Some(f) = fonts.get(id.0 as usize) else {
+            continue;
+        };
         // Style penalty: exact match = 0, mismatch = 1000.
         let style_penalty = if f.style == target_style {
             0u32

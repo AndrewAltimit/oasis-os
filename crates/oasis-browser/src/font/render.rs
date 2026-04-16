@@ -80,8 +80,8 @@ pub fn render_web_font_text(
     let mut cursor_x = x as f32;
     let baseline_y = y as f32 + ascent;
 
+    let size_tenths = (fs * 10.0) as u32;
     for ch in text.chars() {
-        let size_tenths = (fs * 10.0) as u32;
         let cache_key = (
             font_id.as_raw(),
             ch,
