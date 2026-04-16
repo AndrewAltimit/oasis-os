@@ -229,7 +229,7 @@ fn format_symbolic(symbols: &[String], n: usize) -> String {
 
 /// Additive system: greedy decomposition with (weight, symbol) pairs.
 fn format_additive(symbols: &[(i32, String)], n: usize) -> String {
-    if symbols.is_empty() || n > i32::MAX as usize {
+    if symbols.is_empty() || n == 0 || n > i32::MAX as usize {
         return n.to_string();
     }
     let mut val = n as i32;

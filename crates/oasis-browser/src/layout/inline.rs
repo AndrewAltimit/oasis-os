@@ -251,8 +251,23 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         // the penultimate line is more than 60%, try to rebalance.
         if last_w < available_width * 0.20 && prev_w > available_width * 0.60 {
             // Move the last fragment from the penultimate line to the
-            // last line (simple heuristic).
-            if let Some(frag) = lines[last_idx - 1].fragments.pop() {
+            // last line (simple heuristic). Prepend a space to the moved
+            // fragment since trim_line_boundary_spaces already stripped
+            // inter-word whitespace at line edges.
+            if let Some(mut frag) = lines[last_idx - 1].fragments.pop() {
+                if let InlineFragment::Text {
+                    ref mut text,
+                    ref mut width,
+                    ref style,
+                    ..
+                } = frag
+                    && !text.ends_with(' ')
+                    && !text.ends_with('\n')
+                {
+                    text.push(' ');
+                    let sw = measure_space(style.font_size, style.word_spacing, measurer);
+                    *width += sw;
+                }
                 lines[last_idx].fragments.insert(0, frag);
             }
         }
