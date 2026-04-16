@@ -337,6 +337,20 @@ enum PathCmd {
 /// Returns `None` if the node is not an SVG element or has no
 /// parseable content.
 pub fn parse_svg(doc: &Document, svg_node: NodeId) -> Option<SvgElement> {
+    parse_svg_with_styles(doc, svg_node, &[])
+}
+
+/// Parse an `<svg>` DOM node with access to computed CSS styles.
+///
+/// When `styles` is non-empty, animated properties (e.g. `opacity`
+/// from `@keyframes`) are read from the `ComputedStyle` instead of
+/// the DOM attribute, enabling CSS animation overrides to affect SVG
+/// rendering.
+pub fn parse_svg_with_styles(
+    doc: &Document,
+    svg_node: NodeId,
+    styles: &[Option<crate::css::values::ComputedStyle>],
+) -> Option<SvgElement> {
     let elem = doc.element(svg_node)?;
     if elem.tag.as_str() != "svg" {
         return None;
@@ -364,7 +378,7 @@ pub fn parse_svg(doc: &Document, svg_node: NodeId) -> Option<SvgElement> {
     let mut shapes = Vec::new();
     let parent_xf = AffineTransform::identity();
     let inherited = InheritedAttrs::default();
-    parse_children(doc, svg_node, &parent_xf, &inherited, &mut shapes);
+    parse_children(doc, svg_node, &parent_xf, &inherited, &mut shapes, styles);
 
     Some(SvgElement {
         width,
@@ -383,6 +397,7 @@ fn parse_children(
     parent_xf: &AffineTransform,
     inherited: &InheritedAttrs,
     shapes: &mut Vec<SvgShape>,
+    styles: &[Option<crate::css::values::ComputedStyle>],
 ) {
     let children = doc.get(parent_id).children.clone();
     for &child_id in &children {
@@ -414,9 +429,11 @@ fn parse_children(
         };
 
         if tag == "g" {
-            // Merge presentation attributes from this <g> with inherited context.
-            let merged = merge_inherited(elem, inherited);
-            parse_children(doc, child_id, &composed, &merged, shapes);
+            // Merge presentation attributes from this <g> with inherited
+            // context. When CSS styles are available (animation overrides),
+            // read animated opacity from ComputedStyle.
+            let merged = merge_inherited_with_styles(elem, inherited, child_id, styles);
+            parse_children(doc, child_id, &composed, &merged, shapes, styles);
         } else if let Some(mut shape) = parse_shape_inner(doc, child_id, elem, tag, inherited) {
             // Apply composed transform to the shape.
             let identity = AffineTransform::identity();
@@ -432,6 +449,29 @@ fn parse_children(
             shapes.push(shape);
         }
     }
+}
+
+/// Merge inherited attributes with optional CSS animation overrides.
+///
+/// When computed styles are available, animated properties (currently
+/// `opacity`) are read from the [`ComputedStyle`] so that `@keyframes`
+/// animation values flow into the SVG rendering.
+fn merge_inherited_with_styles(
+    elem: &ElementData,
+    parent: &InheritedAttrs,
+    node_id: NodeId,
+    styles: &[Option<crate::css::values::ComputedStyle>],
+) -> InheritedAttrs {
+    let mut merged = merge_inherited(elem, parent);
+    // Override opacity from ComputedStyle when CSS animations have set it.
+    if let Some(Some(style)) = styles.get(node_id) {
+        // CSS animation may set opacity on this node — use the
+        // computed value which includes animation overrides.
+        if style.opacity < 1.0 || elem.get_attribute("opacity").is_some() {
+            merged.opacity = Some(style.opacity);
+        }
+    }
+    merged
 }
 
 /// Merge a `<g>` element's presentation attributes with inherited context.
@@ -553,7 +593,7 @@ fn parse_defs_children(doc: &Document, defs_node: NodeId, defs: &mut SvgDefs) {
                 let mut shapes = Vec::new();
                 let xf = AffineTransform::identity();
                 let inh = InheritedAttrs::default();
-                parse_children(doc, child_id, &xf, &inh, &mut shapes);
+                parse_children(doc, child_id, &xf, &inh, &mut shapes, &[]);
                 defs.patterns.insert(
                     id,
                     SvgPatternDef {

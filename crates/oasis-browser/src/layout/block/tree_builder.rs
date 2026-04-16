@@ -142,7 +142,7 @@ fn build_box_for_node(
 
             // Handle <svg> as a replaced element.
             if elem.tag == TagName::Svg
-                && let Some(svg_elem) = crate::svg::parse_svg(doc, node_id)
+                && let Some(svg_elem) = crate::svg::parse_svg_with_styles(doc, node_id, styles)
             {
                 let replaced = ReplacedContent::Svg {
                     element: Box::new(svg_elem),
