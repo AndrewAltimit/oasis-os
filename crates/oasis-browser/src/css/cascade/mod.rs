@@ -154,7 +154,7 @@ pub fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
         for (local_idx, name) in sheet.layers.iter().enumerate() {
             let global = *name_to_global.entry(name.as_str()).or_insert_with(|| {
                 let idx = next_global;
-                next_global += 1;
+                next_global = next_global.saturating_add(1);
                 idx
             });
             map.insert((sheet_idx as u16, local_idx as u16), global);

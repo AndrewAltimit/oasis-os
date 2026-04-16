@@ -768,7 +768,6 @@ pub struct Stylesheet {
     /// named layer. Empty for stylesheets without any `@layer` rules.
     pub layers: Vec<String>,
     /// `@counter-style` registrations declared in this stylesheet.
-    /// Currently parse-only: not yet wired into list-item rendering.
     pub counter_styles: Vec<CounterStyleRule>,
     /// `@property` registrations declared in this stylesheet. Each
     /// supplies an `initial-value` fallback that the cascade seeds

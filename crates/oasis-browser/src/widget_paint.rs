@@ -167,6 +167,14 @@ impl BrowserWidget {
         // nodes (first paint after navigation).
         self.ensure_image_textures(backend);
 
+        // Collect @counter-style rules from author stylesheets for
+        // list-marker rendering.
+        let counter_styles: Vec<_> = self
+            .cached_author_sheets
+            .iter()
+            .flat_map(|s| s.counter_styles.iter().cloned())
+            .collect();
+
         // Paint layout tree via cached display list.
         if let Some(layout) = &self.layout_root {
             // Rebuild display list when layout changed or on first paint.
@@ -192,7 +200,7 @@ impl BrowserWidget {
                     height: buffered_h,
                     visible_height: content_h as f32,
                     focused_node: self.focused_node,
-                    counter_styles: Vec::new(),
+                    counter_styles: counter_styles.clone(),
                 };
 
                 // Record to display list (no draw calls emitted).
@@ -277,7 +285,7 @@ impl BrowserWidget {
                         height: buffered_h,
                         visible_height: content_h as f32,
                         focused_node: self.focused_node,
-                        counter_styles: Vec::new(),
+                        counter_styles: counter_styles.clone(),
                     };
                     let links = paint::record::record(
                         layout,
@@ -364,7 +372,7 @@ impl BrowserWidget {
                             height: buffered_h,
                             visible_height: content_h as f32,
                             focused_node: self.focused_node,
-                            counter_styles: Vec::new(),
+                            counter_styles: counter_styles.clone(),
                         };
                         let links = paint::record::record(
                             layout,

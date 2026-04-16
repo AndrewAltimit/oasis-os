@@ -1755,18 +1755,18 @@ fn parse_container_condition(name: Option<String>, raw: &str) -> ContainerCondit
     let mut features = Vec::new();
     let raw = raw.trim();
     if !raw.is_empty() {
-        // Check for `style(...)` queries first.
-        if let Some(inner) = raw.strip_prefix("style(").and_then(|s| s.strip_suffix(')')) {
-            if let Some(f) = parse_style_query(inner) {
-                features.push(f);
-            }
-        } else {
-            for part in split_css_and(raw) {
-                let inner = part
-                    .trim()
-                    .trim_start_matches('(')
-                    .trim_end_matches(')')
-                    .trim();
+        for part in split_css_and(raw) {
+            let trimmed = part.trim();
+            // Check for `style(...)` query in this part.
+            if let Some(inner) = trimmed
+                .strip_prefix("style(")
+                .and_then(|s| s.strip_suffix(')'))
+            {
+                if let Some(f) = parse_style_query(inner) {
+                    features.push(f);
+                }
+            } else {
+                let inner = trimmed.trim_start_matches('(').trim_end_matches(')').trim();
                 if let Some(f) = parse_container_feature(inner) {
                     features.push(f);
                 }
