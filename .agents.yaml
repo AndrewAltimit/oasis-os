@@ -8,14 +8,18 @@
 
 # List of enabled agents
 # NOTE: Some agents are only available in specific environments:
-# - Host-only agents: claude (needs subscription auth), gemini (needs Docker access)
+# - Host-only agents: claude (needs subscription auth)
 # - Container-only agents: opencode, crush (installed in openrouter-agents container)
 enabled_agents:
   - claude      # Anthropic's Claude Code (host-only, primary agent)
-  - gemini      # Google's Gemini CLI (host-only, for reviews)
+  # DISABLED: Google Gemini phased out due to updated AI principles (Feb 2026)
+  # allowing mass surveillance and autonomous weapons use cases.
+  # - gemini    # Google's Gemini CLI (host-only, for reviews) -- DISABLED
   # Containerized agents (automatically run in Docker when invoked)
   - opencode    # Open-source alternative (runs in container)
   - crush       # Charm Bracelet's multi-provider tool (runs in container)
+  # API-based agents (no CLI required)
+  - openrouter  # OpenRouter API (for diverse model access)
 
 # Agent priorities for different task types
 agent_priorities:
@@ -23,10 +27,10 @@ agent_priorities:
   issue_creation:
     - claude      # Best for implementation
 
-  # For reviewing PRs
+  # For reviewing PRs (multi-reviewer pipeline with profiles)
   pr_reviews:
-    - gemini      # Excellent for code review
-    - claude      # Fallback option
+    - claude      # Primary reviewer (security + quality profiles)
+    - openrouter  # Third reviewer (general profile, qwen model)
 
   # For implementing code fixes
   code_fixes:
@@ -76,18 +80,18 @@ rate_limits:
   # Agent-specific overrides
   claude:
     requests_per_minute: 20  # Claude can handle more
-  gemini:
-    requests_per_minute: 5   # More conservative for Gemini
+  # gemini:                    # DISABLED - Google surveillance/weapons policy
+  #   requests_per_minute: 5
+  openrouter:
+    requests_per_minute: 10
 
 # Model configuration overrides
 model_overrides:
-  # Gemini models
-  # Using explicit model specification with API key authentication
-  # Model names verified from gemini-config.json
-  gemini:
-    pro_model: gemini-3.1-pro-preview  # Latest preview model (NOT 3.0!)
-    flash_model: gemini-3-flash-preview  # Fast fallback model (Gemini 3 Flash)
-    default_model: gemini-3.1-pro-preview  # Primary model for PR reviews
+  # DISABLED: Google Gemini phased out due to updated AI principles (Feb 2026)
+  # gemini:
+  #   pro_model: gemini-3.1-pro-preview
+  #   flash_model: gemini-3-flash-preview
+  #   default_model: gemini-3.1-pro-preview
 
   # OpenRouter agents configuration
   opencode:
@@ -98,7 +102,11 @@ model_overrides:
     model: qwen/qwen-2.5-coder-32b-instruct
     temperature: 0.1  # Lower temperature for Crush
 
-# OpenRouter configuration (for future agents)
+  # OpenRouter models (for openrouter agent)
+  openrouter:
+    model: "qwen/qwen3.6-plus"
+
+# OpenRouter configuration
 openrouter:
   # API key must be provided as OPENROUTER_API_KEY environment variable
 
@@ -113,7 +121,7 @@ openrouter:
 # PR Review configuration
 pr_review:
   # Default agent for reviews (from enabled_agents)
-  default_agent: gemini
+  default_agent: claude
 
   # Review constraints
   max_words: 500
@@ -139,7 +147,7 @@ automation:
   # Maximum iterations before stopping (prevents infinite loops)
   max_auto_fix_iterations: 5
 
-  # Try autoformat (black, isort) before invoking AI
+  # Try autoformat (cargo fmt) before invoking AI
   autoformat_first: true
 
   # Categories of failures to auto-fix
@@ -177,8 +185,6 @@ advanced:
   # Non-interactive mode settings
   non_interactive_flags:
     claude: ["--print", "--dangerously-skip-permissions"]
-    # For gemini: Use -p for prompt and -m for model selection (both work reliably with API keys)
-    # Note: Only -p is passed by default; model selection uses .env configuration (GEMINI_PRIMARY_MODEL)
-    gemini: ["-p"]
+    # gemini: ["-p"]  # DISABLED - Google surveillance/weapons policy
     opencode: ["--non-interactive"]
     crush: ["--non-interactive", "--no-update"]
