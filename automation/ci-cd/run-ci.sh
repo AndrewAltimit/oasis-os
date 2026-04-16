@@ -5,7 +5,7 @@
 # automation-cli review respond/failure/precommit can call CI stages
 # generically. All Rust operations run inside Docker (rust-ci service).
 #
-# Usage: ./automation/ci-cd/run-ci.sh <stage> [extra-args...]
+# Usage: ./automation/ci-cd/run-ci.sh <stage>
 #
 # Stages:
 #   autoformat    - cargo fmt --all (format in-place, no --check)
@@ -15,7 +15,7 @@
 #   test          - cargo test --workspace
 #   build         - cargo build --workspace --release
 #   deny          - cargo deny check
-#   full          - format + lint-basic + test + build + deny
+#   full          - autoformat + format + lint-basic + test + build + deny
 
 set -euo pipefail
 
