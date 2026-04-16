@@ -77,11 +77,9 @@ is small enough to handle as a drive-by on a related PR.
 
 ### Compositor / mask
 
-- **`mask-size` / `mask-position` / `mask-repeat` for URL masks.**
-  URL masks currently stretch to layer bounds with nearest-neighbor
-  sampling. Wire `background_image_tiles` through `MaskParams` so
-  positioned / tiled / sized masks work. The stretched-to-fit path
-  already covers the rounded-avatar / logo-badge case.
+- ~~**`mask-size` / `mask-position` / `mask-repeat` for URL masks.**~~
+  Done — `background_image_tiles` wired through `MaskParams` for
+  positioned / tiled / sized URL masks.
 - **Real GPU read-modify-write for layer filters.** The filter
   + mask pop path drops the CSS blend mode (becomes `Normal`)
   because it reads back, composites via a plain alpha-over blit,
@@ -159,10 +157,12 @@ as individual issues — not a single epic.
 - **Font rendering quality across skins** — kerning, hinting,
   subpixel positioning. Especially on PSP where we have system
   TrueType fonts via `psp::font`.
-- **Image decoding error recovery** — corrupt JPEG/PNG currently
-  crashes the decode path. Should degrade to a placeholder.
-- **Network error UX** — timeout, DNS fail, TLS error should
-  produce a useful error page, not a blank screen.
+- ~~**Image decoding error recovery**~~ — Done. `catch_unwind`
+  wraps all format-specific decoders; decode failures produce a
+  broken-image placeholder instead of a blank space or crash.
+- ~~**Network error UX**~~ — Done. Error pages now categorize
+  failures (DNS, timeout, TLS, redirect loop) with styled
+  explanations and suggested actions.
 - **`@font-face` / web fonts** — completely missing. Fallback to
   system fonts works but looks wrong on branded pages.
 - **Accessibility** — ARIA roles are parsed but not exposed to

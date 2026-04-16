@@ -72,15 +72,17 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
 /// image exceeds `MAX_IMAGE_PIXELS`, it is automatically scaled down to
 /// fit within the pixel budget.
 ///
-/// For v1.0, this provides a basic BMP decoder. JPEG and PNG require
-/// external crate support (handled by the backend or crate features).
+/// Corrupt or malformed images are handled gracefully: decoder panics
+/// are caught via `catch_unwind` and treated as decode failures
+/// (returns `None`). Callers that need a visual placeholder for failed
+/// decodes should use [`broken_image_placeholder`].
 pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
     let decoded = match detect_format(data) {
         ImageFormat::Bmp => decode_bmp(data),
-        ImageFormat::Png => decode_png(data),
-        ImageFormat::Jpeg => decode_jpeg(data),
-        ImageFormat::Gif => decode_gif(data),
-        ImageFormat::Webp => decode_webp(data),
+        ImageFormat::Png => decode_png_safe(data),
+        ImageFormat::Jpeg => decode_jpeg_safe(data),
+        ImageFormat::Gif => decode_gif_safe(data),
+        ImageFormat::Webp => decode_webp_safe(data),
         ImageFormat::Unknown => None,
     }?;
 
@@ -156,6 +158,13 @@ fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
     Some(DecodedImage::new(w, abs_h, pixels))
 }
 
+/// Decode a PNG image, catching panics from malformed data.
+fn decode_png_safe(data: &[u8]) -> Option<DecodedImage> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_png(data)))
+        .ok()
+        .flatten()
+}
+
 /// Decode a PNG image using the `png` crate.
 fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let decoder = png::Decoder::new(data);
@@ -203,6 +212,13 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     };
 
     Some(DecodedImage::new(w, h, pixels))
+}
+
+/// Decode a JPEG image, catching panics from malformed data.
+fn decode_jpeg_safe(data: &[u8]) -> Option<DecodedImage> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_jpeg(data)))
+        .ok()
+        .flatten()
 }
 
 /// Decode a JPEG image using the `jpeg-decoder` crate.
@@ -261,6 +277,13 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     Some(DecodedImage::new(w, h, pixels))
 }
 
+/// Decode a GIF image, catching panics from malformed data.
+fn decode_gif_safe(data: &[u8]) -> Option<DecodedImage> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_gif(data)))
+        .ok()
+        .flatten()
+}
+
 /// Decode a GIF image using the `gif` crate (first frame only, static).
 fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
     let mut decoder = gif::DecodeOptions::new();
@@ -284,6 +307,13 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
         h,
         frame.buffer[..expected_len].to_vec(),
     ))
+}
+
+/// Decode a WebP image, catching panics from malformed data.
+fn decode_webp_safe(data: &[u8]) -> Option<DecodedImage> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_webp(data)))
+        .ok()
+        .flatten()
 }
 
 /// Decode a WebP image.
@@ -804,5 +834,42 @@ mod tests {
         // We can't easily construct a huge BMP in memory for this test,
         // so we verify the pixel budget constant is correct.
         assert_eq!(MAX_IMAGE_PIXELS, 1_048_576);
+    }
+
+    #[test]
+    fn decode_corrupt_png_returns_none_not_panic() {
+        // PNG magic followed by a valid IHDR length but corrupt data.
+        // This should NOT panic — the catch_unwind wrapper catches it.
+        let mut data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        // Append garbage that looks like an IHDR chunk header but has
+        // invalid CRC and dimensions that would cause issues.
+        data.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x0D, // chunk length 13
+            0x49, 0x48, 0x44, 0x52, // "IHDR"
+            0xFF, 0xFF, 0xFF, 0xFF, // width (garbage)
+            0xFF, 0xFF, 0xFF, 0xFF, // height (garbage)
+            0x08, 0x06, 0x00, 0x00, 0x00, // bit depth, color, etc.
+            0x00, 0x00, 0x00, 0x00, // CRC (wrong)
+        ]);
+        assert!(decode_image(&data).is_none());
+    }
+
+    #[test]
+    fn decode_corrupt_jpeg_returns_none_not_panic() {
+        // JPEG magic followed by garbage that will confuse the decoder.
+        let data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xFF, 0xFF];
+        assert!(decode_image(&data).is_none());
+    }
+
+    #[test]
+    fn decode_corrupt_gif_returns_none_not_panic() {
+        // GIF magic followed by truncated/corrupt data.
+        let data = b"GIF89a\x01\x00\x01\x00\xFF\x00\x00";
+        assert!(decode_image(data).is_none());
+    }
+
+    #[test]
+    fn decode_empty_data_returns_none() {
+        assert!(decode_image(&[]).is_none());
     }
 }

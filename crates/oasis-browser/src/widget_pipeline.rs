@@ -453,26 +453,40 @@ impl BrowserWidget {
             };
             self.pending_io_images.remove(&result.id);
 
-            if let Ok(loaded) = result.result {
-                let body = loaded.response.body;
-                // Dispatch to the background decode thread.
-                self.ensure_decode_thread();
-                let sent = if let Some(ref tx) = self.image_decode_tx {
-                    tx.send((resolved.clone(), body.clone())).is_ok()
-                } else {
-                    false
-                };
-                if sent {
-                    self.image_decode_in_flight += 1;
-                } else if let Some(decoded) = crate::image::decode_image(&body) {
-                    // Sync fallback.
-                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+            match result.result {
+                Ok(loaded) => {
+                    let body = loaded.response.body;
+                    // Dispatch to the background decode thread.
+                    self.ensure_decode_thread();
+                    let sent = if let Some(ref tx) = self.image_decode_tx {
+                        tx.send((resolved.clone(), body.clone())).is_ok()
+                    } else {
+                        false
+                    };
+                    if sent {
+                        self.image_decode_in_flight += 1;
+                    } else {
+                        // Sync fallback — use placeholder on decode failure.
+                        let decoded = crate::image::decode_image(&body)
+                            .unwrap_or_else(|| crate::image::broken_image_placeholder(24, 24));
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(resolved.clone());
+                        self.decoded_images.insert(resolved, decoded);
+                        self.image_info_dirty = true;
+                        self.layout_dirty = true;
+                    }
+                },
+                Err(_) => {
+                    // Network fetch failed — show broken-image placeholder.
+                    let placeholder = crate::image::broken_image_placeholder(24, 24);
+                    let img_bytes = placeholder.width as usize * placeholder.height as usize * 4;
                     self.decoded_image_bytes += img_bytes;
                     self.decoded_image_lru.push_front(resolved.clone());
-                    self.decoded_images.insert(resolved, decoded);
+                    self.decoded_images.insert(resolved, placeholder);
                     self.image_info_dirty = true;
                     self.layout_dirty = true;
-                }
+                },
             }
         }
     }
