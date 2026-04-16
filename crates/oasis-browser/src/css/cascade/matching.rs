@@ -53,9 +53,9 @@ pub(super) struct MatchedDeclaration {
     pub(super) origin: Origin,
     pub(super) specificity: Specificity,
     pub(super) source_order: usize,
-    /// Index of the source stylesheet, used to scope cascade-layer
-    /// comparison to rules from the same sheet (cross-sheet ordering
-    /// still falls through to `source_order`).
+    /// Index of the source stylesheet. Retained for diagnostics; layer
+    /// comparison now uses global indices.
+    #[allow(dead_code)]
     pub(super) sheet_idx: u16,
     /// Cascade-layer index inside the source stylesheet, or `None`
     /// for unlayered rules / non-stylesheet origins.
@@ -91,7 +91,7 @@ pub(super) fn container_condition_matches(
                 Some(want) => entry.names.iter().any(|n| n == want),
             };
             if name_ok {
-                return cond.features.iter().all(|f| eval_feature(*f, entry));
+                return cond.features.iter().all(|f| eval_feature(f, entry));
             }
         }
         cur = doc.nodes[pid].parent;
@@ -140,7 +140,7 @@ pub(super) fn scope_condition_matches(
     cond.root.is_none()
 }
 
-fn eval_feature(f: ContainerFeature, entry: &super::ContainerEntry) -> bool {
+fn eval_feature(f: &ContainerFeature, entry: &super::ContainerEntry) -> bool {
     use crate::css::values::types::ContainerType;
 
     let is_block_axis = matches!(
@@ -153,31 +153,36 @@ fn eval_feature(f: ContainerFeature, entry: &super::ContainerEntry) -> bool {
         return false;
     }
     match f {
-        ContainerFeature::MinWidth(px) => entry.width >= px,
-        ContainerFeature::MaxWidth(px) => entry.width <= px,
-        ContainerFeature::Width(px) => (entry.width - px).abs() < 0.5,
-        ContainerFeature::MinHeight(px) => entry.height >= px,
-        ContainerFeature::MaxHeight(px) => entry.height <= px,
-        ContainerFeature::Height(px) => (entry.height - px).abs() < 0.5,
+        ContainerFeature::MinWidth(px) => entry.width >= *px,
+        ContainerFeature::MaxWidth(px) => entry.width <= *px,
+        ContainerFeature::Width(px) => (entry.width - *px).abs() < 0.5,
+        ContainerFeature::MinHeight(px) => entry.height >= *px,
+        ContainerFeature::MaxHeight(px) => entry.height <= *px,
+        ContainerFeature::Height(px) => (entry.height - *px).abs() < 0.5,
+        ContainerFeature::Style(prop, val) => {
+            // Style queries match when the container's custom properties
+            // contain the expected value.
+            entry
+                .custom_properties
+                .get(prop.as_str())
+                .is_some_and(|v| v.trim() == val.trim())
+        },
     }
 }
 
 /// Compare two declarations by cascade-layer position.
 ///
 /// Spec semantics:
-/// - Within the same stylesheet, unlayered author rules beat layered
-///   author rules for normal declarations; `!important` reverses that
-///   (layered `!important` wins over unlayered `!important`).
+/// - Unlayered author rules beat layered author rules for normal
+///   declarations; `!important` reverses that (layered `!important`
+///   wins over unlayered `!important`).
 /// - Earlier-declared layers lose to later-declared layers for normal
 ///   declarations; `!important` reverses again (earlier layers win).
-/// - Across different stylesheets we fall through to `source_order`
-///   since layer names are sheet-local in this v1 implementation.
+/// - Layer indices are global across stylesheets when
+///   `GlobalLayerMap` is populated.
 pub(super) fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
-    if a.sheet_idx != b.sheet_idx {
-        return Ordering::Equal;
-    }
     // Only style-origin declarations participate in layering.
     if a.origin != Origin::Stylesheet || b.origin != Origin::Stylesheet {
         return Ordering::Equal;
@@ -258,6 +263,13 @@ pub(super) fn resolve_pseudo_style(
                     continue;
                 }
                 let specificity = selector.specificity();
+                let global_layer = rule.layer.and_then(|local| {
+                    if let Some(glm) = ctx.global_layers {
+                        glm.get(&(sheet_idx as u16, local)).copied()
+                    } else {
+                        Some(local)
+                    }
+                });
                 for (i, decl) in rule.declarations.iter().enumerate() {
                     matched.push(MatchedDeclaration {
                         property: decl.property.clone(),
@@ -267,7 +279,7 @@ pub(super) fn resolve_pseudo_style(
                         specificity,
                         source_order: decl_base + i,
                         sheet_idx: sheet_idx as u16,
-                        layer: rule.layer,
+                        layer: global_layer,
                     });
                 }
             }
@@ -448,6 +460,15 @@ pub(super) fn collect_matched_declarations(
         }
         let best_specificity = matching_specificity(doc, node_id, rule, ctx);
         if let Some(specificity) = best_specificity {
+            // Convert sheet-local layer index to global if the global
+            // map is available (cross-stylesheet @layer merging).
+            let global_layer = rule.layer.and_then(|local| {
+                if let Some(glm) = ctx.global_layers {
+                    glm.get(&(candidate.sheet_idx as u16, local)).copied()
+                } else {
+                    Some(local)
+                }
+            });
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 result.push(MatchedDeclaration {
                     property: decl.property.clone(),
@@ -457,7 +478,7 @@ pub(super) fn collect_matched_declarations(
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
                     sheet_idx: candidate.sheet_idx as u16,
-                    layer: rule.layer,
+                    layer: global_layer,
                 });
             }
         }

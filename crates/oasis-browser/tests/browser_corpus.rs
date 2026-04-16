@@ -89,6 +89,7 @@ fn run_pipeline_sized(
         height,
         visible_height: height,
         focused_node: None,
+        counter_styles: Vec::new(),
     };
     let link_map = HashMap::new();
     paint_page(&layout, &mut backend, vp, &link_map).expect("paint must not error");

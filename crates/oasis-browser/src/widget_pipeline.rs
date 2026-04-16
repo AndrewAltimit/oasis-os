@@ -618,11 +618,14 @@ impl BrowserWidget {
                         );
                     }
                     // Install canvas 2D context bindings.
-                    let cm = std::rc::Rc::clone(&self.canvas_states);
-                    if let Err(e) =
-                        engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
+                    #[cfg(feature = "canvas")]
                     {
-                        log::warn!("Canvas bindings install failed: {}", e.message);
+                        let cm = std::rc::Rc::clone(&self.canvas_states);
+                        if let Err(e) =
+                            engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
+                        {
+                            log::warn!("Canvas bindings install failed: {}", e.message);
+                        }
                     }
                     if !scripts.is_empty() {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
@@ -689,6 +692,7 @@ impl BrowserWidget {
                 visited_urls: Some(&self.visited_urls),
                 focused_node: None,
                 containers: None,
+                global_layers: None,
             };
             css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx)
         };
@@ -748,6 +752,7 @@ impl BrowserWidget {
                     visited_urls: Some(&self.visited_urls),
                     focused_node: None,
                     containers: Some(&first_lookup),
+                    global_layers: None,
                 };
                 styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
                 layout_root = layout::block::build_layout_tree(
@@ -1052,6 +1057,7 @@ impl BrowserWidget {
                     visited_urls: Some(&self.visited_urls),
                     focused_node: None,
                     containers: None,
+                    global_layers: None,
                 };
                 let styles = css::cascade::style_tree(&reader_doc, &[ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);

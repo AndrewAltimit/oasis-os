@@ -429,14 +429,21 @@ pub enum ObjectFit {
     ScaleDown,
 }
 
-/// CSS `list-style-type` property (subset).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// CSS `list-style-type` property.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListStyleType {
     None,
     Disc,
     Circle,
     Square,
     Decimal,
+    DecimalLeadingZero,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+    /// Reference to a `@counter-style` rule by name.
+    Custom(String),
 }
 
 /// CSS `list-style-position` property.

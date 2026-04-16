@@ -52,6 +52,8 @@ struct RecordContext<'a> {
     /// DOM node id with keyboard focus, used to draw a caret in
     /// focused `<input>` / `<textarea>` form controls.
     focused_node: Option<NodeId>,
+    /// `@counter-style` rules for custom list markers.
+    counter_styles: Vec<crate::css::parser::CounterStyleRule>,
 }
 
 // -------------------------------------------------------------------
@@ -99,6 +101,7 @@ pub fn record_with_scroll(
         current_node: None,
         nested_scroll_offsets,
         focused_node: viewport.focused_node,
+        counter_styles: viewport.counter_styles.clone(),
     };
 
     record_box(
@@ -1295,7 +1298,9 @@ fn record_list_marker(
         ListMarker::Disc => "\u{2022}".to_string(),
         ListMarker::Circle => "\u{25CB}".to_string(),
         ListMarker::Square => "\u{25A0}".to_string(),
-        ListMarker::Decimal(n) => format!("{n}."),
+        ListMarker::Ordered(style, n) => {
+            super::markers::format_ordered_marker_public(style, *n, &ctx.counter_styles)
+        },
         ListMarker::None => return,
     };
 

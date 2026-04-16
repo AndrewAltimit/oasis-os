@@ -1507,13 +1507,55 @@ mod container_query_tests {
     }
 
     #[test]
-    fn unparseable_feature_drops_to_empty_list() {
-        // `style(--x)` style queries aren't supported; the condition
-        // should parse to an empty feature list which never matches.
+    fn style_query_parses_custom_property() {
         let css = "@container style(--theme: dark) { p { color: red; } }";
         let sheet = parse(css);
         let cond = sheet.rules[0].container.as_ref().unwrap();
-        assert!(cond.features.is_empty());
+        assert_eq!(cond.features.len(), 1);
+        assert_eq!(
+            cond.features[0],
+            ContainerFeature::Style("--theme".into(), "dark".into())
+        );
+    }
+
+    #[test]
+    fn nested_containers_and_combine_features() {
+        // Outer: min-width: 400px, Inner: max-width: 800px.
+        // The resulting rule should carry BOTH features.
+        let css = r#"
+            @container (min-width: 400px) {
+                @container (max-width: 800px) {
+                    .card { color: red; }
+                }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MaxWidth(800.0),
+                ContainerFeature::MinWidth(400.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_named_container_keeps_inner_name() {
+        let css = r#"
+            @container outer (min-width: 200px) {
+                @container inner (max-width: 600px) {
+                    p { color: blue; }
+                }
+            }
+        "#;
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        // Inner name takes priority.
+        assert_eq!(cond.name.as_deref(), Some("inner"));
+        // Both features combined.
+        assert_eq!(cond.features.len(), 2);
     }
 }
 

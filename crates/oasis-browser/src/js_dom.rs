@@ -1604,6 +1604,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 ///
 /// Must be called after [`install_document_global_full`] since the
 /// JS bootstrap below extends `Element.prototype` with `getContext()`.
+#[cfg(feature = "canvas")]
 pub fn install_canvas_bindings(
     ctx: &Ctx<'_>,
     canvas_map: &crate::canvas::SharedCanvasMap,
@@ -2030,13 +2031,17 @@ pub fn install_canvas_bindings(
     }
 
     // -- JavaScript CanvasRenderingContext2D class ---------------------
-    let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
+    #[cfg(feature = "canvas")]
+    {
+        let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
+    }
 
     Ok(())
 }
 
 /// JavaScript code for the CanvasRenderingContext2D class and
 /// `Element.prototype.getContext()`.
+#[cfg(feature = "canvas")]
 const JS_CANVAS_BOOTSTRAP: &str = r##"
 (function() {
   "use strict";

@@ -519,6 +519,9 @@ pub enum CssValue {
     RadialGradient(crate::css::values::RadialGradient),
     /// A `calc(...)` expression (raw expression string).
     Calc(String),
+    /// A deferred `light-dark(light, dark)` color — resolved at
+    /// computed-value time based on the element's `color-scheme`.
+    LightDark(CssColor, CssColor),
 }
 
 /// Supported CSS length units.
@@ -602,10 +605,8 @@ pub struct ContainerCondition {
     pub features: Vec<ContainerFeature>,
 }
 
-/// A single `@container` size feature predicate. Pixel values only —
-/// percent / vw / vh are not supported in the condition (they don't
-/// have a useful meaning against a container's own box).
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A single `@container` feature predicate.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContainerFeature {
     MinWidth(f32),
     MaxWidth(f32),
@@ -613,6 +614,9 @@ pub enum ContainerFeature {
     MinHeight(f32),
     MaxHeight(f32),
     Height(f32),
+    /// `style(property: value)` — matches when the container's computed
+    /// style for the given property equals the value string.
+    Style(String, String),
 }
 
 /// A single keyframe stop (percentage + declarations).

@@ -159,9 +159,22 @@ pub enum ListMarker {
     Disc,
     Circle,
     Square,
-    /// The number to display for ordered lists.
-    Decimal(usize),
+    /// Ordered counter with the style type and current value.
+    Ordered(ListMarkerStyle, usize),
     None,
+}
+
+/// The formatting style for an ordered list marker.
+#[derive(Debug, Clone)]
+pub enum ListMarkerStyle {
+    Decimal,
+    DecimalLeadingZero,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+    /// `@counter-style` name — resolved at paint time.
+    Custom(String),
 }
 
 /// Content for replaced elements (img, hr, br, input, button, select).

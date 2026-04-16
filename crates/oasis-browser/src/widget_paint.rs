@@ -192,6 +192,7 @@ impl BrowserWidget {
                     height: buffered_h,
                     visible_height: content_h as f32,
                     focused_node: self.focused_node,
+                    counter_styles: Vec::new(),
                 };
 
                 // Record to display list (no draw calls emitted).
@@ -276,6 +277,7 @@ impl BrowserWidget {
                         height: buffered_h,
                         visible_height: content_h as f32,
                         focused_node: self.focused_node,
+                        counter_styles: Vec::new(),
                     };
                     let links = paint::record::record(
                         layout,
@@ -362,6 +364,7 @@ impl BrowserWidget {
                             height: buffered_h,
                             visible_height: content_h as f32,
                             focused_node: self.focused_node,
+                            counter_styles: Vec::new(),
                         };
                         let links = paint::record::record(
                             layout,

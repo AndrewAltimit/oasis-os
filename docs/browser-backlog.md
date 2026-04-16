@@ -91,11 +91,10 @@ is small enough to handle as a drive-by on a related PR.
   because it reads back, composites via a plain alpha-over blit,
   then throws the texture away. A GPU-side path would keep blend
   mode + filter + opacity composable.
-- **Nested `@container` rules: AND-combining.** Current behavior
-  is innermost-wins. Pathological circular dependencies also not
-  resolved (single-pass relayout).
-- **`@container style(...)` queries** parse but always evaluate
-  false.
+- ~~**Nested `@container` rules: AND-combining.**~~ Done — nested
+  conditions now AND-combine features at parse time.
+- ~~**`@container style(...)` queries**~~ Done — `style(--prop: val)`
+  evaluates against container custom properties.
 
 ### 3D transforms
 
@@ -110,27 +109,32 @@ is small enough to handle as a drive-by on a related PR.
 
 - **Full DocumentFragment scope isolation for table + select**
   (currently form-scope isolation only).
-- **SVG camelCase identifier round-trip** (`<foreignObject>`,
-  `<textPath>`). Tag names are stored lowercased; expose a
-  namespace-aware representation if real pages need it.
+- ~~**SVG camelCase identifier round-trip**~~ Done — WHATWG case
+  fixup table applied during foreign content insertion (40 tag
+  names, 60 attribute names).
 
 ### CSS long tail
 
-- **Custom counter styles wired to `<ol>` markers.**
-  `@counter-style` parses into `Stylesheet.counter_styles` today
-  but list-item rendering still uses the built-ins only.
-- **`text-wrap: balance` / `pretty` layout-side algorithm.** Parsed
-  and stored; fall through to `wrap` at layout time.
-- **Replaced-element `aspect-ratio`** (`<img>`, `<video>`).
-  Non-replaced blocks derive height from width x ratio; replaced
-  elements don't yet.
-- **Cross-stylesheet `@layer` name merging.** Layer names are
-  sheet-local; cross-stylesheet ordering falls through to source
-  order.
-- **Color-space-aware `color-mix`.** Currently interpolates in
-  linear sRGB regardless of the requested color space.
-- **`light-dark()` color-scheme tracking.** Always returns the
-  light-mode argument.
+- ~~**Custom counter styles wired to `<ol>` markers.**~~ Done —
+  `@counter-style` systems (cyclic, numeric, alphabetic, symbolic,
+  additive, fixed) drive list marker rendering. Built-in
+  `lower-alpha`, `upper-alpha`, `lower-roman`, `upper-roman`,
+  `decimal-leading-zero` also added.
+- ~~**`text-wrap: balance` / `pretty` layout-side algorithm.**~~ Done
+  — `balance` binary-searches for the narrowest width that keeps
+  the same line count; `pretty` pulls a word from the penultimate
+  line to avoid orphans.
+- ~~**Replaced-element `aspect-ratio`**~~ Done — CSS `aspect-ratio`
+  applies to both block-level and inline replaced elements,
+  overriding the intrinsic ratio when set.
+- ~~**Cross-stylesheet `@layer` name merging.**~~ Done — a global
+  layer name map is built before cascade so the same layer name
+  in different sheets shares a cascade position.
+- ~~**Color-space-aware `color-mix`.**~~ Done — `oklch`, `oklab`,
+  `hsl`, and `srgb-linear` interpolation spaces are supported.
+- ~~**`light-dark()` color-scheme tracking.**~~ Done — deferred
+  `CssValue::LightDark` resolves at computed-value time against
+  `color-scheme: dark`.
 - **RTL support** anywhere in the engine. Logical properties
   rewrite to physical LTR at parse time.
 
@@ -149,9 +153,9 @@ is small enough to handle as a drive-by on a related PR.
   only. Likely a `glyph_advance(' ')` returning 0 in the PSP
   bitmap font table (`oasis-backend-psp/src/font.rs`) or the text
   layout step collapsing whitespace after JS-triggered relayout.
-- **`js_dom.rs` bootstrap bloat.** `JS_DOM_BOOTSTRAP` and
-  `JS_CANVAS_BOOTSTRAP` are large string constants; feature-gate
-  the canvas half to trim ~20 KB on PSP where canvas is unused.
+- ~~**`js_dom.rs` bootstrap bloat.**~~ Done — `JS_CANVAS_BOOTSTRAP`
+  and `install_canvas_bindings` gated behind `canvas` feature
+  (included in default features, omittable on PSP).
 
 ---
 

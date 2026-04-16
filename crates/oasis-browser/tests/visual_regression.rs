@@ -103,6 +103,7 @@ fn render_display_list(html: &str, width: f32, height: f32) -> String {
         height,
         visible_height: height,
         focused_node: None,
+        counter_styles: Vec::new(),
     };
     paint_page(&layout, &mut backend, vp, &HashMap::new()).expect("paint must not error");
 

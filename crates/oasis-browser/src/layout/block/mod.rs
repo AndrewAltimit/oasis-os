@@ -343,7 +343,13 @@ fn layout_children_incremental(
                 let h = match child.style.height {
                     Dimension::Px(h) => h,
                     _ => {
-                        if let BoxType::Replaced(ref rc) = child.box_type {
+                        // CSS aspect-ratio on replaced elements: derive
+                        // height from the laid-out width and the ratio.
+                        if let Some(ratio) = child.style.aspect_ratio
+                            && ratio > 0.0
+                        {
+                            w / ratio
+                        } else if let BoxType::Replaced(ref rc) = child.box_type {
                             match rc {
                                 ReplacedContent::HorizontalRule => 2.0,
                                 ReplacedContent::Image { height, .. } => *height as f32,
@@ -685,9 +691,9 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     for child in &mut parent.children {
         // Assign sequential numbers to ordered list items.
         if let BoxType::ListItem { ref mut marker } = child.box_type
-            && let ListMarker::Decimal(_) = marker
+            && let ListMarker::Ordered(_, n) = marker
         {
-            *marker = ListMarker::Decimal(list_counter);
+            *n = list_counter;
             list_counter += 1;
         }
         // Handle clear property: advance cursor below cleared floats.
@@ -862,8 +868,12 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 let h = match child.style.height {
                     Dimension::Px(h) => h,
                     _ => {
-                        // Intrinsic height for replaced content.
-                        if let BoxType::Replaced(ref rc) = child.box_type {
+                        // CSS aspect-ratio on replaced elements.
+                        if let Some(ratio) = child.style.aspect_ratio
+                            && ratio > 0.0
+                        {
+                            w / ratio
+                        } else if let BoxType::Replaced(ref rc) = child.box_type {
                             match rc {
                                 ReplacedContent::HorizontalRule => 2.0,
                                 ReplacedContent::Image { height, .. } => *height as f32,

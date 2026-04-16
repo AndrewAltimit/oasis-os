@@ -60,7 +60,10 @@ impl TreeBuilder {
                 // reconstruct_formatting, no void-element lookup (SVG
                 // and MathML self-close via `/>` which the tokenizer
                 // surfaces as `self_closing: true`).
-                let id = self.create_element_from_start_tag(tag);
+                //
+                // Apply SVG camelCase fixup before creating the element
+                // so DOM queries return the spec-correct tag name.
+                let id = self.create_foreign_element(tag);
                 let parent = self.current_node();
                 self.doc.append_child(parent, id);
                 if !tag.self_closing {
@@ -87,7 +90,11 @@ impl TreeBuilder {
                 let subtree_start = stack_len.saturating_sub(depth);
                 let mut found = None;
                 for (i, &id) in self.open_elements[subtree_start..].iter().enumerate().rev() {
-                    if self.tag_of(id).map(TagName::as_str) == Some(lower.as_str()) {
+                    if self
+                        .tag_of(id)
+                        .map(TagName::as_str)
+                        .is_some_and(|t| t.eq_ignore_ascii_case(&lower))
+                    {
                         found = Some(subtree_start + i);
                         break;
                     }
@@ -120,6 +127,27 @@ impl TreeBuilder {
         self.foreign_depth = 0;
     }
 
+    /// Create an element inside foreign content, applying the WHATWG
+    /// SVG camelCase fixup table (§13.2.6.5) so tag names are stored
+    /// with spec-correct casing (e.g. `foreignObject`, not
+    /// `foreignobject`). Attribute names are similarly fixed up.
+    fn create_foreign_element(
+        &mut self,
+        tag: &super::super::tokenizer::StartTagToken,
+    ) -> super::super::dom::NodeId {
+        let lower = tag.name.to_ascii_lowercase();
+        let fixed = svg_tag_case_fixup(&lower);
+        let tag_name = TagName::from_str(fixed);
+        let mut data = ElementData::new(tag_name);
+        for attr in &tag.attributes {
+            data.attributes.push(super::super::dom::Attribute {
+                name: svg_attr_case_fixup(&attr.name),
+                value: attr.value.clone(),
+            });
+        }
+        self.doc.add_node(NodeKind::Element(data))
+    }
+
     /// Entry point used by `handle_start_tag_in_body` when a bare
     /// `<svg>` or `<math>` root is encountered while in normal HTML
     /// parsing. Creates the root element and enters foreign content.
@@ -146,6 +174,119 @@ impl TreeBuilder {
             self.open_elements.push(id);
             self.foreign_depth += 1;
         }
+    }
+}
+
+/// SVG tag name case fixup per WHATWG §13.2.6.5. The tokenizer
+/// lowercases everything, so we restore the canonical camelCase for
+/// SVG elements that use it. Input must already be lowercased.
+fn svg_tag_case_fixup(lower: &str) -> &str {
+    match lower {
+        "altglyph" => "altGlyph",
+        "altglyphdef" => "altGlyphDef",
+        "altglyphitem" => "altGlyphItem",
+        "animatecolor" => "animateColor",
+        "animatemotion" => "animateMotion",
+        "animatetransform" => "animateTransform",
+        "clippath" => "clipPath",
+        "feblend" => "feBlend",
+        "fecolormatrix" => "feColorMatrix",
+        "fecomponenttransfer" => "feComponentTransfer",
+        "fecomposite" => "feComposite",
+        "feconvolvematrix" => "feConvolveMatrix",
+        "fediffuselighting" => "feDiffuseLighting",
+        "fedisplacementmap" => "feDisplacementMap",
+        "fedistantlight" => "feDistantLight",
+        "fedropshadow" => "feDropShadow",
+        "feflood" => "feFlood",
+        "fefunca" => "feFuncA",
+        "fefuncb" => "feFuncB",
+        "fefuncg" => "feFuncG",
+        "fefuncr" => "feFuncR",
+        "fegaussianblur" => "feGaussianBlur",
+        "feimage" => "feImage",
+        "femerge" => "feMerge",
+        "femergenode" => "feMergeNode",
+        "femorphology" => "feMorphology",
+        "feoffset" => "feOffset",
+        "fepointlight" => "fePointLight",
+        "fespecularlighting" => "feSpecularLighting",
+        "fespotlight" => "feSpotLight",
+        "fetile" => "feTile",
+        "feturbulence" => "feTurbulence",
+        "foreignobject" => "foreignObject",
+        "glyphref" => "glyphRef",
+        "lineargradient" => "linearGradient",
+        "radialgradient" => "radialGradient",
+        "textpath" => "textPath",
+        // Everything else keeps its lowercase form.
+        _ => lower,
+    }
+}
+
+/// SVG attribute name case fixup per WHATWG §13.2.6.5. Only a handful
+/// of SVG attributes use camelCase; this list covers the most common.
+fn svg_attr_case_fixup(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "attributename" => "attributeName".into(),
+        "attributetype" => "attributeType".into(),
+        "basefrequency" => "baseFrequency".into(),
+        "baseprofile" => "baseProfile".into(),
+        "calcmode" => "calcMode".into(),
+        "clippathunits" => "clipPathUnits".into(),
+        "diffuseconstant" => "diffuseConstant".into(),
+        "edgemode" => "edgeMode".into(),
+        "filterunits" => "filterUnits".into(),
+        "glyphref" => "glyphRef".into(),
+        "gradienttransform" => "gradientTransform".into(),
+        "gradientunits" => "gradientUnits".into(),
+        "kernelmatrix" => "kernelMatrix".into(),
+        "kernelunitlength" => "kernelUnitLength".into(),
+        "keypoints" => "keyPoints".into(),
+        "keysplines" => "keySplines".into(),
+        "keytimes" => "keyTimes".into(),
+        "lengthadjust" => "lengthAdjust".into(),
+        "limitingconeangle" => "limitingConeAngle".into(),
+        "markerheight" => "markerHeight".into(),
+        "markerunits" => "markerUnits".into(),
+        "markerwidth" => "markerWidth".into(),
+        "maskcontentunits" => "maskContentUnits".into(),
+        "maskunits" => "maskUnits".into(),
+        "numoctaves" => "numOctaves".into(),
+        "pathlength" => "pathLength".into(),
+        "patterncontentunits" => "patternContentUnits".into(),
+        "patterntransform" => "patternTransform".into(),
+        "patternunits" => "patternUnits".into(),
+        "pointsatx" => "pointsAtX".into(),
+        "pointsaty" => "pointsAtY".into(),
+        "pointsatz" => "pointsAtZ".into(),
+        "preservealpha" => "preserveAlpha".into(),
+        "preserveaspectratio" => "preserveAspectRatio".into(),
+        "primitiveunits" => "primitiveUnits".into(),
+        "refx" => "refX".into(),
+        "refy" => "refY".into(),
+        "repeatcount" => "repeatCount".into(),
+        "repeatdur" => "repeatDur".into(),
+        "requiredextensions" => "requiredExtensions".into(),
+        "requiredfeatures" => "requiredFeatures".into(),
+        "specularconstant" => "specularConstant".into(),
+        "specularexponent" => "specularExponent".into(),
+        "spreadmethod" => "spreadMethod".into(),
+        "startoffset" => "startOffset".into(),
+        "stddeviation" => "stdDeviation".into(),
+        "stitchtiles" => "stitchTiles".into(),
+        "surfacescale" => "surfaceScale".into(),
+        "systemlanguage" => "systemLanguage".into(),
+        "tablevalues" => "tableValues".into(),
+        "targetx" => "targetX".into(),
+        "targety" => "targetY".into(),
+        "textlength" => "textLength".into(),
+        "viewbox" => "viewBox".into(),
+        "viewtarget" => "viewTarget".into(),
+        "xchannelselector" => "xChannelSelector".into(),
+        "ychannelselector" => "yChannelSelector".into(),
+        "zoomandpan" => "zoomAndPan".into(),
+        _ => name.to_string(),
     }
 }
 
@@ -199,4 +340,49 @@ fn is_html_breakout_tag(tag: &str) -> bool {
             | "ul"
             | "var"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn svg_tag_fixup_foreignobject() {
+        assert_eq!(svg_tag_case_fixup("foreignobject"), "foreignObject");
+    }
+
+    #[test]
+    fn svg_tag_fixup_textpath() {
+        assert_eq!(svg_tag_case_fixup("textpath"), "textPath");
+    }
+
+    #[test]
+    fn svg_tag_fixup_lineargradient() {
+        assert_eq!(svg_tag_case_fixup("lineargradient"), "linearGradient");
+    }
+
+    #[test]
+    fn svg_tag_fixup_passthrough() {
+        assert_eq!(svg_tag_case_fixup("rect"), "rect");
+        assert_eq!(svg_tag_case_fixup("circle"), "circle");
+    }
+
+    #[test]
+    fn svg_attr_fixup_viewbox() {
+        assert_eq!(svg_attr_case_fixup("viewbox"), "viewBox");
+    }
+
+    #[test]
+    fn svg_attr_fixup_preserveaspectratio() {
+        assert_eq!(
+            svg_attr_case_fixup("preserveaspectratio"),
+            "preserveAspectRatio"
+        );
+    }
+
+    #[test]
+    fn svg_attr_fixup_passthrough() {
+        assert_eq!(svg_attr_case_fixup("fill"), "fill");
+        assert_eq!(svg_attr_case_fixup("d"), "d");
+    }
 }

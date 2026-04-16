@@ -11,8 +11,8 @@ use super::text::{
     replace_unrenderable, split_into_words,
 };
 use crate::css::values::{
-    ComputedStyle, Dimension, OverflowWrap, TextAlign, TextDirection, VerticalAlign, WhiteSpace,
-    WordBreak,
+    ComputedStyle, Dimension, OverflowWrap, TextAlign, TextDirection, TextWrap, VerticalAlign,
+    WhiteSpace, WordBreak,
 };
 use crate::html::dom::NodeId;
 
@@ -184,6 +184,80 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }
     }
 
+    // text-wrap: balance — re-break lines with a narrower width so that
+    // line widths are as even as possible. Uses binary search for the
+    // narrowest width that still produces the same number of lines.
+    if parent.style.text_wrap == TextWrap::Balance && lines.len() >= 2 && !nowrap {
+        let target_count = lines.len();
+        // Binary search: find the narrowest width that still fits in
+        // `target_count` lines.
+        let max_line_w: f32 = lines.iter().map(|l| l.used_width()).fold(0.0_f32, f32::max);
+        if max_line_w > 0.0 {
+            let mut lo = max_line_w / target_count as f32;
+            let mut hi = available_width;
+            for _ in 0..10 {
+                let mid = (lo + hi) / 2.0;
+                let test_lines =
+                    rebreak_fragments(&fragments, mid, break_all, break_word, measurer);
+                if test_lines <= target_count {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            // Re-break at the found width.
+            let balanced_w = hi;
+            if balanced_w < available_width * 0.99 {
+                let mut new_lines: Vec<LineBox> = Vec::new();
+                let mut cur = LineBox::new(balanced_w);
+                for fragment in &fragments {
+                    let is_lb = match fragment {
+                        InlineFragment::ReplacedInline {
+                            replaced: ReplacedContent::LineBreak,
+                            ..
+                        } => true,
+                        InlineFragment::Text { text, .. } if text == "\n" => true,
+                        _ => false,
+                    };
+                    if is_lb {
+                        new_lines.push(cur);
+                        cur = LineBox::new(balanced_w);
+                        continue;
+                    }
+                    if !cur.try_add(fragment) {
+                        new_lines.push(cur);
+                        cur = LineBox::new(balanced_w);
+                        cur.try_add(fragment);
+                    }
+                }
+                if !cur.is_empty() {
+                    new_lines.push(cur);
+                }
+                for line in &mut new_lines {
+                    trim_line_boundary_spaces(line, measurer);
+                }
+                lines = new_lines;
+            }
+        }
+    }
+
+    // text-wrap: pretty — avoid orphans by pulling the last word of the
+    // penultimate line onto the last line when the last line is very short.
+    if parent.style.text_wrap == TextWrap::Pretty && lines.len() >= 2 && !nowrap {
+        let last_idx = lines.len() - 1;
+        let last_w = lines[last_idx].used_width();
+        let prev_w = lines[last_idx - 1].used_width();
+        // If the last line is less than 20% of the available width and
+        // the penultimate line is more than 60%, try to rebalance.
+        if last_w < available_width * 0.20 && prev_w > available_width * 0.60 {
+            // Move the last fragment from the penultimate line to the
+            // last line (simple heuristic).
+            if let Some(frag) = lines[last_idx - 1].fragments.pop() {
+                lines[last_idx].fragments.insert(0, frag);
+            }
+        }
+    }
+
     // Position line boxes vertically and apply text alignment.
     let mut cursor_y = parent.dimensions.content.y;
     let last_line_idx = lines.len().saturating_sub(1);
@@ -303,17 +377,37 @@ fn collect_inline_fragments(
                     crate::css::values::Dimension::Px(px) => px,
                     _ => intrinsic_h,
                 };
+                // Determine the effective aspect ratio: CSS `aspect-ratio`
+                // overrides the intrinsic ratio for replaced elements.
+                let ratio = if let Some(r) = child.style.aspect_ratio
+                    && r > 0.0
+                {
+                    r
+                } else if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
+                    intrinsic_w / intrinsic_h
+                } else {
+                    0.0
+                };
                 // Preserve aspect ratio when only one dimension is set.
                 let (w, h) = if child.style.width != crate::css::values::Dimension::Auto
                     && child.style.height == crate::css::values::Dimension::Auto
-                    && intrinsic_h > 0.0
+                    && ratio > 0.0
                 {
-                    (w, w * intrinsic_h / intrinsic_w.max(1.0))
+                    (w, w / ratio)
                 } else if child.style.height != crate::css::values::Dimension::Auto
                     && child.style.width == crate::css::values::Dimension::Auto
+                    && ratio > 0.0
+                {
+                    (h * ratio, h)
+                } else if child.style.width == crate::css::values::Dimension::Auto
+                    && child.style.height == crate::css::values::Dimension::Auto
+                    && child.style.aspect_ratio.is_some()
+                    && ratio > 0.0
                     && intrinsic_w > 0.0
                 {
-                    (h * intrinsic_w / intrinsic_h.max(1.0), h)
+                    // Both auto + explicit aspect-ratio: use intrinsic
+                    // width and derive height from the CSS ratio.
+                    (w, w / ratio)
                 } else {
                     (w, h)
                 };
@@ -579,6 +673,40 @@ pub fn make_text_fragments(
 
 /// Break a text fragment at the available width boundary, producing
 /// multiple sub-fragments that each fit within the given width.
+/// Re-break a set of fragments at a given width and return the number
+/// of lines produced. Used by the `text-wrap: balance` binary search.
+fn rebreak_fragments(
+    fragments: &[InlineFragment],
+    width: f32,
+    _break_all: bool,
+    _break_word: bool,
+    _measurer: &dyn TextMeasurer,
+) -> usize {
+    let mut count: usize = 1;
+    let mut line = LineBox::new(width);
+    for fragment in fragments {
+        let is_lb = match fragment {
+            InlineFragment::ReplacedInline {
+                replaced: ReplacedContent::LineBreak,
+                ..
+            } => true,
+            InlineFragment::Text { text, .. } if text == "\n" => true,
+            _ => false,
+        };
+        if is_lb {
+            count += 1;
+            line = LineBox::new(width);
+            continue;
+        }
+        if !line.try_add(fragment) {
+            count += 1;
+            line = LineBox::new(width);
+            line.try_add(fragment);
+        }
+    }
+    count
+}
+
 fn break_word_fragment(
     fragment: &InlineFragment,
     available_width: f32,

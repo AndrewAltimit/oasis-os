@@ -5,7 +5,7 @@
 
 use super::super::helpers::{
     is_color_property, named_color, parse_font_weight, parse_hex_color, parse_unit,
-    tokens_to_css_text, try_parse_color,
+    tokens_to_css_text, try_parse_color, try_parse_light_dark,
 };
 use super::super::shorthand::{
     parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient,
@@ -161,6 +161,14 @@ impl CssParser {
 
     fn parse_value(&self, property: &str, tokens: &[CssToken]) -> CssValue {
         let prop_lower = property.to_ascii_lowercase();
+
+        // Deferred light-dark() — store both colours for computed-value
+        // time resolution against color-scheme.
+        if is_color_property(&prop_lower)
+            && let Some((light, dark)) = try_parse_light_dark(tokens)
+        {
+            return CssValue::LightDark(light, dark);
+        }
 
         // Try colour-valued properties first.
         if is_color_property(&prop_lower)
