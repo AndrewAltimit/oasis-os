@@ -117,58 +117,34 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
 
-### PSP Two-Binary Architecture
+### PSP (target-specific architecture)
 
-The PSP deployment uses two binaries:
-- **`oasis-backend-psp`** (EBOOT.PBP) -- the full shell application, runs standalone
-- **`oasis-plugin-psp`** (PRX) -- lightweight companion module loaded by CFW (ARK-4/PRO) via `PLUGINS.TXT`, stays resident in kernel memory alongside games
+PSP has meaningful enough constraints that the detail lives in
+[`docs/psp-architecture.md`](docs/psp-architecture.md). Summary:
 
-The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebuffer and claims a PSP audio channel for background MP3 playback. No dependency on oasis-core -- direct framebuffer rendering only (<64KB binary).
-
-### PSP GU Rendering Constraints
-
-The PSP GU (Graphics Unit) has a fixed-size command buffer (`DISPLAY_LIST`, 1 MB in BSS). Each `fill_rect`, glyph blit, clip push/pop, and blend mode change appends commands. Browser pages with many elements can generate hundreds of KB of GU commands per frame.
-
-**Critical rules:**
-- **Never call `reinit_gu_frame()` after `swap_buffers_inner()`** — `swap_buffers_inner` already starts a new GU frame via `sceGuStart`. A second `sceGuStart` without `sceGuFinish` corrupts the command buffer and hangs `sceGuSync` on the next frame. Only use `reinit_gu_frame()` after utility dialogs (OSK, `psp::dialog`) which run their own GU frames.
-- **`std::time::Instant` works on PSP Allegrex** (verified on real hardware 2026-04-13). The earlier "crashes" claim was a misdiagnosis — actual cause was that the rust-psp std overlay had no `target_os = "psp"` arm in the new `sys/time/mod.rs`, so PSP fell through to `unsupported::Instant::now` which `panic!()`s. Fixed in rust-psp branch `fix/psp-hardware-std-overlay-alignment-and-time` by adding `sys/time/psp.rs` and wiring it through. Browser `tick()` is currently still gated off on PSP for legacy reasons, but the gate can now be removed whenever browser perf needs it.
-
-### PSP JavaScript (QuickJS-NG)
-
-The PSP backend ships QuickJS-NG via `rquickjs` — the same engine used on desktop/WASM/UE5. QuickJS's C sources are compiled by the `cc` crate through the pspdev cross-toolchain (`/opt/pspdev/bin/psp-gcc`) with custom CFLAGS wired in `crates/oasis-backend-psp/.cargo/config.toml`. Key constraints:
-
-- **`-msingle-float` is mandatory** on the C side. PSP Allegrex has a single-precision FPU only, and rust-psp's target spec declares `"features": "+single-float"`. Compiling QuickJS C with `-mdouble-float` links successfully but crashes on real hardware the first time `JS_Eval` reaches `dtoa`, because the Rust and C halves disagree about how double-precision helpers are called. PPSSPP silently fixes this up; real hardware does not. This was the primary blocker during the QuickJS bring-up.
-- **Final link routed through `psp-ld`**, not `rust-lld`. GCC 15 / binutils 2.43 emit a `.symtab` layout that rust-lld rejects with "invalid binding: 0". The workaround lives in `.cargo/config.toml`: `linker = /opt/pspdev/bin/psp-ld`, `linker-flavor = gnu` under `-Z unstable-options`, replayed target-spec pre-link args, and a supplementary link script (`tools/psp-linkscript.ld`) that synthesises `_gp` since rust-psp's target script omits it (rust-lld computes `_gp` internally).
-- **No pspdev `libc.a` / `libm.a`.** Those archives are eabi32/msingle-float/abicalls and can't merge with Rust's o32/mdouble-float/non-abicalls code. Instead, `crates/oasis-backend-psp/src/quickjs_shim.rs` provides the ~40 libc/libm symbols QuickJS references: math via the `libm` crate; string/memory routines hand-written; `calloc`/`realloc` forwarding to libpsp's `malloc`/`free` with libpsp's size-header decoding; non-variadic stdio stubs; a 256-byte `_impure_ptr` static; RTC-backed `clock_gettime` family.
-- **Lazy engine init.** `BrowserState::widget: Option<BrowserWidget>` in `crates/oasis-backend-psp/src/app_states.rs` means the JS engine is only constructed the first time the user opens the browser app — boot-time cost is zero. DOM bindings are shared code with the other backends (`oasis-browser/src/js_dom.rs`) enabled via the `javascript` feature.
-
-### PSP TLS 1.3
-
-The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which cannot connect to modern HTTPS servers. The PSP backend implements native TLS 1.3 via `embedded-tls` (pure Rust, no C/asm) with `UnsecureProvider` (no certificate validation). The `alloc` feature is required to advertise RSA signature schemes (archive.org uses RSA certs). Raw TCP sockets (`sceNetInet*`) are wrapped with `embedded_io::Read + Write` adapters. RNG seeded from `sceKernelGetSystemTimeLow` (not `mfc0 $9` which is privileged on PSP Allegrex). DNS resolution via `psp::net::resolve_hostname` with `to_ne_bytes()` (network byte order fix for little-endian MIPS). HTTP→HTTPS redirect loops are detected automatically, triggering TLS fallback; HTTPS redirects (archive.org → CDN node) are followed within the TLS path. This enables HTTPS downloads for TV Guide video streaming from servers that enforce TLS.
-
-### PSP Video Streaming
-
-TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O thread downloads HTTP(S) data, buffers the MP4 `moov` atom (~1-3MB), parses track tables via `demux_lite::Mp4Lite`, then extracts interleaved audio/video samples from the `mdat` stream in file-offset order. Video H.264 frames are decoded via ME hardware (`sceMpeg` NAL direct path with `mpeg_vsh370.prx`); audio AAC frames are decoded via `sceAudiocodec` hardware and output through `AudioChannel::output_blocking`. Content selection prefers ≤480p via `select_smallest_with_max_width(max_width=480)` since the ME handles ≤480p decode indefinitely (tested 8300+ frames, 0 errors) while >480p triggers firmware deadlocks.
-
-Key mechanisms:
-- **Frame delivery** — Pre-decode queue wait: video thread checks `VIDEO_FRAME_QUEUE` (capacity 2) has space before committing to ~50ms ME decode, reducing frame drops from ~72% to ~3%. Main thread drains all queued frames per render, uploads only the latest.
-- **Frameskip** — Texture upload (~80ms for 322KB copy + cache flush) only runs every 3rd main loop frame, giving audio DMA uninterrupted CPU time to prevent stuttering.
-- **Strided CSC** — `decode_into_strided()` writes CSC output at 512px stride matching the GU texture buffer, eliminating two stride-conversion copies per frame.
-- **Audio buffering** — 64-slot audio command queue (~1.5s at 44.1kHz/1024 AAC frames) absorbs network I/O jitter that previously caused audible stuttering.
-- **Fullscreen blit** — During video playback, all UI chrome (wallpaper, status bar, bottom bar, SDI overlay) is skipped; only the video blit + title overlay renders.
-- **ME safety** — `sceMpegDelete` crashes after prolonged decode; the decoder is intentionally leaked on ME deadlock recovery (watchdog signals sceMpeg internal semaphore). `ME_LEAKED` flag prevents reinit until reboot.
-- **WiFi retry** — TCP command server retries WiFi connection indefinitely instead of giving up after 2 attempts.
+- **Two binaries** — `oasis-backend-psp` (EBOOT.PBP, the shell) and
+  `oasis-plugin-psp` (PRX overlay loaded by CFW, <64 KB, no
+  `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
+- **GU command buffer (1 MB)** overflows with dense pages. Don't
+  double-start GU frames after `swap_buffers_inner()`.
+- **QuickJS-NG** built through pspdev's `psp-gcc` with `-msingle-float`,
+  linked via `psp-ld`, libc provided by
+  `oasis-backend-psp/src/quickjs_shim.rs` — see
+  [`docs/javascript-engine.md`](docs/javascript-engine.md).
+- **TLS 1.3** via `embedded-tls` + `UnsecureProvider` because PSP
+  firmware ships 2008-vintage CAs.
+- **Video streaming** via ME hardware decode (`sceMpeg` NAL direct
+  path) + `sceAudiocodec`, ≤480p only. See
+  [`docs/video-streaming.md`](docs/video-streaming.md).
 
 ### Desktop Video Streaming
 
-TV Guide on desktop uses in-process progressive streaming via `StreamingBuffer` (in `tv_controller.rs`). A background download thread feeds an `Arc<StreamingInner>` sliding-window buffer while symphonia decodes from the same buffer via `Read + Seek`. Key mechanisms:
-
-- **`probe_mode`** — During symphonia's probe phase, reads return zeros so mdat body is skipped instantly. `decoder_pos` is NOT updated during probe to prevent a throttle deadlock.
-- **Deferred tail probe** — A separate thread fetches the last 8MB for moov-at-end files, but only launches after >8MB body data received without finding moov. Prevents CDN connection throttling.
-- **`should_throttle()`** — Backpressure: `decoder_pos > 0 ? received > decoder_pos + 16MB : has_moov && buf_size > 16MB`
-- **CDN failover** — Range requests route through the original archive.org URL (not cached CDN) to get a fresh 302 redirect, avoiding 401 errors from stale CDN nodes. `open_range_connection()` follows redirect chains.
-- **Prebuffer gate** — Decoder waits for MIN_PREBUFFER (2MB) of body data before seeking, preventing reads into empty buffer regions.
-- **Seek restart** — After probe discovers moov, the download restarts from the estimated byte offset via a Range request. Linear interpolation: `(seek_secs / duration) * file_size`.
+Progressive streaming via `StreamingBuffer` (sliding-window over an
+`Arc<StreamingInner>` while symphonia decodes from the same buffer
+via `Read + Seek`). Probe-mode reads return zeros, deferred tail
+probe for moov-at-end files, CDN failover through the archive.org
+URL for fresh 302 redirects. Full details in
+[`docs/video-streaming.md`](docs/video-streaming.md).
 
 ### Key Abstraction: Backend Traits
 
@@ -188,8 +164,8 @@ The framework is split into 37 crates (35 workspace members + 2 excluded PSP cra
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 18 skins (14 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine with HTTP/1.1 + HTTP/2 (RFC 9113) client — ALPN-negotiated `h2` over rustls, full HPACK (RFC 7541) with Huffman decode, sync frame layer with HEADERS/CONTINUATION/DATA flow control, GOAWAY/PUSH_PROMISE handling. DOM parser, CSS cascade with viewport-aware `@media` / `@supports` queries (window dimensions threaded into `Stylesheet::parse_with_viewport` so desktop breakpoints no longer collapse to the 480x272 default) and `var()` custom properties, `html { font-size: 62.5% }` resolution (CSS "medium" 16px baseline for the html element only, and `rem` units track the html element's computed font-size via a thread-local cell), absolute-size font keywords (`x-small`..`xx-large`) anchored to the CSS 2.1 §15.7 16px default so `font-size: x-small` matches real-browser rendering (~10px) instead of collapsing against the 8px PSP-tuned `ROOT_FONT_SIZE`, CSS length units `px`/`em`/`rem`/`pt`/`ex`/`ch` (the latter two resolve to `0.5em`), CSS Nesting (`&` selector with parse-time desugaring), `:has()` relational pseudo-class (with `>`/`+`/`~` leading combinators, scope-bounded inner combinators), Selectors Level 4 `:not(a, b, c)` list form, `@layer` cascade layers (statement/named-block/anonymous-block forms, cross-stylesheet name merging, factored into the cascade sort with `!important` inversion), modern color functions (`hsl/hsla`, `oklch/oklab`, `color(srgb | srgb-linear | display-p3)`, `color-mix(in srgb | oklch | oklab | hsl | srgb-linear)`, `light-dark()` with `color-scheme` tracking), CSS logical properties (parse-time rewrite to LTR physical equivalents for margin/padding/border/inset/block-size/inline-size longhands and shorthands), `text-wrap` (balance binary-searches narrowest equal-line-count width, pretty avoids orphans, stable parsed), `aspect-ratio` for non-replaced blocks and replaced elements (width-driven height, CSS ratio overrides intrinsic), flex/grid/table layout with `float: left|right` per CSS 2.1 §10.3.5 (floats keep their declared width, auto margins compute to 0, and float descendants shift with their parent post-placement so `float: right` sidebars land on the right edge with their children in the right place), `calc()`, full 2D CSS transforms plus 3D transform functions (rotateX/Y/Z, translate3d, scale3d, rotate3d, matrix3d, perspective()) evaluated through a 4x4 `Matrix3d`. Pure 2D transforms flatten orthographically via `AffineTransform2D::from_css_transforms`. 3D transforms under an ancestor `perspective:` property route through a screen-space projection path that builds the full `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)` matrix and derives a 3-corner-fit affine via `Matrix3d::project_screen_rect_affine`. `transform-style: preserve-3d` propagates the parent's 4x4 matrix to descendants via `PaintContext.preserved_3d`. `transform-origin` (X/Y/Z) and `perspective-origin` are parsed into structured types and resolved via shared helpers. `backface-visibility: hidden` culls back-facing subtrees via surface-normal Z, animations, hover-triggered CSS transitions (27 numeric properties auto-interpolate on state change), `::before`/`::after` pseudo-elements, `text-overflow: ellipsis`, z-index stacking contexts (CSS 2.1 appendix E paint order), Canvas 2D path API (`beginPath`/`bezierCurveTo`/`quadraticCurveTo`/`fill`/`stroke`/`save`/`restore`), SVG paths with fill-rule/linecap/linejoin and `<g>` group transform composition, light compositor (display list with batched rect+text submission via `SdiBatch::submit_rect_batch`/`submit_text_batch`, vertical/horizontal strip merging, occluded rect elimination, clip intersection optimization, granular animation dirty tracking, sticky element scroll caching via `PushSticky`/`PopSticky` display items), nested scroll containers (`overflow: auto/scroll` with per-element scroll offsets), form elements (text input, password masking, checkbox, radio button, textarea, select with dropdown overlay, submit/reset buttons, `<label for="">` click association, Tab focus navigation, form GET/POST submission), soft hyphen (U+00AD) line breaking with visible hyphens, bidi text direction detection (Hebrew/Arabic/Syriac), cookies, gzip, CSP (scripts/styles/connect enforced; img-src relaxed), `@font-face` web fonts (full CSS parsing of font-family/src/font-weight ranges/font-style/font-display/unicode-range descriptors, `FontFamily` as ordered name stack with generic fallbacks, `fontdue` TTF/OTF rasterizer behind `web-fonts` feature, `FontRegistry` with CSS font matching, `FontAwareTextMeasurer` for layout, glyph texture cache for rendering, lazy font loading on first tick), link navigation, reader mode, JavaScript DOM bindings
-- **oasis-js** -- JavaScript engine. Single `rquickjs-engine` backend (QuickJS-NG via `rquickjs`) used on all backends including PSP. Full `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes, `innerHTML`, `classList`, `style` property, `querySelector`/`querySelectorAll`), `fetch()` API, `setTimeout`/`setInterval`, `localStorage` (persistent across navigations)/`sessionStorage`, `document.cookie` getter/setter, `history.pushState`/`replaceState`, `window.location` with assign/replace/reload, retained engine with event dispatch (click/keydown/keyup/mousedown/mouseup/mousemove bubbling via `__oasis_dispatch_with_bubbling` with three-phase capture/target/bubble dispatch, `addEventListener` options `{once, capture, passive}`, detail properties `clientX`/`clientY`/`key`/`code`, `stopPropagation`/`preventDefault`). The PSP build compiles QuickJS-NG's C sources through the pspdev cross-toolchain (`/opt/pspdev/bin/psp-gcc` wired into the `cc` crate via `CC_mipsel_sony_psp_std`) and provides ~40 libc/libm symbols through `oasis-backend-psp/src/quickjs_shim.rs` instead of linking pspdev's prebuilt newlib (which is eabi32/msingle-float/abicalls and can't be merged with Rust's o32/mdouble-float/non-abicalls code). The earlier pure-Rust `boa_engine` PSP backend has been retired. Feature-gated (`javascript`) on oasis-browser across all platforms; the PSP backend instantiates the engine lazily via `BrowserState::widget: Option<BrowserWidget>` so boot-time cost is zero.
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: WHATWG HTML, full CSS cascade with `@media` / `@container` / `@layer` / `@supports` / `@scope` / CSS Nesting / `:has()`, viewport-aware stylesheet parsing, 2D + 3D transforms, `@font-face` web fonts, canvas + SVG, HTTP/1.1 + HTTP/2 over rustls, cookies, CSP, reader mode, forms, bookmarks. **Feature catalogue:** [`docs/browser-engine.md`](docs/browser-engine.md). **Backlog:** [`docs/browser-backlog.md`](docs/browser-backlog.md).
+- **oasis-js** -- QuickJS-NG via `rquickjs` on every target (desktop / WASM / UE5 / PSP). DOM bindings (`getElementById`, `querySelector`, `fetch`, `setTimeout`, `localStorage`, event bubbling, …) feature-gated as `javascript`. PSP cross-compile is non-trivial (pspdev toolchain, `-msingle-float`, `psp-ld`, hand-rolled libc shim) — see [`docs/javascript-engine.md`](docs/javascript-engine.md).
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
@@ -197,7 +173,7 @@ The framework is split into 37 crates (35 workspace members + 2 excluded PSP cra
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop uses `StreamingBuffer` sliding-window for progressive playback with deferred tail probe, CDN failover, and PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceMpeg` H.264 ME hardware decode (NAL direct path via `mpeg_vsh370.prx`, ≤480p indefinite, >480p limited) with pre-decode queue wait, frameskip, 64-slot audio buffering, and fullscreen video blit
+- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
@@ -235,6 +211,10 @@ Key documentation files for agents and contributors. Read these for deeper conte
 
 ### Architecture & Design
 - [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1500 lines, comprehensive architecture)
+- [`docs/browser-engine.md`](docs/browser-engine.md) -- Browser feature catalogue (HTTP, HTML, CSS, layout, fonts, chrome, JS bindings)
+- [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
+- [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
+- [`docs/video-streaming.md`](docs/video-streaming.md) -- Desktop `StreamingBuffer` progressive playback
 - [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
 - [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
 - [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy
