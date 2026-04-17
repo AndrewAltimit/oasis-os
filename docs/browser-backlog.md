@@ -12,6 +12,34 @@ The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
 
+- **old.reddit.com rendering + address-bar polish**
+  (`feat/browser-old-reddit-rendering`). Three fixes that together
+  turn the listing and comments pages from an illegible overlap mess
+  into a recognisable old.reddit layout. (1) CSS `ex` and `ch` length
+  units are now parsed (both resolve to `0.5em`, the standard
+  pre-typometric heuristic) — old.reddit's vote column uses
+  `width: 4.1ex` and the post rank uses `width: 2.2ex`, so treating
+  those as invalid was collapsing the whole midcol gutter to zero.
+  (2) Absolute-size font keywords (`x-small` / `small` / `medium` /
+  `large` / `x-large` / `xx-large`) now anchor to the CSS 2.1 §15.7
+  16 px baseline instead of the PSP-tuned `ROOT_FONT_SIZE` (8 px), so
+  `font-size: x-small` renders at ~10 px as real browsers show
+  instead of 5 px. (3) Floated blocks no longer inherit the
+  normal-flow over-constrained rule (CSS 2.1 §10.3.3) that absorbs
+  leftover width into `margin-right`; per §10.3.5 floats keep their
+  declared width and auto margins compute to 0, so `.side { float:
+  right; width: 300px }` inside a 1280 px container now places at the
+  right edge instead of at `x=0`. Float descendants also shift with
+  their parent post-placement (same subtree-delta trick the centered
+  `margin: 0 auto` path already used). Address-bar polish rolled in
+  on the same branch: caret uses `bitmap_measure_text` instead of
+  the hardcoded 8-px-per-char assumption, click-to-focus selects the
+  whole URL so the next keystroke replaces it (Firefox/Chrome
+  behaviour), a new "B" button next to "H" navigates to
+  `vfs://bookmarks` (served inline from `nav::bookmarks_page_html`),
+  chrome height bumped 20→28 px for usable tap targets. Real-world
+  test-page shortcuts (wikipedia / old.reddit / google) added to the
+  browser homepage at `vfs://sites/home/index.html`.
 - **`@font-face` / web fonts** (`feat/browser-font-face`). Full
   `@font-face` CSS parsing (family, src url/local, font-weight
   ranges, font-style, font-display, unicode-range). `FontFamily`
