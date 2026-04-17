@@ -352,9 +352,9 @@ fn blend_channels(
         ),
         // Non-separable blend modes operate on HSL.
         BlendMode::Hue => {
-            let (sh, ss, _) = rgb_to_hsl(sr, sg, sb);
-            let (_, _, dl) = rgb_to_hsl(dr, dg, db);
-            hsl_to_rgb(sh, ss, dl)
+            let (sh, _, _) = rgb_to_hsl(sr, sg, sb);
+            let (_, ds, dl) = rgb_to_hsl(dr, dg, db);
+            hsl_to_rgb(sh, ds, dl)
         },
         BlendMode::Saturation => {
             let (_, ss, _) = rgb_to_hsl(sr, sg, sb);

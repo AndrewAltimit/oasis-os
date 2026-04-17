@@ -1557,7 +1557,10 @@ fn paint_shape(
                 },
                 SvgPaint::GradientRef(id) => {
                     if let Some(grad) = defs.gradients.get(id.as_str()) {
-                        paint_rect_gradient(backend, px, py, pw, ph, grad, *opacity)?;
+                        let grad = normalize_gradient_for_rect(grad, *x, *y, *width, *height);
+                        paint_rect_gradient(backend, px, py, pw, ph, &grad, *opacity)?;
+                    } else if let Some(pat) = defs.patterns.get(id.as_str()) {
+                        paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, *opacity)?;
                     }
                 },
                 SvgPaint::PatternRef(id) => {
@@ -1962,6 +1965,61 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Render a gradient fill for a rectangular region.
+/// Normalize a gradient's coordinates to objectBoundingBox (0..1) for a rect
+/// in viewBox-space `(rx, ry, rw, rh)`. When `user_space` is true the
+/// gradient coords are absolute viewBox coords; divide out the rect origin
+/// and size so downstream band sampling can use 0..1 positions uniformly.
+/// When the rect is degenerate the gradient is returned unchanged.
+fn normalize_gradient_for_rect(
+    grad: &SvgGradientDef,
+    rx: f32,
+    ry: f32,
+    rw: f32,
+    rh: f32,
+) -> SvgGradientDef {
+    match grad {
+        SvgGradientDef::Linear {
+            x1,
+            y1,
+            x2,
+            y2,
+            stops,
+            user_space,
+        } => {
+            if !*user_space || rw.abs() < f32::EPSILON || rh.abs() < f32::EPSILON {
+                return grad.clone();
+            }
+            SvgGradientDef::Linear {
+                x1: (*x1 - rx) / rw,
+                y1: (*y1 - ry) / rh,
+                x2: (*x2 - rx) / rw,
+                y2: (*y2 - ry) / rh,
+                stops: stops.clone(),
+                user_space: false,
+            }
+        },
+        SvgGradientDef::Radial {
+            cx,
+            cy,
+            r,
+            stops,
+            user_space,
+        } => {
+            if !*user_space || rw.abs() < f32::EPSILON || rh.abs() < f32::EPSILON {
+                return grad.clone();
+            }
+            let denom = rw.max(rh);
+            SvgGradientDef::Radial {
+                cx: (*cx - rx) / rw,
+                cy: (*cy - ry) / rh,
+                r: *r / denom,
+                stops: stops.clone(),
+                user_space: false,
+            }
+        },
+    }
+}
+
 fn paint_rect_gradient(
     backend: &mut dyn SdiBackend,
     x: i32,
@@ -2108,12 +2166,25 @@ fn paint_shape_with_extra_opacity(
     backend: &mut dyn SdiBackend,
     xf: &SvgTransform,
     defs: &SvgDefs,
-    _extra_opacity: f32,
+    extra_opacity: f32,
 ) -> Result<()> {
-    // For simplicity, delegate to paint_shape. The shape already carries
-    // its own opacity from parsing (including inherited opacity from the
-    // pattern's parent context).
-    paint_shape(shape, backend, xf, defs)
+    if (extra_opacity - 1.0).abs() < f32::EPSILON {
+        return paint_shape(shape, backend, xf, defs);
+    }
+    let mut shape = shape.clone();
+    match &mut shape {
+        SvgShape::Rect { opacity, .. }
+        | SvgShape::Circle { opacity, .. }
+        | SvgShape::Ellipse { opacity, .. }
+        | SvgShape::Line { opacity, .. }
+        | SvgShape::Text { opacity, .. }
+        | SvgShape::Path { opacity, .. }
+        | SvgShape::Polygon { opacity, .. }
+        | SvgShape::Polyline { opacity, .. } => {
+            *opacity = (*opacity * extra_opacity).clamp(0.0, 1.0);
+        },
+    }
+    paint_shape(&shape, backend, xf, defs)
 }
 
 /// Stroke a line between two points using filled rectangles (Bresenham-like).

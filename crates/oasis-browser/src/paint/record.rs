@@ -188,6 +188,30 @@ fn record_box(
         offset_y,
     );
 
+    // Screen-space culling (includes CSS transform translation). Runs
+    // BEFORE the 3D ambient context is mutated below — otherwise an early
+    // return here would leave `ctx.ambient_screen_matrix` set for siblings.
+    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y
+        + sticky_dy as f32
+        + (tx_off_y - offset_y) as f32;
+    let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
+    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x + (tx_off_x - offset_x) as f32;
+    let box_right = screen_x + layout_box.dimensions.margin_box().width;
+
+    if box_bottom < 0.0 || screen_y > ctx.viewport_height {
+        // Close the sticky group opened above to keep the stack balanced.
+        if is_sticky {
+            dl.push(DisplayItem::PopSticky);
+        }
+        return;
+    }
+    if box_right < 0.0 || screen_x > ctx.viewport_width {
+        if is_sticky {
+            dl.push(DisplayItem::PopSticky);
+        }
+        return;
+    }
+
     // 3D transform context: when this element has 3D transforms or a
     // `perspective:` property, compute the screen-space 4x4 matrix and
     // propagate it so descendants emit FillPolygon items for perspective
@@ -240,28 +264,6 @@ fn record_box(
             let by = layout_box.dimensions.border_box().y - ctx.scroll_y + offset_y as f32;
             ctx.perspective_vanishing = Some((bx + pox, by + poy));
         }
-    }
-
-    // Screen-space culling (includes CSS transform translation).
-    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y
-        + sticky_dy as f32
-        + (tx_off_y - offset_y) as f32;
-    let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
-    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x + (tx_off_x - offset_x) as f32;
-    let box_right = screen_x + layout_box.dimensions.margin_box().width;
-
-    if box_bottom < 0.0 || screen_y > ctx.viewport_height {
-        // Close the sticky group opened above to keep the stack balanced.
-        if is_sticky {
-            dl.push(DisplayItem::PopSticky);
-        }
-        return;
-    }
-    if box_right < 0.0 || screen_x > ctx.viewport_width {
-        if is_sticky {
-            dl.push(DisplayItem::PopSticky);
-        }
-        return;
     }
 
     let is_visible = layout_box.style.visibility == Visibility::Visible;
