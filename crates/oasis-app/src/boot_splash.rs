@@ -195,51 +195,31 @@ fn generate_logo_glow_texture(
     draw_line(275.0, 290.0, 275.0, 445.0);
     draw_line(275.0, 445.0, 420.0, 445.0);
     // O (angular rectangle)
-    draw_line(345.0, 290.0, 425.0, 290.0);
-    draw_line(425.0, 290.0, 425.0, 410.0);
-    draw_line(425.0, 410.0, 345.0, 410.0);
-    draw_line(345.0, 410.0, 345.0, 290.0);
+    draw_line(410.0, 290.0, 490.0, 290.0);
+    draw_line(490.0, 290.0, 490.0, 410.0);
+    draw_line(490.0, 410.0, 410.0, 410.0);
+    draw_line(410.0, 410.0, 410.0, 290.0);
     // A
-    draw_line(455.0, 410.0, 495.0, 290.0);
-    draw_line(495.0, 290.0, 535.0, 410.0);
+    draw_line(520.0, 410.0, 560.0, 290.0);
+    draw_line(560.0, 290.0, 600.0, 410.0);
     // S (first — upper-left vertical, lower-right vertical)
-    draw_line(635.0, 290.0, 715.0, 290.0); // top
-    draw_line(635.0, 290.0, 635.0, 350.0); // upper-left
-    draw_line(635.0, 350.0, 715.0, 350.0); // middle
-    draw_line(715.0, 350.0, 715.0, 410.0); // lower-right
-    draw_line(635.0, 410.0, 715.0, 410.0); // bottom
+    draw_line(630.0, 290.0, 710.0, 290.0); // top
+    draw_line(630.0, 290.0, 630.0, 350.0); // upper-left
+    draw_line(630.0, 350.0, 710.0, 350.0); // middle
+    draw_line(710.0, 350.0, 710.0, 410.0); // lower-right
+    draw_line(630.0, 410.0, 710.0, 410.0); // bottom
     // I
-    draw_line(755.0, 290.0, 755.0, 410.0);
+    draw_line(740.0, 290.0, 740.0, 410.0);
     // S (second)
-    draw_line(795.0, 290.0, 875.0, 290.0); // top
-    draw_line(795.0, 290.0, 795.0, 350.0); // upper-left
-    draw_line(795.0, 350.0, 875.0, 350.0); // middle
-    draw_line(875.0, 350.0, 875.0, 410.0); // lower-right
-    draw_line(795.0, 410.0, 875.0, 410.0); // bottom
+    draw_line(770.0, 290.0, 850.0, 290.0); // top
+    draw_line(770.0, 290.0, 770.0, 350.0); // upper-left
+    draw_line(770.0, 350.0, 850.0, 350.0); // middle
+    draw_line(850.0, 350.0, 850.0, 410.0); // lower-right
+    draw_line(770.0, 410.0, 850.0, 410.0); // bottom
     // Right bracket
     draw_line(965.0, 290.0, 1005.0, 290.0);
     draw_line(1005.0, 290.0, 1005.0, 445.0);
     draw_line(1005.0, 445.0, 860.0, 445.0);
-
-    // Aperture circle (centered between A and S).
-    let acx = (585.0 * sx) as i32 - logo_x;
-    let acy = (350.0 * sy) as i32 - logo_y;
-    let ar = (25.0 * scale) as i32;
-    for dy in -ar..=ar {
-        for dx in -ar..=ar {
-            if dx * dx + dy * dy <= ar * ar {
-                let bx = (acx + dx) as u32;
-                let by = (acy + dy) as u32;
-                if bx < logo_w && by < logo_h {
-                    let idx = ((by * logo_w + bx) * 4) as usize;
-                    buf[idx] = 255;
-                    buf[idx + 1] = 255;
-                    buf[idx + 2] = 255;
-                    buf[idx + 3] = 255;
-                }
-            }
-        }
-    }
 
     // Apply 3-pass separable box blur (approximates Gaussian stdDeviation≈4).
     let blur_radius = (4.0 * scale).max(2.0) as i32;
@@ -636,16 +616,7 @@ fn paint_splash_screen(
 
         // Crisp logo strokes with scale + brightness.
         let sw = (7.0 * scale).max(2.0) as u32;
-        paint_logo_scaled(
-            backend,
-            sx,
-            sy,
-            scale,
-            logo_opacity,
-            sw,
-            logo_scale,
-            brightness,
-        )?;
+        paint_logo_scaled(backend, sx, sy, logo_opacity, sw, logo_scale, brightness)?;
     }
 
     // Subtitle "OPERATING SYSTEMS" (appears at 4.8s).
@@ -720,12 +691,10 @@ fn paint_splash_screen(
 ///
 /// `logo_scale`: 1.0 = normal, 1.05 = 5% larger from center.
 /// `brightness`: 1.0 = normal white, 2.0 = double brightness (clamped).
-#[allow(clippy::too_many_arguments)]
 fn paint_logo_scaled(
     backend: &mut dyn SdiBackend,
     sx: f32,
     sy: f32,
-    scale: f32,
     opacity: f32,
     sw: u32,
     logo_scale: f32,
@@ -782,93 +751,31 @@ fn paint_logo_scaled(
     draw(backend, 275.0, 290.0, 275.0, 445.0)?;
     draw(backend, 275.0, 445.0, 420.0, 445.0)?;
     // O (angular rectangle outline)
-    draw(backend, 345.0, 290.0, 425.0, 290.0)?;
-    draw(backend, 425.0, 290.0, 425.0, 410.0)?;
-    draw(backend, 425.0, 410.0, 345.0, 410.0)?;
-    draw(backend, 345.0, 410.0, 345.0, 290.0)?;
+    draw(backend, 410.0, 290.0, 490.0, 290.0)?;
+    draw(backend, 490.0, 290.0, 490.0, 410.0)?;
+    draw(backend, 490.0, 410.0, 410.0, 410.0)?;
+    draw(backend, 410.0, 410.0, 410.0, 290.0)?;
     // A (inverted V)
-    draw(backend, 455.0, 410.0, 495.0, 290.0)?;
-    draw(backend, 495.0, 290.0, 535.0, 410.0)?;
-    // Aperture — hexagonal camera shutter between A and S.
-    let ocx = 585.0 * adj_sx + offset_x;
-    let ocy = 350.0 * adj_sy + offset_y;
-    paint_aperture_icon(backend, ocx, ocy, scale * logo_scale, c, bright_opacity)?;
+    draw(backend, 520.0, 410.0, 560.0, 290.0)?;
+    draw(backend, 560.0, 290.0, 600.0, 410.0)?;
     // S (angular — upper-left vertical, lower-right vertical)
-    draw(backend, 635.0, 290.0, 715.0, 290.0)?; // top
-    draw(backend, 635.0, 290.0, 635.0, 350.0)?; // upper-left
-    draw(backend, 635.0, 350.0, 715.0, 350.0)?; // middle
-    draw(backend, 715.0, 350.0, 715.0, 410.0)?; // lower-right
-    draw(backend, 635.0, 410.0, 715.0, 410.0)?; // bottom
+    draw(backend, 630.0, 290.0, 710.0, 290.0)?; // top
+    draw(backend, 630.0, 290.0, 630.0, 350.0)?; // upper-left
+    draw(backend, 630.0, 350.0, 710.0, 350.0)?; // middle
+    draw(backend, 710.0, 350.0, 710.0, 410.0)?; // lower-right
+    draw(backend, 630.0, 410.0, 710.0, 410.0)?; // bottom
     // I
-    draw(backend, 755.0, 290.0, 755.0, 410.0)?;
+    draw(backend, 740.0, 290.0, 740.0, 410.0)?;
     // S (second)
-    draw(backend, 795.0, 290.0, 875.0, 290.0)?; // top
-    draw(backend, 795.0, 290.0, 795.0, 350.0)?; // upper-left
-    draw(backend, 795.0, 350.0, 875.0, 350.0)?; // middle
-    draw(backend, 875.0, 350.0, 875.0, 410.0)?; // lower-right
-    draw(backend, 795.0, 410.0, 875.0, 410.0)?; // bottom
+    draw(backend, 770.0, 290.0, 850.0, 290.0)?; // top
+    draw(backend, 770.0, 290.0, 770.0, 350.0)?; // upper-left
+    draw(backend, 770.0, 350.0, 850.0, 350.0)?; // middle
+    draw(backend, 850.0, 350.0, 850.0, 410.0)?; // lower-right
+    draw(backend, 770.0, 410.0, 850.0, 410.0)?; // bottom
     // Right bracket: ] (with extended bottom leg)
     draw(backend, 965.0, 290.0, 1005.0, 290.0)?;
     draw(backend, 1005.0, 290.0, 1005.0, 445.0)?;
     draw(backend, 1005.0, 445.0, 860.0, 445.0)?;
-
-    Ok(())
-}
-
-/// Render the hexagonal aperture/shutter icon centered at (cx, cy).
-///
-/// Draws a filled hexagon with a center hole and six radiating
-/// shutter cut lines, matching the SVG's `<polygon>` + `<mask>` combo.
-fn paint_aperture_icon(
-    backend: &mut dyn SdiBackend,
-    cx: f32,
-    cy: f32,
-    scale: f32,
-    color: Color,
-    opacity: f32,
-) -> Result<()> {
-    let r = 25.0 * scale;
-    // Hexagon vertices: 6 points at 60-degree increments starting from top.
-    let hex_pts: Vec<(i32, i32)> = (0..6)
-        .map(|i| {
-            let angle = std::f32::consts::FRAC_PI_3 * i as f32 - std::f32::consts::FRAC_PI_2;
-            ((cx + r * angle.cos()) as i32, (cy + r * angle.sin()) as i32)
-        })
-        .collect();
-    backend.fill_polygon(&hex_pts, color)?;
-
-    // Center hole (r=5 in SVG).
-    let hole_r = (5.0 * scale).max(1.0) as u16;
-    // Use a dark color matching the background behind the aperture.
-    let hole_c = apply_alpha(Color::rgb(21, 0, 136), opacity);
-    backend.fill_circle(cx as i32, cy as i32, hole_r, hole_c)?;
-
-    // Shutter cut lines — 6 lines radiating from near-center outward,
-    // each rotated by 60 degrees. SVG: <line x1="4" y1="2" x2="30" y2="10">
-    // with transform="rotate(N)" for N=0,60,120,180,240,300.
-    let cut_c = apply_alpha(Color::rgb(21, 0, 136), opacity);
-    let cut_sw = (2.5 * scale).max(1.0) as u32;
-    for i in 0..6 {
-        let angle = std::f32::consts::FRAC_PI_3 * i as f32;
-        let cos_a = angle.cos();
-        let sin_a = angle.sin();
-        // Inner point (4, 2) rotated.
-        let ix = cx + (4.0 * cos_a - 2.0 * sin_a) * scale;
-        let iy = cy + (4.0 * sin_a + 2.0 * cos_a) * scale;
-        // Outer point (30, 10) rotated — clamped to hexagon radius.
-        let ox = cx + (25.0 * cos_a - 8.0 * sin_a) * scale;
-        let oy = cy + (25.0 * sin_a + 8.0 * cos_a) * scale;
-        // Draw via Bresenham.
-        let steps = ((ox - ix).abs().max((oy - iy).abs())) as i32;
-        if steps > 0 {
-            for s in 0..=steps {
-                let t = s as f32 / steps as f32;
-                let px = (ix + (ox - ix) * t) as i32;
-                let py = (iy + (oy - iy) * t) as i32;
-                backend.fill_rect(px, py, cut_sw, cut_sw, cut_c)?;
-            }
-        }
-    }
 
     Ok(())
 }
