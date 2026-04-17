@@ -12,6 +12,83 @@ The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
 
+- **google.com rendering + form interactivity + click hit-testing**
+  (`feat/browser-google-rendering`). The OASIS-UA variant of the
+  Google homepage (the 79 KB table-based legacy fallback served to
+  non-mainstream user-agents) now renders with a real 25/50/25
+  three-column layout, sized search input, clickable submit
+  buttons, and — the part that made the "it's just a picture"
+  comparison especially painful before — the search box is
+  genuinely interactive: clicking focuses it, typing updates the
+  displayed text, and Enter navigates to `/search?q=...`.
+
+  **Table / layout fixes:** `measure_box_widths` in
+  `layout/table.rs` now reads replaced elements' intrinsic
+  dimensions via the newly-exported `replaced_dimensions`,
+  so `<input>` in a `<td>` no longer collapses the cell to 0 px.
+  `<td width="25%">` reserves its share via a new percent-
+  constraint pass in `distribute_widths`, and explicit-pixel
+  columns stay pinned instead of being rescaled.
+  `layout_cell_content` wraps inline / replaced children in an
+  anonymous block so an inputs-only cell gets a real inline
+  formatting context. New presentational-hint mappings for
+  `valign` (→ `vertical-align` on tr/td/th), table-level
+  `cellpadding` (propagated to descendant cells via an ancestor
+  walk), `<br clear="…">` (→ CSS `clear`), and `<center> > *`
+  getting `margin-left/right: auto` so shrink-wrapped tables
+  inside `<center>` end up centred.
+
+  **Interactivity fixes:** `populate_forms_from_dom` runs on
+  every page load — previously nothing wrote to
+  `form_manager.forms`, so every `<input>` looked unowned to
+  the click handler. `handle_form_element_click` walks up from
+  the hit node looking for an `<input>`/`<button>`/`<textarea>`
+  ancestor (Google's submit button is wrapped in
+  `<span class="lsbb">`). Focused-element routing in
+  `handle_input` delivers `TextInput(ch)` / `Backspace` /
+  `Button::Confirm` to the form manager instead of the
+  page-zoom shortcut or the link-activation path.
+  `sync_form_values_to_dom` writes `form_manager` state back
+  onto the `<input value="…">` attribute so the next relayout
+  actually paints the typed characters — without it the
+  layout's `ReplacedContent::TextInput { value }` is re-read
+  from the original HTML on every dirty-layout tick.
+
+  **Click hit-testing was off by 28 px.** Paint draws the
+  layout tree offset by `url_bar_height` (plus scroll) but every
+  `hit_test` call in `widget_input.rs` passed raw screen coords.
+  Added `screen_to_layout` and applied it at all five hit-test
+  sites — clicks on inputs, labels, `<details>` summaries, and
+  the JS click/mouse dispatchers used to land on whatever was
+  28 px above the real target.
+
+  **Failed `background-image: url(…)` no longer tiles a red-X
+  grid.** A new `broken_image_urls` set on `BrowserWidget`
+  tracks URLs whose fetch or decode failed; the CSS-background
+  assignment path skips them, so Google's `.lsb` button sprite
+  (referencing a 404'd `nav_logo229.png`) falls through to the
+  background-colour instead of repeating a 24×24 placeholder
+  across every submit button.
+
+  **Internal-link regression fix bundled in:** homepage hrefs
+  were absolute paths like `/sites/home/about.html` which, on
+  `vfs://sites/home/…`, resolved per RFC 3986 to
+  `vfs://sites/sites/home/…` (authority "sites" + absolute path
+  preserved) and then the missing VFS file fell through to
+  `load_from_network`, which rejected `vfs:` with the
+  misleading "unsupported network scheme" error. Homepage hrefs
+  are now relative, and `VfsThenNetwork` no longer escapes to
+  network for `vfs:`/`about:`/`data:` schemes.
+
+  **Test coverage:** new `google_homepage.html` fixture + 480×272
+  and 800×600 goldens wired into `visual_regression`, and three
+  end-to-end form interaction tests (`form_click_focuses_input`,
+  `form_typing_updates_value_and_reflects_in_dom`,
+  `form_enter_submits`) that would have caught each bug above.
+  Knock-on: HackerNews' 30-px rank / 14-px votelinks columns
+  are now honoured (frontpage height dropped ~900 px);
+  Wikipedia infobox cells flow inline content through a real
+  IFC instead of the single-line approximation stub.
 - **old.reddit.com rendering + address-bar polish**
   (`feat/browser-old-reddit-rendering`). Three fixes that together
   turn the listing and comments pages from an illegible overlap mess

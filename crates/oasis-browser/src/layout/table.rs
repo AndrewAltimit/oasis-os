@@ -10,6 +10,20 @@ use super::block::TextMeasurer;
 use super::box_model::*;
 use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display, VerticalAlign};
 
+/// Pixel multiplier used to encode a table cell's `colspan` /
+/// `rowspan` inside the computed-style `min_width` / `max_width`
+/// fields. The DOM-to-layout bridge writes
+/// `Dimension::Px(span * COLSPAN_ENCODING_SCALE)` and
+/// [`extract_explicit_width`] filters out any `Px` value at or above
+/// this threshold so a legitimate `width="1200"` is *not* legal — the
+/// encoding scale must stay larger than any plausible CSS pixel width.
+///
+/// Shared between [`make_cell_with_spans`], [`extract_span_attrs`],
+/// [`extract_explicit_width`], and the DOM-to-layout bridge in
+/// `crate::layout::block::tree_builder` so changing the scale in one
+/// place updates the sentinel everywhere.
+pub(crate) const COLSPAN_ENCODING_SCALE: f32 = 1000.0;
+
 // -------------------------------------------------------------------
 // Table cell representation
 // -------------------------------------------------------------------
@@ -29,6 +43,14 @@ struct TableCell {
     min_width: f32,
     /// Preferred content width (text laid out without line breaks).
     pref_width: f32,
+    /// Explicit CSS width expressed in pixels, if set on the cell.
+    /// Used as a constraint when computing column widths so cells
+    /// with `width="200"` reserve exactly that column width.
+    explicit_px: Option<f32>,
+    /// Explicit CSS width expressed as a percentage of the table's
+    /// available width (0..=100), if set on the cell. Used to
+    /// reserve a fraction of the table width per column.
+    explicit_pct: Option<f32>,
     /// The layout box for this cell's content.
     layout_box: LayoutBox,
 }
@@ -47,6 +69,11 @@ struct TableLayout {
     cells: Vec<TableCell>,
     /// Resolved width for each column.
     col_widths: Vec<f32>,
+    /// Set to `true` for columns that have an explicit CSS pixel
+    /// width on at least one single-column cell. These stay pinned
+    /// when the table has slack and other columns should absorb the
+    /// slack instead.
+    col_explicit_px: Vec<bool>,
     /// Resolved height for each row.
     row_heights: Vec<f32>,
     /// Horizontal and vertical spacing between cells (CSS
@@ -64,6 +91,7 @@ impl TableLayout {
             num_rows: 0,
             cells: Vec::new(),
             col_widths: Vec::new(),
+            col_explicit_px: Vec::new(),
             row_heights: Vec::new(),
             border_spacing,
             border_collapse,
@@ -230,6 +258,7 @@ fn parse_row(row: &LayoutBox, row_idx: usize, tl: &mut TableLayout, occupied: &m
         // Mark slots occupied by this cell's rowspan/colspan.
         mark_occupied(occupied, row_idx, col_idx, rowspan, colspan, tl);
 
+        let (explicit_px, explicit_pct) = extract_explicit_width(cell_box);
         tl.cells.push(TableCell {
             col: col_idx,
             row: row_idx,
@@ -237,6 +266,8 @@ fn parse_row(row: &LayoutBox, row_idx: usize, tl: &mut TableLayout, occupied: &m
             rowspan,
             min_width: 0.0,
             pref_width: 0.0,
+            explicit_px,
+            explicit_pct,
             layout_box: cell_box.clone(),
         });
 
@@ -274,6 +305,7 @@ fn parse_bare_cell(
 
     mark_occupied(occupied, row_idx, col_idx, rowspan, colspan, tl);
 
+    let (explicit_px, explicit_pct) = extract_explicit_width(cell_box);
     tl.cells.push(TableCell {
         col: col_idx,
         row: row_idx,
@@ -281,8 +313,24 @@ fn parse_bare_cell(
         rowspan,
         min_width: 0.0,
         pref_width: 0.0,
+        explicit_px,
+        explicit_pct,
         layout_box: cell_box.clone(),
     });
+}
+
+/// Extract a cell's explicit CSS width as (px, percent).
+///
+/// Multi-column cells propagate their width constraint across spanned
+/// columns during distribution. Values at or above
+/// [`COLSPAN_ENCODING_SCALE`] are the colspan sentinel set by the
+/// DOM-to-layout bridge and are ignored here.
+fn extract_explicit_width(cell_box: &LayoutBox) -> (Option<f32>, Option<f32>) {
+    match cell_box.style.width {
+        Dimension::Px(v) if v > 0.0 && v < COLSPAN_ENCODING_SCALE => (Some(v), None),
+        Dimension::Percent(p) if p > 0.0 && p <= 100.0 => (None, Some(p)),
+        _ => (None, None),
+    }
 }
 
 /// Find the next column index at `row_idx` starting from `start` that
@@ -340,11 +388,11 @@ fn extract_span_attrs(cell_box: &LayoutBox) -> (usize, usize) {
     // The public API `make_cell_with_spans` allows tests and callers
     // to embed span metadata.
     let colspan = match cell_box.style.min_width {
-        Dimension::Px(v) if v >= 1000.0 => (v / 1000.0) as usize,
+        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
         _ => 1,
     };
     let rowspan = match cell_box.style.max_width {
-        Dimension::Px(v) if v >= 1000.0 => (v / 1000.0) as usize,
+        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
         _ => 1,
     };
     (colspan.max(1), rowspan.max(1))
@@ -376,6 +424,22 @@ fn measure_cell_widths(tl: &mut TableLayout, measurer: &dyn TextMeasurer) {
 /// leaf nodes use explicit CSS widths directly.
 #[allow(clippy::only_used_in_recursion)]
 fn measure_box_widths(layout_box: &LayoutBox, measurer: &dyn TextMeasurer) -> (f32, f32) {
+    // Replaced leaves (inputs, images, buttons, svg, canvas) contribute
+    // their intrinsic dimensions so a table cell containing, for example,
+    // `<input size="57">` doesn't collapse to 0px. An explicit CSS width
+    // still wins.
+    if let BoxType::Replaced(replaced) = &layout_box.box_type {
+        let w = match layout_box.style.width {
+            Dimension::Px(w) => w,
+            _ => {
+                let (intrinsic_w, _) =
+                    crate::layout::inline::replaced_dimensions(replaced, &layout_box.style);
+                intrinsic_w
+            },
+        };
+        return (w, w);
+    }
+
     // Leaf cell with no children: use explicit width if set,
     // otherwise zero.
     if layout_box.children.is_empty() {
@@ -393,8 +457,9 @@ fn measure_box_widths(layout_box: &LayoutBox, measurer: &dyn TextMeasurer) -> (f
         let (cmin, cpref) = measure_box_widths(child, measurer);
         // For block children, take the maximum width (they stack
         // vertically). For inline, we sum (they flow horizontally).
+        // Replaced elements participate in inline flow like Inline.
         match child.box_type {
-            BoxType::Inline | BoxType::InlineBlock => {
+            BoxType::Inline | BoxType::InlineBlock | BoxType::Replaced(_) => {
                 total_min = total_min.max(cmin);
                 total_pref += cpref;
             },
@@ -424,7 +489,7 @@ fn compute_column_widths(tl: &mut TableLayout) {
     let mut col_min = vec![0.0_f32; tl.num_cols];
     let mut col_pref = vec![0.0_f32; tl.num_cols];
 
-    // Pass 1: single-column cells.
+    // Pass 1: content widths from single-column cells.
     for cell in &tl.cells {
         if cell.colspan == 1 {
             col_min[cell.col] = col_min[cell.col].max(cell.min_width);
@@ -432,29 +497,65 @@ fn compute_column_widths(tl: &mut TableLayout) {
         }
     }
 
-    // Pass 2: multi-column cells. Distribute extra width evenly
-    // across spanned columns if the span exceeds the sum of
-    // individual column widths.
+    // Pass 1b: explicit CSS-pixel widths on single-column cells. A
+    // cell with `width: 30px` fixes its column's preferred width so
+    // that later colspan distribution cannot inflate it. Percent
+    // columns are handled separately in `distribute_widths`.
+    let mut col_explicit_px = vec![false; tl.num_cols];
+    for cell in &tl.cells {
+        if cell.colspan == 1
+            && let Some(px) = cell.explicit_px
+        {
+            col_pref[cell.col] = col_pref[cell.col].max(px);
+            col_min[cell.col] = col_min[cell.col].max(px);
+            col_explicit_px[cell.col] = true;
+        }
+    }
+    tl.col_explicit_px = col_explicit_px.clone();
+
+    // Pass 2: multi-column cells. Distribute extra preferred / min
+    // width across the *non-pinned* spanned columns. Columns that
+    // already have an explicit CSS pixel width stay at that width;
+    // the remaining columns absorb the slack.
+    //
+    // When every spanned column is already pinned (`flex_cols == 0`)
+    // we still have to place the extra somewhere; split it evenly
+    // across the pinned columns instead of adding it to each
+    // individually (which would multiply the growth by the span width).
     for cell in &tl.cells {
         if cell.colspan <= 1 {
             continue;
         }
         let end = (cell.col + cell.colspan).min(tl.num_cols);
-        let sum_min: f32 = col_min[cell.col..end].iter().sum();
-        let sum_pref: f32 = col_pref[cell.col..end].iter().sum();
+        let span_range = cell.col..end;
+        let span_len = end - cell.col;
+        let flex_cols: usize = (span_range.clone())
+            .filter(|i| !col_explicit_px[*i])
+            .count();
+        let divisor = if flex_cols == 0 {
+            span_len.max(1) as f32
+        } else {
+            flex_cols as f32
+        };
 
+        let sum_min: f32 = col_min[span_range.clone()].iter().sum();
         if cell.min_width > sum_min {
             let extra = cell.min_width - sum_min;
-            let per_col = extra / cell.colspan as f32;
-            for v in col_min.iter_mut().take(end).skip(cell.col) {
-                *v += per_col;
+            let per_col = extra / divisor;
+            for i in span_range.clone() {
+                if !col_explicit_px[i] || flex_cols == 0 {
+                    col_min[i] += per_col;
+                }
             }
         }
+        let sum_pref: f32 = col_pref[span_range.clone()].iter().sum();
         if cell.pref_width > sum_pref {
             let extra = cell.pref_width - sum_pref;
-            let per_col = extra / cell.colspan as f32;
-            for v in col_pref.iter_mut().take(end).skip(cell.col) {
-                *v += per_col;
+            let per_col = extra / divisor;
+            for i in span_range.clone() {
+                if !col_explicit_px[i] || flex_cols == 0 {
+                    col_pref[i] += per_col;
+                }
             }
         }
     }
@@ -471,6 +572,24 @@ fn compute_column_widths(tl: &mut TableLayout) {
     }
 }
 
+/// Aggregate per-column percentage constraints from cell widths.
+///
+/// Returns `None` for columns with no explicit percentage cell and a
+/// percentage value (0..=100) for columns where at least one single-
+/// column cell specifies `width="N%"`. The max across cells wins so
+/// a mixed column reserves the widest demand.
+fn collect_percent_constraints(tl: &TableLayout) -> Vec<Option<f32>> {
+    let mut pct = vec![None; tl.num_cols];
+    for cell in &tl.cells {
+        if cell.colspan == 1
+            && let Some(p) = cell.explicit_pct
+        {
+            pct[cell.col] = Some(pct[cell.col].unwrap_or(0.0_f32).max(p));
+        }
+    }
+    pct
+}
+
 // -------------------------------------------------------------------
 // Step 4 -- Distribute available width across columns
 // -------------------------------------------------------------------
@@ -482,8 +601,68 @@ fn compute_column_widths(tl: &mut TableLayout) {
 /// remaining space is distributed proportionally. If the sum exceeds
 /// the available width, columns are shrunk proportionally but never
 /// below their minimum widths.
+///
+/// Percent-sized columns (`<td width="25%">`) reserve their share of
+/// the table's available width before auto columns fight over what
+/// remains — this is what makes spacer cells in legacy 3-column
+/// table layouts (Google's homepage, for example) actually push
+/// content into the middle column.
 fn distribute_widths(tl: &mut TableLayout, available: f32) {
     if tl.num_cols == 0 {
+        return;
+    }
+
+    // Pass A: honor explicit percentage widths. Each percent column
+    // claims max(pref_width, pct * available); we clamp the total so
+    // over-subscribed tables (sum > 100 %) scale down together.
+    let percent_constraints = collect_percent_constraints(tl);
+    let mut percent_claim: Vec<f32> = vec![0.0; tl.num_cols];
+    let mut percent_total = 0.0_f32;
+    for (i, pct) in percent_constraints.iter().enumerate() {
+        if let Some(p) = pct {
+            let claim = (available * p / 100.0).max(tl.col_widths[i]);
+            percent_claim[i] = claim;
+            percent_total += claim;
+        }
+    }
+    // If percent claims alone exceed the available width, scale them
+    // back proportionally so they still sum to `available`.
+    if percent_total > available && percent_total > 0.0 {
+        let scale = available / percent_total;
+        for claim in &mut percent_claim {
+            *claim *= scale;
+        }
+        percent_total = available;
+    }
+    let has_percent = percent_constraints.iter().any(|p| p.is_some());
+
+    // Pass B: distribute the remainder across auto columns by their
+    // preferred widths. When percent columns are present we keep them
+    // pinned at their claim and only rescale the rest.
+    let remainder = (available - percent_total).max(0.0);
+    let auto_pref: f32 = tl
+        .col_widths
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| percent_constraints[*i].is_none())
+        .map(|(_, w)| *w)
+        .sum();
+
+    if has_percent {
+        for (i, w) in tl.col_widths.iter_mut().enumerate() {
+            if percent_constraints[i].is_some() {
+                *w = percent_claim[i];
+            } else if auto_pref > 0.0 {
+                *w *= remainder / auto_pref;
+            } else {
+                // No preferred width on auto columns: split the
+                // remainder evenly among them.
+                let auto_cols = percent_constraints.iter().filter(|p| p.is_none()).count() as f32;
+                if auto_cols > 0.0 {
+                    *w = remainder / auto_cols;
+                }
+            }
+        }
         return;
     }
 
@@ -498,19 +677,48 @@ fn distribute_widths(tl: &mut TableLayout, available: f32) {
         return;
     }
 
-    if total_pref <= available {
-        // Expand proportionally to fill available width.
-        let scale = available / total_pref;
-        for w in &mut tl.col_widths {
-            *w *= scale;
+    // When the table has slack and some columns are pinned to an
+    // explicit pixel width, give the slack only to the auto columns
+    // so `<td width="30px">` does not silently expand to hundreds of
+    // pixels just because the table is wide. If every column is
+    // pinned (or there is no slack), fall back to proportional scaling.
+    if total_pref < available
+        && tl.col_explicit_px.iter().any(|p| *p)
+        && tl.col_explicit_px.iter().any(|p| !*p)
+    {
+        let auto_pref: f32 = tl
+            .col_widths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !tl.col_explicit_px[*i])
+            .map(|(_, w)| *w)
+            .sum();
+        let slack = available - total_pref;
+        if auto_pref > 0.0 {
+            let grow = slack / auto_pref;
+            for (i, w) in tl.col_widths.iter_mut().enumerate() {
+                if !tl.col_explicit_px[i] {
+                    *w += *w * grow;
+                }
+            }
+        } else {
+            // Auto columns have zero preferred width: split the slack
+            // evenly among them so they are visible at all.
+            let auto_cols = tl.col_explicit_px.iter().filter(|p| !**p).count() as f32;
+            let per = slack / auto_cols;
+            for (i, w) in tl.col_widths.iter_mut().enumerate() {
+                if !tl.col_explicit_px[i] {
+                    *w += per;
+                }
+            }
         }
-    } else {
-        // Shrink proportionally. We do a single pass; a full
-        // implementation would iteratively clamp at minimums.
-        let scale = available / total_pref;
-        for w in &mut tl.col_widths {
-            *w *= scale;
-        }
+        return;
+    }
+
+    // Expand or shrink proportionally to match the available width.
+    let scale = available / total_pref;
+    for w in &mut tl.col_widths {
+        *w *= scale;
     }
 }
 
@@ -570,6 +778,14 @@ fn layout_cell_content(
     let bdr_h = cell_box.dimensions.border.horizontal();
     cell_box.dimensions.content.width = (available_width - pad_h - bdr_h).max(0.0);
 
+    // Promote runs of inline / replaced children to anonymous block
+    // wrappers. Without this, inline children (such as an `<input>`
+    // inside a `<td>`) fall through the fast-path below and never
+    // receive a real layout — they paint at 0×0. The wrap means the
+    // cell's children become uniformly block-level and participate
+    // in normal inline-formatting-context layout inside the wrapper.
+    wrap_inline_runs_in_cell(cell_box);
+
     // Compute content height from children.
     let mut content_height: f32 = 0.0;
     let content_width = cell_box.dimensions.content.width;
@@ -597,6 +813,40 @@ fn layout_cell_content(
         _ => 0.0,
     };
     cell_box.dimensions.content.height = content_height.max(explicit_h);
+}
+
+/// Wrap consecutive runs of inline / replaced children into anonymous
+/// block boxes so they receive a real inline-formatting-context layout
+/// when the cell is laid out as a block.
+fn wrap_inline_runs_in_cell(cell_box: &mut LayoutBox) {
+    if cell_box.children.is_empty() {
+        return;
+    }
+    let any_inline_like = cell_box.children.iter().any(|c| !c.is_block_level());
+    if !any_inline_like {
+        return;
+    }
+    let children = std::mem::take(&mut cell_box.children);
+    let mut result: Vec<LayoutBox> = Vec::with_capacity(children.len());
+    let mut run: Vec<LayoutBox> = Vec::new();
+    for child in children {
+        if child.is_block_level() {
+            if !run.is_empty() {
+                let mut anon = LayoutBox::new(BoxType::Anonymous, cell_box.style.clone(), None);
+                anon.children = std::mem::take(&mut run);
+                result.push(anon);
+            }
+            result.push(child);
+        } else {
+            run.push(child);
+        }
+    }
+    if !run.is_empty() {
+        let mut anon = LayoutBox::new(BoxType::Anonymous, cell_box.style.clone(), None);
+        anon.children = std::mem::take(&mut run);
+        result.push(anon);
+    }
+    cell_box.children = result;
 }
 
 // -------------------------------------------------------------------
@@ -858,8 +1108,9 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
 /// Create a table cell `LayoutBox` with colspan and rowspan encoded
 /// in the style for use in tests and the table layout algorithm.
 ///
-/// `colspan` is encoded as `min_width: Px(colspan * 1000.0)`.
-/// `rowspan` is encoded as `max_width: Px(rowspan * 1000.0)`.
+/// `colspan` is encoded as
+/// `min_width: Px(colspan * COLSPAN_ENCODING_SCALE)`. `rowspan` is
+/// encoded as `max_width: Px(rowspan * COLSPAN_ENCODING_SCALE)`.
 #[cfg(test)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
@@ -870,10 +1121,10 @@ pub fn make_cell_with_spans(
     let mut cell_style = style.clone();
     cell_style.display = Display::TableCell;
     if colspan > 1 {
-        cell_style.min_width = Dimension::Px(colspan as f32 * 1000.0);
+        cell_style.min_width = Dimension::Px(colspan as f32 * COLSPAN_ENCODING_SCALE);
     }
     if rowspan > 1 {
-        cell_style.max_width = Dimension::Px(rowspan as f32 * 1000.0);
+        cell_style.max_width = Dimension::Px(rowspan as f32 * COLSPAN_ENCODING_SCALE);
     }
     let mut lb = LayoutBox::new(BoxType::TableCell, cell_style, None);
     lb.children = children;

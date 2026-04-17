@@ -282,6 +282,15 @@ center {
     display: block;
     text-align: center;
 }
+/* Legacy <center> centers block-level children (tables, divs, forms)
+   by giving them auto left/right margins. Auto margins only kick in
+   when the child has a computed width less than the container, which
+   is the common case for shrink-wrapped tables like Google's
+   search form layout. */
+center > * {
+    margin-left: auto;
+    margin-right: auto;
+}
 
 /* -- Hidden elements ------------------------------------------------ */
 head, script, style, link, meta, title, noscript, template {

@@ -105,6 +105,7 @@ const FIXTURES: &[&str] = &[
     "substack_post.html",
     "reddit_listing.html",
     "reddit_comments.html",
+    "google_homepage.html",
 ];
 
 fn fixtures_dir() -> PathBuf {

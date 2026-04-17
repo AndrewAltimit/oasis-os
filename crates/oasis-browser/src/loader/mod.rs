@@ -559,10 +559,28 @@ pub fn load_resource(
         },
         ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
             Ok(resp) => Ok(LoadedResource::from_response(resp)),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-            Err(_) => load_from_network(request, tls, cookie_jar, resource_cache),
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
-            Err(_) => load_from_network(request, tls).map(LoadedResource::from_response),
+            Err(vfs_err) => {
+                // Only fall back to network for schemes the network
+                // loader actually handles. A missing `vfs://` file
+                // should surface the real VFS error, not the
+                // misleading "unsupported network scheme: vfs"
+                // produced by handing a vfs URL to the HTTP code
+                // path.
+                let scheme = Url::parse(&request.url)
+                    .map(|u| u.scheme.clone())
+                    .unwrap_or_default();
+                if matches!(scheme.as_str(), "vfs" | "about" | "data") {
+                    return Err(vfs_err);
+                }
+                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+                {
+                    load_from_network(request, tls, cookie_jar, resource_cache)
+                }
+                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                {
+                    load_from_network(request, tls).map(LoadedResource::from_response)
+                }
+            },
         },
     }
 }

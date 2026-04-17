@@ -67,6 +67,24 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   compute to 0, and float descendants shift with their parent
   post-placement so `float: right` sidebars land on the right edge
   with their children in the right place.
+- **Table layout** honours explicit pixel widths on `<td>`/`<th>`
+  (pinned — not rescaled when the table has slack) and percent
+  widths (`<td width="25%">`) via a pre-pass in `distribute_widths`
+  that reserves each percent column's share before auto columns
+  fight over the remainder. Replaced children (`<input>`, `<img>`,
+  etc.) contribute their intrinsic dimensions to cell preferred
+  widths via `replaced_dimensions` instead of collapsing the cell
+  to 0 px. A cell with only inline / replaced children is wrapped
+  in an anonymous block so it gets a real inline formatting
+  context.
+- **Presentational HTML attributes → CSS:** `bgcolor`, `align`,
+  `valign`, `nowrap`, `cellspacing`, `cellpadding` (table-level,
+  propagated to descendant cells via an ancestor walk),
+  `width`/`height` on `td`/`th`/`img`/`input`, `border` on
+  `<table>`, `size` on `<input>` (→ width), `<br clear="left|
+  right|all">` (→ CSS `clear`). `<center>` centres both inline
+  content (via `text-align`) and block children (via
+  `margin-left/right: auto`).
 - **`text-wrap`** — `balance` binary-searches narrowest equal-line-
   count width, `pretty` avoids orphans, `stable` parsed.
 - **`aspect-ratio`** for non-replaced blocks and replaced elements —
@@ -122,7 +140,21 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Text input, password masking, checkbox, radio button, textarea,
   select with dropdown overlay, submit/reset buttons.
 - `<label for="">` click association, Tab focus navigation.
-- Form GET / POST submission.
+- Direct click on `<input>` / `<button>` / `<textarea>` focuses or
+  submits (the click handler walks up from the hit node, so clicks
+  on wrapper spans like `<span class="lsbb"><input…>` still land on
+  the input).
+- Physical keyboard typing: `TextInput(ch)` / `Backspace` /
+  `Button::Confirm` route to the focused form element through
+  `dispatch_form_key`, and in-flight values sync back to the DOM
+  `value` attribute on each keystroke so the next relayout paints
+  the typed text.
+- Form GET / POST submission; Enter on any text field submits the
+  owning form.
+- Forms are rebuilt from the DOM on every page load via
+  `populate_forms_from_dom` (walks every `<form>` and registers
+  inputs, selects, textareas, and submit buttons with the
+  `FormManager`).
 
 ## Web fonts (`@font-face`)
 

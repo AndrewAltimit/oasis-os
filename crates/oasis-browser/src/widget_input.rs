@@ -294,6 +294,14 @@ impl BrowserWidget {
                 true
             },
             InputEvent::ButtonPress(Button::Confirm) => {
+                // Enter / Confirm on a focused text input submits its
+                // form — the dominant interaction path for search
+                // boxes. Falls through to link activation when no
+                // form element has focus.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Enter, vfs);
+                    return true;
+                }
                 self.activate_selected_link(vfs);
                 true
             },
@@ -357,6 +365,18 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
+            InputEvent::Backspace => {
+                // Delete a char from the focused text input, if any.
+                // Without this branch Backspace is silently dropped in
+                // Content focus — forms that rely on physical keyboard
+                // editing (e.g. the Google search box) appear broken.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Backspace, vfs);
+                    self.layout_dirty = true;
+                    return true;
+                }
+                false
+            },
             // Dispatch keydown + keyup + input events to JS.
             InputEvent::TextInput(ch) => {
                 #[cfg(feature = "javascript")]
@@ -368,6 +388,15 @@ impl BrowserWidget {
                         Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
                         Self::dispatch_js_event(engine, nid, "input");
                     }
+                }
+                // When a text input is focused, deliver the character
+                // to the form manager instead of treating it as a page
+                // shortcut — typing in Google's search box shouldn't
+                // trigger zoom because the user pressed `+`.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Char(*ch), vfs);
+                    self.layout_dirty = true;
+                    return true;
                 }
                 // Zoom: + / - / 0 keys when not in URL bar.
                 match ch {
@@ -640,6 +669,169 @@ impl BrowserWidget {
 
         // Handle <label for="..."> click: focus the associated form element.
         self.handle_label_for_click(x, y);
+
+        // Handle direct clicks on <input> elements: focus text inputs,
+        // fire the form submission for submit buttons, toggle
+        // checkbox/radio state. Needed so Google's search box takes
+        // focus when clicked directly (not just via a <label>).
+        self.handle_form_element_click(x, y, vfs);
+    }
+
+    /// Convert a screen-space `(x, y)` click position into the layout
+    /// tree's coordinate space.
+    ///
+    /// Paint shifts the layout tree by `window_origin + url_bar_height
+    /// − scroll_offset` before drawing. `hit_test` expects raw layout
+    /// coords, so every click-into-layout path has to undo that
+    /// transform. Without this the hit rectangle of every element is
+    /// off by the URL-bar height and clicks on inputs miss.
+    fn screen_to_layout(&self, screen_x: i32, screen_y: i32) -> (f32, f32) {
+        let lx = (screen_x - self.window_x) as f32 + self.scroll.scroll_x as f32;
+        let ly = (screen_y - self.window_y - self.config.url_bar_height as i32) as f32
+            + self.scroll.scroll_y as f32;
+        (lx, ly)
+    }
+
+    /// Handle clicks that fall on a form `<input>` / `<button>` element
+    /// directly (i.e. outside any `<label for="...">` wrapper).
+    ///
+    /// Text-like inputs grab focus so subsequent keystrokes flow into
+    /// them through `dispatch_form_key`. Submit buttons trigger form
+    /// submission with the clicked button's `name`/`value` pair
+    /// (propagated by `FormManager::submit_with_button`). Checkboxes
+    /// and radios toggle / select.
+    fn handle_form_element_click(&mut self, x: i32, y: i32, vfs: &dyn Vfs) {
+        use crate::html::dom::{NodeKind, TagName};
+
+        // Translate from screen-space click coordinates into layout
+        // space. The layout tree is built at (0, 0); paint shifts it
+        // down by the URL bar height and offsets by the current scroll
+        // position. hit_test expects layout-space coords.
+        let (lx, ly) = self.screen_to_layout(x, y);
+        let Some(nid) = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(lx, ly))
+        else {
+            return;
+        };
+        let Some(doc) = &self.document else { return };
+
+        // Walk up to the nearest <input> / <button> ancestor — the
+        // click may land on a `<span>` wrapper like Google's
+        // `<span class="lsbb"><input ...>`.
+        let mut form_elem_nid = None;
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if let NodeKind::Element(ref e) = doc.nodes[id].kind
+                && matches!(e.tag, TagName::Input | TagName::Button | TagName::Textarea)
+            {
+                form_elem_nid = Some(id);
+                break;
+            }
+            cur = doc.nodes[id].parent;
+        }
+        let Some(target_nid) = form_elem_nid else {
+            return;
+        };
+
+        let (tag, input_type, value, name_or_id) = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => (
+                elem.tag.clone(),
+                elem.get_attribute("type")
+                    .unwrap_or("text")
+                    .to_ascii_lowercase(),
+                elem.get_attribute("value").unwrap_or("").to_string(),
+                elem.get_attribute("name")
+                    .or_else(|| elem.get_attribute("id"))
+                    .map(|s| s.to_string()),
+            ),
+            _ => return,
+        };
+        // `name_or_id` is optional: anonymous reset/submit buttons
+        // (no `name`/`id`) still need to fire their form action. Only
+        // the radio and focused-element-tracking paths require a name.
+        let name = name_or_id;
+
+        // Focus tracking: mirror the hover/:focus pseudo-class state
+        // even when the form manager doesn't own this element.
+        self.focused_node = Some(target_nid);
+
+        let is_submit = matches!(input_type.as_str(), "submit" | "image")
+            || (tag == TagName::Button && !matches!(input_type.as_str(), "button" | "reset"));
+
+        // Resolve the owning form by DOM ancestry rather than by
+        // element name. Name-based matching fails for
+        // `FormElement::ResetButton` (no `name` field — `has_element`
+        // only matches the sentinel `"__reset__"`), for anonymous
+        // submit buttons, and for named elements shared across
+        // sibling forms (position returns the first match, not the
+        // actual owner). `populate_forms_from_dom` registers forms
+        // in document order, so the N-th `<form>` node corresponds
+        // to `form_manager.forms[N]`.
+        let fi_owning = {
+            let mut form_ancestor = None;
+            let mut cur = Some(target_nid);
+            while let Some(id) = cur {
+                if let NodeKind::Element(ref e) = doc.nodes[id].kind
+                    && e.tag == TagName::Form
+                {
+                    form_ancestor = Some(id);
+                    break;
+                }
+                cur = doc.nodes[id].parent;
+            }
+            form_ancestor.and_then(|target| {
+                doc.nodes
+                    .iter()
+                    .enumerate()
+                    .filter(
+                        |(_, n)| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Form),
+                    )
+                    .position(|(nid, _)| nid == target)
+            })
+        };
+
+        if let Some(fi) = fi_owning {
+            self.form_manager.focused_form = Some(fi);
+            if let Some(ref n) = name {
+                self.form_manager.focused_element = Some(n.clone());
+            }
+        }
+
+        let is_reset = input_type == "reset";
+
+        match input_type.as_str() {
+            "checkbox" => {
+                let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
+                self.layout_dirty = true;
+            },
+            "radio" => {
+                if let (Some(fi), Some(n)) = (fi_owning, name.as_deref()) {
+                    self.form_manager.select_radio(fi, n, &value);
+                    self.layout_dirty = true;
+                }
+            },
+            _ if is_submit => {
+                if let Some(fi) = fi_owning
+                    && let Some(data) = self.form_manager.submit(fi)
+                {
+                    self.handle_form_submit(&data, vfs);
+                }
+            },
+            _ if is_reset => {
+                if let Some(fi) = fi_owning {
+                    self.form_manager.reset(fi);
+                    self.layout_dirty = true;
+                }
+            },
+            _ => {
+                // Plain text input — focus is enough. Typed characters
+                // now flow through `handle_input`'s focused-element
+                // routing.
+                self.layout_dirty = true;
+            },
+        }
     }
 
     /// If the click hits a `<label>` element with a `for` attribute,
@@ -647,10 +839,11 @@ impl BrowserWidget {
     fn handle_label_for_click(&mut self, x: i32, y: i32) {
         use crate::html::dom::{NodeKind, TagName};
 
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         let Some(nid) = node_id else { return };
         let Some(doc) = &self.document else {
@@ -734,10 +927,11 @@ impl BrowserWidget {
     fn handle_details_toggle(&mut self, x: i32, y: i32) {
         use crate::html::dom::{NodeKind, TagName};
 
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         let Some(nid) = node_id else { return };
         let Some(doc) = &mut self.document else {
@@ -792,10 +986,11 @@ impl BrowserWidget {
     /// Dispatch a JS click event using the layout tree hit test.
     #[cfg(feature = "javascript")]
     fn dispatch_js_click(&mut self, x: i32, y: i32) {
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
             Self::dispatch_js_event(engine, nid, "click");
@@ -817,10 +1012,11 @@ impl BrowserWidget {
     /// the given coordinates, passing `clientX`/`clientY` as detail.
     #[cfg(feature = "javascript")]
     fn dispatch_js_mouse_event(&mut self, x: i32, y: i32, event_type: &str) {
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
             Self::dispatch_js_mouse_event_to(engine, nid, x, y, event_type);
         }
@@ -1153,6 +1349,14 @@ impl BrowserWidget {
     /// Returns `true` if the event was consumed by the form manager.
     pub fn dispatch_form_key(&mut self, key: crate::forms::FormKey, vfs: &dyn Vfs) -> bool {
         let action = self.form_manager.handle_input(key);
+        // Sync form_manager's value back to the DOM so the next
+        // relayout paints the typed characters. Without this, the
+        // layout tree's `ReplacedContent::TextInput { value }` stays
+        // whatever the HTML `<input value="">` attribute said at page
+        // load, and the search box appears to ignore every key.
+        if matches!(action, crate::forms::FormAction::ValueChanged) {
+            self.sync_form_values_to_dom();
+        }
         match action {
             crate::forms::FormAction::Submit(ref data) => {
                 self.handle_form_submit(data, vfs);
@@ -1161,6 +1365,71 @@ impl BrowserWidget {
             crate::forms::FormAction::FocusChanged | crate::forms::FormAction::ValueChanged => true,
             crate::forms::FormAction::None => false,
         }
+    }
+
+    /// Write every form-manager value back onto the corresponding DOM
+    /// element's `value` attribute.
+    ///
+    /// This is the glue between `form_manager` (source of truth for
+    /// in-flight edits) and the layout tree (rebuilt from DOM on every
+    /// `layout_dirty` tick). Without this sync the input content is
+    /// invisible to the user because the layout pass keeps re-reading
+    /// the original HTML attribute.
+    fn sync_form_values_to_dom(&mut self) {
+        use crate::forms::FormElement;
+        use crate::html::dom::{NodeKind, TagName};
+        let Some(doc) = self.document.as_mut() else {
+            return;
+        };
+        // Build the list of `<form>` DOM node ids in document order.
+        // `populate_forms_from_dom` registers forms in this same order,
+        // so the N-th `<form>` node corresponds to
+        // `form_manager.forms[N]`. Scoping the name lookup to each
+        // form's subtree prevents two forms sharing a field name
+        // (e.g. both with `<input name="q">`) from overwriting each
+        // other's in-flight value.
+        let mut form_dom_ids: Vec<usize> = Vec::with_capacity(self.form_manager.forms.len());
+        for (nid, node) in doc.nodes.iter().enumerate() {
+            if let NodeKind::Element(e) = &node.kind
+                && e.tag == TagName::Form
+            {
+                form_dom_ids.push(nid);
+            }
+        }
+        for (idx, form) in self.form_manager.forms.iter().enumerate() {
+            let Some(&form_nid) = form_dom_ids.get(idx) else {
+                continue;
+            };
+            // Collect every descendant node id of this <form> so we
+            // can gate the mutable pass on form ownership.
+            let mut descendants: Vec<usize> = Vec::new();
+            let mut stack: Vec<usize> = doc.nodes[form_nid].children.clone();
+            while let Some(nid) = stack.pop() {
+                descendants.push(nid);
+                for &c in &doc.nodes[nid].children {
+                    stack.push(c);
+                }
+            }
+            for elem in form.elements() {
+                let (name, value) = match elem {
+                    FormElement::TextInput { name, value, .. }
+                    | FormElement::TextArea { name, value, .. } => (name, value.clone()),
+                    _ => continue,
+                };
+                if name.is_empty() {
+                    continue;
+                }
+                for &nid in &descendants {
+                    if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind
+                        && matches!(e.tag, TagName::Input | TagName::Textarea)
+                        && e.get_attribute("name") == Some(name.as_str())
+                    {
+                        e.set_attribute("value", &value);
+                    }
+                }
+            }
+        }
+        self.layout_dirty = true;
     }
 
     /// Handle a form submission.

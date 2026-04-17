@@ -518,7 +518,7 @@ fn text_fragments_for_inline(
 }
 
 /// Get the dimensions of a replaced inline element.
-fn replaced_dimensions(replaced: &ReplacedContent, style: &ComputedStyle) -> (f32, f32) {
+pub(crate) fn replaced_dimensions(replaced: &ReplacedContent, style: &ComputedStyle) -> (f32, f32) {
     use crate::css::values::types::FieldSizing;
     match replaced {
         ReplacedContent::Image { width, height, .. } => (*width as f32, *height as f32),
