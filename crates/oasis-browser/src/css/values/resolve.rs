@@ -3,7 +3,9 @@
 //! Functions that convert parsed `CssValue` representations into concrete
 //! computed values (pixel lengths, colors, dimensions, etc.).
 
-use super::types::{BorderStyle, Dimension, FontWeight, GridTrackSize, ROOT_FONT_SIZE};
+use super::types::{
+    BorderStyle, Dimension, FontWeight, GridTrackSize, ROOT_FONT_SIZE, current_root_font_size,
+};
 use crate::css::parser::{CssColor, CssValue, LengthUnit};
 use oasis_types::backend::Color;
 
@@ -35,7 +37,7 @@ pub(super) fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
     match value {
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
+        CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Number(n) => *n,
         CssValue::Calc(expr) => resolve_calc(expr, parent_font_size, None).unwrap_or(0.0),
@@ -60,7 +62,7 @@ pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dime
         CssValue::Percentage(p) => Dimension::Percent(*p),
         CssValue::Length(n, LengthUnit::Px) => Dimension::Px(*n),
         CssValue::Length(n, LengthUnit::Em) => Dimension::Px(*n * parent_font_size),
-        CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * ROOT_FONT_SIZE),
+        CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * current_root_font_size()),
         CssValue::Length(n, LengthUnit::Pt) => Dimension::Px(*n * 1.333),
         CssValue::Number(n) => Dimension::Px(*n),
         CssValue::Calc(expr) => {
@@ -198,7 +200,7 @@ pub(super) fn resolve_font_size(value: &CssValue, parent_font_size: f32) -> f32 
     match value {
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
+        CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => parent_font_size * (*p / 100.0),
         CssValue::Number(n) => *n,
@@ -231,7 +233,7 @@ pub(super) fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_
         CssValue::Number(n) => *n * font_size,
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
+        CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => font_size * (*p / 100.0),
         CssValue::Calc(expr) => {
@@ -385,7 +387,7 @@ fn calc_value_to_px(
         None => value,
         Some(CalcUnit::Px) => value,
         Some(CalcUnit::Em) => value * parent_font_size,
-        Some(CalcUnit::Rem) => value * ROOT_FONT_SIZE,
+        Some(CalcUnit::Rem) => value * current_root_font_size(),
         Some(CalcUnit::Pt) => value * 1.333,
         Some(CalcUnit::Percent) => {
             let base = containing_width.unwrap_or(0.0);
@@ -497,7 +499,7 @@ pub(super) fn parse_grid_template(value: &CssValue, parent_font_size: f32) -> Ve
             let px = match unit {
                 LengthUnit::Px => *n,
                 LengthUnit::Em => *n * parent_font_size,
-                LengthUnit::Rem => *n * ROOT_FONT_SIZE,
+                LengthUnit::Rem => *n * current_root_font_size(),
                 LengthUnit::Pt => *n * 1.333,
             };
             vec![GridTrackSize::Px(px)]

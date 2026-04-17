@@ -285,8 +285,28 @@ fn layout_children_incremental(
                     + child.dimensions.border.top
                     + child.dimensions.padding.top;
 
+                // `calculate_block_width` inside the recursive layout
+                // call may resolve auto margins (the `margin: 0 auto`
+                // centering pattern) only AFTER we've baked the
+                // pre-resolution margin into `content.x` above. Snapshot
+                // the x that was just written so we can apply the delta
+                // — and shift the whole subtree — once the child is
+                // done. Without this, `.central-textlogo` (Wikipedia's
+                // centered logo wrapper) gets `margin-left = 254.8` on
+                // an 800-wide viewport but paints at `x = 10.2`.
+                let pre_x = child.dimensions.content.x;
+
                 if child.dirty || any_child_dirty(child) {
                     layout_block_incremental(child, content_width, measurer, cache);
+                }
+
+                let resolved_x = content_x
+                    + child.dimensions.margin.left
+                    + child.dimensions.border.left
+                    + child.dimensions.padding.left;
+                let dx = resolved_x - pre_x;
+                if dx != 0.0 {
+                    offset_descendant(child, dx, 0.0);
                 }
 
                 let bb = child.dimensions.border_box();
@@ -522,6 +542,21 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
 
     let is_border_box = layout_box.style.box_sizing == BoxSizing::BorderBox;
 
+    // Absolute and fixed positioning run their own constraint-solving
+    // pass in `positioning::apply_absolute_position` using `top`/`left`/
+    // `right`/`bottom`. For those boxes the normal-flow "over-constrained
+    // → margin-right absorbs the overflow" rule does not apply — CSS
+    // 2.1 §10.3.7 lets the `right`/`left` properties take the slack.
+    // If we run that rule here anyway, a box that declares a fixed
+    // width of 124.8 inside a 436.8-wide containing block ends up with
+    // margin-right = 312, which later multiplies into the absolute-
+    // positioning formula (margin_box.width) and drags the box
+    // hundreds of pixels off-screen (Wikipedia's 10-language circle).
+    let is_abs = matches!(
+        layout_box.style.position,
+        Position::Absolute | Position::Fixed
+    );
+
     match layout_box.style.width {
         Dimension::Px(w) => {
             let content_w = if is_border_box {
@@ -531,7 +566,12 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             };
             layout_box.dimensions.content.width = content_w;
             let available_for_margins = containing_width - content_w - pad_h - bdr_h;
-            if ml_auto && mr_auto {
+            if is_abs {
+                // Auto margins on absolute boxes resolve against the
+                // `top`/`left`/`right`/`bottom` constraints in the
+                // positioning pass; here we just leave declared margins
+                // in place (auto → treated as 0 for this pass).
+            } else if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
                 layout_box.dimensions.margin.right = half;
@@ -556,7 +596,9 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             };
             layout_box.dimensions.content.width = content_w;
             let available_for_margins = containing_width - content_w - pad_h - bdr_h;
-            if ml_auto && mr_auto {
+            if is_abs {
+                // See note above for the `Dimension::Px` branch.
+            } else if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
                 layout_box.dimensions.margin.right = half;
@@ -773,7 +815,25 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                     + child.dimensions.border.top
                     + child.dimensions.padding.top;
 
+                // Auto horizontal margins (`margin: 0 auto` centering)
+                // are only resolved inside `layout_block → calculate_
+                // block_width`, which runs *after* we've baked the pre-
+                // resolution margin into `content.x` above. Snapshot x
+                // so we can shift the child's subtree by the resolved
+                // delta once layout returns — otherwise centered blocks
+                // paint at their parent's origin.
+                let pre_x = child.dimensions.content.x;
+
                 layout_block(child, content_width, measurer);
+
+                let resolved_x = content_x
+                    + child.dimensions.margin.left
+                    + child.dimensions.border.left
+                    + child.dimensions.padding.left;
+                let dx = resolved_x - pre_x;
+                if dx != 0.0 {
+                    offset_descendant(child, dx, 0.0);
+                }
 
                 // layout_block re-resolves edge sizes from the
                 // style, so re-zero the top margin that was

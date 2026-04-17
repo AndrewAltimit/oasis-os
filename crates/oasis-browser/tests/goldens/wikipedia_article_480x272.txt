@@ -1,133 +1,168 @@
 # viewport 480x272
-draw_text "Operating ", 8, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Operating ", 9, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system", 68, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system", 69, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 43, 463, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 471, 43, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 60, 463, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 43, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Operating system", 13, 45, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Operating system", 14, 45, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 61, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 239, 61, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 78, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 61, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Developer", 13, 63, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Developer", 14, 63, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 240, 61, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 471, 61, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 78, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 61, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Various", 245, 63, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 79, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 239, 79, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 96, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 79, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Written in", 13, 81, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Written in", 14, 81, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 240, 79, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 471, 79, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 96, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 79, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "C, C++, assembly", 245, 81, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 97, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 239, 97, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 114, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 97, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Kernel type", 13, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Kernel type", 14, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 240, 97, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 471, 97, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 114, 231, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 240, 97, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Monolithic, microkernel, hybrid", 245, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "An ", 8, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "operating ", 26, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "operating ", 27, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system", 86, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system", 87, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " (", 122, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "OS", 134, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "OS", 135, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text ") ", 146, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 158, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system ", 176, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "software ", 218, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 272, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "manages ", 302, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "computer ", 350, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hardware", 404, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 8, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "software ", 32, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "resources, ", 86, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 152, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "provides ", 176, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "common ", 230, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "services ", 272, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 326, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "computer ", 350, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "programs.", 404, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Time-sharing ", 8, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "operating ", 86, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "systems ", 146, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "schedule ", 194, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "tasks ", 248, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 284, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "efficient ", 308, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "use ", 368, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 392, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the", 410, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system, ", 8, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 56, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "may ", 80, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "also ", 104, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "include ", 134, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "accounting ", 182, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "software ", 248, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 302, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cost ", 326, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "allocation ", 356, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of", 422, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "processor ", 8, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "time, ", 68, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "mass ", 104, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "storage, ", 134, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "peripherals, ", 188, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 266, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "other ", 290, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "resources.", 326, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "•", 28, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "1 ", 48, 190, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 196, 11, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "History", 60, 190, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 60, 196, 47, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2 ", 48, 202, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 208, 11, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Types", 60, 202, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 60, 208, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 68, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2.1 ", 88, 222, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 88, 228, 21, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Single-tasking ", 112, 222, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 112, 228, 96, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "and ", 202, 222, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 202, 228, 25, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "multi-tasking", 226, 222, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 226, 228, 86, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 68, 234, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2.2 ", 88, 234, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 88, 240, 21, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Single- ", 112, 234, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 112, 240, 49, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "and ", 160, 234, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 160, 240, 25, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "multi-user", 184, 234, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 184, 240, 67, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 254, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "3 ", 48, 254, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 260, 11, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Examples", 60, 254, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 60, 260, 55, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-# totals fill_rect=42 draw_text=89 other=0
+fill_rect 0, 25, 480, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+draw_text "Operating ", 0, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Operating ", 1, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system", 60, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system", 61, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 8, 44, 161, 68, Color { r: 248, g: 249, b: 250, a: 255 }
+fill_rect 7, 43, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 169, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 7, 112, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 7, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 1, 1, 145, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 0, 0, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 146, 0, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 14, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 0, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 2, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 4, 2, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Operating system", 4, 2, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Operating system", 5, 2, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 1, 16, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 0, 15, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 72, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 29, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 17, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 4, 17, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Developer", 4, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Developer", 5, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 74, 15, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 146, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 29, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "Various", 78, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 1, 31, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 0, 31, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 72, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 45, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 33, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 4, 33, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Written in", 4, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Written in", 5, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 74, 31, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 146, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 45, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "C, C++, assembly", 78, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 1, 47, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 0, 46, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 72, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 60, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 48, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 4, 48, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Kernel type", 4, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Kernel type", 5, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 74, 46, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 146, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 60, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 74, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "Monolithic, microkernel, hybrid", 78, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "An ", 8, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "operating ", 26, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "operating ", 27, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system", 86, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system", 87, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text " (", 122, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "OS", 134, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "OS", 135, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text ") ", 146, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "is ", 158, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system ", 176, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "software ", 218, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "that ", 272, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "manages ", 302, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "computer ", 350, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "hardware", 404, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "and ", 8, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "software ", 32, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "resources, ", 86, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "and ", 152, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "provides ", 176, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "common ", 230, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "services ", 272, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "for ", 326, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "computer ", 350, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "programs.", 404, 60, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Time-sharing ", 8, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "operating ", 86, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "systems ", 146, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "schedule ", 194, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "tasks ", 248, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "for ", 284, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "efficient ", 308, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "use ", 368, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "of ", 392, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "the", 410, 73, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "system, ", 8, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "and ", 56, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "may ", 80, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "also ", 104, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "include ", 134, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "accounting ", 182, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "software ", 248, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "for ", 302, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "cost ", 326, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "allocation ", 356, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "of", 422, 86, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "processor ", 8, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "time, ", 68, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "mass ", 104, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "storage, ", 134, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "peripherals, ", 188, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "and ", 266, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "other ", 290, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "resources.", 326, 99, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 9, 120, 462, 92, Color { r: 248, g: 249, b: 250, a: 255 }
+fill_rect 8, 119, 464, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 471, 119, 1, 94, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 8, 212, 464, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 8, 119, 1, 94, Color { r: 162, g: 169, b: 177, a: 255 }
+draw_text "•", -7, 125, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "1 ", 13, 125, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "History", 25, 125, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "•", -7, 139, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "2 ", 13, 139, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "Types", 25, 139, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "•", 33, 160, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "2.1 ", 53, 160, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "Single-tasking ", 77, 160, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "and ", 167, 160, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "multi-tasking", 191, 160, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "•", 33, 173, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "2.2 ", 53, 173, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "Single- ", 77, 173, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "and ", 125, 173, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "multi-user", 149, 173, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "•", -7, 196, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "3 ", 13, 196, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+draw_text "Examples", 25, 196, 8, Color { r: 6, g: 69, b: 173, a: 255 }
+fill_rect 8, 245, 464, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+draw_text "History", 8, 225, 12, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "History", 9, 225, 12, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "The ", 8, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "first ", 32, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "computers ", 68, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "of ", 128, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "the ", 146, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "late ", 170, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "1940s ", 200, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "and ", 236, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "1950s ", 260, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "were ", 296, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "directly ", 326, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "programmed", 380, 256, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "either ", 8, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "with ", 50, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "plugboards ", 80, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "or ", 146, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "with ", 164, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "machine ", 194, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "code. ", 242, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "The ", 278, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "introduction ", 302, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "of ", 380, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "operating", 398, 269, 8, Color { r: 32, g: 33, b: 34, a: 255 }
+# totals fill_rect=52 draw_text=114 other=0

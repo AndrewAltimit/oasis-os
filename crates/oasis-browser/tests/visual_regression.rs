@@ -28,10 +28,53 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use oasis_browser::internals::{
-    CascadeContext, PaintViewport, Stylesheet, TextMeasurer, Tokenizer, TreeBuilder,
-    build_layout_tree, default_stylesheet, paint_page, style_tree,
+    CascadeContext, Document, MediaViewport, NodeKind, PaintViewport, Stylesheet, TagName,
+    TextMeasurer, Tokenizer, TreeBuilder, build_layout_tree, default_stylesheet, paint_page,
+    parse_inline_style, style_tree,
 };
 use oasis_test_backend::MockSdiCore;
+
+type NodeId = usize;
+
+/// Walk the DOM and collect text content of `<style>` elements, parsing
+/// each into a `Stylesheet`. Mirrors `widget_pipeline::collect_style_sheets`.
+///
+/// `viewport` is threaded into the parser so `@media (min/max-width)` and
+/// `@media (prefers-color-scheme)` evaluate against the test viewport
+/// rather than the 480x272 default.
+fn collect_style_sheets(doc: &Document, viewport: MediaViewport) -> Vec<Stylesheet> {
+    let mut sheets = Vec::new();
+    for (id, node) in doc.nodes.iter().enumerate() {
+        if let NodeKind::Element(elem) = &node.kind
+            && elem.tag == TagName::Style
+        {
+            let css_text = doc.text_content(id);
+            if !css_text.is_empty() {
+                sheets.push(Stylesheet::parse_with_viewport(&css_text, viewport));
+            }
+        }
+    }
+    sheets
+}
+
+/// Walk the DOM to collect inline `style=""` attributes. Mirrors
+/// `widget_pipeline::collect_inline_styles`.
+fn collect_inline_styles(
+    doc: &Document,
+) -> Vec<(NodeId, Vec<oasis_browser::internals::ParsedDeclaration>)> {
+    let mut result = Vec::new();
+    for (id, node) in doc.nodes.iter().enumerate() {
+        if let NodeKind::Element(elem) = &node.kind
+            && let Some(style_attr) = elem.get_attribute("style")
+        {
+            let decls = parse_inline_style(style_attr);
+            if !decls.is_empty() {
+                result.push((id, decls));
+            }
+        }
+    }
+    result
+}
 
 /// Fixed-width measurer so the golden stream is layout-stable.
 struct FixedMeasurer;
@@ -50,6 +93,7 @@ impl TextMeasurer for FixedMeasurer {
 /// use `UPDATE_GOLDENS=1` to seed the golden.
 const FIXTURES: &[&str] = &[
     "wikipedia_article.html",
+    "wikipedia_portal.html",
     "news_homepage.html",
     "blog_post.html",
     "adversarial_malformed.html",
@@ -78,10 +122,26 @@ fn render_display_list(html: &str, width: f32, height: f32) -> String {
     let tokens = Tokenizer::new(html).tokenize();
     let doc = TreeBuilder::build(tokens);
 
+    // Mirror production's stylesheet plumbing: extract `<style>` element
+    // contents and inline `style=""` attributes so fixtures render with
+    // their author CSS applied, not just the UA default sheet.
+    let viewport = MediaViewport {
+        width,
+        height,
+        dark_mode: false,
+        prefers_reduced_motion: false,
+        hover: true,
+        pointer: "fine",
+    };
+    let author_sheets = collect_style_sheets(&doc, viewport);
+    let inline_styles = collect_inline_styles(&doc);
     let ua = default_stylesheet();
-    let sheets: Vec<&Stylesheet> = vec![&ua];
+    let mut sheets: Vec<&Stylesheet> = vec![&ua];
+    for sheet in &author_sheets {
+        sheets.push(sheet);
+    }
     let ctx = CascadeContext::default();
-    let styles = style_tree(&doc, &sheets, &[], &ctx);
+    let styles = style_tree(&doc, &sheets, &inline_styles, &ctx);
 
     let layout = build_layout_tree(
         &doc,
@@ -129,22 +189,32 @@ fn canonicalize_calls(calls: &[(String, String)], width: u32, height: u32) -> St
             },
             "fill_rect" => {
                 rect_count += 1;
-                out.push_str(&format!("fill_rect {params}\n"));
+                out.push_str(&format!("fill_rect {}\n", params.trim_end()));
             },
             "draw_text" => {
                 text_count += 1;
-                out.push_str(&format!("draw_text {params}\n"));
+                out.push_str(&format!("draw_text {}\n", params.trim_end()));
             },
             "clear" | "set_clip_rect" | "reset_clip_rect" | "blit" => {
                 other_count += 1;
-                out.push_str(&format!("{method} {params}\n"));
+                let tail = params.trim_end();
+                if tail.is_empty() {
+                    out.push_str(&format!("{method}\n"));
+                } else {
+                    out.push_str(&format!("{method} {tail}\n"));
+                }
             },
             _ => {
                 // Unknown extension-trait call — record verbatim so
                 // new backend paths show up as diffs rather than being
                 // silently swallowed.
                 other_count += 1;
-                out.push_str(&format!("{method} {params}\n"));
+                let tail = params.trim_end();
+                if tail.is_empty() {
+                    out.push_str(&format!("{method}\n"));
+                } else {
+                    out.push_str(&format!("{method} {tail}\n"));
+                }
             },
         }
     }

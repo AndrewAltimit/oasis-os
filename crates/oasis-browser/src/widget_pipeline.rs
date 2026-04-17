@@ -671,7 +671,15 @@ impl BrowserWidget {
         // 3. Collect <style> blocks and inline style="" attributes from DOM.
         //    Cache them so hover restyles don't re-parse.
         self.diag("[BR] collect stylesheets start");
-        let author_sheets = Self::collect_style_sheets(&doc);
+        let media_viewport = css::parser::MediaViewport {
+            width: self.window_w as f32,
+            height: self.window_h as f32,
+            dark_mode: false,
+            prefers_reduced_motion: false,
+            hover: true,
+            pointer: "fine",
+        };
+        let author_sheets = Self::collect_style_sheets(&doc, media_viewport);
         let inline_styles = Self::collect_inline_styles(&doc);
         self.diag(&format!(
             "[BR] collect stylesheets done: {} sheets, {} inline",
@@ -905,7 +913,16 @@ impl BrowserWidget {
     /// Walk the DOM to collect text from `<style>` elements and parse
     /// each into a `Stylesheet`. Both `<head>` and `<body>` style blocks
     /// are included.
-    fn collect_style_sheets(doc: &html::dom::Document) -> Vec<css::parser::Stylesheet> {
+    ///
+    /// `viewport` is threaded into `Stylesheet::parse_with_viewport` so
+    /// `@media (min/max-width)` and `@media (prefers-color-scheme)` gate
+    /// against the actual window size rather than the 480x272 default —
+    /// without this, desktop-sized windows silently get the mobile
+    /// breakpoints of any page whose author CSS uses `max-width`.
+    fn collect_style_sheets(
+        doc: &html::dom::Document,
+        viewport: css::parser::MediaViewport,
+    ) -> Vec<css::parser::Stylesheet> {
         let mut sheets = Vec::new();
         for (id, node) in doc.nodes.iter().enumerate() {
             if let html::dom::NodeKind::Element(elem) = &node.kind
@@ -913,7 +930,9 @@ impl BrowserWidget {
             {
                 let css_text = doc.text_content(id);
                 if !css_text.is_empty() {
-                    sheets.push(css::parser::Stylesheet::parse(&css_text));
+                    sheets.push(css::parser::Stylesheet::parse_with_viewport(
+                        &css_text, viewport,
+                    ));
                 }
             }
         }

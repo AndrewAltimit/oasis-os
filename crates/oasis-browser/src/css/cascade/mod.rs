@@ -307,6 +307,10 @@ pub fn style_tree(
     ctx: &CascadeContext<'_>,
 ) -> Vec<Option<ComputedStyle>> {
     cascade_progress(100, stylesheets.len() as u64); // marker: enter style_tree
+    // Reset the root font size before this cascade pass. The `<html>`
+    // element update below will publish the real value; this clears any
+    // value lingering from a previous page in the same browser process.
+    super::values::types::set_root_font_size(super::values::ROOT_FONT_SIZE);
     // Build selector index for O(1) bucket lookups instead of O(rules).
     let index = SelectorIndex::build(stylesheets);
     cascade_progress(101, 0); // marker: SelectorIndex built
@@ -401,7 +405,7 @@ fn style_subtree(
     let node = &doc.nodes[node_id];
 
     // Only elements get computed styles.
-    if let NodeKind::Element(_) = &node.kind {
+    if let NodeKind::Element(elem) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
         let style = compute_style(
             doc,
@@ -413,6 +417,14 @@ fn style_subtree(
             ctx,
             tag_cache,
         );
+        // The `<html>` element's resolved font-size is the reference
+        // for all subsequent `rem` unit resolution. Publish it to the
+        // `values::types` atomic so `calc(1.4rem)` later in the tree
+        // picks up, e.g. Wikipedia's `html { font-size: 62.5% }` =
+        // 10px rather than the 8px engine default.
+        if matches!(elem.tag, crate::html::dom::TagName::Html) {
+            crate::css::values::types::set_root_font_size(style.font_size);
+        }
         styles[node_id] = Some(style);
         *elements_styled += 1;
         // Cooperative yield + sparse progress logging so PSP's
@@ -507,6 +519,12 @@ fn style_subtree_parallel(
     }
 }
 
+/// The CSS "medium" keyword size in real browsers. Used only as the
+/// implicit parent-font-size for the `<html>` element so percentage
+/// font-size declarations there (the common `62.5%` pattern) produce
+/// the pixel values authors designed against.
+const CSS_MEDIUM_FONT_SIZE: f32 = 16.0;
+
 /// Compute the final style for a single element.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_style(
@@ -525,7 +543,23 @@ pub fn compute_style(
         None => ComputedStyle::default(),
     };
 
-    let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
+    // The `<html>` element has no parent in CSS; percentage font-sizes
+    // on it resolve against the initial ("medium") browser font size.
+    // Real browsers use 16px here, and authors write `html { font-size:
+    // 62.5% }` expecting 10px. Our engine defaults `ROOT_FONT_SIZE` to
+    // 8px for PSP readability — if we used that here, `62.5%` would
+    // collapse to 5px and every rem-based page would render absurdly
+    // small. Use 16 for the html-element baseline specifically so the
+    // Wikipedia-style 62.5% trick produces its intended 10px.
+    let is_html = matches!(
+        doc.nodes[node_id].kind,
+        NodeKind::Element(ref e) if matches!(e.tag, crate::html::dom::TagName::Html)
+    );
+    let parent_font_size = if is_html && parent_style.is_none() {
+        CSS_MEDIUM_FONT_SIZE
+    } else {
+        parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size)
+    };
 
     // Collect all matching declarations with their origin info.
     let mut matched = matching::collect_matched_declarations(
