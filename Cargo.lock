@@ -1172,6 +1172,7 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "log",
+ "oasis-backend-ue5",
  "oasis-js",
  "oasis-net",
  "oasis-skin",

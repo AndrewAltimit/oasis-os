@@ -1,31 +1,35 @@
 # viewport 800x600
 fill_rect 0, 0, 800, 944, Color { r: 218, g: 224, b: 230, a: 255 }
-fill_rect 11, 36, 300, 118, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 10, 35, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
-fill_rect 311, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
-fill_rect 10, 154, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
-fill_rect 10, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
-draw_text "rust", 0, 0, 14, Color { r: 0, g: 121, b: 211, a: 255 }
-draw_text "rust", 1, 0, 14, Color { r: 0, g: 121, b: 211, a: 255 }
-draw_text "361,242 ", 0, 24, 11, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "Rustaceans", 48, 24, 11, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "A ", 0, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "place ", 12, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "for ", 48, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "all ", 72, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "things ", 96, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "related ", 138, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "to ", 186, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "the ", 204, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "Rust", 228, 51, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "programming ", 0, 68, 13, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "language.", 72, 68, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 494, 36, 300, 118, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 493, 35, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 794, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 493, 154, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 493, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "rust", 504, 46, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "rust", 505, 46, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "361,242 ", 504, 71, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Rustaceans", 552, 71, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "A ", 504, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "place ", 516, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "for ", 552, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "all ", 576, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "things ", 600, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "related ", 642, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "to ", 690, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the ", 708, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Rust", 732, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "programming ", 504, 115, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "language.", 576, 115, 13, Color { r: 34, g: 34, b: 34, a: 255 }
 fill_rect 16, 41, 473, 93, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 15, 40, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 489, 40, 1, 95, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 15, 134, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 15, 40, 1, 95, Color { r: 199, g: 199, b: 199, a: 255 }
 set_clip_rect 24, 49, 457, 77
+fill_rect 9, 49, 15, 14, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 8, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 9, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 9, 81, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
 draw_text "Rust ", 24, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "1.91 ", 54, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "released ", 84, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -615,4 +619,4 @@ fill_rect 208, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
 fill_rect 215, 5, 24, 15, Color { r: 239, g: 247, b: 255, a: 255 }
 fill_rect 215, 5, 24, 15, Color { r: 239, g: 247, b: 255, a: 255 }
 draw_text "wiki", 215, 5, 12, Color { r: 51, g: 102, b: 153, a: 255 }
-# totals fill_rect=394 draw_text=206 other=16
+# totals fill_rect=396 draw_text=208 other=16

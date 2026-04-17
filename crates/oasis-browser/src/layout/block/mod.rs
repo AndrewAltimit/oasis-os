@@ -556,6 +556,15 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
         layout_box.style.position,
         Position::Absolute | Position::Fixed
     );
+    // CSS 2.1 §10.3.5: floated, non-replaced elements use the declared
+    // width (shrink-to-fit if auto) and `auto` margins compute to 0.
+    // The normal-flow over-constrained rule (§10.3.3) that absorbs
+    // leftover space into `margin-right` must NOT apply to floats —
+    // otherwise a `float: right; width: 300px` inside an 1280px
+    // container gets `margin-right: 960px`, which makes its margin box
+    // span the whole container and `place_float` anchors it at x=0
+    // instead of the right edge. This is the old.reddit sidebar bug.
+    let is_float = layout_box.style.float != Float::None;
 
     match layout_box.style.width {
         Dimension::Px(w) => {
@@ -571,6 +580,13 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
                 // `top`/`left`/`right`/`bottom` constraints in the
                 // positioning pass; here we just leave declared margins
                 // in place (auto → treated as 0 for this pass).
+            } else if is_float {
+                if ml_auto {
+                    layout_box.dimensions.margin.left = 0.0;
+                }
+                if mr_auto {
+                    layout_box.dimensions.margin.right = 0.0;
+                }
             } else if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
@@ -598,6 +614,13 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             let available_for_margins = containing_width - content_w - pad_h - bdr_h;
             if is_abs {
                 // See note above for the `Dimension::Px` branch.
+            } else if is_float {
+                if ml_auto {
+                    layout_box.dimensions.margin.left = 0.0;
+                }
+                if mr_auto {
+                    layout_box.dimensions.margin.right = 0.0;
+                }
             } else if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
@@ -611,9 +634,18 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             }
         },
         Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            // Width = containing_width minus all horizontal extras.
-            let w = (containing_width - total_extra).max(0.0);
-            layout_box.dimensions.content.width = w;
+            if is_float {
+                // Floats with `width: auto` shrink to content. We don't
+                // have a full shrink-to-fit pass yet; fall back to the
+                // old behaviour of filling the containing width, which
+                // at least keeps paintable content on screen.
+                let w = (containing_width - total_extra).max(0.0);
+                layout_box.dimensions.content.width = w;
+            } else {
+                // Width = containing_width minus all horizontal extras.
+                let w = (containing_width - total_extra).max(0.0);
+                layout_box.dimensions.content.width = w;
+            }
         },
     }
 
@@ -767,15 +799,33 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 cursor_y,
                 content_width,
             );
-            // Position the child at the float's placed position.
-            child.dimensions.content.x = float_box.rect.x
+            // layout_block positioned the float's descendants relative
+            // to the float's *pre-placement* content.x/y (which
+            // defaulted to (0, 0) during the recursive layout). Now
+            // that place_float has the real position, shift the whole
+            // subtree by the delta so descendants paint inside the
+            // floated box instead of staying at the containing block's
+            // origin. Same pattern we already use for `margin: 0 auto`
+            // centering below.
+            let pre_x = child.dimensions.content.x;
+            let pre_y = child.dimensions.content.y;
+            let resolved_x = float_box.rect.x
                 + child.dimensions.margin.left
                 + child.dimensions.border.left
                 + child.dimensions.padding.left;
-            child.dimensions.content.y = float_box.rect.y
+            let resolved_y = float_box.rect.y
                 + child.dimensions.margin.top
                 + child.dimensions.border.top
                 + child.dimensions.padding.top;
+            let dx = resolved_x - pre_x;
+            let dy = resolved_y - pre_y;
+            child.dimensions.content.x = resolved_x;
+            child.dimensions.content.y = resolved_y;
+            if dx != 0.0 || dy != 0.0 {
+                for grandchild in &mut child.children {
+                    offset_descendant(grandchild, dx, dy);
+                }
+            }
             continue;
         }
 
