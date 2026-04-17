@@ -1,0 +1,1610 @@
+# viewport 800x600
+fill_rect 0, 0, 800, 931, Color { r: 218, g: 224, b: 230, a: 255 }
+fill_rect 0, 0, 280, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 280, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 280, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 29, 280, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 0, 1, 30, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 279, 0, 1, 30, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "search", 6, 9, 12, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 1, 46, 298, 24, Color { r: 240, g: 240, b: 240, a: 255 }
+fill_rect 0, 45, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 299, 45, 1, 26, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 70, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 45, 1, 26, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "Submit ", 99, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "Submit ", 100, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "a ", 141, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "a ", 142, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "new ", 153, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "new ", 154, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "link", 177, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "link", 178, 49, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 1, 87, 298, 24, Color { r: 240, g: 240, b: 240, a: 255 }
+fill_rect 0, 86, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 299, 86, 1, 26, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 111, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 86, 1, 26, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "Submit ", 84, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "Submit ", 85, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "a ", 126, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "a ", 127, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "new ", 138, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "new ", 139, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "text ", 162, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "text ", 163, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "post", 192, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "post", 193, 90, 14, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 1, 128, 298, 217, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 127, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 299, 127, 1, 219, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 345, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 127, 1, 219, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "rust", 11, 138, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "rust", 12, 138, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 12, 154, 44, 20, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 11, 153, 46, 1, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 56, 153, 1, 22, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 11, 174, 46, 1, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 11, 153, 1, 22, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 22, 156, 24, 16, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 22, 156, 24, 16, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "join", 22, 156, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "join", 23, 156, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "The ", 11, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "The ", 12, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 35, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust ", 36, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Programming ", 65, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Programming ", 66, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Language", 137, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Language", 138, 181, 15, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "A ", 11, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "place ", 23, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "for ", 59, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "all ", 83, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "things ", 107, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "related ", 149, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "to ", 197, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 215, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust", 239, 216, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "programming ", 11, 233, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "language—an ", 83, 233, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "open-source ", 167, 233, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "systems", 239, 233, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "language ", 11, 250, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "that ", 65, 250, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "emphasizes ", 95, 250, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "performance,", 161, 250, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "reliability, ", 11, 267, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "and ", 89, 267, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "productivity.", 113, 267, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "361,242", 11, 297, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " Rustaceans", 53, 297, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "1,412", 11, 321, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " users ", 41, 321, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "here ", 83, 321, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "now", 113, 321, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+fill_rect 1, 362, 298, 117, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 361, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 299, 361, 1, 119, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 479, 300, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 0, 361, 1, 119, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "MODERATORS", 11, 367, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "MODERATORS", 12, 367, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "•", 31, 394, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "steveklabnik1", 51, 394, 13, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "•", 31, 411, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "burntsushi", 51, 411, 13, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "•", 31, 428, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "dtolnay", 51, 428, 13, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "•", 31, 445, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "BurntSushi5", 51, 445, 13, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 11, 107, 453, 23, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 10, 106, 455, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 464, 106, 1, 25, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 10, 130, 455, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 10, 106, 1, 25, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "hot", 21, 112, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "hot", 22, 112, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 21, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 23, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 25, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 27, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 29, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 31, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 33, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 35, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 37, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 39, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 41, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 43, 120, 1, 1, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "·", 45, 112, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "new", 57, 112, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "·", 75, 112, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "top", 87, 112, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "·", 105, 112, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "rising", 117, 112, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 10, 136, 455, 98, Color { r: 245, g: 253, b: 253, a: 255 }
+fill_rect 10, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 12, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 14, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 16, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 18, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 20, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 22, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 24, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 26, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 28, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 30, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 32, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 34, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 36, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 38, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 40, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 42, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 44, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 48, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 50, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 52, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 54, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 56, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 58, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 60, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 62, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 64, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 66, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 68, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 70, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 72, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 74, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 76, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 78, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 80, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 82, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 84, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 86, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 90, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 92, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 94, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 96, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 98, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 100, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 102, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 104, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 106, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 108, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 110, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 112, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 114, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 116, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 118, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 120, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 122, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 124, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 126, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 128, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 130, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 132, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 134, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 138, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 140, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 142, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 144, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 146, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 148, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 150, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 152, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 154, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 156, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 158, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 160, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 162, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 164, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 166, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 168, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 170, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 172, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 174, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 176, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 180, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 182, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 184, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 186, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 188, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 190, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 192, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 194, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 196, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 198, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 200, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 202, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 204, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 206, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 208, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 210, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 212, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 214, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 216, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 218, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 220, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 222, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 224, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 226, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 228, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 230, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 232, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 234, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 236, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 238, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 240, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 242, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 244, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 246, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 248, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 250, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 252, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 254, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 258, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 260, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 262, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 264, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 266, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 268, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 270, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 272, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 274, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 276, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 278, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 280, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 282, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 284, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 286, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 288, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 290, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 292, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 294, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 296, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 298, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 300, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 302, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 304, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 306, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 308, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 310, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 312, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 314, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 316, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 318, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 322, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 324, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 326, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 328, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 330, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 332, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 334, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 336, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 338, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 340, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 342, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 344, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 346, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 348, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 350, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 352, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 354, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 356, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 358, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 360, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 362, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 364, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 366, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 368, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 370, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 372, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 374, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 376, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 378, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 380, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 382, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 384, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 386, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 388, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 390, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 392, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 394, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 396, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 398, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 400, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 402, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 404, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 406, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 408, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 410, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 412, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 414, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 416, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 418, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 420, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 422, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 424, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 426, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 428, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 430, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 432, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 434, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 436, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 438, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 440, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 442, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 444, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 446, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 448, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 450, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 452, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 454, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 456, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 458, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 460, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 462, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 464, 234, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+set_clip_rect 14, 141, 451, 91
+set_clip_rect 14, 141, 451, 17
+draw_text "1", 14, 141, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "1", 15, 141, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 141, 451, 91
+set_clip_rect 14, 163, 15, 43
+reset_clip_rect
+set_clip_rect 14, 141, 451, 91
+set_clip_rect 14, 158, 451, 15
+fill_rect 14, 158, 0, 15, Color { r: 215, g: 218, b: 220, a: 255 }
+set_clip_rect 14, 158, 0, 15
+fill_rect 14, 158, 0, 15, Color { r: 215, g: 218, b: 220, a: 255 }
+draw_text "", 14, 158, 12, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 158, 451, 15
+reset_clip_rect
+set_clip_rect 14, 141, 451, 91
+set_clip_rect 19, 174, 446, 59
+draw_text "This ", 19, 174, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Week ", 49, 174, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "in ", 79, 174, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Rust ", 97, 174, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "647", 127, 174, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 145, 174, 76, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 145, 174, 76, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "announcement", 145, 174, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "(", 221, 174, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "this-week-in-rust.org", 230, 174, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text ")", 356, 174, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "submitted ", 19, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "8 ", 79, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 91, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 127, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 145, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "b-dillo", 169, 195, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "b-dillo", 170, 195, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 211, 195, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 235, 195, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "r/rust", 236, 195, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "38 ", 19, 218, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "38 ", 20, 218, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 37, 218, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 38, 218, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "share", 91, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 92, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 127, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 128, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 157, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 158, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 187, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 188, 218, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 141, 451, 91
+reset_clip_rect
+fill_rect 10, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 12, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 14, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 16, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 18, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 20, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 22, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 24, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 26, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 28, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 30, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 32, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 34, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 36, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 38, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 40, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 42, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 44, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 48, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 50, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 52, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 54, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 56, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 58, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 60, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 62, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 64, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 66, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 68, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 70, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 72, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 74, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 76, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 78, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 80, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 82, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 84, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 86, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 90, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 92, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 94, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 96, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 98, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 100, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 102, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 104, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 106, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 108, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 110, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 112, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 114, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 116, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 118, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 120, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 122, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 124, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 126, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 128, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 130, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 132, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 134, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 138, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 140, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 142, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 144, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 146, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 148, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 150, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 152, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 154, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 156, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 158, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 160, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 162, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 164, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 166, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 168, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 170, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 172, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 174, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 176, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 180, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 182, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 184, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 186, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 188, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 190, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 192, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 194, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 196, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 198, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 200, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 202, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 204, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 206, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 208, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 210, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 212, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 214, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 216, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 218, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 220, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 222, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 224, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 226, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 228, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 230, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 232, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 234, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 236, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 238, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 240, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 242, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 244, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 246, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 248, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 250, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 252, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 254, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 258, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 260, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 262, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 264, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 266, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 268, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 270, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 272, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 274, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 276, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 278, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 280, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 282, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 284, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 286, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 288, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 290, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 292, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 294, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 296, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 298, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 300, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 302, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 304, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 306, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 308, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 310, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 312, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 314, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 316, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 318, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 322, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 324, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 326, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 328, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 330, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 332, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 334, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 336, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 338, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 340, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 342, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 344, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 346, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 348, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 350, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 352, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 354, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 356, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 358, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 360, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 362, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 364, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 366, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 368, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 370, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 372, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 374, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 376, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 378, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 380, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 382, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 384, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 386, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 388, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 390, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 392, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 394, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 396, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 398, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 400, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 402, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 404, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 406, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 408, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 410, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 412, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 414, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 416, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 418, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 420, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 422, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 424, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 426, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 428, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 430, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 432, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 434, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 436, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 438, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 440, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 442, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 444, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 446, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 448, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 450, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 452, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 454, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 456, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 458, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 460, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 462, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 464, 334, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+set_clip_rect 14, 241, 451, 91
+set_clip_rect 14, 241, 451, 17
+draw_text "2", 14, 241, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "2", 15, 241, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 241, 451, 91
+set_clip_rect 14, 263, 15, 43
+reset_clip_rect
+set_clip_rect 14, 241, 451, 91
+set_clip_rect 14, 258, 451, 15
+fill_rect 14, 258, 0, 15, Color { r: 215, g: 218, b: 220, a: 255 }
+set_clip_rect 14, 258, 0, 15
+fill_rect 14, 258, 0, 15, Color { r: 215, g: 218, b: 220, a: 255 }
+draw_text "", 14, 258, 12, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 258, 451, 15
+reset_clip_rect
+set_clip_rect 14, 241, 451, 91
+set_clip_rect 19, 274, 446, 59
+draw_text "Easy ", 19, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Questions ", 49, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "/ ", 109, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Beginners ", 121, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Thread ", 181, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "(Week ", 223, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "of ", 259, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "2026-04-14)", 277, 274, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 343, 274, 82, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 343, 274, 82, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "easyquestions", 343, 274, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "submitted ", 19, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "3 ", 79, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "days ", 91, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 121, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 139, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "rust-ping-bot", 163, 295, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "rust-ping-bot", 164, 295, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 241, 295, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 265, 295, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "r/rust", 266, 295, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "112 ", 19, 318, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "112 ", 20, 318, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 43, 318, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 44, 318, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "share", 97, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 98, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 133, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 134, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 163, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 164, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 193, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 194, 318, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 241, 451, 91
+reset_clip_rect
+fill_rect 10, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 12, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 14, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 16, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 18, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 20, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 22, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 24, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 26, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 28, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 30, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 32, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 34, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 36, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 38, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 40, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 42, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 44, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 48, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 50, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 52, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 54, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 56, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 58, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 60, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 62, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 64, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 66, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 68, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 70, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 72, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 74, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 76, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 78, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 80, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 82, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 84, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 86, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 90, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 92, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 94, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 96, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 98, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 100, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 102, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 104, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 106, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 108, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 110, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 112, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 114, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 116, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 118, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 120, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 122, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 124, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 126, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 128, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 130, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 132, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 134, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 138, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 140, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 142, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 144, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 146, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 148, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 150, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 152, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 154, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 156, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 158, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 160, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 162, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 164, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 166, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 168, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 170, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 172, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 174, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 176, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 180, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 182, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 184, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 186, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 188, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 190, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 192, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 194, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 196, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 198, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 200, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 202, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 204, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 206, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 208, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 210, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 212, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 214, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 216, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 218, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 220, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 222, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 224, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 226, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 228, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 230, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 232, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 234, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 236, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 238, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 240, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 242, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 244, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 246, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 248, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 250, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 252, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 254, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 258, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 260, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 262, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 264, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 266, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 268, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 270, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 272, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 274, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 276, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 278, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 280, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 282, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 284, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 286, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 288, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 290, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 292, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 294, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 296, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 298, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 300, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 302, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 304, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 306, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 308, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 310, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 312, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 314, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 316, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 318, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 322, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 324, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 326, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 328, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 330, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 332, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 334, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 336, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 338, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 340, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 342, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 344, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 346, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 348, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 350, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 352, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 354, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 356, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 358, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 360, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 362, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 364, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 366, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 368, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 370, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 372, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 374, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 376, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 378, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 380, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 382, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 384, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 386, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 388, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 390, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 392, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 394, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 396, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 398, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 400, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 402, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 404, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 406, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 408, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 410, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 412, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 414, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 416, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 418, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 420, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 422, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 424, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 426, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 428, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 430, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 432, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 434, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 436, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 438, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 440, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 442, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 444, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 446, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 448, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 450, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 452, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 454, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 456, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 458, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 460, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 462, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 464, 454, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+set_clip_rect 14, 341, 451, 111
+set_clip_rect 14, 341, 451, 17
+draw_text "3", 14, 341, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "3", 15, 341, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 341, 451, 111
+set_clip_rect 14, 363, 15, 43
+reset_clip_rect
+set_clip_rect 14, 341, 451, 111
+set_clip_rect 14, 358, 451, 15
+fill_rect 14, 358, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+set_clip_rect 14, 358, 0, 15
+fill_rect 14, 358, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+draw_text "", 14, 358, 12, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 358, 451, 15
+reset_clip_rect
+set_clip_rect 14, 341, 451, 111
+set_clip_rect 19, 374, 446, 78
+draw_text "Rust ", 19, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "1.91 ", 49, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "released ", 79, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 133, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "stabilized ", 157, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "str::floor_char_boundary ", 223, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and ", 373, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "new ", 397, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "MIR", 421, 374, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "optimizations", 19, 393, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 97, 393, 28, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 97, 393, 28, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "news", 97, 393, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "(", 125, 393, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "blog.rust-lang.org", 134, 393, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text ")", 242, 393, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "submitted ", 19, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "14 ", 79, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 97, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 133, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 151, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "withoutboats", 175, 414, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "withoutboats", 176, 414, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 247, 414, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 271, 414, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "r/rust", 272, 414, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "214 ", 19, 437, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "214 ", 20, 437, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 43, 437, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 44, 437, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "share", 97, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 98, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 133, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 134, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 163, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 164, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 193, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 194, 437, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 341, 451, 111
+reset_clip_rect
+fill_rect 10, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 12, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 14, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 16, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 18, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 20, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 22, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 24, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 26, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 28, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 30, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 32, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 34, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 36, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 38, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 40, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 42, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 44, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 48, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 50, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 52, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 54, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 56, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 58, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 60, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 62, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 64, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 66, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 68, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 70, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 72, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 74, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 76, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 78, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 80, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 82, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 84, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 86, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 90, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 92, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 94, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 96, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 98, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 100, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 102, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 104, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 106, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 108, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 110, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 112, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 114, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 116, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 118, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 120, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 122, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 124, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 126, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 128, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 130, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 132, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 134, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 138, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 140, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 142, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 144, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 146, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 148, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 150, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 152, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 154, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 156, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 158, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 160, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 162, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 164, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 166, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 168, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 170, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 172, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 174, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 176, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 180, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 182, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 184, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 186, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 188, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 190, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 192, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 194, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 196, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 198, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 200, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 202, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 204, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 206, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 208, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 210, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 212, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 214, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 216, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 218, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 220, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 222, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 224, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 226, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 228, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 230, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 232, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 234, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 236, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 238, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 240, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 242, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 244, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 246, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 248, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 250, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 252, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 254, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 258, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 260, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 262, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 264, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 266, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 268, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 270, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 272, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 274, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 276, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 278, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 280, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 282, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 284, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 286, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 288, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 290, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 292, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 294, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 296, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 298, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 300, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 302, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 304, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 306, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 308, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 310, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 312, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 314, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 316, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 318, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 322, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 324, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 326, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 328, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 330, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 332, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 334, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 336, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 338, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 340, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 342, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 344, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 346, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 348, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 350, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 352, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 354, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 356, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 358, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 360, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 362, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 364, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 366, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 368, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 370, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 372, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 374, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 376, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 378, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 380, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 382, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 384, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 386, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 388, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 390, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 392, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 394, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 396, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 398, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 400, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 402, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 404, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 406, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 408, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 410, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 412, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 414, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 416, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 418, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 420, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 422, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 424, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 426, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 428, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 430, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 432, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 434, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 436, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 438, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 440, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 442, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 444, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 446, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 448, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 450, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 452, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 454, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 456, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 458, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 460, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 462, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 464, 565, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+set_clip_rect 14, 460, 451, 103
+set_clip_rect 14, 460, 451, 17
+draw_text "4", 14, 460, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "4", 15, 460, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 460, 451, 103
+set_clip_rect 14, 482, 15, 42
+reset_clip_rect
+set_clip_rect 14, 460, 451, 103
+set_clip_rect 14, 477, 451, 15
+fill_rect 14, 477, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+set_clip_rect 14, 477, 0, 15
+fill_rect 14, 477, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+draw_text "", 14, 477, 12, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 477, 451, 15
+reset_clip_rect
+set_clip_rect 14, 460, 451, 103
+set_clip_rect 19, 493, 446, 71
+draw_text "Running ", 19, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Rust ", 67, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "on ", 97, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a ", 115, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "2004 ", 127, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Sony ", 157, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "PSP ", 187, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 211, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a ", 235, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "homebrew ", 247, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "OS ", 301, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "from ", 319, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "scratch", 349, 493, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "(", 391, 493, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "github.com", 400, 493, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text ")", 19, 512, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "submitted ", 19, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "6 ", 79, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 91, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 127, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 145, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "altimit", 169, 526, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "altimit", 170, 526, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 211, 526, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 235, 526, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "r/rust", 236, 526, 10, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "88 ", 19, 549, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "88 ", 20, 549, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 37, 549, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "comments", 38, 549, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "share", 91, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 92, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 127, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 128, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 157, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 158, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 187, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 188, 549, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 460, 451, 103
+reset_clip_rect
+fill_rect 10, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 12, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 14, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 16, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 18, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 20, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 22, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 24, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 26, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 28, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 30, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 32, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 34, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 36, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 38, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 40, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 42, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 44, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 48, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 50, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 52, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 54, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 56, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 58, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 60, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 62, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 64, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 66, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 68, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 70, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 72, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 74, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 76, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 78, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 80, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 82, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 84, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 86, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 90, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 92, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 94, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 96, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 98, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 100, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 102, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 104, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 106, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 108, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 110, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 112, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 114, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 116, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 118, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 120, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 122, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 124, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 126, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 128, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 130, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 132, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 134, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 138, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 140, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 142, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 144, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 146, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 148, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 150, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 152, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 154, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 156, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 158, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 160, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 162, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 164, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 166, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 168, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 170, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 172, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 174, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 176, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 180, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 182, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 184, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 186, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 188, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 190, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 192, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 194, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 196, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 198, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 200, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 202, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 204, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 206, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 208, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 210, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 212, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 214, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 216, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 218, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 220, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 222, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 224, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 226, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 228, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 230, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 232, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 234, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 236, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 238, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 240, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 242, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 244, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 246, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 248, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 250, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 252, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 254, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 258, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 260, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 262, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 264, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 266, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 268, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 270, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 272, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 274, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 276, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 278, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 280, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 282, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 284, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 286, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 288, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 290, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 292, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 294, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 296, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 298, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 300, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 302, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 304, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 306, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 308, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 310, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 312, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 314, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 316, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 318, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 322, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 324, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 326, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 328, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 330, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 332, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 334, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 336, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 338, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 340, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 342, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 344, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 346, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 348, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 350, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 352, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 354, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 356, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 358, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 360, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 362, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 364, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 366, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 368, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 370, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 372, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 374, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 376, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 378, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 380, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 382, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 384, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 386, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 388, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 390, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 392, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 394, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 396, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 398, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 400, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 402, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 404, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 406, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 408, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 410, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 412, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 414, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 416, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 418, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 420, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 422, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 424, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 426, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 428, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 430, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 432, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 434, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 436, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 438, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 440, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 442, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 444, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 446, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 448, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 450, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 452, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 454, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 456, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 458, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 460, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 462, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 464, 685, 1, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+set_clip_rect 14, 572, 451, 111
+set_clip_rect 14, 572, 451, 17
+draw_text "5", 14, 572, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "5", 15, 572, 13, Color { r: 198, g: 198, b: 198, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 572, 451, 111
+set_clip_rect 14, 594, 15, 41
+reset_clip_rect
+set_clip_rect 14, 572, 451, 111
+set_clip_rect 14, 589, 451, 15
+fill_rect 14, 589, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+set_clip_rect 14, 589, 0, 15
+fill_rect 14, 589, 0, 15, Color { r: 240, g: 240, b: 240, a: 255 }
+draw_text "", 14, 589, 12, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 14, 589, 451, 15
+reset_clip_rect
+set_clip_rect 14, 572, 451, 111
+reset_clip_rect
+fill_rect 0, 0, 800, 100, Color { r: 206, g: 227, b: 248, a: 255 }
+fill_rect 0, 100, 800, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 0, 0, 800, 24, Color { r: 240, g: 240, b: 240, a: 255 }
+fill_rect 0, 24, 800, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 5, 3, 790, 18
+set_clip_rect 5, 3, 710, 13
+draw_text "my ", 5, 3, 10, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "my ", 6, 3, 10, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "subreddits", 23, 3, 10, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "subreddits", 24, 3, 10, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "popular", 99, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 141, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "all", 147, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 165, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "users", 171, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "\u{a0}|\u{a0}", 201, 3, 10, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "AskReddit", 231, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 285, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "pics", 291, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 315, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "funny", 321, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 351, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "worldnews", 357, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 411, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "news", 417, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 441, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "todayilearned", 447, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 525, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "science", 531, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 573, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "videos", 579, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "-", 615, 3, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "programming", 621, 3, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+reset_clip_rect
+set_clip_rect 5, 3, 790, 18
+reset_clip_rect
+draw_text "rust", 10, 63, 18, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "rust", 11, 63, 18, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 41, 61, 30, 17, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 40, 60, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 71, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 40, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 47, 63, 18, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 47, 63, 18, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "hot", 47, 63, 10, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "hot", 48, 63, 10, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 75, 61, 30, 17, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 74, 60, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 105, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 74, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 81, 63, 18, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 81, 63, 18, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "new", 81, 63, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 109, 61, 48, 17, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 108, 60, 50, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 157, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 108, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 115, 63, 36, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 115, 63, 36, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "rising", 115, 63, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 161, 61, 90, 17, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 160, 60, 92, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 251, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 160, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 167, 63, 78, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 167, 63, 78, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "controversial", 167, 63, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 255, 61, 30, 17, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 254, 60, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 285, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 254, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 261, 63, 18, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 261, 63, 18, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "top", 261, 63, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 289, 61, 36, 17, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 288, 60, 38, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 325, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 288, 60, 1, 18, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 295, 63, 24, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 295, 63, 24, 13, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "wiki", 295, 63, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 0, 86, 800, 14, Color { r: 206, g: 227, b: 248, a: 255 }
+draw_text "Want ", 5, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "to ", 35, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "join? ", 53, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Log ", 89, 86, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "in", 113, 86, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text " or ", 125, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "sign ", 149, 86, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "up", 179, 86, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text " in ", 191, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "seconds.", 215, 86, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+# totals fill_rect=1249 draw_text=272 other=87

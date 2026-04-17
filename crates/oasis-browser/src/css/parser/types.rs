@@ -531,6 +531,16 @@ pub enum LengthUnit {
     Em,
     Rem,
     Pt,
+    /// `ex` — nominal x-height. Resolved as 0.5em, matching what every
+    /// real browser does when fontdue hasn't been queried yet. Old.reddit
+    /// leans on this unit for its `.midcol` (`width: 4.1ex`) and `.rank`
+    /// (`width: 2.2ex`) vote column, so treating it as 0 collapses the
+    /// whole vote gutter.
+    Ex,
+    /// `ch` — nominal advance width of '0'. Resolved as 0.5em (same
+    /// heuristic as `ex`; close enough for proportional fonts and matches
+    /// how author CSS expects it to behave for sizing terminal columns).
+    Ch,
 }
 
 /// An RGBA colour.
