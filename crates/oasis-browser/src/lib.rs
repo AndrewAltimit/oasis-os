@@ -321,6 +321,15 @@ pub struct BrowserWidget {
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
+    /// URLs whose fetch or decode failed and were substituted with
+    /// the broken-image placeholder. `<img>` still renders the red-X
+    /// placeholder (so users see dead assets), but CSS
+    /// `background-image: url(...)` silently falls through to
+    /// `background-color` instead of tiling the placeholder across
+    /// the element (which looked like garbage on, e.g., Google's
+    /// button sprites).
+    broken_image_urls: std::collections::HashSet<String>,
+
     /// Arc-wrapped views of `decoded_images` entries used as
     /// `mask-image: url(...)` sources. Lazily populated by
     /// `ensure_image_textures` so each unique mask URL clones its
@@ -603,6 +612,7 @@ impl BrowserWidget {
             focused_node: None,
             body_node_id: None,
             decoded_images: HashMap::new(),
+            broken_image_urls: std::collections::HashSet::new(),
             mask_image_arcs: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             io_thread: None,

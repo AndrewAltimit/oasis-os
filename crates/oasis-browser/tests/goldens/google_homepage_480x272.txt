@@ -1,0 +1,62 @@
+# viewport 480x272
+fill_rect 0, 0, 480, 347, Color { r: 255, g: 255, b: 255, a: 255 }
+set_clip_rect 0, 0, 480, 347
+fill_rect 104, 72, 272, 1, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 104, 163, 272, 1, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 104, 72, 1, 92, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 375, 72, 1, 92, Color { r: 31, g: 31, b: 31, a: 255 }
+set_clip_rect 104, 72, 272, 92
+draw_text "Google", 106, 74, 8, Color { r: 31, g: 31, b: 31, a: 255 }
+reset_clip_rect
+fill_rect 0, 164, 119, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 119, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 243, 119, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 164, 37, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 36, 164, 1, 12, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 175, 37, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 0, 164, 1, 12, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "\u{a0}", 12, 167, 8, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 120, 164, 239, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 359, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 120, 243, 239, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 120, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 120, 164, 230, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 349, 164, 1, 74, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 120, 237, 230, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 120, 164, 1, 74, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 125, 167, 496, 25, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 125, 167, 496, 1, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 125, 167, 1, 25, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 125, 191, 496, 1, Color { r: 200, g: 200, b: 200, a: 255 }
+fill_rect 620, 167, 1, 25, Color { r: 200, g: 200, b: 200, a: 255 }
+fill_rect 130, 200, 214, 30, Color { r: 243, g: 245, b: 246, a: 255 }
+fill_rect 129, 199, 216, 1, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 344, 199, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 129, 230, 216, 1, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 129, 199, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 150, 200, 172, 30, Color { r: 239, g: 239, b: 239, a: 255 }
+fill_rect 150, 200, 172, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 150, 200, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 150, 229, 172, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 321, 200, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "Google Search", 156, 207, 15, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 350, 200, 214, 30, Color { r: 243, g: 245, b: 246, a: 255 }
+fill_rect 349, 199, 216, 1, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 564, 199, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 349, 230, 216, 1, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 349, 199, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 351, 200, 211, 30, Color { r: 239, g: 239, b: 239, a: 255 }
+fill_rect 351, 200, 211, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 351, 200, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 351, 229, 211, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 561, 200, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "I'm Feeling Lucky", 358, 207, 15, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 360, 164, 119, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 479, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 360, 243, 119, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 360, 164, 0, 79, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "Advanced ", 365, 170, 11, Color { r: 25, g: 103, b: 210, a: 255 }
+draw_text "search", 419, 170, 11, Color { r: 25, g: 103, b: 210, a: 255 }
+reset_clip_rect
+# totals fill_rect=50 draw_text=6 other=4

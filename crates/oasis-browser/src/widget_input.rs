@@ -294,6 +294,14 @@ impl BrowserWidget {
                 true
             },
             InputEvent::ButtonPress(Button::Confirm) => {
+                // Enter / Confirm on a focused text input submits its
+                // form — the dominant interaction path for search
+                // boxes. Falls through to link activation when no
+                // form element has focus.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Enter, vfs);
+                    return true;
+                }
                 self.activate_selected_link(vfs);
                 true
             },
@@ -357,6 +365,18 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
+            InputEvent::Backspace => {
+                // Delete a char from the focused text input, if any.
+                // Without this branch Backspace is silently dropped in
+                // Content focus — forms that rely on physical keyboard
+                // editing (e.g. the Google search box) appear broken.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Backspace, vfs);
+                    self.layout_dirty = true;
+                    return true;
+                }
+                false
+            },
             // Dispatch keydown + keyup + input events to JS.
             InputEvent::TextInput(ch) => {
                 #[cfg(feature = "javascript")]
@@ -368,6 +388,15 @@ impl BrowserWidget {
                         Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
                         Self::dispatch_js_event(engine, nid, "input");
                     }
+                }
+                // When a text input is focused, deliver the character
+                // to the form manager instead of treating it as a page
+                // shortcut — typing in Google's search box shouldn't
+                // trigger zoom because the user pressed `+`.
+                if self.form_manager.focused_element.is_some() {
+                    self.dispatch_form_key(crate::forms::FormKey::Char(*ch), vfs);
+                    self.layout_dirty = true;
+                    return true;
                 }
                 // Zoom: + / - / 0 keys when not in URL bar.
                 match ch {
@@ -640,6 +669,111 @@ impl BrowserWidget {
 
         // Handle <label for="..."> click: focus the associated form element.
         self.handle_label_for_click(x, y);
+
+        // Handle direct clicks on <input> elements: focus text inputs,
+        // fire the form submission for submit buttons, toggle
+        // checkbox/radio state. Needed so Google's search box takes
+        // focus when clicked directly (not just via a <label>).
+        self.handle_form_element_click(x, y, vfs);
+    }
+
+    /// Handle clicks that fall on a form `<input>` / `<button>` element
+    /// directly (i.e. outside any `<label for="...">` wrapper).
+    ///
+    /// Text-like inputs grab focus so subsequent keystrokes flow into
+    /// them through `dispatch_form_key`. Submit buttons trigger form
+    /// submission with the clicked button's `name`/`value` pair
+    /// (propagated by `FormManager::submit_with_button`). Checkboxes
+    /// and radios toggle / select.
+    fn handle_form_element_click(&mut self, x: i32, y: i32, vfs: &dyn Vfs) {
+        use crate::html::dom::{NodeKind, TagName};
+
+        let Some(nid) = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32))
+        else {
+            return;
+        };
+        let Some(doc) = &self.document else { return };
+
+        // Walk up to the nearest <input> / <button> ancestor — the
+        // click may land on a `<span>` wrapper like Google's
+        // `<span class="lsbb"><input ...>`.
+        let mut form_elem_nid = None;
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if let NodeKind::Element(ref e) = doc.nodes[id].kind
+                && matches!(e.tag, TagName::Input | TagName::Button | TagName::Textarea)
+            {
+                form_elem_nid = Some(id);
+                break;
+            }
+            cur = doc.nodes[id].parent;
+        }
+        let Some(target_nid) = form_elem_nid else {
+            return;
+        };
+
+        let (tag, input_type, value, name_or_id) = match &doc.nodes[target_nid].kind {
+            NodeKind::Element(elem) => (
+                elem.tag.clone(),
+                elem.get_attribute("type")
+                    .unwrap_or("text")
+                    .to_ascii_lowercase(),
+                elem.get_attribute("value").unwrap_or("").to_string(),
+                elem.get_attribute("name")
+                    .or_else(|| elem.get_attribute("id"))
+                    .map(|s| s.to_string()),
+            ),
+            _ => return,
+        };
+        let Some(name) = name_or_id else { return };
+
+        // Focus tracking: mirror the hover/:focus pseudo-class state
+        // even when the form manager doesn't own this element.
+        self.focused_node = Some(target_nid);
+
+        let is_submit = matches!(input_type.as_str(), "submit" | "image")
+            || (tag == TagName::Button && !matches!(input_type.as_str(), "button" | "reset"));
+
+        // Look up which form owns this element so we can focus it.
+        let fi_owning = self
+            .form_manager
+            .forms
+            .iter()
+            .position(|f| f.has_element(&name));
+
+        if let Some(fi) = fi_owning {
+            self.form_manager.focused_form = Some(fi);
+            self.form_manager.focused_element = Some(name.clone());
+        }
+
+        match input_type.as_str() {
+            "checkbox" => {
+                let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
+                self.layout_dirty = true;
+            },
+            "radio" => {
+                if let Some(fi) = fi_owning {
+                    self.form_manager.select_radio(fi, &name, &value);
+                    self.layout_dirty = true;
+                }
+            },
+            _ if is_submit => {
+                if let Some(fi) = fi_owning
+                    && let Some(data) = self.form_manager.submit(fi)
+                {
+                    self.handle_form_submit(&data, vfs);
+                }
+            },
+            _ => {
+                // Plain text input — focus is enough. Typed characters
+                // now flow through `handle_input`'s focused-element
+                // routing.
+                self.layout_dirty = true;
+            },
+        }
     }
 
     /// If the click hits a `<label>` element with a `for` attribute,

@@ -162,6 +162,7 @@ impl BrowserWidget {
         self.page_csp = None;
         self.page_errors.clear();
         self.decoded_images.clear();
+        self.broken_image_urls.clear();
         self.mask_image_arcs.clear();
         self.image_textures.clear();
         self.image_atlas.clear_without_destroy();
@@ -484,8 +485,13 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = crate::image::decode_image(&body)
-                            .unwrap_or_else(|| crate::image::broken_image_placeholder(24, 24));
+                        let decoded = match crate::image::decode_image(&body) {
+                            Some(img) => img,
+                            None => {
+                                self.broken_image_urls.insert(resolved.clone());
+                                crate::image::broken_image_placeholder(24, 24)
+                            },
+                        };
                         let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                         self.decoded_image_bytes += img_bytes;
                         self.decoded_image_lru.push_front(resolved.clone());
@@ -499,6 +505,7 @@ impl BrowserWidget {
                     let placeholder = crate::image::broken_image_placeholder(24, 24);
                     let img_bytes = placeholder.width as usize * placeholder.height as usize * 4;
                     self.decoded_image_bytes += img_bytes;
+                    self.broken_image_urls.insert(resolved.clone());
                     self.decoded_image_lru.push_front(resolved.clone());
                     self.decoded_images.insert(resolved, placeholder);
                     self.image_info_dirty = true;
@@ -853,6 +860,15 @@ impl BrowserWidget {
         self.href_map = href_map;
         self.layout_root = Some(layout_root);
         self.link_map.clear();
+
+        // 7b. Rebuild form state from the fresh DOM. Without this
+        // `form_manager.forms` stays empty and every click on a
+        // `<form>`'s inputs silently fails to find an owning form,
+        // which means keystrokes never land in the search box.
+        self.form_manager.clear();
+        if let Some(doc) = &self.document {
+            Self::populate_forms_from_dom(doc, &mut self.form_manager);
+        }
         self.scroll.reset();
         self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
@@ -867,6 +883,251 @@ impl BrowserWidget {
         }
         self.skip_nav_push = false;
         self.diag("[BR] load_html done");
+    }
+
+    /// Walk the DOM and register every `<form>` (plus its descendant
+    /// inputs / selects / textareas / buttons) with `form_manager`.
+    ///
+    /// This is what makes a newly-loaded page actually interactive:
+    /// the click handler and keyboard router both look up whether an
+    /// element belongs to a registered form, and without this pass
+    /// they always miss.
+    fn populate_forms_from_dom(
+        doc: &html::dom::Document,
+        form_manager: &mut crate::forms::FormManager,
+    ) {
+        use crate::forms::{FormElement, FormMethod, InputType, SelectOption};
+        use html::dom::{NodeKind, TagName};
+
+        // Find every <form>. Nested <form> elements are disallowed in
+        // HTML5, so a flat walk is sufficient.
+        for (form_nid, form_node) in doc.nodes.iter().enumerate() {
+            let NodeKind::Element(form_elem) = &form_node.kind else {
+                continue;
+            };
+            if form_elem.tag != TagName::Form {
+                continue;
+            }
+
+            let action = form_elem.get_attribute("action").unwrap_or("").to_string();
+            let method = match form_elem
+                .get_attribute("method")
+                .unwrap_or("get")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "post" => FormMethod::Post,
+                _ => FormMethod::Get,
+            };
+            let form_id = form_manager.add_form(&action, method);
+
+            // DFS the form's subtree collecting form-element descendants.
+            let mut stack = form_node.children.clone();
+            while let Some(nid) = stack.pop() {
+                let node = &doc.nodes[nid];
+                for &c in node.children.iter().rev() {
+                    stack.push(c);
+                }
+                let NodeKind::Element(elem) = &node.kind else {
+                    continue;
+                };
+                match elem.tag {
+                    TagName::Input => {
+                        let input_type = elem
+                            .get_attribute("type")
+                            .unwrap_or("text")
+                            .to_ascii_lowercase();
+                        let name = elem.get_attribute("name").unwrap_or("").to_string();
+                        let value = elem.get_attribute("value").unwrap_or("").to_string();
+                        let placeholder =
+                            elem.get_attribute("placeholder").unwrap_or("").to_string();
+                        let maxlength = elem
+                            .get_attribute("maxlength")
+                            .and_then(|v| v.parse::<usize>().ok());
+                        let required = elem.get_attribute("required").is_some();
+
+                        match input_type.as_str() {
+                            "hidden" => {
+                                form_manager
+                                    .add_element(form_id, FormElement::HiddenInput { name, value });
+                            },
+                            "submit" => {
+                                let label = if value.is_empty() {
+                                    "Submit".to_string()
+                                } else {
+                                    value.clone()
+                                };
+                                form_manager.add_element(
+                                    form_id,
+                                    FormElement::SubmitButton { name, value, label },
+                                );
+                            },
+                            "reset" => {
+                                let label = if value.is_empty() {
+                                    "Reset".to_string()
+                                } else {
+                                    value.clone()
+                                };
+                                form_manager
+                                    .add_element(form_id, FormElement::ResetButton { label });
+                            },
+                            "button" => {
+                                // Plain push button — no submission. Treat
+                                // like SubmitButton for focus purposes but
+                                // don't submit on click.
+                            },
+                            "checkbox" => {
+                                let checked = elem.get_attribute("checked").is_some();
+                                let label = String::new();
+                                form_manager.add_element(
+                                    form_id,
+                                    FormElement::Checkbox {
+                                        name,
+                                        value,
+                                        checked,
+                                        label,
+                                    },
+                                );
+                            },
+                            "radio" => {
+                                let checked = elem.get_attribute("checked").is_some();
+                                form_manager.add_element(
+                                    form_id,
+                                    FormElement::RadioButton {
+                                        name: name.clone(),
+                                        value,
+                                        checked,
+                                        group: name,
+                                    },
+                                );
+                            },
+                            _ => {
+                                // text / search / email / password / number
+                                // and unknown types collapse to TextInput so
+                                // the user can at least type into them.
+                                let it = match input_type.as_str() {
+                                    "password" => InputType::Password,
+                                    "email" => InputType::Email,
+                                    "number" => InputType::Number,
+                                    _ => InputType::Text,
+                                };
+                                form_manager.add_element(
+                                    form_id,
+                                    FormElement::TextInput {
+                                        name,
+                                        value,
+                                        placeholder,
+                                        maxlength,
+                                        input_type: it,
+                                        required,
+                                        minlength: elem
+                                            .get_attribute("minlength")
+                                            .and_then(|v| v.parse::<usize>().ok()),
+                                        pattern: elem
+                                            .get_attribute("pattern")
+                                            .map(|s| s.to_string()),
+                                        min: elem
+                                            .get_attribute("min")
+                                            .and_then(|v| v.parse::<f64>().ok()),
+                                        max: elem
+                                            .get_attribute("max")
+                                            .and_then(|v| v.parse::<f64>().ok()),
+                                    },
+                                );
+                            },
+                        }
+                    },
+                    TagName::Textarea => {
+                        let name = elem.get_attribute("name").unwrap_or("").to_string();
+                        // `<textarea>`'s initial value is its text children.
+                        let value = doc.text_content(nid);
+                        let placeholder =
+                            elem.get_attribute("placeholder").unwrap_or("").to_string();
+                        let rows = elem
+                            .get_attribute("rows")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(3);
+                        let cols = elem
+                            .get_attribute("cols")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(40);
+                        let required = elem.get_attribute("required").is_some();
+                        form_manager.add_element(
+                            form_id,
+                            FormElement::TextArea {
+                                name,
+                                value,
+                                rows,
+                                cols,
+                                placeholder,
+                                required,
+                                minlength: elem
+                                    .get_attribute("minlength")
+                                    .and_then(|v| v.parse::<usize>().ok()),
+                                maxlength: elem
+                                    .get_attribute("maxlength")
+                                    .and_then(|v| v.parse::<usize>().ok()),
+                            },
+                        );
+                    },
+                    TagName::Select => {
+                        let name = elem.get_attribute("name").unwrap_or("").to_string();
+                        let mut options = Vec::new();
+                        let mut selected_index = None;
+                        for (idx, &opt_id) in node.children.iter().enumerate() {
+                            if let NodeKind::Element(ref opt) = doc.nodes[opt_id].kind
+                                && opt.tag == TagName::Option
+                            {
+                                let value = opt
+                                    .get_attribute("value")
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| doc.text_content(opt_id));
+                                let label = doc.text_content(opt_id);
+                                let disabled = opt.get_attribute("disabled").is_some();
+                                if opt.get_attribute("selected").is_some() {
+                                    selected_index = Some(options.len());
+                                }
+                                let _ = idx;
+                                options.push(SelectOption {
+                                    value,
+                                    label,
+                                    disabled,
+                                });
+                            }
+                        }
+                        if selected_index.is_none() && !options.is_empty() {
+                            selected_index = Some(0);
+                        }
+                        form_manager.add_element(
+                            form_id,
+                            FormElement::SelectBox {
+                                name,
+                                options,
+                                selected_index,
+                                open: false,
+                            },
+                        );
+                    },
+                    TagName::Button => {
+                        let btype = elem
+                            .get_attribute("type")
+                            .unwrap_or("submit")
+                            .to_ascii_lowercase();
+                        if btype == "submit" {
+                            let name = elem.get_attribute("name").unwrap_or("").to_string();
+                            let value = elem.get_attribute("value").unwrap_or("").to_string();
+                            let label = doc.text_content(nid);
+                            form_manager.add_element(
+                                form_id,
+                                FormElement::SubmitButton { name, value, label },
+                            );
+                        }
+                    },
+                    _ => {},
+                }
+            }
+            let _ = form_nid;
+        }
     }
 
     /// Walk the DOM to build a map of `<a>` element NodeIds to their

@@ -12,6 +12,63 @@ The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
 
+- **google.com rendering + table layout correctness + form
+  interactivity** (`feat/browser-google-rendering`). The OASIS-UA
+  variant of the Google homepage (the 79 KB table-based legacy
+  fallback the server returns to non-mainstream user-agents)
+  now renders with a real three-column 25/50/25 layout, sized
+  search input, and clickable submit buttons, *and* the user
+  can actually click in the search box, type a query, and
+  either press Enter or click "Google Search" to navigate to
+  `/search?q=...`. Three independent issues blocked that before:
+  (a) `BrowserWidget::form_manager` was never populated from
+  the parsed DOM — there was no DOM→FormManager pass, so every
+  `<input>` looked unowned to the click handler and keystrokes
+  silently fell through to the page-zoom shortcut; (b) the
+  content-focus keyboard path dispatched printable keys only
+  to the JS engine and the zoom handler, never to the focused
+  form element; (c) click hit-testing only checked the link
+  map and `<label for="…">`, never direct clicks on an
+  `<input>` / `<button>`. The fix installs a
+  `populate_forms_from_dom` pass after every page load, a
+  `handle_form_element_click` helper that walks up from the
+  hit node looking for an `<input>`/`<button>`/`<textarea>`
+  ancestor (Google's submit button is wrapped in
+  `<span class="lsbb">`), and focused-element routing in
+  `handle_input` for `TextInput(ch)`, `Backspace`, and
+  `Button::Confirm`. Separately, failed `background-image:
+  url(...)` fetches no longer render a grid of red-X broken
+  placeholders — a new `broken_image_urls` set on the widget
+  tracks URLs whose decode failed so the CSS-background
+  assignment path can skip them (Google's `.lsb` button sprite
+  references a 404'd `nav_logo229.png`, which used to tile a
+  24×24 placeholder across every submit button). The six
+  original rendering fixes still apply: (1)
+  `measure_box_widths` in `layout/table.rs` now reads replaced
+  elements' intrinsic dimensions via the newly-exported
+  `replaced_dimensions` — previously `<input>` inside a `<td>`
+  contributed 0 px preferred width, collapsing the whole cell;
+  (2) `<td width="25%">` actually reserves its share of the
+  table (`distribute_widths` honours a new percent-constraint
+  pass, and explicit-pixel columns stay pinned instead of being
+  scaled by the final `available / total_pref` divide); (3)
+  `layout_cell_content` wraps runs of inline / replaced children
+  in an anonymous block so an inputs-only cell gets a real
+  inline formatting context instead of the fast-path line-height
+  approximation; (4) new presentational-hint mappings for
+  `valign` (→ `vertical-align` on tr/td/th), table-level
+  `cellpadding` (propagated to descendant cells via an ancestor
+  walk from the `<td>`), and `<br clear="...">` (→ CSS
+  `clear`); (5) the UA stylesheet now applies
+  `margin-left/right: auto` to direct children of `<center>`
+  so a shrink-wrapped table inside `<center>` actually sits in
+  the middle of the viewport; (6) new `google_homepage.html`
+  fixture + goldens wired into the visual-regression harness.
+  Knock-on improvements: HackerNews' 30-px rank column and
+  14-px votelinks column are now honoured (frontpage height
+  dropped ~900 px), Wikipedia infobox cells now flow inline
+  content through a real IFC instead of the stub single-line
+  approximation.
 - **old.reddit.com rendering + address-bar polish**
   (`feat/browser-old-reddit-rendering`). Three fixes that together
   turn the listing and comments pages from an illegible overlap mess

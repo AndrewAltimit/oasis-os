@@ -486,7 +486,7 @@ pub(super) fn collect_matched_declarations(
 
     // Presentational HTML attributes (bgcolor, width, height, align, etc.)
     // have lowest author-origin priority (overridden by any CSS rule).
-    collect_presentational_attrs(elem, &mut result);
+    collect_presentational_attrs(doc, node_id, elem, &mut result);
 
     // Inline styles have the highest non-important specificity.
     // O(1) lookup via HashMap instead of linear scan.
@@ -525,7 +525,12 @@ pub(super) fn collect_matched_declarations(
 /// Per the CSS spec, presentational attributes act as author-origin rules
 /// with zero specificity -- overridden by any CSS rule. We use
 /// `Origin::Presentational` which sorts before `Origin::Stylesheet`.
-fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDeclaration>) {
+fn collect_presentational_attrs(
+    doc: &Document,
+    node_id: NodeId,
+    elem: &ElementData,
+    result: &mut Vec<MatchedDeclaration>,
+) {
     use crate::html::dom::TagName;
 
     let zero_spec = Specificity {
@@ -592,6 +597,21 @@ fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDecl
         push("white-space", CssValue::Keyword("nowrap".into()));
     }
 
+    // valign attribute -> vertical-align (on tr, td, th)
+    //
+    // Legacy HTML `valign="top|middle|bottom|baseline"` maps directly to
+    // the CSS `vertical-align` keyword. Google's search-row is
+    // `<tr valign="top">` so the top-aligned cell content sits flush
+    // with the top of the row.
+    if matches!(elem.tag, TagName::Tr | TagName::Td | TagName::Th)
+        && let Some(val) = elem.get_attribute("valign")
+    {
+        let v = val.to_ascii_lowercase();
+        if matches!(v.as_str(), "top" | "middle" | "bottom" | "baseline") {
+            push("vertical-align", CssValue::Keyword(v));
+        }
+    }
+
     // cellspacing attribute on table -> border-spacing
     if elem.tag == TagName::Table
         && let Some(val) = elem.get_attribute("cellspacing")
@@ -600,10 +620,36 @@ fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDecl
         push("border-spacing", CssValue::Length(n, LengthUnit::Px));
     }
 
-    // cellpadding attribute on table -> padding on descendant cells
-    // (This is applied on the table and will be propagated separately in
-    // the layout engine or by querying the parent table. For now, skip --
-    // author CSS can override.)
+    // cellpadding attribute on table propagates to descendant cells as
+    // padding. We look up the nearest ancestor `<table>` from each td/th
+    // and apply its cellpadding to the cell. This overrides the UA
+    // default `td { padding: 2px 4px }` for legacy layouts that rely
+    // on `cellpadding="0"` (Google's search-form table is the canonical
+    // example).
+    if matches!(elem.tag, TagName::Td | TagName::Th)
+        && let Some(pad) = ancestor_table_cellpadding(doc, node_id)
+    {
+        push("padding-top", CssValue::Length(pad, LengthUnit::Px));
+        push("padding-right", CssValue::Length(pad, LengthUnit::Px));
+        push("padding-bottom", CssValue::Length(pad, LengthUnit::Px));
+        push("padding-left", CssValue::Length(pad, LengthUnit::Px));
+    }
+
+    // <br clear="left|right|all"> -> clear: left|right|both.
+    // A legacy way to break out of a float context.
+    if elem.tag == TagName::Br
+        && let Some(val) = elem.get_attribute("clear")
+    {
+        let v = val.to_ascii_lowercase();
+        let mapped = match v.as_str() {
+            "left" | "right" => Some(v),
+            "all" => Some("both".to_string()),
+            _ => None,
+        };
+        if let Some(k) = mapped {
+            push("clear", CssValue::Keyword(k));
+        }
+    }
 
     // border attribute on table
     if elem.tag == TagName::Table
@@ -629,6 +675,29 @@ fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDecl
         // Each character ~ 8px in our bitmap font.
         push("width", CssValue::Length(n * 8.0, LengthUnit::Px));
     }
+}
+
+/// Walk up the DOM from `start` looking for the nearest `<table>`
+/// ancestor; if found and it has a `cellpadding="N"` attribute with
+/// a non-negative integer value, return that padding in pixels.
+///
+/// Used to propagate the table's cellpadding to descendant cells so
+/// `cellpadding="0"` actually collapses the UA default cell padding.
+fn ancestor_table_cellpadding(doc: &Document, start: NodeId) -> Option<f32> {
+    use crate::html::dom::TagName;
+    let mut cur = doc.nodes[start].parent;
+    while let Some(pid) = cur {
+        if let NodeKind::Element(ref e) = doc.nodes[pid].kind
+            && e.tag == TagName::Table
+        {
+            return e
+                .get_attribute("cellpadding")
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| *v >= 0.0);
+        }
+        cur = doc.nodes[pid].parent;
+    }
+    None
 }
 
 /// Parse an HTML color attribute value (e.g., "#fff", "#ffffff", "red").

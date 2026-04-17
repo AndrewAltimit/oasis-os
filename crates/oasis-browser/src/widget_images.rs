@@ -361,6 +361,7 @@ impl BrowserWidget {
             // Replace sentinel (failed decode) with a broken-image placeholder
             // so the user sees a visual indicator instead of nothing.
             let decoded = if decoded.width == 0 && decoded.height == 0 {
+                self.broken_image_urls.insert(url.clone());
                 image::broken_image_placeholder(24, 24)
             } else {
                 decoded
@@ -483,8 +484,13 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = image::decode_image(&vfs_resp.body)
-                            .unwrap_or_else(|| image::broken_image_placeholder(24, 24));
+                        let decoded = match image::decode_image(&vfs_resp.body) {
+                            Some(img) => img,
+                            None => {
+                                self.broken_image_urls.insert(resolved.clone());
+                                image::broken_image_placeholder(24, 24)
+                            },
+                        };
                         let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                         self.decoded_image_bytes += img_bytes;
                         self.decoded_image_lru.push_front(resolved.clone());
@@ -546,6 +552,7 @@ impl BrowserWidget {
                     let placeholder = image::broken_image_placeholder(24, 24);
                     let img_bytes = placeholder.width as usize * placeholder.height as usize * 4;
                     self.decoded_image_bytes += img_bytes;
+                    self.broken_image_urls.insert(resolved.clone());
                     self.decoded_image_lru.push_front(resolved.clone());
                     self.decoded_images.insert(resolved, placeholder);
                     self.image_info_dirty = true;
@@ -815,6 +822,7 @@ impl BrowserWidget {
                 self.window_w,
                 &self.cached_image_info,
                 &self.mask_image_arcs,
+                &self.broken_image_urls,
             );
         }
     }
@@ -834,6 +842,7 @@ impl BrowserWidget {
         viewport_w: u32,
         image_info: &HashMap<String, (u32, u32)>,
         mask_arcs: &HashMap<String, std::sync::Arc<image::DecodedImage>>,
+        broken_urls: &std::collections::HashSet<String>,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
@@ -862,11 +871,18 @@ impl BrowserWidget {
         // Assign background-image texture (not atlas-eligible since
         // background images are typically tiled/stretched to arbitrary
         // sizes and need their own texture).
+        //
+        // Skip URLs whose fetch or decode failed — otherwise the
+        // broken-image placeholder tiles across the element and every
+        // `background: url() repeat-x` failure (Google's button
+        // sprite, say) becomes a stripe of red X's.
         if layout_box.background_texture.is_none()
             && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
         {
             let resolved = Self::resolve_src(base_url, url);
-            if let Some(&tex) = textures.get(&resolved) {
+            if !broken_urls.contains(&resolved)
+                && let Some(&tex) = textures.get(&resolved)
+            {
                 layout_box.background_texture = Some(tex);
                 if let Some(&dims) = image_info.get(&resolved) {
                     layout_box.background_texture_size = Some(dims);
@@ -889,7 +905,15 @@ impl BrowserWidget {
 
         for child in &mut layout_box.children {
             Self::assign_textures_recursive(
-                child, doc, base_url, textures, atlas, viewport_w, image_info, mask_arcs,
+                child,
+                doc,
+                base_url,
+                textures,
+                atlas,
+                viewport_w,
+                image_info,
+                mask_arcs,
+                broken_urls,
             );
         }
     }
