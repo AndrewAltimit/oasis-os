@@ -71,12 +71,13 @@ fn default_config_creation() {
     assert!(config.features.native_engine);
     assert!(config.features.gemini);
     assert!(config.features.reader_mode);
-    assert_eq!(config.url_bar_height, 20);
+    assert_eq!(config.url_bar_height, 28);
     assert_eq!(config.status_bar_height, 14);
-    assert_eq!(config.button_width, 20);
+    assert_eq!(config.button_width, 28);
     assert_eq!(config.features.home_url, "vfs://sites/home/index.html");
     assert_eq!(config.cache_size_bytes(), 8 * 1024 * 1024);
-    assert_eq!(config.content_height(272), 238);
+    // 272 - 28 (chrome) - 14 (status) = 230
+    assert_eq!(config.content_height(272), 230);
 }
 
 // ---------------------------------------------------------------
@@ -511,15 +512,16 @@ fn url_bar_typing_inserts_chars() {
     browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
     assert_eq!(browser.focus, Focus::UrlBar);
 
-    let base_len = browser.url_input.len();
-
+    // Clicking the URL bar selects the whole URL (Firefox/Chrome
+    // behaviour), so the first keystroke replaces the selection and
+    // subsequent keystrokes append. Final buffer is exactly "abc".
     browser.handle_input(&InputEvent::TextInput('a'), &vfs);
     browser.handle_input(&InputEvent::TextInput('b'), &vfs);
     browser.handle_input(&InputEvent::TextInput('c'), &vfs);
 
-    assert_eq!(browser.url_input.len(), base_len + 3);
-    assert!(browser.url_input.ends_with("abc"));
+    assert_eq!(browser.url_input, "abc");
     assert_eq!(browser.url_cursor, browser.url_input.len());
+    assert!(browser.url_selection_anchor.is_none());
 }
 
 // ---------------------------------------------------------------

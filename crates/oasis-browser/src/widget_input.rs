@@ -138,6 +138,42 @@ pub(crate) fn styles_geometry_equal(a: &ComputedStyle, b: &ComputedStyle) -> boo
 
 impl BrowserWidget {
     // ---------------------------------------------------------------
+    // URL-bar selection helpers
+    // ---------------------------------------------------------------
+
+    /// Return the `(lo, hi)` byte range of the current URL-bar
+    /// selection — `lo` and `hi` are sorted so callers don't need to
+    /// care which way the user dragged. Returns `None` if there is no
+    /// selection or the selection is collapsed (anchor == cursor).
+    pub(crate) fn url_selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.url_selection_anchor?;
+        if anchor == self.url_cursor {
+            None
+        } else if anchor < self.url_cursor {
+            Some((anchor, self.url_cursor))
+        } else {
+            Some((self.url_cursor, anchor))
+        }
+    }
+
+    /// Delete the selected range from `url_input` and position the
+    /// cursor at the deletion point. Returns `true` if anything was
+    /// deleted. Callers use the return value to decide whether a
+    /// follow-up action (like Backspace's single-char delete) is still
+    /// needed.
+    fn url_delete_selection(&mut self) -> bool {
+        if let Some((lo, hi)) = self.url_selection_range() {
+            self.url_input.replace_range(lo..hi, "");
+            self.url_cursor = lo;
+            self.url_selection_anchor = None;
+            true
+        } else {
+            self.url_selection_anchor = None;
+            false
+        }
+    }
+
+    // ---------------------------------------------------------------
     // Input handling
     // ---------------------------------------------------------------
 
@@ -148,13 +184,21 @@ impl BrowserWidget {
         if self.focus == Focus::UrlBar {
             match event {
                 InputEvent::TextInput(ch) => {
+                    // If there's an active selection, typing replaces it.
+                    // This is the standard "click URL bar, type to
+                    // replace" flow users expect from Firefox/Chrome.
+                    self.url_delete_selection();
                     self.url_input.insert(self.url_cursor, *ch);
                     self.url_cursor += ch.len_utf8();
                     return true;
                 },
                 InputEvent::Backspace => {
-                    if self.url_cursor > 0 {
-                        // Find the previous character boundary.
+                    if self.url_delete_selection() {
+                        // Selection was non-empty — deletion already
+                        // happened, nothing more to do.
+                    } else if self.url_cursor > 0 {
+                        // No selection: delete the character before
+                        // the cursor on a character boundary.
                         let prev = self.url_input[..self.url_cursor]
                             .char_indices()
                             .next_back()
@@ -168,6 +212,7 @@ impl BrowserWidget {
                 InputEvent::ButtonPress(Button::Confirm) => {
                     let url = self.url_input.clone();
                     self.focus = Focus::Content;
+                    self.url_selection_anchor = None;
                     if !url.is_empty() {
                         self.navigate_to(&url, vfs);
                     }
@@ -178,10 +223,16 @@ impl BrowserWidget {
                     self.focus = Focus::Content;
                     self.url_input.clear();
                     self.url_cursor = 0;
+                    self.url_selection_anchor = None;
                     return true;
                 },
                 InputEvent::ButtonPress(Button::Left) => {
-                    if self.url_cursor > 0 {
+                    // If there's a selection, collapse to its left edge
+                    // instead of moving further. Matches GTK/Chrome.
+                    if let Some((lo, _hi)) = self.url_selection_range() {
+                        self.url_cursor = lo;
+                        self.url_selection_anchor = None;
+                    } else if self.url_cursor > 0 {
                         let prev = self.url_input[..self.url_cursor]
                             .char_indices()
                             .next_back()
@@ -192,7 +243,10 @@ impl BrowserWidget {
                     return true;
                 },
                 InputEvent::ButtonPress(Button::Right) => {
-                    if self.url_cursor < self.url_input.len() {
+                    if let Some((_lo, hi)) = self.url_selection_range() {
+                        self.url_cursor = hi;
+                        self.url_selection_anchor = None;
+                    } else if self.url_cursor < self.url_input.len() {
                         let next = self.url_input[self.url_cursor..]
                             .chars()
                             .next()
@@ -509,24 +563,49 @@ impl BrowserWidget {
         if rel_y < chrome_h {
             let rel_x = x - self.window_x;
             let bw = self.config.button_width as i32;
+            // Rightmost button group, left→right: bookmark then home.
+            let home_x = self.window_w as i32 - bw;
+            let bookmark_x = home_x - bw;
 
             if rel_x < bw {
                 // Back button.
                 self.focus = Focus::Content;
+                self.url_selection_anchor = None;
                 self.go_back(vfs);
             } else if rel_x < bw * 2 {
                 // Forward button.
                 self.focus = Focus::Content;
+                self.url_selection_anchor = None;
                 self.go_forward(vfs);
-            } else if rel_x >= self.window_w as i32 - bw {
+            } else if rel_x >= home_x {
                 // Home button.
                 self.focus = Focus::Content;
+                self.url_selection_anchor = None;
                 self.go_home(vfs);
+            } else if rel_x >= bookmark_x {
+                // Bookmark button: a quick left-click opens the
+                // bookmarks listing (vfs://bookmarks, served by
+                // NavigationController::bookmarks_page_html). A future
+                // follow-up can add long-press / right-click to toggle
+                // the current page, but just getting to the saved list
+                // is the more useful affordance for now and mirrors
+                // what Ctrl-Shift-O does on Firefox.
+                self.focus = Focus::Content;
+                self.url_selection_anchor = None;
+                self.navigate_to("vfs://bookmarks", vfs);
             } else {
-                // URL bar area -- enter edit mode.
+                // URL bar area -- enter edit mode and select the whole
+                // URL so the next keystroke replaces it (Firefox/Chrome
+                // address-bar behaviour). Users reported "hard to
+                // highlight and replace text" — this is the fix.
                 self.focus = Focus::UrlBar;
                 self.url_input = self.nav.current_url().unwrap_or("about:blank").to_string();
                 self.url_cursor = self.url_input.len();
+                self.url_selection_anchor = if self.url_input.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
             }
             return;
         }

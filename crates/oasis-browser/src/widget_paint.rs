@@ -10,6 +10,40 @@ use crate::layout::box_model::{BoxType, LayoutBox, Rect, ReplacedContent};
 use crate::paint;
 use crate::{BrowserWidget, Focus, LoadingState};
 
+/// Truncate `text` to the longest UTF-8 prefix that renders in
+/// `max_width_px` or fewer pixels at the given font size.
+///
+/// Binary search over character boundaries keeps the cost O(log n) in
+/// string length and avoids the "cut through a multi-byte codepoint"
+/// panic that a naive byte slice would hit. Used by the URL bar so
+/// long URLs clip at a legible glyph edge instead of a garbled
+/// half-character.
+fn truncate_to_pixels(text: &str, font_size: u16, max_width_px: i32) -> &str {
+    use oasis_types::backend::bitmap_measure_text;
+    if max_width_px <= 0 {
+        return "";
+    }
+    if bitmap_measure_text(text, font_size) as i32 <= max_width_px {
+        return text;
+    }
+    // Binary-search for the largest char-boundary end offset that fits.
+    let mut lo = 0;
+    let mut hi = text.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let mid = text.floor_char_boundary(mid);
+        if mid == lo {
+            break;
+        }
+        if bitmap_measure_text(&text[..mid], font_size) as i32 <= max_width_px {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    &text[..text.floor_char_boundary(lo)]
+}
+
 impl BrowserWidget {
     // ---------------------------------------------------------------
     // Painting
@@ -573,10 +607,24 @@ impl BrowserWidget {
 
     /// Paint the URL bar and navigation buttons.
     pub fn paint_chrome(&self, backend: &mut dyn SdiBackend) -> Result<()> {
+        use oasis_types::backend::bitmap_measure_text;
+
         let h = self.config.url_bar_height;
         let bw = self.config.button_width;
         let themed = self.config.use_themed_chrome;
         let r: u16 = 4; // Chrome element border radius.
+
+        // Font size for chrome labels. 14 fits comfortably in the 28-px
+        // bar and is tall enough that the caret/selection don't clip.
+        const LABEL_FS: u16 = 14;
+        let label_h = LABEL_FS as i32;
+
+        // Vertical center for label baselines inside the chrome bar.
+        let label_y = self.window_y + (h as i32 - label_h) / 2;
+
+        // Right-edge button layout: star (bookmark) + home.
+        let home_x = self.window_x + self.window_w as i32 - bw as i32;
+        let bookmark_x = home_x - bw as i32;
 
         // Chrome background.
         if themed {
@@ -598,151 +646,153 @@ impl BrowserWidget {
             )?;
         }
 
-        // Back button.
-        let back_color = if self.nav.can_go_back() {
-            self.config.chrome_button_bg
-        } else {
-            self.config.chrome_bg
+        // Helper: paint a chrome button with a centered text label.
+        let paint_button = |backend: &mut dyn SdiBackend,
+                            x: i32,
+                            label: &str,
+                            enabled: bool,
+                            highlight: Option<Color>|
+         -> Result<()> {
+            let fill = if let Some(hi) = highlight {
+                hi
+            } else if enabled {
+                self.config.chrome_button_bg
+            } else {
+                self.config.chrome_bg
+            };
+            if themed {
+                backend.fill_rounded_rect(x, self.window_y + 2, bw, h - 4, r, fill)?;
+            } else {
+                backend.fill_rect(x, self.window_y, bw, h, fill)?;
+            }
+            let label_w = bitmap_measure_text(label, LABEL_FS) as i32;
+            let tx = x + (bw as i32 - label_w) / 2;
+            let text_color = if enabled {
+                self.config.chrome_text
+            } else {
+                // Dim disabled labels so their grey-on-grey doesn't
+                // look like a rendering bug.
+                Color::rgba(
+                    self.config.chrome_text.r,
+                    self.config.chrome_text.g,
+                    self.config.chrome_text.b,
+                    110,
+                )
+            };
+            backend.draw_text(label, tx, label_y, LABEL_FS, text_color)?;
+            Ok(())
         };
-        if themed {
-            backend.fill_rounded_rect(self.window_x, self.window_y, bw, h, r, back_color)?;
-        } else {
-            backend.fill_rect(self.window_x, self.window_y, bw, h, back_color)?;
-        }
-        backend.draw_text(
-            "<",
-            self.window_x + 6,
-            self.window_y + 4,
-            12,
-            self.config.chrome_text,
-        )?;
 
-        // Forward button.
-        let fwd_color = if self.nav.can_go_forward() {
-            self.config.chrome_button_bg
-        } else {
-            self.config.chrome_bg
-        };
-        if themed {
-            backend.fill_rounded_rect(
-                self.window_x + bw as i32,
-                self.window_y,
-                bw,
-                h,
-                r,
-                fwd_color,
-            )?;
-        } else {
-            backend.fill_rect(self.window_x + bw as i32, self.window_y, bw, h, fwd_color)?;
-        }
-        backend.draw_text(
+        // Back / Forward buttons.
+        paint_button(backend, self.window_x, "<", self.nav.can_go_back(), None)?;
+        paint_button(
+            backend,
+            self.window_x + bw as i32,
             ">",
-            self.window_x + bw as i32 + 6,
-            self.window_y + 4,
-            12,
-            self.config.chrome_text,
+            self.nav.can_go_forward(),
+            None,
         )?;
 
         // URL bar.
         let url_x = self.window_x + (bw * 2) as i32;
-        let url_w = self.window_w.saturating_sub(bw * 3);
+        // Reserve room for two buttons on the right (bookmark + home).
+        let url_w = self.window_w.saturating_sub(bw * 4);
 
-        // Use a highlighted background when the URL bar is focused.
         let bar_bg = if self.focus == Focus::UrlBar {
             Color::rgb(60, 60, 80)
         } else {
             self.config.url_bar_bg
         };
         if themed {
-            backend.fill_rounded_rect(
-                url_x,
-                self.window_y + 2,
-                url_w,
-                h.saturating_sub(4),
-                r,
-                bar_bg,
-            )?;
-            // Stroke around URL bar for definition.
+            backend.fill_rounded_rect(url_x, self.window_y + 2, url_w, h - 4, r, bar_bg)?;
             backend.stroke_rounded_rect(
                 url_x,
                 self.window_y + 2,
                 url_w,
-                h.saturating_sub(4),
+                h - 4,
                 r,
                 1,
                 Color::rgba(255, 255, 255, 30),
             )?;
         } else {
-            backend.fill_rect(url_x, self.window_y + 2, url_w, h.saturating_sub(4), bar_bg)?;
+            backend.fill_rect(url_x, self.window_y + 2, url_w, h - 4, bar_bg)?;
         }
 
-        // URL text: show the editing buffer when focused, otherwise
-        // the current navigation URL.
-        let max_chars = (url_w / 8).saturating_sub(1) as usize;
+        // URL text: editing buffer when focused, navigation URL otherwise.
+        //
+        // Cursor and selection are positioned with `bitmap_measure_text`
+        // (the same measurer the paint pass uses for content text),
+        // so the caret lands exactly on the glyph edge regardless of
+        // variable character widths. The old hardcoded 8-px-per-char
+        // was what made the caret feel misaligned.
+        let text_x = url_x + 4;
+        let text_max_w = url_w.saturating_sub(8) as i32;
         if self.focus == Focus::UrlBar {
-            // Show editing buffer with cursor indicator.
-            let display = if self.url_input.len() > max_chars {
-                &self.url_input[..self.url_input.floor_char_boundary(max_chars)]
-            } else {
-                &self.url_input
-            };
-            backend.draw_text(
-                display,
-                url_x + 4,
-                self.window_y + 4,
-                12,
-                self.config.url_bar_text,
-            )?;
+            // Truncate the buffer to fit the visible bar, preserving
+            // UTF-8 boundaries.
+            let display = truncate_to_pixels(&self.url_input, LABEL_FS, text_max_w);
 
-            // Draw cursor line.
-            let cursor_chars = self.url_input[..self.url_cursor].chars().count();
-            let cursor_px = url_x + 4 + cursor_chars as i32 * 8;
-            if cursor_px < url_x + url_w as i32 - 4 {
+            // Selection highlight (behind the text).
+            if let Some((lo, hi)) = self.url_selection_range() {
+                let lo_px = bitmap_measure_text(&self.url_input[..lo], LABEL_FS) as i32;
+                let hi_px = bitmap_measure_text(&self.url_input[..hi], LABEL_FS) as i32;
+                let sel_x = (text_x + lo_px).max(text_x);
+                let sel_end = (text_x + hi_px).min(url_x + url_w as i32 - 4);
+                let sel_w = (sel_end - sel_x).max(0);
+                if sel_w > 0 {
+                    backend.fill_rect(
+                        sel_x,
+                        label_y - 1,
+                        sel_w as u32,
+                        (label_h + 2) as u32,
+                        Color::rgb(66, 133, 244),
+                    )?;
+                }
+            }
+
+            backend.draw_text(display, text_x, label_y, LABEL_FS, self.config.url_bar_text)?;
+
+            // Caret: 2-px wide vertical bar so it's actually visible at
+            // 14-px font height.
+            let cursor_px =
+                bitmap_measure_text(&self.url_input[..self.url_cursor], LABEL_FS) as i32;
+            let caret_x = text_x + cursor_px;
+            if caret_x < url_x + url_w as i32 - 4 {
                 backend.fill_rect(
-                    cursor_px,
-                    self.window_y + 3,
-                    1,
-                    h.saturating_sub(6),
+                    caret_x,
+                    label_y - 1,
+                    2,
+                    (label_h + 2) as u32,
                     self.config.url_bar_text,
                 )?;
             }
         } else {
             let url_text = self.nav.current_url().unwrap_or("about:blank");
-            let display_url = if url_text.len() > max_chars {
-                &url_text[..url_text.floor_char_boundary(max_chars)]
-            } else {
-                url_text
-            };
+            let display_url = truncate_to_pixels(url_text, LABEL_FS, text_max_w);
             backend.draw_text(
                 display_url,
-                url_x + 4,
-                self.window_y + 4,
-                12,
+                text_x,
+                label_y,
+                LABEL_FS,
                 self.config.url_bar_text,
             )?;
         }
 
-        // Home button (rightmost).
-        let home_x = self.window_x + self.window_w as i32 - bw as i32;
-        if themed {
-            backend.fill_rounded_rect(
-                home_x,
-                self.window_y + 2,
-                bw,
-                h.saturating_sub(4),
-                r,
-                self.config.chrome_button_bg,
-            )?;
+        // Bookmark button: highlighted when the current page is
+        // bookmarked. A click navigates to `vfs://bookmarks` (the saved
+        // list). We label it "B" rather than a unicode star because the
+        // bitmap font in use only reliably covers ASCII — ★/☆ render
+        // as tofu on several of our backends.
+        let is_bookmarked = self.nav.is_bookmarked();
+        let bookmark_highlight = if is_bookmarked {
+            Some(Color::rgb(231, 176, 43))
         } else {
-            backend.fill_rect(home_x, self.window_y, bw, h, self.config.chrome_button_bg)?;
-        }
-        backend.draw_text(
-            "H",
-            home_x + 6,
-            self.window_y + 4,
-            12,
-            self.config.chrome_text,
-        )?;
+            None
+        };
+        paint_button(backend, bookmark_x, "B", true, bookmark_highlight)?;
+
+        // Home button.
+        paint_button(backend, home_x, "H", true, None)?;
 
         Ok(())
     }

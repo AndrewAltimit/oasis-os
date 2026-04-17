@@ -274,6 +274,16 @@ pub struct BrowserWidget {
     /// Cursor position within `url_input` (byte offset).
     url_cursor: usize,
 
+    /// Selection anchor within `url_input` (byte offset). When `Some`,
+    /// the range between `url_selection_anchor` and `url_cursor` is
+    /// selected and drawn highlighted; typing any character replaces
+    /// the selection. Entering URL-bar edit mode seeds this with
+    /// `Some(0)` + cursor at end so a single click selects the entire
+    /// URL, matching Firefox/Chrome behaviour — that's the "click,
+    /// then type replaces" flow the previous text-at-end cursor was
+    /// missing.
+    url_selection_anchor: Option<usize>,
+
     /// Whether reader mode is active.
     reader_mode: bool,
 
@@ -578,6 +588,7 @@ impl BrowserWidget {
             focus: Focus::Content,
             url_input: String::new(),
             url_cursor: 0,
+            url_selection_anchor: None,
             reader_mode: false,
             reader_html: None,
             window_x: 0,
