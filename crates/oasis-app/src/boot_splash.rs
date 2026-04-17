@@ -362,86 +362,93 @@ pub fn run_boot_splash(
     // Pre-compute GPU textures for vignette and logo glow.
     let textures = SplashTextures::create(backend, screen_w, screen_h, scale);
 
-    loop {
-        let frame_start = std::time::Instant::now();
-        let elapsed = start.elapsed().as_secs_f32();
+    // Run the splash loop inside a closure so that any `?`-propagated
+    // backend error still lets us release the GPU textures on the way
+    // out — otherwise early-returns would leak them.
+    let result: Result<()> = (|| {
+        loop {
+            let frame_start = std::time::Instant::now();
+            let elapsed = start.elapsed().as_secs_f32();
 
-        // Allow skipping with any button press.
-        let events = backend.poll_events();
-        if events
-            .iter()
-            .any(|e| matches!(e, oasis_core::input::InputEvent::ButtonPress(_)))
-        {
-            break;
+            // Allow skipping with any button press.
+            let events = backend.poll_events();
+            if events
+                .iter()
+                .any(|e| matches!(e, oasis_core::input::InputEvent::ButtonPress(_)))
+            {
+                break;
+            }
+
+            if elapsed >= SPLASH_DURATION_S {
+                break;
+            }
+
+            backend.clear(Color::rgb(5, 5, 5))?;
+
+            // Phase 1: BIOS screen (0.0 - 3.6s)
+            let bios_opacity = if elapsed < 3.6 { 1.0 } else { 0.0 };
+            if bios_opacity > 0.0 {
+                paint_bios_screen(backend, elapsed, sx, sy, scale)?;
+            }
+
+            // Phase transition: CRT flicker (3.4 - 3.9s)
+            if (3.4..3.9).contains(&elapsed) {
+                let t = (elapsed - 3.4) / 0.5;
+                let alpha = if t < 0.1 {
+                    (t / 0.1 * 255.0) as u8
+                } else if t < 0.6 {
+                    255
+                } else {
+                    ((1.0 - (t - 0.6) / 0.4) * 255.0).max(0.0) as u8
+                };
+                let flicker_color = if t < 0.3 {
+                    Color::rgba(255, 255, 255, alpha)
+                } else if t < 0.6 {
+                    Color::rgba(191, 0, 255, alpha)
+                } else {
+                    Color::rgba(255, 255, 255, alpha)
+                };
+                backend.fill_rect(0, 0, screen_w, screen_h, flicker_color)?;
+            }
+
+            // Phase 2: Splash screen (3.5s+)
+            if elapsed >= 3.5 {
+                paint_splash_screen(
+                    backend, elapsed, screen_w, screen_h, sx, sy, scale, &textures,
+                )?;
+            }
+
+            backend.swap_buffers()?;
+
+            // Frame rate limiting.
+            let frame_time = frame_start.elapsed().as_millis();
+            if frame_time < MIN_FRAME_MS {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    (MIN_FRAME_MS - frame_time) as u64,
+                ));
+            }
         }
 
-        if elapsed >= SPLASH_DURATION_S {
-            break;
+        // Fade out to black over ~0.3s.
+        let fade_start = std::time::Instant::now();
+        while fade_start.elapsed().as_secs_f32() < 0.3 {
+            let t = fade_start.elapsed().as_secs_f32() / 0.3;
+            let alpha = (t * 255.0).min(255.0) as u8;
+            backend.clear(Color::rgb(0, 0, 0))?;
+            backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
+            backend.swap_buffers()?;
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
-
-        backend.clear(Color::rgb(5, 5, 5))?;
-
-        // Phase 1: BIOS screen (0.0 - 3.6s)
-        let bios_opacity = if elapsed < 3.6 { 1.0 } else { 0.0 };
-        if bios_opacity > 0.0 {
-            paint_bios_screen(backend, elapsed, sx, sy, scale)?;
-        }
-
-        // Phase transition: CRT flicker (3.4 - 3.9s)
-        if (3.4..3.9).contains(&elapsed) {
-            let t = (elapsed - 3.4) / 0.5;
-            let alpha = if t < 0.1 {
-                (t / 0.1 * 255.0) as u8
-            } else if t < 0.6 {
-                255
-            } else {
-                ((1.0 - (t - 0.6) / 0.4) * 255.0).max(0.0) as u8
-            };
-            let flicker_color = if t < 0.3 {
-                Color::rgba(255, 255, 255, alpha)
-            } else if t < 0.6 {
-                Color::rgba(191, 0, 255, alpha)
-            } else {
-                Color::rgba(255, 255, 255, alpha)
-            };
-            backend.fill_rect(0, 0, screen_w, screen_h, flicker_color)?;
-        }
-
-        // Phase 2: Splash screen (3.5s+)
-        if elapsed >= 3.5 {
-            paint_splash_screen(
-                backend, elapsed, screen_w, screen_h, sx, sy, scale, &textures,
-            )?;
-        }
-
-        backend.swap_buffers()?;
-
-        // Frame rate limiting.
-        let frame_time = frame_start.elapsed().as_millis();
-        if frame_time < MIN_FRAME_MS {
-            std::thread::sleep(std::time::Duration::from_millis(
-                (MIN_FRAME_MS - frame_time) as u64,
-            ));
-        }
-    }
-
-    // Fade out to black over ~0.3s.
-    let fade_start = std::time::Instant::now();
-    while fade_start.elapsed().as_secs_f32() < 0.3 {
-        let t = fade_start.elapsed().as_secs_f32() / 0.3;
-        let alpha = (t * 255.0).min(255.0) as u8;
         backend.clear(Color::rgb(0, 0, 0))?;
-        backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
         backend.swap_buffers()?;
-        std::thread::sleep(std::time::Duration::from_millis(16));
-    }
-    backend.clear(Color::rgb(0, 0, 0))?;
-    backend.swap_buffers()?;
 
-    // Release GPU textures.
+        Ok(())
+    })();
+
+    // Release GPU textures regardless of how the splash loop exited.
     textures.destroy(backend);
 
-    Ok(())
+    result
 }
 
 // -----------------------------------------------------------------------
@@ -465,7 +472,7 @@ fn paint_bios_screen(
         ("INITIALIZING VIRTUAL FILE SYSTEM... OK", 1.6),
         ("MOUNTING BOOT DRIVE /DEV/HDA1... OK", 2.1),
         ("LOADING FRAGMENT... OK", 2.6),
-        ("STARTING DISPLAY MANAGER_", 3.0),
+        ("STARTING DISPLAY MANAGER", 3.0),
     ];
 
     let x = (40.0 * sx) as i32;

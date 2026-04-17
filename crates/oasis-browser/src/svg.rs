@@ -463,13 +463,13 @@ fn merge_inherited_with_styles(
     styles: &[Option<crate::css::values::ComputedStyle>],
 ) -> InheritedAttrs {
     let mut merged = merge_inherited(elem, parent);
-    // Override opacity from ComputedStyle when CSS animations have set it.
+    // Override opacity from ComputedStyle when available. The computed
+    // value carries the cascade result and any active CSS animation
+    // override, including fade-ins that end at `opacity: 1.0`. Applying
+    // conditionally on `style.opacity < 1.0` dropped the final keyframe
+    // of fade-in animations.
     if let Some(Some(style)) = styles.get(node_id) {
-        // CSS animation may set opacity on this node — use the
-        // computed value which includes animation overrides.
-        if style.opacity < 1.0 || elem.get_attribute("opacity").is_some() {
-            merged.opacity = Some(style.opacity);
-        }
+        merged.opacity = Some(style.opacity);
     }
     merged
 }
