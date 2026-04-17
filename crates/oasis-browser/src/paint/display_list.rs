@@ -544,6 +544,18 @@ pub enum DisplayItem {
         /// Source DOM node for hover color patching.
         node_id: Option<usize>,
     },
+    /// Filled quadrilateral defined by four corners (screen-space).
+    ///
+    /// Used for 3D-transformed backgrounds where perspective projection
+    /// produces a true trapezoid instead of an axis-aligned rectangle.
+    /// The four points are in clockwise winding order: top-left,
+    /// top-right, bottom-right, bottom-left.
+    FillPolygon {
+        points: [(i32, i32); 4],
+        color: Color,
+        /// Source DOM node for hover color patching.
+        node_id: Option<usize>,
+    },
     /// Stroked rectangle outline.
     StrokeRoundedRect {
         x: i32,
@@ -761,6 +773,18 @@ impl DisplayItem {
                 width: *w as f32,
                 height: *h as f32,
             }),
+            DisplayItem::FillPolygon { points, .. } => {
+                let min_x = points.iter().map(|p| p.0).min().unwrap_or(0);
+                let min_y = points.iter().map(|p| p.1).min().unwrap_or(0);
+                let max_x = points.iter().map(|p| p.0).max().unwrap_or(0);
+                let max_y = points.iter().map(|p| p.1).max().unwrap_or(0);
+                Some(Rect {
+                    x: min_x as f32,
+                    y: min_y as f32,
+                    width: (max_x - min_x) as f32,
+                    height: (max_y - min_y) as f32,
+                })
+            },
             DisplayItem::DrawText {
                 x,
                 y,
@@ -895,7 +919,8 @@ impl DisplayList {
         for item in &mut self.items {
             match item {
                 DisplayItem::FillRect { color, node_id, .. }
-                | DisplayItem::FillRoundedRect { color, node_id, .. } => {
+                | DisplayItem::FillRoundedRect { color, node_id, .. }
+                | DisplayItem::FillPolygon { color, node_id, .. } => {
                     if *node_id == Some(target_node_id) {
                         *color = bg;
                         count += 1;
@@ -1409,21 +1434,16 @@ impl DisplayList {
                             compositor_dx = layer.saved_compositor_dx;
                             compositor_dy = layer.saved_compositor_dy;
                             let unbind_res = backend.unbind_render_target();
-                            // Filter pass: if the layer has any
-                            // filters AND the backend supports pixel
-                            // readback, read the target, apply the
-                            // filter chain on CPU, upload as a
-                            // temporary texture, and blit it at the
-                            // destination rect. The blit path drops
-                            // the CSS blend mode (becomes Normal) but
-                            // keeps opacity — documented degradation
-                            // until a read-modify-write path lands on
-                            // the render target itself.
-                            // Any effect that must inspect layer pixels
-                            // before composite funnels through a single
-                            // CPU readback path. Currently that means
-                            // `filter:` and `mask-*`. Both require
-                            // `supports_render_target_readback`.
+                            // Filter/mask CPU pass: if the layer has
+                            // filters or masks AND the backend supports
+                            // pixel readback, read the layer target,
+                            // apply the chain on CPU, then composite
+                            // back with proper blend mode support.
+                            //
+                            // Non-Normal blend modes are composited on
+                            // CPU by reading the destination pixels and
+                            // applying the W3C blend formula before
+                            // upload — no longer silently dropped.
                             let has_filter = !layer.filters.is_empty();
                             let has_mask = layer.mask.is_some();
                             let run_cpu_pass = (has_filter || has_mask)
@@ -1444,28 +1464,82 @@ impl DisplayList {
                                         if let Some(mask) = layer.mask.as_ref() {
                                             apply_mask(&mut buf, layer.dst_w, layer.dst_h, mask);
                                         }
-                                        // Pre-multiply opacity into
-                                        // alpha so a plain alpha-over
-                                        // blit gives the correct result.
+                                        // Pre-multiply opacity into alpha.
                                         if (layer.opacity - 1.0).abs() > f32::EPSILON {
                                             let f = layer.opacity.clamp(0.0, 1.0);
                                             for chunk in buf.chunks_exact_mut(4) {
                                                 chunk[3] = ((chunk[3] as f32) * f).round() as u8;
                                             }
                                         }
-                                        if let Ok(tex) =
-                                            backend.load_texture(layer.dst_w, layer.dst_h, &buf)
-                                        {
-                                            let _ = backend.blit(
-                                                tex,
+                                        // Non-Normal blend: read destination
+                                        // pixels and composite on CPU so the
+                                        // blend mode is preserved through the
+                                        // filter/mask path.
+                                        if !layer.blend.is_normal() {
+                                            if let Ok(dst_pixels) = backend.read_pixels(
                                                 layer.dst_x,
                                                 layer.dst_y,
                                                 layer.dst_w,
                                                 layer.dst_h,
-                                            );
-                                            let _ = backend.destroy_texture(tex);
+                                            ) {
+                                                let mut blended = dst_pixels;
+                                                crate::paint::filter_chain::cpu_blend_composite(
+                                                    &buf,
+                                                    &mut blended,
+                                                    layer.dst_w,
+                                                    layer.dst_h,
+                                                    layer.blend,
+                                                );
+                                                if let Ok(tex) = backend.load_texture(
+                                                    layer.dst_w,
+                                                    layer.dst_h,
+                                                    &blended,
+                                                ) {
+                                                    let _ = backend.blit(
+                                                        tex,
+                                                        layer.dst_x,
+                                                        layer.dst_y,
+                                                        layer.dst_w,
+                                                        layer.dst_h,
+                                                    );
+                                                    let _ = backend.destroy_texture(tex);
+                                                }
+                                                Ok(())
+                                            } else {
+                                                // read_pixels failed — fall
+                                                // back to Normal blit.
+                                                if let Ok(tex) = backend.load_texture(
+                                                    layer.dst_w,
+                                                    layer.dst_h,
+                                                    &buf,
+                                                ) {
+                                                    let _ = backend.blit(
+                                                        tex,
+                                                        layer.dst_x,
+                                                        layer.dst_y,
+                                                        layer.dst_w,
+                                                        layer.dst_h,
+                                                    );
+                                                    let _ = backend.destroy_texture(tex);
+                                                }
+                                                Ok(())
+                                            }
+                                        } else {
+                                            // Normal blend — plain blit.
+                                            if let Ok(tex) =
+                                                backend.load_texture(layer.dst_w, layer.dst_h, &buf)
+                                            {
+                                                let _ = backend.blit(
+                                                    tex,
+                                                    layer.dst_x,
+                                                    layer.dst_y,
+                                                    layer.dst_w,
+                                                    layer.dst_h,
+                                                );
+                                                let _ = backend.destroy_texture(tex);
+                                            }
+                                            Ok(())
                                         }
-                                        Ok(())
                                     } else {
                                         backend.composite_render_target(
                                             id,
@@ -1646,6 +1720,16 @@ impl DisplayList {
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
+                },
+                DisplayItem::FillPolygon { points, color, .. } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let shifted = [
+                        (points[0].0 + scroll_dx, points[0].1 + eff_dy),
+                        (points[1].0 + scroll_dx, points[1].1 + eff_dy),
+                        (points[2].0 + scroll_dx, points[2].1 + eff_dy),
+                        (points[3].0 + scroll_dx, points[3].1 + eff_dy),
+                    ];
+                    backend.fill_polygon(&shifted, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,
@@ -2054,6 +2138,16 @@ impl DisplayList {
                 } => {
                     let c = apply_layer_opacity(*color, layer_opacity);
                     backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
+                },
+                DisplayItem::FillPolygon { points, color, .. } => {
+                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let shifted = [
+                        (points[0].0 + scroll_dx, points[0].1 + eff_dy),
+                        (points[1].0 + scroll_dx, points[1].1 + eff_dy),
+                        (points[2].0 + scroll_dx, points[2].1 + eff_dy),
+                        (points[3].0 + scroll_dx, points[3].1 + eff_dy),
+                    ];
+                    backend.fill_polygon(&shifted, c)?;
                 },
                 DisplayItem::StrokeRoundedRect {
                     x,

@@ -72,6 +72,16 @@ so you can `git show` for specifics.
   z-index opt-outs, template scope isolation for table/select,
   RTL/bidi + responsive grid corpus fixtures, triage `--parallel`
   flag, benchmark CI gate.
+- **Follow-up batch 12** (`feat/browser-backlog-batch-12`). CPU
+  blend-mode compositing for filter/mask pop path (all 16 CSS blend
+  modes), `FillPolygon` display list item with 4-corner perspective
+  projection for 3D-transformed backgrounds in the recording path,
+  PSP bitmap font proportional advance fix (space-collapsing bug).
+  SVG `<defs>` pipeline: `<linearGradient>`, `<radialGradient>`,
+  `<pattern>` definitions with `fill="url(#id)"` resolution,
+  presentation attribute inheritance from `<g>` groups, `<text>`
+  with `text-anchor`/`letter-spacing`/`font-weight`/`opacity`,
+  `<tspan>` children, and gradient/pattern fill rendering.
 
 ---
 
@@ -94,25 +104,32 @@ is small enough to handle as a drive-by on a related PR.
 
 ### Compositor / mask
 
-- **Real GPU read-modify-write for layer filters.** The filter
-  + mask pop path drops the CSS blend mode (becomes `Normal`)
-  because it reads back, composites via a plain alpha-over blit,
-  then throws the texture away. A GPU-side path would keep blend
-  mode + filter + opacity composable.
+- ~~**Real GPU read-modify-write for layer filters.**~~ **Shipped
+  (`feat/browser-backlog-batch-12`).** The filter + mask pop path
+  now reads destination pixels and applies all 16 CSS blend modes
+  on CPU via `cpu_blend_composite` in `filter_chain.rs`. Non-Normal
+  blend modes are fully preserved through the filter/mask readback
+  path. A future GPU-side path could still replace this for
+  performance, but correctness is no longer degraded.
 
 ### 3D transforms
 
-- **Real perspective rendering on GPU backends.** PSP GU has
-  `sceGumPerspective` for true perspective projection; the
-  software path uses a 3-corner-fit affine.
+- ~~**Real perspective rendering on GPU backends.**~~ **Partially
+  shipped (`feat/browser-backlog-batch-12`).** The display list
+  recording path now computes and propagates the full 4x4
+  `ambient_screen_matrix` through 3D-transformed subtrees and
+  emits `FillPolygon` items with true 4-corner perspective
+  projection for backgrounds. PSP GU `sceGumPerspective` hardware
+  path remains a future follow-up.
 
 ### PSP
 
-- **Space-collapsing in JS-mutated text nodes.** `textContent`
-  containing ASCII spaces renders without visible spaces on PSP
-  only. Likely a `glyph_advance(' ')` returning 0 in the PSP
-  bitmap font table (`oasis-backend-psp/src/font.rs`) or the text
-  layout step collapsing whitespace after JS-triggered relayout.
+- ~~**Space-collapsing in JS-mutated text nodes.**~~ **Shipped
+  (`feat/browser-backlog-batch-12`).** Root cause: PSP
+  `draw_text_bitmap` used constant `GLYPH_WIDTH = 8` for cursor
+  advance instead of proportional `glyph_advance_scaled()`. Fixed
+  by switching to per-character proportional advances from
+  `oasis_types::bitmap_font`, matching `bitmap_measure_text`.
 
 ---
 

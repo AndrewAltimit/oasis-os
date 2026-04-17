@@ -58,6 +58,20 @@ impl BrowserWidget {
             }
         }
 
+        // Apply animation overrides to styles. The animation engine
+        // interpolates numeric keyframe values each frame — feed them
+        // into ComputedStyle so layout and paint see the animated state.
+        if anim_active {
+            for (nid, _) in self.animation_engine.active_node_properties() {
+                let overrides = self.animation_engine.get_overrides(nid);
+                for (prop, val) in &overrides {
+                    if let Some(Some(style)) = self.styles.get_mut(nid) {
+                        apply_transition_value(style, prop, *val);
+                    }
+                }
+            }
+        }
+
         if anim_active || trans_active {
             // Check if all animated properties are visual-only (color changes
             // that don't affect layout). If so, use dirty-rect repainting

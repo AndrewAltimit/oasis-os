@@ -20,6 +20,7 @@ pub use oasis_types::error;
 pub use oasis_types::input;
 pub use oasis_types::tls;
 
+pub use oasis_types::bitmap_font;
 pub use oasis_types::color;
 pub use oasis_types::geometry;
 #[doc(hidden)]

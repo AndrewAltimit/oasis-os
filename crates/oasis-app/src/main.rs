@@ -7,6 +7,7 @@
 //! Press F1 to toggle terminal, F2 to toggle on-screen keyboard, Escape to quit.
 
 mod app_state;
+mod boot_splash;
 mod commands;
 mod input;
 mod launch;
@@ -91,6 +92,15 @@ fn main() -> Result<()> {
     // Show a black frame immediately so the window isn't frozen during init.
     backend.clear(Color::rgb(0, 0, 0))?;
     backend.swap_buffers()?;
+
+    // Boot splash screen — animated BIOS + splash logo sequence.
+    // Skip with OASIS_SKIP_SPLASH=1 env var for fast development iteration.
+    if std::env::var("OASIS_SKIP_SPLASH").as_deref() != Ok("1")
+        && let Err(e) =
+            boot_splash::run_boot_splash(&mut backend, config.screen_width, config.screen_height)
+    {
+        log::warn!("Boot splash failed: {e}");
+    }
 
     // Attempt to initialize software shader bridge for background effects.
     let mut shader_bridge = oasis_backend_sdl::shader_bridge::SdlShaderBridge::new(
