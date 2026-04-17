@@ -192,7 +192,7 @@ fn generate_logo_glow_texture(
     // Left bracket
     draw_line(315.0, 290.0, 275.0, 290.0);
     draw_line(275.0, 290.0, 275.0, 445.0);
-    draw_line(275.0, 445.0, 420.0, 445.0);
+    draw_line(275.0, 445.0, 315.0, 445.0);
     // O (angular rectangle)
     draw_line(410.0, 290.0, 490.0, 290.0);
     draw_line(490.0, 290.0, 490.0, 410.0);
@@ -218,7 +218,7 @@ fn generate_logo_glow_texture(
     // Right bracket
     draw_line(965.0, 290.0, 1005.0, 290.0);
     draw_line(1005.0, 290.0, 1005.0, 445.0);
-    draw_line(1005.0, 445.0, 860.0, 445.0);
+    draw_line(1005.0, 445.0, 965.0, 445.0);
 
     // Apply 3-pass separable box blur (approximates Gaussian stdDeviation≈4).
     let blur_radius = (4.0 * scale).max(2.0) as i32;
@@ -723,10 +723,10 @@ fn paint_logo_scaled(
         Ok(())
     };
 
-    // Left bracket: [ (with extended bottom leg)
+    // Left bracket: [
     draw(backend, 315.0, 290.0, 275.0, 290.0)?;
     draw(backend, 275.0, 290.0, 275.0, 445.0)?;
-    draw(backend, 275.0, 445.0, 420.0, 445.0)?;
+    draw(backend, 275.0, 445.0, 315.0, 445.0)?;
     // O (angular rectangle outline)
     draw(backend, 410.0, 290.0, 490.0, 290.0)?;
     draw(backend, 490.0, 290.0, 490.0, 410.0)?;
@@ -749,10 +749,10 @@ fn paint_logo_scaled(
     draw(backend, 770.0, 350.0, 850.0, 350.0)?; // middle
     draw(backend, 850.0, 350.0, 850.0, 410.0)?; // lower-right
     draw(backend, 770.0, 410.0, 850.0, 410.0)?; // bottom
-    // Right bracket: ] (with extended bottom leg)
+    // Right bracket: ]
     draw(backend, 965.0, 290.0, 1005.0, 290.0)?;
     draw(backend, 1005.0, 290.0, 1005.0, 445.0)?;
-    draw(backend, 1005.0, 445.0, 860.0, 445.0)?;
+    draw(backend, 1005.0, 445.0, 965.0, 445.0)?;
 
     Ok(())
 }
