@@ -86,9 +86,14 @@ impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
             features: BrowserFeatures::default(),
-            url_bar_height: 20,
+            // 28 px tall chrome gives the URL bar a hit target big enough
+            // to click reliably and leaves vertical room for a properly
+            // centered 14-px caret — the old 20 px bar was too cramped to
+            // edit in, which is what drove the "cursor feels misaligned"
+            // complaint.
+            url_bar_height: 28,
             status_bar_height: 14,
-            button_width: 20,
+            button_width: 28,
             chrome_bg: Color::rgb(48, 48, 48),
             chrome_text: Color::rgb(200, 200, 200),
             chrome_button_bg: Color::rgb(64, 64, 64),
@@ -176,9 +181,9 @@ mod tests {
         assert!(!cfg.features.sandbox_only);
         assert_eq!(cfg.features.home_url, "vfs://sites/home/index.html");
         assert_eq!(cfg.features.max_cache_mb, 8);
-        assert_eq!(cfg.url_bar_height, 20);
+        assert_eq!(cfg.url_bar_height, 28);
         assert_eq!(cfg.status_bar_height, 14);
-        assert_eq!(cfg.button_width, 20);
+        assert_eq!(cfg.button_width, 28);
         assert!((cfg.default_font_size - 8.0).abs() < f32::EPSILON);
         assert_eq!(cfg.max_redirects, 5);
         assert_eq!(cfg.max_image_dimension, 480);
@@ -197,8 +202,8 @@ mod tests {
     #[test]
     fn content_height_calculation() {
         let cfg = BrowserConfig::default();
-        // url_bar_height=20, status_bar_height=14 => 34 total chrome
-        assert_eq!(cfg.content_height(272), 272 - 20 - 14);
+        // url_bar_height=28, status_bar_height=14 => 42 total chrome
+        assert_eq!(cfg.content_height(272), 272 - 28 - 14);
         // Window smaller than chrome: saturating_sub prevents underflow.
         assert_eq!(cfg.content_height(10), 0);
     }

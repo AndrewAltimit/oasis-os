@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The Rust Programming Language &bull; r/rust</title>
+<style>
+/* Faithful subset of old.reddit.com's listing CSS (reddit.ETA_etA2z5U.css),
+   reduced to what applies to the elements in this fixture. The real sheet
+   is ~319 KB — this captures the selectors actually matched by a frontpage
+   subreddit listing. */
+
+html, body { margin: 0; padding: 0; }
+body {
+  background: #dae0e6;
+  color: #222222;
+  font-family: Verdana, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.3;
+}
+a { color: #0079d3; text-decoration: none; }
+a:visited { color: #551a8b; }
+a:hover { text-decoration: underline; }
+
+/* ===== Header bar ===== */
+#header {
+  background: #cee3f8;
+  border-bottom: 1px solid #5f99cf;
+  color: #333;
+  font-size: x-small;
+  margin-bottom: 5px;
+  position: relative;
+}
+#sr-header-area {
+  background: #f0f0f0;
+  border-bottom: 1px solid #c7c7c7;
+  color: #333333;
+  font-size: x-small;
+  line-height: 1.3em;
+  padding: 3px 5px 3px 5px;
+  height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#sr-header-area .width-clip {
+  overflow: hidden;
+  padding-right: 80px;
+}
+#sr-header-area .dropdown.srdrop {
+  display: inline-block;
+  padding-right: 16px;
+  font-weight: bold;
+}
+#sr-header-area .sr-list {
+  display: inline-block;
+}
+.flat-list.sr-bar {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.flat-list.sr-bar li {
+  display: inline;
+  margin: 0;
+  padding: 0;
+}
+.flat-list.sr-bar li .separator {
+  color: #888;
+  padding: 0 2px;
+}
+#sr-more-link {
+  position: absolute;
+  right: 5px;
+  top: 3px;
+  background: #f0f0f0;
+  padding: 0 4px;
+  font-weight: bold;
+}
+
+#header-bottom-left {
+  padding: 38px 0 0 10px;
+  position: relative;
+}
+#header-img {
+  vertical-align: bottom;
+}
+.pagename {
+  font-size: 1.8em;
+  font-weight: bold;
+  letter-spacing: -1px;
+  margin: 0 4px;
+}
+.pagename a {
+  color: #000;
+  text-decoration: none;
+}
+.tabmenu {
+  display: inline;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tabmenu li {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 0;
+}
+.tabmenu li a {
+  background: #eff7ff;
+  border: 1px solid #5f99cf;
+  border-bottom: 0;
+  color: #369;
+  display: inline-block;
+  padding: 2px 6px;
+  font-weight: normal;
+  text-decoration: none;
+}
+.tabmenu li.selected a {
+  background: #fff;
+  color: #ff4500;
+  font-weight: bold;
+}
+
+#header-bottom-right {
+  background: #cee3f8;
+  bottom: 0;
+  color: #369;
+  padding: 0 5px 1px 5px;
+  position: absolute;
+  right: 0;
+  font-size: x-small;
+}
+#header-bottom-right .user {
+  color: #888;
+}
+
+/* ===== Side panel (right sidebar) ===== */
+.side {
+  background: transparent;
+  color: #000;
+  float: right;
+  margin: 0 5px 0 10px;
+  width: 300px;
+  font-size: small;
+}
+.side .spacer {
+  margin: 0 0 15px 0;
+}
+.sidebox.submit .morelink {
+  background: #f0f0f0;
+  border: 1px solid #c7c7c7;
+  border-radius: 3px;
+  font-size: 14px;
+  margin: 0;
+  padding: 3px 10px;
+  position: relative;
+  text-align: center;
+}
+.sidebox.submit .morelink a {
+  color: #369;
+  font-weight: bold;
+  text-decoration: none;
+  display: block;
+}
+.titlebox {
+  background: #fff;
+  padding: 10px;
+  border: 1px solid #c7c7c7;
+}
+.titlebox h1 {
+  font-size: 14px;
+  margin: 0 0 5px 0;
+  font-weight: bold;
+}
+.titlebox .users-online {
+  color: #888;
+  font-size: 11px;
+}
+.titlebox .subscribers {
+  color: #888;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+.fancy-toggle-button {
+  display: inline-block;
+  margin-bottom: 5px;
+}
+.fancy-toggle-button a.active {
+  background: #ff4500;
+  border: 1px solid #ff4500;
+  color: #fff;
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 2px;
+  font-weight: bold;
+  text-decoration: none;
+}
+.sidecontentbox {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  margin-bottom: 10px;
+  padding: 5px 10px;
+}
+.sidecontentbox .title h1 {
+  font-size: 11px;
+  font-weight: bold;
+  color: #888;
+  margin: 0 0 5px 0;
+  text-transform: uppercase;
+}
+
+#search input[type="text"] {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  padding: 3px 6px;
+  width: 280px;
+  font-size: 12px;
+}
+
+/* ===== Main content / listing ===== */
+.content {
+  background: transparent;
+  margin: 0 325px 0 10px;
+  padding: 0 5px 0 0;
+}
+
+#siteTable {
+  margin-right: 5px;
+}
+
+/* Each post row */
+.thing {
+  padding: 5px 0 2px 4px;
+  overflow: hidden;
+  margin-bottom: 0;
+  border-bottom: 1px dotted #ddd;
+}
+.thing.stickied {
+  background: #f5fdfd;
+}
+.thing.even {
+  background: transparent;
+}
+
+.thing .rank {
+  color: #c6c6c6;
+  font-family: arial;
+  font-size: 110%;
+  font-weight: bold;
+  margin-right: 5px;
+  margin-top: 12px;
+  min-width: 2.2ex;
+  text-align: right;
+  float: left;
+}
+
+.thing .midcol {
+  float: left;
+  margin: 0 7px 0 5px;
+  overflow: hidden;
+  padding-top: 5px;
+  width: 4.1ex;
+  text-align: center;
+}
+.thing .arrow {
+  background: #c6c6c6;
+  border-radius: 2px;
+  cursor: pointer;
+  display: block;
+  height: 14px;
+  margin: 0 auto;
+  width: 15px;
+}
+.thing .arrow.up {
+  background: #d7dadc;
+}
+.thing .arrow.upmod {
+  background: #ff4500;
+}
+.thing .arrow.down {
+  background: #d7dadc;
+  margin-top: 2px;
+}
+.thing .arrow.downmod {
+  background: #7193ff;
+}
+.thing .score {
+  color: #c6c6c6;
+  font-weight: bold;
+  font-size: x-small;
+  text-align: center;
+  padding: 0;
+}
+.thing .score.likes { color: #ff4500; }
+.thing .score.dislikes { color: #7193ff; }
+
+.thing .thumbnail {
+  background: #f0f0f0;
+  border: 1px solid #e0e0e0;
+  float: left;
+  margin: 2px 5px 2px 0;
+  overflow: hidden;
+  width: 70px;
+  height: 52px;
+  text-align: center;
+}
+.thing .thumbnail.self {
+  background: #d7dadc url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='70' height='52'><text x='50%' y='60%' fill='%23555' font-size='18' text-anchor='middle'>T</text></svg>") center no-repeat;
+}
+
+.thing .entry {
+  overflow: hidden;
+  margin: 0 0 0 5px;
+  padding: 0;
+}
+
+.thing .entry .title {
+  font-size: medium;
+  margin: 0 0 1px 0;
+  line-height: 1.2;
+}
+.thing .entry .title a.title {
+  color: #222;
+  font-weight: normal;
+  padding: 0;
+  text-decoration: none;
+}
+.thing .entry .title a.title:visited {
+  color: #9b9b9b;
+}
+.thing .entry .title .domain {
+  color: #888;
+  font-size: x-small;
+  font-weight: normal;
+  margin-left: 3px;
+}
+.thing .entry .title .domain a {
+  color: #888;
+}
+.thing .entry .linkflairlabel {
+  background: #eff7ff;
+  border: 1px solid #5f99cf;
+  color: #369;
+  font-size: x-small;
+  margin-left: 4px;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.thing .tagline {
+  color: #888;
+  font-size: x-small;
+  margin-top: 2px;
+}
+.thing .tagline .author {
+  color: #369;
+  font-weight: bold;
+}
+.thing .tagline .subreddit {
+  color: #000;
+  font-weight: bold;
+}
+.thing .tagline time {
+  color: #888;
+}
+
+.thing .entry .buttons {
+  list-style: none;
+  margin: 2px 0 0 -3px;
+  padding: 0;
+}
+.thing .entry .buttons li {
+  display: inline-block;
+  margin: 0;
+  padding: 2px 3px;
+  color: #888;
+  font-size: x-small;
+  font-weight: bold;
+}
+.thing .entry .buttons li a {
+  color: #888;
+  text-decoration: none;
+}
+.thing .entry .buttons li a:hover {
+  text-decoration: underline;
+}
+.thing .entry .buttons li.first a {
+  color: #369;
+}
+
+.nextprev {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  color: #369;
+  font-size: medium;
+  font-weight: bold;
+  margin: 10px 5px 10px 0;
+  padding: 10px;
+  text-align: center;
+}
+.nextprev a {
+  padding: 2px 8px;
+  color: #369;
+}
+
+.menuarea {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  color: #888;
+  font-size: x-small;
+  margin: 0 5px 5px 0;
+  padding: 5px 10px;
+}
+.menuarea .dropdown {
+  display: inline-block;
+  margin-right: 6px;
+}
+.menuarea .dropdown .selected.title {
+  color: #369;
+  font-weight: bold;
+  text-decoration: underline dotted;
+  padding: 0 2px;
+}
+
+/* ===== Footer ===== */
+.footer-parent {
+  background: transparent;
+  color: #888;
+  font-size: x-small;
+  margin-top: 20px;
+  padding: 10px;
+  text-align: center;
+}
+.footer-parent a { color: #888; }
+</style>
+</head>
+<body class="listing-page hot-page">
+
+<div id="header" role="banner">
+  <div id="sr-header-area">
+    <div class="width-clip">
+      <div class="dropdown srdrop"><span class="selected title">my subreddits</span></div>
+      <div class="sr-list">
+        <ul class="flat-list sr-bar">
+          <li><a href="#" class="choice">popular</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">all</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">users</a></li>
+        </ul>
+        <span class="separator">&nbsp;|&nbsp;</span>
+        <ul class="flat-list sr-bar">
+          <li><a href="#" class="choice">AskReddit</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">pics</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">funny</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">worldnews</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">news</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">todayilearned</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">science</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">videos</a></li>
+          <li><span class="separator">-</span><a href="#" class="choice">programming</a></li>
+        </ul>
+      </div>
+      <a href="#" id="sr-more-link">more &raquo;</a>
+    </div>
+  </div>
+  <div id="header-bottom-left">
+    <span class="pagename redditname"><a href="#">rust</a></span>
+    <ul class="tabmenu">
+      <li class="selected"><a href="#" class="choice">hot</a></li>
+      <li><a href="#" class="choice">new</a></li>
+      <li><a href="#" class="choice">rising</a></li>
+      <li><a href="#" class="choice">controversial</a></li>
+      <li><a href="#" class="choice">top</a></li>
+      <li><a href="#" class="choice">wiki</a></li>
+    </ul>
+  </div>
+  <div id="header-bottom-right">
+    <span class="user">Want to join? <a href="#">Log in</a> or <a href="#">sign up</a> in seconds.</span>
+  </div>
+</div>
+
+<div class="side">
+  <div class="spacer">
+    <form action="#" id="search" role="search">
+      <input type="text" name="q" placeholder="search" tabindex="20">
+    </form>
+  </div>
+  <div class="spacer">
+    <div class="sidebox submit submit-link">
+      <div class="morelink"><a href="#">Submit a new link</a></div>
+    </div>
+  </div>
+  <div class="spacer">
+    <div class="sidebox submit submit-text">
+      <div class="morelink"><a href="#">Submit a new text post</a></div>
+    </div>
+  </div>
+  <div class="spacer">
+    <div class="titlebox">
+      <h1 class="hover redditname"><a href="#" class="hover">rust</a></h1>
+      <span class="fancy-toggle-button"><a class="active" href="#">join</a></span>
+      <div class="md">
+        <h3>The Rust Programming Language</h3>
+        <p>A place for all things related to the Rust programming language&mdash;an open-source systems language that emphasizes performance, reliability, and productivity.</p>
+      </div>
+      <div class="subscribers"><span class="number">361,242</span> Rustaceans</div>
+      <div class="users-online"><span class="number">1,412</span> users here now</div>
+    </div>
+  </div>
+  <div class="spacer">
+    <div class="sidecontentbox">
+      <div class="title"><h1>Moderators</h1></div>
+      <ul class="flat-list">
+        <li><a href="#">steveklabnik1</a></li>
+        <li><a href="#">burntsushi</a></li>
+        <li><a href="#">dtolnay</a></li>
+        <li><a href="#">BurntSushi5</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="content" role="main">
+  <div class="menuarea">
+    <div class="dropdown">
+      <span class="selected title">hot</span>
+    </div>
+    <span class="separator">&middot;</span>
+    <a href="#">new</a>
+    <span class="separator">&middot;</span>
+    <a href="#">top</a>
+    <span class="separator">&middot;</span>
+    <a href="#">rising</a>
+  </div>
+
+  <div id="siteTable" class="sitetable linklisting">
+
+    <div class="thing odd stickied link" data-fullname="t3_1smskwm">
+      <span class="rank">1</span>
+      <div class="midcol unvoted">
+        <div class="arrow up"></div>
+        <div class="score unvoted">124</div>
+        <div class="arrow down"></div>
+      </div>
+      <a class="thumbnail self" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">This Week in Rust 647</a>
+          <span class="linkflairlabel">announcement</span>
+          <span class="domain">(<a href="#">this-week-in-rust.org</a>)</span>
+        </p>
+        <p class="tagline">
+          submitted <time>8 hours ago</time> by
+          <a class="author" href="#">b-dillo</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">38 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="thing even stickied link self" data-fullname="t3_1sk4oiz">
+      <span class="rank">2</span>
+      <div class="midcol unvoted">
+        <div class="arrow up"></div>
+        <div class="score unvoted">57</div>
+        <div class="arrow down"></div>
+      </div>
+      <a class="thumbnail self" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">Easy Questions / Beginners Thread (Week of 2026-04-14)</a>
+          <span class="linkflairlabel">easyquestions</span>
+        </p>
+        <p class="tagline">
+          submitted <time>3 days ago</time> by
+          <a class="author" href="#">rust-ping-bot</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">112 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="thing odd link" data-fullname="t3_1sn2sp6">
+      <span class="rank">3</span>
+      <div class="midcol unvoted">
+        <div class="arrow up"></div>
+        <div class="score unvoted">842</div>
+        <div class="arrow down"></div>
+      </div>
+      <a class="thumbnail" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">Rust 1.91 released &mdash; stabilized str::floor_char_boundary and new MIR optimizations</a>
+          <span class="linkflairlabel">news</span>
+          <span class="domain">(<a href="#">blog.rust-lang.org</a>)</span>
+        </p>
+        <p class="tagline">
+          submitted <time>14 hours ago</time> by
+          <a class="author" href="#">withoutboats</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">214 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="thing even link" data-fullname="t3_1snbmjv">
+      <span class="rank">4</span>
+      <div class="midcol unvoted">
+        <div class="arrow upmod"></div>
+        <div class="score likes">321</div>
+        <div class="arrow down"></div>
+      </div>
+      <a class="thumbnail" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">Running Rust on a 2004 Sony PSP &mdash; a homebrew OS from scratch</a>
+          <span class="domain">(<a href="#">github.com</a>)</span>
+        </p>
+        <p class="tagline">
+          submitted <time>6 hours ago</time> by
+          <a class="author" href="#">altimit</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">88 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="thing odd linkflair link" data-fullname="t3_1snkpb9">
+      <span class="rank">5</span>
+      <div class="midcol unvoted">
+        <div class="arrow up"></div>
+        <div class="score unvoted">197</div>
+        <div class="arrow downmod"></div>
+      </div>
+      <a class="thumbnail" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">I built a terminal-first file manager entirely in async Rust &mdash; looking for feedback</a>
+          <span class="linkflairlabel">project</span>
+          <span class="domain">(<a href="#">i.redd.it</a>)</span>
+        </p>
+        <p class="tagline">
+          submitted <time>4 hours ago</time> by
+          <a class="author" href="#">tokio_fan_42</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">45 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="thing even link" data-fullname="t3_1snzabc">
+      <span class="rank">6</span>
+      <div class="midcol unvoted">
+        <div class="arrow up"></div>
+        <div class="score unvoted">62</div>
+        <div class="arrow down"></div>
+      </div>
+      <a class="thumbnail" href="#"></a>
+      <div class="entry unvoted">
+        <p class="title">
+          <a class="title" href="#">Borrow checker lifetime inference in const contexts &mdash; what changed in 2026</a>
+          <span class="domain">(<a href="#">fasterthanli.me</a>)</span>
+        </p>
+        <p class="tagline">
+          submitted <time>1 day ago</time> by
+          <a class="author" href="#">fasterthanlime</a>
+          to <a class="subreddit" href="#">r/rust</a>
+        </p>
+        <ul class="buttons">
+          <li class="first"><a href="#">33 comments</a></li>
+          <li><a href="#">share</a></li>
+          <li><a href="#">save</a></li>
+          <li><a href="#">hide</a></li>
+          <li><a href="#">report</a></li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="nextprev">
+    view more: <a href="#">next &rsaquo;</a>
+  </div>
+</div>
+
+<div class="footer-parent">
+  <p>use of this site constitutes acceptance of our <a href="#">User Agreement</a> and <a href="#">Privacy Policy</a>. &copy; 2026 reddit inc. all rights reserved.</p>
+</div>
+
+</body>
+</html>

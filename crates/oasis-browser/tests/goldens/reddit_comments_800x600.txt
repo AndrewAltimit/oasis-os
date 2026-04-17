@@ -1,0 +1,622 @@
+# viewport 800x600
+fill_rect 0, 0, 800, 944, Color { r: 218, g: 224, b: 230, a: 255 }
+fill_rect 494, 36, 300, 118, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 493, 35, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 794, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 493, 154, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 493, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
+draw_text "rust", 504, 46, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "rust", 505, 46, 14, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "361,242 ", 504, 71, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Rustaceans", 552, 71, 11, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "A ", 504, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "place ", 516, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "for ", 552, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "all ", 576, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "things ", 600, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "related ", 642, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "to ", 690, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the ", 708, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Rust", 732, 98, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "programming ", 504, 115, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "language.", 576, 115, 13, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 16, 41, 473, 93, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 15, 40, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 489, 40, 1, 95, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 134, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 40, 1, 95, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 24, 49, 457, 77
+fill_rect 9, 49, 15, 14, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 8, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 9, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 9, 81, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
+draw_text "Rust ", 24, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "1.91 ", 54, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "released ", 84, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 138, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "stabilized ", 162, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "str::floor_char_boundary ", 228, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and ", 378, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "new ", 402, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "MIR", 426, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "optimizations", 24, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "(", 102, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "blog.rust-lang.org", 112, 69, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text ")", 220, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "submitted ", 24, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "14 ", 84, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 102, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 138, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 156, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "withoutboats", 180, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "withoutboats", 181, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 252, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 276, 90, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "214 ", 28, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "comments", 52, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 108, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 146, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 178, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+fill_rect 16, 160, 473, 23, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 15, 159, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 489, 159, 1, 25, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 183, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 159, 1, 25, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 26, 165, 42, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 26, 165, 42, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "sorted ", 26, 165, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+fill_rect 68, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 68, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "by: ", 68, 165, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "best", 92, 165, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "best", 93, 165, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 116, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 116, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text " · ", 116, 165, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "top", 140, 165, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 158, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 158, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text " · ", 158, 165, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "new", 182, 165, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 200, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 200, 165, 24, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text " · ", 200, 165, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "controversial", 224, 165, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+fill_rect 16, 193, 473, 475, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 15, 192, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 489, 192, 1, 477, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 668, 475, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 15, 192, 1, 477, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 22, 197, 461, 467
+fill_rect 52, 197, 72, 13, Color { r: 206, g: 227, b: 248, a: 255 }
+fill_rect 52, 197, 72, 13, Color { r: 206, g: 227, b: 248, a: 255 }
+draw_text "withoutboats", 52, 197, 10, Color { r: 0, g: 85, b: 223, a: 255 }
+draw_text "withoutboats", 53, 197, 10, Color { r: 0, g: 85, b: 223, a: 255 }
+draw_text "412 ", 124, 197, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "points", 148, 197, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "13 ", 184, 197, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 202, 197, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 238, 197, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Release ", 52, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "notes ", 100, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "have ", 136, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the ", 166, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "full ", 190, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "list, ", 220, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "but ", 256, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the ", 280, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "headline ", 304, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "items ", 358, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "for ", 394, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "1.91 ", 418, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "are", 448, 210, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 52, 227, 144, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 52, 227, 144, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "str::floor_char_boundary", 52, 227, 11, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text " (stabilized ", 196, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 274, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "useful ", 298, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "for ", 340, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "chunking ", 364, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "UTF-8", 418, 227, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "without ", 52, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "falling ", 100, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "between ", 148, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "code ", 196, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "points) ", 226, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and ", 274, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a ", 298, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "new ", 310, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "MIR ", 334, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "pass ", 358, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "that ", 388, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "folds", 418, 243, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "repeated ", 52, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "integer ", 106, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "comparisons. ", 154, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Happy ", 232, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "to ", 268, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "answer ", 286, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "questions.", 328, 260, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "permalink", 52, 281, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "embed", 110, 281, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 144, 281, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "report", 172, 281, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "reply", 212, 281, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+fill_rect 34, 298, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 300, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 302, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 304, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 306, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 308, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 310, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 312, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 314, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 316, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 318, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 320, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 322, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 324, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 326, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 328, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 330, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 332, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 334, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 336, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 338, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 340, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 342, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 344, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 346, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 348, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 350, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 352, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 354, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 356, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 358, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 360, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 362, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 364, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 366, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 368, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 370, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 372, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 374, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 376, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 378, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 380, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 382, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 384, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 386, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 388, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 390, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 392, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 394, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 396, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 398, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 400, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 402, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 404, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 406, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 408, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 410, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 412, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 414, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 416, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 418, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 420, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 422, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 424, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 426, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 428, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 430, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 432, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 434, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 436, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 438, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 440, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 442, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 444, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 446, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 448, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 450, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 452, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 454, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 456, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 458, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 460, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 462, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 464, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 466, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 468, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 470, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 472, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 474, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 476, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 478, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 480, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 482, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 484, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 486, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 488, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 490, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 492, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 494, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 496, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 498, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 500, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 502, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 504, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 506, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 508, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 510, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 512, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 514, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 516, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 518, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 520, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 522, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 524, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 526, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 528, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 530, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 532, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 534, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 536, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 538, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 540, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 542, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 544, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 546, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 548, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 550, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 552, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 554, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 556, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 558, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 560, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 562, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 564, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 566, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 568, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 570, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 572, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 574, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 576, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 578, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 580, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 582, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 584, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 586, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 588, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 590, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 592, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 594, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 596, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 598, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 600, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 602, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 604, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 606, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 608, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 610, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 612, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 614, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 616, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 618, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 620, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 622, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 624, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 626, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 628, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 630, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 632, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 634, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 636, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 638, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 640, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 642, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 644, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 646, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 648, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 650, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 652, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 654, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 34, 656, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 42, 301, 440, 259, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 41, 300, 442, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 482, 300, 1, 261, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 41, 560, 442, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 41, 300, 1, 261, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 48, 305, 428, 251
+draw_text "altimit", 78, 305, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "altimit", 79, 305, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "188 ", 120, 305, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "points", 144, 305, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "12 ", 180, 305, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 198, 305, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 234, 305, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "This ", 78, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "is ", 108, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "perfect ", 126, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "timing ", 174, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 216, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "I'm ", 240, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "chunking ", 264, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "UTF-8 ", 318, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "to ", 354, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "draw ", 372, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "text ", 402, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "on ", 432, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a", 450, 318, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "PSP ", 78, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "glyph ", 102, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "atlas ", 138, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and ", 174, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "was ", 198, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "carrying ", 222, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a ", 276, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "hand-rolled ", 288, 335, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 360, 335, 114, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 360, 335, 114, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "floor_char_boundary", 360, 335, 11, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text ". ", 78, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Does ", 90, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "it ", 120, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "work ", 138, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "in ", 168, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "const ", 186, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "contexts?", 222, 352, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "permalink", 78, 372, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "reply", 136, 372, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+fill_rect 60, 389, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 391, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 393, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 395, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 397, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 399, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 401, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 403, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 405, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 407, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 409, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 411, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 413, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 415, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 417, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 419, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 421, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 423, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 425, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 427, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 429, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 431, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 433, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 435, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 437, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 439, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 441, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 443, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 445, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 447, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 449, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 451, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 453, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 455, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 457, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 459, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 461, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 463, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 465, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 467, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 469, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 471, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 473, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 475, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 477, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 479, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 481, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 483, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 485, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 487, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 489, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 491, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 493, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 495, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 497, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 499, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 501, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 503, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 505, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 507, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 509, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 511, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 513, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 515, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 517, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 519, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 521, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 523, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 525, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 527, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 529, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 531, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 533, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 535, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 537, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 539, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 541, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 543, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 545, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 547, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 60, 549, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 68, 392, 407, 157, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 67, 391, 409, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 475, 391, 1, 159, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 67, 549, 409, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 67, 391, 1, 159, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 74, 396, 395, 149
+fill_rect 104, 396, 72, 13, Color { r: 206, g: 227, b: 248, a: 255 }
+fill_rect 104, 396, 72, 13, Color { r: 206, g: 227, b: 248, a: 255 }
+draw_text "withoutboats", 104, 396, 10, Color { r: 0, g: 85, b: 223, a: 255 }
+draw_text "withoutboats", 105, 396, 10, Color { r: 0, g: 85, b: 223, a: 255 }
+draw_text "144 ", 176, 396, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "points", 200, 396, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "12 ", 236, 396, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 254, 396, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 290, 396, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Not ", 104, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "yet ", 128, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 152, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the ", 176, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "const-eval ", 200, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "side ", 266, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "still ", 296, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "needs", 332, 409, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 104, 426, 174, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 104, 426, 174, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "const_char_from_u32_unchecked", 104, 426, 11, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text " to ", 278, 426, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "land. ", 302, 426, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Probably ", 338, 426, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "1.93.", 392, 426, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "permalink", 104, 447, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "reply", 162, 447, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+fill_rect 86, 464, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 466, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 468, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 470, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 472, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 474, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 476, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 478, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 480, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 482, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 484, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 486, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 488, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 490, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 492, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 494, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 496, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 498, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 500, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 502, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 504, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 506, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 508, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 510, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 512, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 514, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 516, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 518, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 520, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 522, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 524, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 526, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 528, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 530, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 532, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 534, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 536, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 86, 538, 1, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 94, 467, 374, 71, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 93, 466, 376, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 468, 466, 1, 73, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 93, 538, 376, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 93, 466, 1, 73, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 100, 471, 362, 63
+draw_text "altimit", 130, 471, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "altimit", 131, 471, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "72 ", 172, 471, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "points", 190, 471, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "11 ", 226, 471, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 244, 471, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 280, 471, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "Thanks. ", 130, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Any ", 178, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "chance ", 202, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "of ", 244, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a ", 262, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 274, 484, 90, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 274, 484, 90, 16, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "#[track_caller]", 274, 484, 11, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text " variant ", 364, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "in ", 418, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the", 436, 484, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "meantime?", 130, 501, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "permalink", 130, 522, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "reply", 188, 522, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+reset_clip_rect
+set_clip_rect 74, 396, 395, 149
+reset_clip_rect
+set_clip_rect 48, 305, 428, 251
+reset_clip_rect
+set_clip_rect 22, 197, 461, 467
+fill_rect 42, 569, 440, 88, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 41, 568, 442, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 482, 568, 1, 90, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 41, 657, 442, 1, Color { r: 199, g: 199, b: 199, a: 255 }
+fill_rect 41, 568, 1, 90, Color { r: 199, g: 199, b: 199, a: 255 }
+set_clip_rect 48, 573, 428, 80
+draw_text "mipsfan", 78, 573, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "mipsfan", 79, 573, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "63 ", 120, 573, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "points", 138, 573, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "11 ", 174, 573, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 192, 573, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 228, 573, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "The ", 78, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "MIR ", 102, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "comparison-folding ", 126, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "pass ", 240, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 270, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "does ", 294, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "it ", 324, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "help ", 342, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "with", 372, 586, 12, Color { r: 34, g: 34, b: 34, a: 255 }
+reset_clip_rect
+set_clip_rect 22, 197, 461, 467
+reset_clip_rect
+fill_rect 0, 0, 800, 34, Color { r: 206, g: 227, b: 248, a: 255 }
+fill_rect 0, 34, 800, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+draw_text "r/rust", 10, 5, 19, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "r/rust", 11, 5, 19, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 43, 3, 30, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 42, 2, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 73, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 42, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 49, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 49, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "hot", 49, 5, 12, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 77, 3, 30, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 76, 2, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 107, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 76, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 83, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 83, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "new", 83, 5, 12, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 111, 3, 60, 19, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 110, 2, 62, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 171, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 110, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 117, 5, 48, 15, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 117, 5, 48, 15, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "comments", 117, 5, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "comments", 118, 5, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 175, 3, 30, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 174, 2, 32, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 205, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 174, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 181, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 181, 5, 18, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "top", 181, 5, 12, Color { r: 51, g: 102, b: 153, a: 255 }
+fill_rect 209, 3, 36, 19, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 208, 2, 38, 1, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 245, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 208, 2, 1, 20, Color { r: 95, g: 153, b: 207, a: 255 }
+fill_rect 215, 5, 24, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+fill_rect 215, 5, 24, 15, Color { r: 239, g: 247, b: 255, a: 255 }
+draw_text "wiki", 215, 5, 12, Color { r: 51, g: 102, b: 153, a: 255 }
+# totals fill_rect=396 draw_text=208 other=16

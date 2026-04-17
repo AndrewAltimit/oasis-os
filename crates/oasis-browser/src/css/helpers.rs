@@ -73,6 +73,8 @@ pub(crate) fn parse_unit(unit: &str) -> Option<LengthUnit> {
         "em" => Some(LengthUnit::Em),
         "rem" => Some(LengthUnit::Rem),
         "pt" => Some(LengthUnit::Pt),
+        "ex" => Some(LengthUnit::Ex),
+        "ch" => Some(LengthUnit::Ch),
         _ => None,
     }
 }

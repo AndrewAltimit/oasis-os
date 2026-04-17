@@ -3,9 +3,7 @@
 //! Functions that convert parsed `CssValue` representations into concrete
 //! computed values (pixel lengths, colors, dimensions, etc.).
 
-use super::types::{
-    BorderStyle, Dimension, FontWeight, GridTrackSize, ROOT_FONT_SIZE, current_root_font_size,
-};
+use super::types::{BorderStyle, Dimension, FontWeight, GridTrackSize, current_root_font_size};
 use crate::css::parser::{CssColor, CssValue, LengthUnit};
 use oasis_types::backend::Color;
 
@@ -39,6 +37,8 @@ pub(super) fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
         CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
+        CssValue::Length(n, LengthUnit::Ex) => *n * parent_font_size * 0.5,
+        CssValue::Length(n, LengthUnit::Ch) => *n * parent_font_size * 0.5,
         CssValue::Number(n) => *n,
         CssValue::Calc(expr) => resolve_calc(expr, parent_font_size, None).unwrap_or(0.0),
         _ => 0.0,
@@ -64,6 +64,8 @@ pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dime
         CssValue::Length(n, LengthUnit::Em) => Dimension::Px(*n * parent_font_size),
         CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * current_root_font_size()),
         CssValue::Length(n, LengthUnit::Pt) => Dimension::Px(*n * 1.333),
+        CssValue::Length(n, LengthUnit::Ex) => Dimension::Px(*n * parent_font_size * 0.5),
+        CssValue::Length(n, LengthUnit::Ch) => Dimension::Px(*n * parent_font_size * 0.5),
         CssValue::Number(n) => Dimension::Px(*n),
         CssValue::Calc(expr) => {
             // If the expression is purely percentage-based, return Percent.
@@ -202,22 +204,41 @@ pub(super) fn resolve_font_size(value: &CssValue, parent_font_size: f32) -> f32 
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
         CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
+        CssValue::Length(n, LengthUnit::Ex) => *n * parent_font_size * 0.5,
+        CssValue::Length(n, LengthUnit::Ch) => *n * parent_font_size * 0.5,
         CssValue::Percentage(p) => parent_font_size * (*p / 100.0),
         CssValue::Number(n) => *n,
         CssValue::Calc(expr) => {
             resolve_calc(expr, parent_font_size, None).unwrap_or(parent_font_size)
         },
-        CssValue::Keyword(kw) => match kw.as_str() {
-            "xx-small" => ROOT_FONT_SIZE * 0.5625,
-            "x-small" => ROOT_FONT_SIZE * 0.625,
-            "small" => ROOT_FONT_SIZE * 0.8125,
-            "medium" => ROOT_FONT_SIZE,
-            "large" => ROOT_FONT_SIZE * 1.125,
-            "x-large" => ROOT_FONT_SIZE * 1.5,
-            "xx-large" => ROOT_FONT_SIZE * 2.0,
-            "smaller" => parent_font_size * 0.833,
-            "larger" => parent_font_size * 1.2,
-            _ => parent_font_size,
+        CssValue::Keyword(kw) => {
+            // CSS absolute-size keywords are anchored to the user-agent's
+            // "medium" default, which CSS 2.1 (§15.7) and every real
+            // browser pin to 16 px — not to our internal `ROOT_FONT_SIZE`
+            // (8.0 for PSP readability). Authors write `font-size:
+            // x-small` expecting ~10 px (what Chrome/Firefox show), and
+            // old.reddit leans on `x-small`/`small` for every tagline and
+            // button in its listing + comments pages. Anchoring against
+            // 8 px collapsed all of those to 5–7 px, which is the
+            // "clicking links is tough" symptom the user reported.
+            //
+            // We keep `rem` resolving against `ROOT_FONT_SIZE` so the
+            // pages that opt into the `html { font-size: 62.5% }` pattern
+            // (Wikipedia, GitHub docs, Substack) still compute their
+            // rem-sized layouts unchanged.
+            const KW_MEDIUM: f32 = 16.0;
+            match kw.as_str() {
+                "xx-small" => KW_MEDIUM * 0.5625,
+                "x-small" => KW_MEDIUM * 0.625,
+                "small" => KW_MEDIUM * 0.8125,
+                "medium" => KW_MEDIUM,
+                "large" => KW_MEDIUM * 1.125,
+                "x-large" => KW_MEDIUM * 1.5,
+                "xx-large" => KW_MEDIUM * 2.0,
+                "smaller" => parent_font_size * 0.833,
+                "larger" => parent_font_size * 1.2,
+                _ => parent_font_size,
+            }
         },
         _ => parent_font_size,
     }
@@ -235,6 +256,8 @@ pub(super) fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
         CssValue::Length(n, LengthUnit::Rem) => *n * current_root_font_size(),
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
+        CssValue::Length(n, LengthUnit::Ex) => *n * parent_font_size * 0.5,
+        CssValue::Length(n, LengthUnit::Ch) => *n * parent_font_size * 0.5,
         CssValue::Percentage(p) => font_size * (*p / 100.0),
         CssValue::Calc(expr) => {
             resolve_calc(expr, parent_font_size, None).unwrap_or(font_size * 1.5)
@@ -287,6 +310,8 @@ enum CalcUnit {
     Em,
     Rem,
     Pt,
+    Ex,
+    Ch,
     Percent,
 }
 
@@ -362,6 +387,8 @@ fn tokenize_calc(input: &str) -> Option<Vec<CalcToken>> {
                     "em" => CalcUnit::Em,
                     "rem" => CalcUnit::Rem,
                     "pt" => CalcUnit::Pt,
+                    "ex" => CalcUnit::Ex,
+                    "ch" => CalcUnit::Ch,
                     _ => return None,
                 };
                 tokens.push(CalcToken::Unit(value, unit));
@@ -389,6 +416,8 @@ fn calc_value_to_px(
         Some(CalcUnit::Em) => value * parent_font_size,
         Some(CalcUnit::Rem) => value * current_root_font_size(),
         Some(CalcUnit::Pt) => value * 1.333,
+        Some(CalcUnit::Ex) => value * parent_font_size * 0.5,
+        Some(CalcUnit::Ch) => value * parent_font_size * 0.5,
         Some(CalcUnit::Percent) => {
             let base = containing_width.unwrap_or(0.0);
             base * (value / 100.0)
@@ -501,6 +530,8 @@ pub(super) fn parse_grid_template(value: &CssValue, parent_font_size: f32) -> Ve
                 LengthUnit::Em => *n * parent_font_size,
                 LengthUnit::Rem => *n * current_root_font_size(),
                 LengthUnit::Pt => *n * 1.333,
+                LengthUnit::Ex => *n * parent_font_size * 0.5,
+                LengthUnit::Ch => *n * parent_font_size * 0.5,
             };
             vec![GridTrackSize::Px(px)]
         },
@@ -812,6 +843,7 @@ mod tests {
 
     mod prop {
         use super::*;
+        use crate::css::values::ROOT_FONT_SIZE;
         use proptest::prelude::*;
 
         proptest! {

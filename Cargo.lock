@@ -1136,9 +1136,12 @@ version = "1.3.0"
 dependencies = [
  "log",
  "oasis-audio",
+ "oasis-browser",
  "oasis-core",
  "oasis-rasterize",
  "oasis-types",
+ "oasis-vfs",
+ "png",
 ]
 
 [[package]]

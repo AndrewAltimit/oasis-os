@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Comments: Rust 1.91 released &bull; r/rust</title>
+<style>
+/* Faithful subset of old.reddit.com comments-page CSS — nested comment
+   threads (.commentarea > .comment > .child > .comment), tagline,
+   entry/usertext/md, midcol vote column, tabmenu for sort choices.
+
+   Exercises the parts of the engine that old.reddit leans on heavily:
+   • deeply nested block-in-block indentation (padding + left-border)
+   • float: left / overflow: hidden sibling interaction (midcol + entry)
+   • inline tagline inside a block .entry
+   • small-font bitmap legibility at 480x272 */
+
+html, body { margin: 0; padding: 0; }
+body {
+  background: #dae0e6;
+  color: #222;
+  font-family: Verdana, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.3;
+}
+a { color: #0079d3; text-decoration: none; }
+a:visited { color: #551a8b; }
+a:hover { text-decoration: underline; }
+
+/* ===== Header ===== */
+#header {
+  background: #cee3f8;
+  border-bottom: 1px solid #5f99cf;
+  margin-bottom: 5px;
+  position: relative;
+  padding: 5px 10px;
+}
+.pagename {
+  font-size: 1.6em;
+  font-weight: bold;
+  letter-spacing: -1px;
+}
+.pagename a { color: #000; }
+.tabmenu {
+  display: inline;
+  list-style: none;
+  margin: 0 0 0 10px;
+  padding: 0;
+}
+.tabmenu li {
+  display: inline-block;
+  margin: 0 1px;
+}
+.tabmenu li a {
+  background: #eff7ff;
+  border: 1px solid #5f99cf;
+  border-bottom: 0;
+  color: #369;
+  display: inline-block;
+  padding: 2px 6px;
+}
+.tabmenu li.selected a {
+  background: #fff;
+  color: #ff4500;
+  font-weight: bold;
+}
+
+/* ===== Side panel ===== */
+.side {
+  float: right;
+  margin: 0 5px 0 10px;
+  width: 280px;
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  padding: 10px;
+  font-size: small;
+}
+.side h1 {
+  font-size: 14px;
+  margin: 0 0 6px 0;
+  font-weight: bold;
+}
+.side .subscribers {
+  color: #888;
+  font-size: 11px;
+}
+
+/* ===== The submitted link (top of comments page) ===== */
+.content {
+  margin: 0 305px 0 10px;
+  padding: 0 5px;
+}
+.thing.link {
+  background: #fff;
+  padding: 8px;
+  border: 1px solid #c7c7c7;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.thing.link .midcol {
+  float: left;
+  width: 4.1ex;
+  margin: 0 7px 0 5px;
+  text-align: center;
+}
+.thing.link .midcol .arrow {
+  background: #c6c6c6;
+  border-radius: 2px;
+  display: block;
+  height: 14px;
+  margin: 0 auto;
+  width: 15px;
+}
+.thing.link .midcol .arrow.upmod { background: #ff4500; }
+.thing.link .midcol .arrow.down { background: #d7dadc; margin-top: 2px; }
+.thing.link .midcol .score.likes { color: #ff4500; font-weight: bold; }
+.thing.link .entry { overflow: hidden; }
+.thing.link .entry .title {
+  font-size: medium;
+  margin: 0;
+  line-height: 1.2;
+}
+.thing.link .entry .title a { color: #222; }
+.thing.link .entry .title .domain {
+  color: #888;
+  font-size: x-small;
+  margin-left: 4px;
+}
+.thing.link .entry .tagline {
+  color: #888;
+  font-size: x-small;
+  margin-top: 2px;
+}
+.thing.link .entry .tagline a.author { color: #369; font-weight: bold; }
+.thing.link .entry .buttons {
+  list-style: none;
+  margin: 4px 0 0 0;
+  padding: 0;
+  font-size: x-small;
+}
+.thing.link .entry .buttons li {
+  display: inline-block;
+  padding: 1px 4px;
+  color: #888;
+}
+.thing.link .entry .buttons li a { color: #888; }
+
+/* ===== Sort bar ===== */
+.commentarea .menuarea {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  color: #888;
+  font-size: x-small;
+  margin: 10px 0 8px 0;
+  padding: 5px 10px;
+}
+.commentarea .menuarea .dropdown .selected.title {
+  color: #369;
+  font-weight: bold;
+  padding: 0 2px;
+}
+
+/* ===== Comments ===== */
+.commentarea {
+  padding: 5px 0;
+}
+
+.commentarea .sitetable {
+  margin: 0;
+  padding: 0;
+}
+
+.comment {
+  background: #fff;
+  border: 1px solid #c7c7c7;
+  margin: 0 0 6px 0;
+  padding: 4px 6px;
+  overflow: hidden;
+  position: relative;
+}
+.comment .midcol {
+  float: left;
+  width: 22px;
+  text-align: center;
+  padding: 3px 4px 0 0;
+}
+.comment .midcol .arrow {
+  background: #c6c6c6;
+  border-radius: 2px;
+  display: block;
+  height: 12px;
+  margin: 0 auto;
+  width: 13px;
+}
+.comment .midcol .arrow.upmod { background: #ff4500; }
+.comment .midcol .arrow.down { background: #d7dadc; margin-top: 1px; }
+
+.comment .entry {
+  margin: 0 0 0 30px;
+  padding: 0;
+}
+.comment .entry .tagline {
+  color: #888;
+  font-size: x-small;
+  margin: 0;
+}
+.comment .entry .tagline .author {
+  color: #369;
+  font-weight: bold;
+}
+.comment .entry .tagline .author.submitter {
+  color: #0055df;
+  background: #cee3f8;
+  padding: 0 2px;
+}
+.comment .entry .tagline .score {
+  color: #888;
+}
+.comment .entry .tagline time { color: #888; }
+
+.comment .entry .usertext .md {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #222;
+}
+.comment .entry .usertext .md p {
+  margin: 4px 0;
+}
+.comment .entry .usertext .md code {
+  background: #f5f5f5;
+  border: 1px solid #e6e6e6;
+  border-radius: 2px;
+  padding: 0 3px;
+  font-family: monospace;
+  font-size: 11px;
+}
+.comment .entry .usertext .md blockquote {
+  border-left: 3px solid #c7c7c7;
+  padding-left: 8px;
+  margin: 4px 0;
+  color: #555;
+}
+
+.comment .entry .buttons {
+  list-style: none;
+  margin: 4px 0 0 0;
+  padding: 0;
+  font-size: x-small;
+}
+.comment .entry .buttons li {
+  display: inline-block;
+  padding: 0 4px 0 0;
+  color: #888;
+}
+.comment .entry .buttons li a { color: #888; }
+
+/* Reddit uses .child on nested replies — left padding + subtle border
+   stripe to show depth. Borders compound as you nest. */
+.comment .child {
+  border-left: 1px dotted #c7c7c7;
+  margin: 4px 0 0 12px;
+  padding: 2px 0 0 6px;
+}
+
+.comment.collapsed .entry .usertext { display: none; }
+.comment.collapsed .entry .buttons { display: none; }
+.comment.collapsed .entry .tagline { color: #aaa; }
+
+.deepthread > .child {
+  border-left: 1px dashed #ccc;
+}
+.deepthread > .child > .sitetable > .comment {
+  background: #fafafa;
+}
+</style>
+</head>
+<body class="comments-page">
+
+<div id="header" role="banner">
+  <span class="pagename"><a href="#">r/rust</a></span>
+  <ul class="tabmenu">
+    <li><a href="#">hot</a></li>
+    <li><a href="#">new</a></li>
+    <li class="selected"><a href="#">comments</a></li>
+    <li><a href="#">top</a></li>
+    <li><a href="#">wiki</a></li>
+  </ul>
+</div>
+
+<div class="side">
+  <h1><a href="#">rust</a></h1>
+  <div class="subscribers">361,242 Rustaceans</div>
+  <p>A place for all things related to the Rust programming language.</p>
+</div>
+
+<div class="content" role="main">
+
+  <div class="thing link" data-fullname="t3_1sn2sp6">
+    <div class="midcol unvoted">
+      <div class="arrow upmod"></div>
+      <div class="score likes">842</div>
+      <div class="arrow down"></div>
+    </div>
+    <div class="entry">
+      <p class="title">
+        <a class="title" href="#">Rust 1.91 released &mdash; stabilized str::floor_char_boundary and new MIR optimizations</a>
+        <span class="domain">(<a href="#">blog.rust-lang.org</a>)</span>
+      </p>
+      <p class="tagline">
+        submitted <time>14 hours ago</time> by
+        <a class="author" href="#">withoutboats</a>
+        to <a href="#">r/rust</a>
+      </p>
+      <ul class="buttons">
+        <li><a href="#">214 comments</a></li>
+        <li><a href="#">share</a></li>
+        <li><a href="#">save</a></li>
+        <li><a href="#">hide</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="commentarea">
+    <div class="menuarea">
+      sorted by:
+      <span class="dropdown"><span class="selected title">best</span></span>
+      &middot; <a href="#">top</a>
+      &middot; <a href="#">new</a>
+      &middot; <a href="#">controversial</a>
+    </div>
+
+    <div class="sitetable nestedlisting">
+
+      <!-- Top-level comment 1, with nested replies 3 deep -->
+      <div class="comment" data-fullname="t1_aaaa001">
+        <div class="midcol">
+          <div class="arrow upmod"></div>
+          <div class="arrow down"></div>
+        </div>
+        <div class="entry">
+          <p class="tagline">
+            <a href="#" class="author submitter">withoutboats</a>
+            <span class="score">412 points</span>
+            <time>13 hours ago</time>
+          </p>
+          <div class="usertext">
+            <div class="md">
+              <p>Release notes have the full list, but the headline items for 1.91 are <code>str::floor_char_boundary</code> (stabilized &mdash; useful for chunking UTF-8 without falling between code points) and a new MIR pass that folds repeated integer comparisons. Happy to answer questions.</p>
+            </div>
+          </div>
+          <ul class="buttons">
+            <li><a href="#">permalink</a></li>
+            <li><a href="#">embed</a></li>
+            <li><a href="#">save</a></li>
+            <li><a href="#">report</a></li>
+            <li><a href="#">reply</a></li>
+          </ul>
+        </div>
+
+        <div class="child">
+          <div class="sitetable listing">
+            <div class="comment" data-fullname="t1_aaaa002">
+              <div class="midcol">
+                <div class="arrow upmod"></div>
+                <div class="arrow down"></div>
+              </div>
+              <div class="entry">
+                <p class="tagline">
+                  <a href="#" class="author">altimit</a>
+                  <span class="score">188 points</span>
+                  <time>12 hours ago</time>
+                </p>
+                <div class="usertext">
+                  <div class="md">
+                    <p>This is perfect timing &mdash; I'm chunking UTF-8 to draw text on a PSP glyph atlas and was carrying a hand-rolled <code>floor_char_boundary</code>. Does it work in const contexts?</p>
+                  </div>
+                </div>
+                <ul class="buttons">
+                  <li><a href="#">permalink</a></li>
+                  <li><a href="#">reply</a></li>
+                </ul>
+              </div>
+
+              <div class="child">
+                <div class="sitetable listing">
+                  <div class="comment" data-fullname="t1_aaaa003">
+                    <div class="midcol">
+                      <div class="arrow upmod"></div>
+                      <div class="arrow down"></div>
+                    </div>
+                    <div class="entry">
+                      <p class="tagline">
+                        <a href="#" class="author submitter">withoutboats</a>
+                        <span class="score">144 points</span>
+                        <time>12 hours ago</time>
+                      </p>
+                      <div class="usertext">
+                        <div class="md">
+                          <p>Not yet &mdash; the const-eval side still needs <code>const_char_from_u32_unchecked</code> to land. Probably 1.93.</p>
+                        </div>
+                      </div>
+                      <ul class="buttons">
+                        <li><a href="#">permalink</a></li>
+                        <li><a href="#">reply</a></li>
+                      </ul>
+                    </div>
+
+                    <div class="child">
+                      <div class="sitetable listing">
+                        <div class="comment" data-fullname="t1_aaaa004">
+                          <div class="midcol">
+                            <div class="arrow upmod"></div>
+                            <div class="arrow down"></div>
+                          </div>
+                          <div class="entry">
+                            <p class="tagline">
+                              <a href="#" class="author">altimit</a>
+                              <span class="score">72 points</span>
+                              <time>11 hours ago</time>
+                            </p>
+                            <div class="usertext">
+                              <div class="md">
+                                <p>Thanks. Any chance of a <code>#[track_caller]</code> variant in the meantime?</p>
+                              </div>
+                            </div>
+                            <ul class="buttons">
+                              <li><a href="#">permalink</a></li>
+                              <li><a href="#">reply</a></li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="comment" data-fullname="t1_aaaa005">
+              <div class="midcol">
+                <div class="arrow up"></div>
+                <div class="arrow down"></div>
+              </div>
+              <div class="entry">
+                <p class="tagline">
+                  <a href="#" class="author">mipsfan</a>
+                  <span class="score">63 points</span>
+                  <time>11 hours ago</time>
+                </p>
+                <div class="usertext">
+                  <div class="md">
+                    <p>The MIR comparison-folding pass &mdash; does it help with monomorphized bounds checks in <code>Vec::push</code> hot loops, or only with explicit integer equality?</p>
+                  </div>
+                </div>
+                <ul class="buttons">
+                  <li><a href="#">permalink</a></li>
+                  <li><a href="#">reply</a></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top-level comment 2 with blockquote -->
+      <div class="comment" data-fullname="t1_aaaa010">
+        <div class="midcol">
+          <div class="arrow upmod"></div>
+          <div class="arrow down"></div>
+        </div>
+        <div class="entry">
+          <p class="tagline">
+            <a href="#" class="author">overdrive</a>
+            <span class="score">221 points</span>
+            <time>10 hours ago</time>
+          </p>
+          <div class="usertext">
+            <div class="md">
+              <blockquote>
+                <p>new MIR pass that folds repeated integer comparisons</p>
+              </blockquote>
+              <p>This matters for state-machine codegen more than people realize. In my dispatch loop I was hand-unrolling a match because the optimizer kept emitting redundant range checks. Hoping 1.91 finally gets this right.</p>
+            </div>
+          </div>
+          <ul class="buttons">
+            <li><a href="#">permalink</a></li>
+            <li><a href="#">reply</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Collapsed (low-score) comment -->
+      <div class="comment collapsed" data-fullname="t1_aaaa020">
+        <div class="midcol">
+          <div class="arrow up"></div>
+          <div class="arrow down"></div>
+        </div>
+        <div class="entry">
+          <p class="tagline">
+            [&ndash;]
+            <a href="#" class="author">hot_take_427</a>
+            <span class="score">-18 points</span>
+            <time>9 hours ago</time>
+          </p>
+          <div class="usertext">
+            <div class="md"><p>hidden content</p></div>
+          </div>
+          <ul class="buttons">
+            <li><a href="#">reply</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Another top-level with a code block -->
+      <div class="comment" data-fullname="t1_aaaa030">
+        <div class="midcol">
+          <div class="arrow up"></div>
+          <div class="arrow down"></div>
+        </div>
+        <div class="entry">
+          <p class="tagline">
+            <a href="#" class="author">tokio_fan_42</a>
+            <span class="score">88 points</span>
+            <time>8 hours ago</time>
+          </p>
+          <div class="usertext">
+            <div class="md">
+              <p>For anyone who wants to feel it immediately:</p>
+              <p><code>rustup update stable &amp;&amp; rustc --version</code></p>
+              <p>Expect to see <code>rustc 1.91.0</code>.</p>
+            </div>
+          </div>
+          <ul class="buttons">
+            <li><a href="#">permalink</a></li>
+            <li><a href="#">reply</a></li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

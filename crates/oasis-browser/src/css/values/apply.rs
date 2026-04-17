@@ -3604,10 +3604,17 @@ mod tests {
         let mut s = ComputedStyle::default();
         let parent = ROOT_FONT_SIZE;
         s.apply_declaration("font-size", &CssValue::Keyword("small".into()), parent);
-        let expected_small = ROOT_FONT_SIZE * 0.8125;
+        // Absolute-size keywords anchor to the CSS "medium" default
+        // (16 px per CSS 2.1 §15.7), not the PSP-tuned `ROOT_FONT_SIZE`.
+        // Changed because old.reddit leans on `small`/`x-small` for its
+        // taglines and buttons and the 8px-anchored resolution made
+        // links unreadable/unclickable on desktop viewports.
+        let expected_small = 16.0_f32 * 0.8125;
         assert!((s.font_size - expected_small).abs() < f32::EPSILON);
 
         s.apply_declaration("font-size", &CssValue::Keyword("larger".into()), parent);
+        // `larger` still scales against the parent computed size, not
+        // the absolute-size anchor.
         let expected_larger = parent * 1.2;
         assert!((s.font_size - expected_larger).abs() < 0.01);
     }

@@ -4,62 +4,62 @@ draw_text "Operating ", 0, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "Operating ", 1, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "system", 60, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "system", 61, 0, 14, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 8, 44, 161, 68, Color { r: 248, g: 249, b: 250, a: 255 }
-fill_rect 7, 43, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
-fill_rect 169, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
-fill_rect 7, 112, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
-fill_rect 7, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
-fill_rect 1, 1, 145, 13, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 0, 0, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 146, 0, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 14, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 0, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 2, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 4, 2, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-draw_text "Operating system", 4, 2, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Operating system", 5, 2, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 1, 16, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 0, 15, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 72, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 29, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 17, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 4, 17, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-draw_text "Developer", 4, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Developer", 5, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 74, 15, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 146, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 29, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 15, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Various", 78, 17, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 1, 31, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 0, 31, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 72, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 45, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 33, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 4, 33, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-draw_text "Written in", 4, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Written in", 5, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 74, 31, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 146, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 45, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 31, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "C, C++, assembly", 78, 33, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 1, 47, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 0, 46, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 72, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 60, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 0, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 48, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-fill_rect 4, 48, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
-draw_text "Kernel type", 4, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Kernel type", 5, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
-fill_rect 74, 46, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 146, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 60, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 74, 46, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Monolithic, microkernel, hybrid", 78, 48, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 301, 44, 161, 68, Color { r: 248, g: 249, b: 250, a: 255 }
+fill_rect 300, 43, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 462, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 300, 112, 163, 1, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 300, 43, 1, 70, Color { r: 162, g: 169, b: 177, a: 255 }
+fill_rect 305, 49, 145, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 305, 48, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 451, 48, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 62, 146, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 48, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 309, 50, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 309, 50, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Operating system", 309, 50, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Operating system", 310, 50, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 305, 64, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 305, 64, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 377, 64, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 78, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 64, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 309, 66, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 309, 66, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Developer", 309, 66, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Developer", 310, 66, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 379, 64, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 451, 64, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 78, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 64, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "Various", 383, 66, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 305, 80, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 305, 79, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 377, 79, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 93, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 79, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 309, 81, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 309, 81, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Written in", 309, 81, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Written in", 310, 81, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 379, 79, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 451, 79, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 93, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 79, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "C, C++, assembly", 383, 81, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 305, 95, 71, 13, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 305, 94, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 377, 94, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 108, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 305, 94, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 309, 96, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+fill_rect 309, 96, 0, 0, Color { r: 204, g: 204, b: 255, a: 255 }
+draw_text "Kernel type", 309, 96, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Kernel type", 310, 96, 7, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 379, 94, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 451, 94, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 108, 72, 0, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 379, 94, 0, 14, Color { r: 204, g: 204, b: 204, a: 255 }
+draw_text "Monolithic, microkernel, hybrid", 383, 96, 7, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "An ", 8, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "operating ", 26, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "operating ", 27, 47, 8, Color { r: 32, g: 33, b: 34, a: 255 }

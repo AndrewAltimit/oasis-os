@@ -277,6 +277,8 @@ fn declaration_value_to_string(value: &super::parser::CssValue) -> String {
                 super::parser::LengthUnit::Em => "em",
                 super::parser::LengthUnit::Rem => "rem",
                 super::parser::LengthUnit::Pt => "pt",
+                super::parser::LengthUnit::Ex => "ex",
+                super::parser::LengthUnit::Ch => "ch",
             };
             format!("{n}{u}")
         },

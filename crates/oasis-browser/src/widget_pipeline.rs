@@ -181,6 +181,23 @@ impl BrowserWidget {
     pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
         self.reset_for_navigation();
 
+        // Internal pages: serve directly without hitting the VFS or
+        // network. Only `vfs://bookmarks` is wired up for now — the
+        // bookmarks button in the chrome navigates here. History is
+        // available through `nav.history_page_html()` if we ever wire
+        // a second button for it.
+        if url == "vfs://bookmarks" || url == "oasis://bookmarks" {
+            let body = self.nav.bookmarks_page_html().into_bytes();
+            let response = crate::loader::ResourceResponse {
+                url: url.to_string(),
+                content_type: crate::loader::ContentType::Html,
+                body,
+                status: 200,
+            };
+            self.process_response(response);
+            return;
+        }
+
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
         } else {

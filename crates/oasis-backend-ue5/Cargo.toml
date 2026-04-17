@@ -15,5 +15,10 @@ oasis-rasterize.workspace = true
 oasis-audio.workspace = true
 log.workspace = true
 
+[dev-dependencies]
+oasis-browser.workspace = true
+oasis-vfs.workspace = true
+png.workspace = true
+
 [lints]
 workspace = true
