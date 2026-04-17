@@ -202,20 +202,20 @@ fn generate_logo_glow_texture(
     // A
     draw_line(455.0, 410.0, 495.0, 290.0);
     draw_line(495.0, 290.0, 535.0, 410.0);
-    // S (first, angular zigzag)
-    draw_line(635.0, 290.0, 715.0, 290.0);
-    draw_line(715.0, 290.0, 715.0, 350.0);
-    draw_line(715.0, 350.0, 635.0, 350.0);
-    draw_line(635.0, 350.0, 635.0, 410.0);
-    draw_line(635.0, 410.0, 715.0, 410.0);
+    // S (first — upper-left vertical, lower-right vertical)
+    draw_line(635.0, 290.0, 715.0, 290.0); // top
+    draw_line(635.0, 290.0, 635.0, 350.0); // upper-left
+    draw_line(635.0, 350.0, 715.0, 350.0); // middle
+    draw_line(715.0, 350.0, 715.0, 410.0); // lower-right
+    draw_line(635.0, 410.0, 715.0, 410.0); // bottom
     // I
     draw_line(755.0, 290.0, 755.0, 410.0);
     // S (second)
-    draw_line(795.0, 290.0, 875.0, 290.0);
-    draw_line(875.0, 290.0, 875.0, 350.0);
-    draw_line(875.0, 350.0, 795.0, 350.0);
-    draw_line(795.0, 350.0, 795.0, 410.0);
-    draw_line(795.0, 410.0, 875.0, 410.0);
+    draw_line(795.0, 290.0, 875.0, 290.0); // top
+    draw_line(795.0, 290.0, 795.0, 350.0); // upper-left
+    draw_line(795.0, 350.0, 875.0, 350.0); // middle
+    draw_line(875.0, 350.0, 875.0, 410.0); // lower-right
+    draw_line(795.0, 410.0, 875.0, 410.0); // bottom
     // Right bracket
     draw_line(965.0, 290.0, 1005.0, 290.0);
     draw_line(1005.0, 290.0, 1005.0, 445.0);
@@ -793,20 +793,20 @@ fn paint_logo_scaled(
     let ocx = 585.0 * adj_sx + offset_x;
     let ocy = 350.0 * adj_sy + offset_y;
     paint_aperture_icon(backend, ocx, ocy, scale * logo_scale, c, bright_opacity)?;
-    // S (angular zigzag)
-    draw(backend, 635.0, 290.0, 715.0, 290.0)?;
-    draw(backend, 715.0, 290.0, 715.0, 350.0)?;
-    draw(backend, 715.0, 350.0, 635.0, 350.0)?;
-    draw(backend, 635.0, 350.0, 635.0, 410.0)?;
-    draw(backend, 635.0, 410.0, 715.0, 410.0)?;
+    // S (angular — upper-left vertical, lower-right vertical)
+    draw(backend, 635.0, 290.0, 715.0, 290.0)?; // top
+    draw(backend, 635.0, 290.0, 635.0, 350.0)?; // upper-left
+    draw(backend, 635.0, 350.0, 715.0, 350.0)?; // middle
+    draw(backend, 715.0, 350.0, 715.0, 410.0)?; // lower-right
+    draw(backend, 635.0, 410.0, 715.0, 410.0)?; // bottom
     // I
     draw(backend, 755.0, 290.0, 755.0, 410.0)?;
     // S (second)
-    draw(backend, 795.0, 290.0, 875.0, 290.0)?;
-    draw(backend, 875.0, 290.0, 875.0, 350.0)?;
-    draw(backend, 875.0, 350.0, 795.0, 350.0)?;
-    draw(backend, 795.0, 350.0, 795.0, 410.0)?;
-    draw(backend, 795.0, 410.0, 875.0, 410.0)?;
+    draw(backend, 795.0, 290.0, 875.0, 290.0)?; // top
+    draw(backend, 795.0, 290.0, 795.0, 350.0)?; // upper-left
+    draw(backend, 795.0, 350.0, 875.0, 350.0)?; // middle
+    draw(backend, 875.0, 350.0, 875.0, 410.0)?; // lower-right
+    draw(backend, 795.0, 410.0, 875.0, 410.0)?; // bottom
     // Right bracket: ] (with extended bottom leg)
     draw(backend, 965.0, 290.0, 1005.0, 290.0)?;
     draw(backend, 1005.0, 290.0, 1005.0, 445.0)?;
