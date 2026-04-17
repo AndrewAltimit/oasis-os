@@ -1842,9 +1842,20 @@ fn paint_polygon_shape(
             if let Some(grad) = defs.gradients.get(id.as_str()) {
                 let mid_color = sample_svg_gradient_at(grad, 0.5, opacity);
                 backend.fill_polygon(&screen_pts, mid_color)?;
+            } else if let Some(pat) = defs.patterns.get(id.as_str())
+                && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
+            {
+                paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;
             }
         },
-        SvgPaint::PatternRef(_) | SvgPaint::None => {},
+        SvgPaint::PatternRef(id) => {
+            if let Some(pat) = defs.patterns.get(id.as_str())
+                && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
+            {
+                paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;
+            }
+        },
+        SvgPaint::None => {},
     }
     if let Some(sc) = stroke.as_color() {
         let sc = apply_opacity(sc, opacity);
@@ -1904,6 +1915,32 @@ fn paint_polygon_shape(
 // -------------------------------------------------------------------
 // Gradient and pattern rendering
 // -------------------------------------------------------------------
+
+fn polygon_aabb(pts: &[(i32, i32)]) -> Option<(i32, i32, u32, u32)> {
+    let first = pts.first()?;
+    let (mut min_x, mut min_y) = *first;
+    let (mut max_x, mut max_y) = *first;
+    for &(x, y) in &pts[1..] {
+        if x < min_x {
+            min_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+    }
+    let w = (max_x - min_x).max(0) as u32;
+    let h = (max_y - min_y).max(0) as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((min_x, min_y, w, h))
+}
 
 /// Apply opacity to a color by multiplying its alpha channel.
 fn apply_opacity(c: Color, opacity: f32) -> Color {

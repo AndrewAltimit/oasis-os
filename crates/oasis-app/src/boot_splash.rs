@@ -238,10 +238,10 @@ fn generate_logo_glow_texture(
 fn generate_horizon_glow_texture(
     backend: &mut dyn SdiBackend,
     screen_w: u32,
-    _screen_h: u32,
+    screen_h: u32,
     scale: f32,
 ) -> (Option<TextureId>, u32, u32, i32) {
-    let sy = _screen_h as f32 / 720.0;
+    let sy = screen_h as f32 / 720.0;
     let w = screen_w;
     let h = (64.0 * scale).max(16.0) as u32; // tall enough for blur spread
     let center_y = h / 2;
