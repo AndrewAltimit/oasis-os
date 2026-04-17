@@ -40,7 +40,6 @@ proptest.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
 oasis-test-backend = { workspace = true }
 oasis-net = { workspace = true, features = ["tls-rustls"] }
-oasis-backend-ue5 = { workspace = true }
 
 [[bench]]
 name = "html_parsing"

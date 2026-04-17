@@ -634,18 +634,16 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             }
         },
         Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            if is_float {
-                // Floats with `width: auto` shrink to content. We don't
-                // have a full shrink-to-fit pass yet; fall back to the
-                // old behaviour of filling the containing width, which
-                // at least keeps paintable content on screen.
-                let w = (containing_width - total_extra).max(0.0);
-                layout_box.dimensions.content.width = w;
-            } else {
-                // Width = containing_width minus all horizontal extras.
-                let w = (containing_width - total_extra).max(0.0);
-                layout_box.dimensions.content.width = w;
-            }
+            // TODO: floats with `width: auto` should shrink-to-fit per
+            // CSS 2.1 §10.3.5 (`min(max-content, available)`), which
+            // needs a dedicated measurement pass. Until that lands,
+            // floats share the normal-flow fallback of filling the
+            // containing width — keeps paintable content on screen
+            // (the old.reddit sidebar at a fixed `width: 310px` goes
+            // through `Dimension::Px`, so this fallback only affects
+            // floats that declared `width: auto`).
+            let w = (containing_width - total_extra).max(0.0);
+            layout_box.dimensions.content.width = w;
         },
     }
 
