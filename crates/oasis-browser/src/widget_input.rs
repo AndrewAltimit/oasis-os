@@ -748,7 +748,10 @@ impl BrowserWidget {
             ),
             _ => return,
         };
-        let Some(name) = name_or_id else { return };
+        // `name_or_id` is optional: anonymous reset/submit buttons
+        // (no `name`/`id`) still need to fire their form action. Only
+        // the radio and focused-element-tracking paths require a name.
+        let name = name_or_id;
 
         // Focus tracking: mirror the hover/:focus pseudo-class state
         // even when the form manager doesn't own this element.
@@ -791,7 +794,9 @@ impl BrowserWidget {
 
         if let Some(fi) = fi_owning {
             self.form_manager.focused_form = Some(fi);
-            self.form_manager.focused_element = Some(name.clone());
+            if let Some(ref n) = name {
+                self.form_manager.focused_element = Some(n.clone());
+            }
         }
 
         let is_reset = input_type == "reset";
@@ -802,8 +807,8 @@ impl BrowserWidget {
                 self.layout_dirty = true;
             },
             "radio" => {
-                if let Some(fi) = fi_owning {
-                    self.form_manager.select_radio(fi, &name, &value);
+                if let (Some(fi), Some(n)) = (fi_owning, name.as_deref()) {
+                    self.form_manager.select_radio(fi, n, &value);
                     self.layout_dirty = true;
                 }
             },
