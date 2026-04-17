@@ -21,7 +21,6 @@
 //! | Splash BG reveal     | 3.5       | opacity 0 → 1    |
 //! | Horizon glow         | 3.8       | pulse start       |
 //! | Logo group           | 4.0       | opacity 0 → 1    |
-//! | Subtitle             | 4.8       | opacity 0 → 1    |
 //! | Loading text          | 5.5       | opacity 0 → 1    |
 //! | End                  | 6.5       | fade to dashboard |
 
@@ -617,28 +616,6 @@ fn paint_splash_screen(
         // Crisp logo strokes with scale + brightness.
         let sw = (7.0 * scale).max(2.0) as u32;
         paint_logo_scaled(backend, sx, sy, logo_opacity, sw, logo_scale, brightness)?;
-    }
-
-    // Subtitle "OPERATING SYSTEMS" (appears at 4.8s).
-    if elapsed >= 4.8 {
-        let sub_t = (elapsed - 4.8) / 1.0;
-        let sub_opacity = sub_t.clamp(0.0, 1.0) * splash_opacity;
-        let fs = (20.0 * scale).max(8.0) as u16;
-        let text = "OPERATING SYSTEMS";
-        let tw = backend.measure_text(text, fs);
-        let x = (screen_w as i32 - tw as i32) / 2;
-        let y = (452.0 * sy) as i32;
-        let c = apply_alpha(Color::rgb(255, 255, 255), sub_opacity);
-        // Letter-spacing rendering.
-        let ls = (14.0 * scale) as i32;
-        let mut cx = x;
-        for ch in text.chars() {
-            let mut buf = [0u8; 4];
-            let s = ch.encode_utf8(&mut buf);
-            backend.draw_text(s, cx, y, fs, c)?;
-            let cw = backend.measure_text(s, fs) as i32;
-            cx += cw + ls;
-        }
     }
 
     // Loading text (appears at 5.5s, base opacity 0.8 per SVG).
