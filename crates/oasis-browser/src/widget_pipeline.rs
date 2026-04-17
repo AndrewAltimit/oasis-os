@@ -1129,14 +1129,27 @@ impl BrowserWidget {
                             .get_attribute("type")
                             .unwrap_or("submit")
                             .to_ascii_lowercase();
-                        if btype == "submit" {
-                            let name = elem.get_attribute("name").unwrap_or("").to_string();
-                            let value = elem.get_attribute("value").unwrap_or("").to_string();
-                            let label = doc.text_content(nid);
-                            form_manager.add_element(
-                                form_id,
-                                FormElement::SubmitButton { name, value, label },
-                            );
+                        match btype.as_str() {
+                            "submit" => {
+                                let name = elem.get_attribute("name").unwrap_or("").to_string();
+                                let value = elem.get_attribute("value").unwrap_or("").to_string();
+                                let label = doc.text_content(nid);
+                                form_manager.add_element(
+                                    form_id,
+                                    FormElement::SubmitButton { name, value, label },
+                                );
+                            },
+                            "reset" => {
+                                let text = doc.text_content(nid);
+                                let label = if text.is_empty() {
+                                    "Reset".to_string()
+                                } else {
+                                    text
+                                };
+                                form_manager
+                                    .add_element(form_id, FormElement::ResetButton { label });
+                            },
+                            _ => {},
                         }
                     },
                     _ => {},

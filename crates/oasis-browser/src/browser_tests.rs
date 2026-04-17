@@ -2439,7 +2439,7 @@ fn form_enter_submits() {
     vfs.write(
         "/sites/f/page.html",
         b"<html><body>\
-          <form action=\"/results.html\">\
+          <form action=\"results.html\">\
           <input name=\"q\" size=\"30\">\
           </form></body></html>",
     )

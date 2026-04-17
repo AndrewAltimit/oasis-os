@@ -769,6 +769,8 @@ impl BrowserWidget {
             self.form_manager.focused_element = Some(name.clone());
         }
 
+        let is_reset = input_type == "reset";
+
         match input_type.as_str() {
             "checkbox" => {
                 let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
@@ -785,6 +787,12 @@ impl BrowserWidget {
                     && let Some(data) = self.form_manager.submit(fi)
                 {
                     self.handle_form_submit(&data, vfs);
+                }
+            },
+            _ if is_reset => {
+                if let Some(fi) = fi_owning {
+                    self.form_manager.reset(fi);
+                    self.layout_dirty = true;
                 }
             },
             _ => {
