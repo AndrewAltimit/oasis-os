@@ -673,6 +673,10 @@ fn record_background(
             let safe = |p: (f32, f32, f32)| -> bool {
                 p.0.is_finite() && p.1.is_finite() && p.0.abs() < 1.0e7 && p.1.abs() < 1.0e7
             };
+            // Intentional: back-face / extreme-perspective cull. Non-finite or
+            // out-of-bounds projected corners indicate the element is facing
+            // away from the camera or past the perspective limit, so we drop
+            // the fill rather than emit a degenerate polygon.
             if safe(p0) && safe(p1) && safe(p2) && safe(p3) {
                 dl.push(DisplayItem::FillPolygon {
                     points: [
