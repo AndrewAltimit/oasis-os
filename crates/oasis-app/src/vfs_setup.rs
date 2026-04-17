@@ -111,9 +111,9 @@ td { border: 1px solid rgba(255,255,255,20); }
 
 <h2>Internal test pages</h2>
 <ol>
-<li><a href="/sites/home/about.html">About OASIS Browser</a></li>
-<li><a href="/sites/home/features.html">CSS Feature Test</a></li>
-<li><a href="/sites/home/js-test.html">JavaScript DOM Test</a></li>
+<li><a href="about.html">About OASIS Browser</a></li>
+<li><a href="features.html">CSS Feature Test</a></li>
+<li><a href="js-test.html">JavaScript DOM Test</a></li>
 </ol>
 </body></html>"#,
     )
@@ -135,7 +135,7 @@ a { color: #64c8ff; }
 <li><strong>Layout</strong> -- block, inline, flex, table, float</li>
 <li><strong>Gemini</strong> -- lightweight text protocol</li>
 </ul>
-<p><a href="/sites/home/index.html">Back to home</a></p>
+<p><a href="index.html">Back to home</a></p>
 </body></html>"#,
     )
     .expect("vfs write /sites/home/about.html");
@@ -162,7 +162,7 @@ a { color: #64c8ff; }
 <pre>fn main() {
     println!("Hello!");
 }</pre>
-<p><a href="/sites/home/index.html">Back to home</a></p>
+<p><a href="index.html">Back to home</a></p>
 </body></html>"#,
     )
     .expect("vfs write /sites/home/features.html");
@@ -183,7 +183,7 @@ a { color: #64c8ff; }
 <h1>JavaScript DOM Test</h1>
 <div id="output"></div>
 <div id="created"></div>
-<p><a href="/sites/home/index.html">Back to home</a></p>
+<p><a href="index.html">Back to home</a></p>
 <script>
 var out = document.getElementById("output");
 var results = [];

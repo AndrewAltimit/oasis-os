@@ -2322,3 +2322,146 @@ fn js_dom_get_attribute() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].message, "https://example.com");
 }
+
+// ---------------------------------------------------------------
+// Form interaction tests — end-to-end keyboard + click routing
+// ---------------------------------------------------------------
+
+/// Locate the first focusable text input in the layout tree and
+/// return the center of its rendered rectangle in screen space.
+fn input_center(browser: &BrowserWidget) -> (i32, i32) {
+    use crate::layout::box_model::{BoxType, LayoutBox, ReplacedContent};
+    fn walk(lb: &LayoutBox, offset_y: i32) -> Option<(i32, i32)> {
+        if let BoxType::Replaced(ReplacedContent::TextInput { .. }) = &lb.box_type {
+            let r = &lb.dimensions.content;
+            return Some((
+                (r.x + r.width / 2.0) as i32,
+                (r.y + r.height / 2.0) as i32 + offset_y,
+            ));
+        }
+        for c in &lb.children {
+            if let Some(p) = walk(c, offset_y) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    let offset_y = browser.config.url_bar_height as i32;
+    let root = browser.layout_root.as_ref().expect("layout present");
+    walk(root, offset_y).expect("no text input in layout")
+}
+
+#[test]
+fn form_click_focuses_input() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/f").unwrap();
+    vfs.write(
+        "/sites/f/page.html",
+        b"<html><body>\
+          <form action=\"/search\">\
+          <input name=\"q\" size=\"30\">\
+          </form></body></html>",
+    )
+    .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/f/page.html", &vfs);
+
+    // Form manager should be populated from the DOM.
+    assert_eq!(browser.form_manager.forms.len(), 1);
+
+    let (cx, cy) = input_center(&browser);
+    browser.handle_click(cx, cy, &vfs);
+
+    assert_eq!(
+        browser.form_manager.focused_element.as_deref(),
+        Some("q"),
+        "clicking a text input should focus it (click=({cx},{cy}))"
+    );
+}
+
+#[test]
+fn form_typing_updates_value_and_reflects_in_dom() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/f").unwrap();
+    vfs.write(
+        "/sites/f/page.html",
+        b"<html><body>\
+          <form action=\"/search\">\
+          <input name=\"q\" size=\"30\">\
+          </form></body></html>",
+    )
+    .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/f/page.html", &vfs);
+
+    let (cx, cy) = input_center(&browser);
+    browser.handle_click(cx, cy, &vfs);
+    browser.handle_input(&InputEvent::TextInput('h'), &vfs);
+    browser.handle_input(&InputEvent::TextInput('i'), &vfs);
+
+    assert_eq!(
+        browser.form_manager.get_value(0, "q"),
+        Some("hi"),
+        "form manager should hold the typed characters"
+    );
+
+    // The DOM `value` attribute should mirror the form-manager state
+    // so the next relayout paints the typed text.
+    let doc = browser.document.as_ref().expect("doc present");
+    let input_nid = doc
+        .nodes
+        .iter()
+        .position(|n| {
+            matches!(
+                &n.kind,
+                crate::html::dom::NodeKind::Element(e)
+                    if e.tag == crate::html::dom::TagName::Input
+                        && e.get_attribute("name") == Some("q")
+            )
+        })
+        .expect("input in DOM");
+    if let crate::html::dom::NodeKind::Element(e) = &doc.nodes[input_nid].kind {
+        assert_eq!(e.get_attribute("value"), Some("hi"));
+    }
+}
+
+#[test]
+fn form_enter_submits() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/f").unwrap();
+    vfs.write(
+        "/sites/f/page.html",
+        b"<html><body>\
+          <form action=\"/results.html\">\
+          <input name=\"q\" size=\"30\">\
+          </form></body></html>",
+    )
+    .unwrap();
+    vfs.write(
+        "/sites/f/results.html",
+        b"<html><body><h1>Results</h1></body></html>",
+    )
+    .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/f/page.html", &vfs);
+
+    let (cx, cy) = input_center(&browser);
+    browser.handle_click(cx, cy, &vfs);
+    browser.handle_input(&InputEvent::TextInput('a'), &vfs);
+    browser.handle_input(&InputEvent::ButtonPress(Button::Confirm), &vfs);
+
+    let current = browser.current_url().unwrap_or("");
+    assert!(
+        current.contains("results.html") && current.contains("q=a"),
+        "Enter should submit the form; got: {current}"
+    );
+}

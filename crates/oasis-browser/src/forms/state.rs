@@ -67,6 +67,15 @@ impl FormState {
         self.index_of(name).is_some()
     }
 
+    /// Read-only view of this form's elements.
+    ///
+    /// Exposed so outer layers (`BrowserWidget`) can synchronise
+    /// in-flight form state back onto the DOM without reaching into
+    /// module-private fields.
+    pub fn elements(&self) -> &[FormElement] {
+        &self.elements
+    }
+
     /// Find element index by name.
     pub(super) fn index_of(&self, name: &str) -> Option<usize> {
         self.elements.iter().position(|e| match e {

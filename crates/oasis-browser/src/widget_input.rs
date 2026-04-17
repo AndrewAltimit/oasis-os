@@ -677,6 +677,21 @@ impl BrowserWidget {
         self.handle_form_element_click(x, y, vfs);
     }
 
+    /// Convert a screen-space `(x, y)` click position into the layout
+    /// tree's coordinate space.
+    ///
+    /// Paint shifts the layout tree by `window_origin + url_bar_height
+    /// − scroll_offset` before drawing. `hit_test` expects raw layout
+    /// coords, so every click-into-layout path has to undo that
+    /// transform. Without this the hit rectangle of every element is
+    /// off by the URL-bar height and clicks on inputs miss.
+    fn screen_to_layout(&self, screen_x: i32, screen_y: i32) -> (f32, f32) {
+        let lx = (screen_x - self.window_x) as f32 + self.scroll.scroll_x as f32;
+        let ly = (screen_y - self.window_y - self.config.url_bar_height as i32) as f32
+            + self.scroll.scroll_y as f32;
+        (lx, ly)
+    }
+
     /// Handle clicks that fall on a form `<input>` / `<button>` element
     /// directly (i.e. outside any `<label for="...">` wrapper).
     ///
@@ -688,10 +703,15 @@ impl BrowserWidget {
     fn handle_form_element_click(&mut self, x: i32, y: i32, vfs: &dyn Vfs) {
         use crate::html::dom::{NodeKind, TagName};
 
+        // Translate from screen-space click coordinates into layout
+        // space. The layout tree is built at (0, 0); paint shifts it
+        // down by the URL bar height and offsets by the current scroll
+        // position. hit_test expects layout-space coords.
+        let (lx, ly) = self.screen_to_layout(x, y);
         let Some(nid) = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32))
+            .and_then(|root| root.hit_test(lx, ly))
         else {
             return;
         };
@@ -781,10 +801,11 @@ impl BrowserWidget {
     fn handle_label_for_click(&mut self, x: i32, y: i32) {
         use crate::html::dom::{NodeKind, TagName};
 
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         let Some(nid) = node_id else { return };
         let Some(doc) = &self.document else {
@@ -868,10 +889,11 @@ impl BrowserWidget {
     fn handle_details_toggle(&mut self, x: i32, y: i32) {
         use crate::html::dom::{NodeKind, TagName};
 
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         let Some(nid) = node_id else { return };
         let Some(doc) = &mut self.document else {
@@ -926,10 +948,11 @@ impl BrowserWidget {
     /// Dispatch a JS click event using the layout tree hit test.
     #[cfg(feature = "javascript")]
     fn dispatch_js_click(&mut self, x: i32, y: i32) {
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
 
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
             Self::dispatch_js_event(engine, nid, "click");
@@ -951,10 +974,11 @@ impl BrowserWidget {
     /// the given coordinates, passing `clientX`/`clientY` as detail.
     #[cfg(feature = "javascript")]
     fn dispatch_js_mouse_event(&mut self, x: i32, y: i32, event_type: &str) {
+        let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(x as f32, y as f32));
+            .and_then(|root| root.hit_test(lx, ly));
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
             Self::dispatch_js_mouse_event_to(engine, nid, x, y, event_type);
         }
@@ -1287,6 +1311,14 @@ impl BrowserWidget {
     /// Returns `true` if the event was consumed by the form manager.
     pub fn dispatch_form_key(&mut self, key: crate::forms::FormKey, vfs: &dyn Vfs) -> bool {
         let action = self.form_manager.handle_input(key);
+        // Sync form_manager's value back to the DOM so the next
+        // relayout paints the typed characters. Without this, the
+        // layout tree's `ReplacedContent::TextInput { value }` stays
+        // whatever the HTML `<input value="">` attribute said at page
+        // load, and the search box appears to ignore every key.
+        if matches!(action, crate::forms::FormAction::ValueChanged) {
+            self.sync_form_values_to_dom();
+        }
         match action {
             crate::forms::FormAction::Submit(ref data) => {
                 self.handle_form_submit(data, vfs);
@@ -1295,6 +1327,48 @@ impl BrowserWidget {
             crate::forms::FormAction::FocusChanged | crate::forms::FormAction::ValueChanged => true,
             crate::forms::FormAction::None => false,
         }
+    }
+
+    /// Write every form-manager value back onto the corresponding DOM
+    /// element's `value` attribute.
+    ///
+    /// This is the glue between `form_manager` (source of truth for
+    /// in-flight edits) and the layout tree (rebuilt from DOM on every
+    /// `layout_dirty` tick). Without this sync the input content is
+    /// invisible to the user because the layout pass keeps re-reading
+    /// the original HTML attribute.
+    fn sync_form_values_to_dom(&mut self) {
+        use crate::forms::FormElement;
+        let Some(doc) = self.document.as_mut() else {
+            return;
+        };
+        for form in &self.form_manager.forms {
+            for elem in form.elements() {
+                let (name, value) = match elem {
+                    FormElement::TextInput { name, value, .. }
+                    | FormElement::TextArea { name, value, .. } => (name, value.clone()),
+                    _ => continue,
+                };
+                if name.is_empty() {
+                    continue;
+                }
+                // Locate the matching <input>/<textarea> by its `name`
+                // attribute. `get_element_by_id` only indexes ids, so
+                // fall back to a linear walk.
+                for node in doc.nodes.iter_mut() {
+                    if let crate::html::dom::NodeKind::Element(ref mut e) = node.kind
+                        && matches!(
+                            e.tag,
+                            crate::html::dom::TagName::Input | crate::html::dom::TagName::Textarea
+                        )
+                        && e.get_attribute("name") == Some(name.as_str())
+                    {
+                        e.set_attribute("value", &value);
+                    }
+                }
+            }
+        }
+        self.layout_dirty = true;
     }
 
     /// Handle a form submission.
