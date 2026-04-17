@@ -189,39 +189,40 @@ fn generate_logo_glow_texture(
         }
     };
 
-    // Render all logo strokes into buffer (same coordinates as paint_logo).
+    // Render all logo strokes into buffer (same coordinates as paint_logo_scaled).
     // Left bracket
     draw_line(315.0, 290.0, 275.0, 290.0);
     draw_line(275.0, 290.0, 275.0, 445.0);
     draw_line(275.0, 445.0, 420.0, 445.0);
+    // O (angular rectangle)
+    draw_line(345.0, 290.0, 425.0, 290.0);
+    draw_line(425.0, 290.0, 425.0, 410.0);
+    draw_line(425.0, 410.0, 345.0, 410.0);
+    draw_line(345.0, 410.0, 345.0, 290.0);
     // A
-    draw_line(355.0, 410.0, 395.0, 290.0);
-    draw_line(395.0, 290.0, 435.0, 410.0);
-    // L
-    draw_line(465.0, 290.0, 465.0, 410.0);
-    draw_line(465.0, 410.0, 515.0, 410.0);
-    // T (first)
-    draw_line(595.0, 290.0, 655.0, 290.0);
-    draw_line(625.0, 290.0, 625.0, 410.0);
-    // I (first)
-    draw_line(685.0, 290.0, 685.0, 410.0);
-    // M
-    draw_line(715.0, 410.0, 715.0, 290.0);
-    draw_line(715.0, 290.0, 760.0, 355.0);
-    draw_line(760.0, 355.0, 805.0, 290.0);
-    draw_line(805.0, 290.0, 805.0, 410.0);
-    // I (second)
-    draw_line(835.0, 290.0, 835.0, 410.0);
-    // T (second)
-    draw_line(865.0, 290.0, 925.0, 290.0);
-    draw_line(895.0, 290.0, 895.0, 410.0);
+    draw_line(455.0, 410.0, 495.0, 290.0);
+    draw_line(495.0, 290.0, 535.0, 410.0);
+    // S (first, angular zigzag)
+    draw_line(635.0, 290.0, 715.0, 290.0);
+    draw_line(715.0, 290.0, 715.0, 350.0);
+    draw_line(715.0, 350.0, 635.0, 350.0);
+    draw_line(635.0, 350.0, 635.0, 410.0);
+    draw_line(635.0, 410.0, 715.0, 410.0);
+    // I
+    draw_line(755.0, 290.0, 755.0, 410.0);
+    // S (second)
+    draw_line(795.0, 290.0, 875.0, 290.0);
+    draw_line(875.0, 290.0, 875.0, 350.0);
+    draw_line(875.0, 350.0, 795.0, 350.0);
+    draw_line(795.0, 350.0, 795.0, 410.0);
+    draw_line(795.0, 410.0, 875.0, 410.0);
     // Right bracket
     draw_line(965.0, 290.0, 1005.0, 290.0);
     draw_line(1005.0, 290.0, 1005.0, 445.0);
     draw_line(1005.0, 445.0, 860.0, 445.0);
 
-    // Aperture circle at center.
-    let acx = (555.0 * sx) as i32 - logo_x;
+    // Aperture circle (centered between A and S).
+    let acx = (585.0 * sx) as i32 - logo_x;
     let acy = (350.0 * sy) as i32 - logo_y;
     let ar = (25.0 * scale) as i32;
     for dy in -ar..=ar {
@@ -479,8 +480,8 @@ fn paint_bios_screen(
     let c = Color::rgb(204, 204, 204);
 
     let lines: &[(&str, f32)] = &[
-        ("ALTIMIT_KERNEL_V.7.0.4 BOOT SEQUENCE INITIATED", 0.4),
-        ("COPYRIGHT (C) 199X ALTIMIT CORP. ALL RIGHTS RESERVED.", 0.8),
+        ("OASIS_KERNEL_V.7.0.4 BOOT SEQUENCE INITIATED", 0.4),
+        ("COPYRIGHT (C) 199X OASIS CORP. ALL RIGHTS RESERVED.", 0.8),
         ("SYSTEM RAM CHECK... 1024000K OK", 1.2),
         ("INITIALIZING VIRTUAL FILE SYSTEM... OK", 1.6),
         ("MOUNTING BOOT DRIVE /DEV/HDA1... OK", 2.1),
@@ -776,36 +777,37 @@ fn paint_logo_scaled(
         Ok(())
     };
 
-    // Left bracket
+    // Left bracket: [ (with extended bottom leg)
     draw(backend, 315.0, 290.0, 275.0, 290.0)?;
     draw(backend, 275.0, 290.0, 275.0, 445.0)?;
     draw(backend, 275.0, 445.0, 420.0, 445.0)?;
-    // A
-    draw(backend, 355.0, 410.0, 395.0, 290.0)?;
-    draw(backend, 395.0, 290.0, 435.0, 410.0)?;
-    // L
-    draw(backend, 465.0, 290.0, 465.0, 410.0)?;
-    draw(backend, 465.0, 410.0, 515.0, 410.0)?;
-    // Aperture
-    let ocx = 555.0 * adj_sx + offset_x;
+    // O (angular rectangle outline)
+    draw(backend, 345.0, 290.0, 425.0, 290.0)?;
+    draw(backend, 425.0, 290.0, 425.0, 410.0)?;
+    draw(backend, 425.0, 410.0, 345.0, 410.0)?;
+    draw(backend, 345.0, 410.0, 345.0, 290.0)?;
+    // A (inverted V)
+    draw(backend, 455.0, 410.0, 495.0, 290.0)?;
+    draw(backend, 495.0, 290.0, 535.0, 410.0)?;
+    // Aperture — hexagonal camera shutter between A and S.
+    let ocx = 585.0 * adj_sx + offset_x;
     let ocy = 350.0 * adj_sy + offset_y;
     paint_aperture_icon(backend, ocx, ocy, scale * logo_scale, c, bright_opacity)?;
-    // T
-    draw(backend, 595.0, 290.0, 655.0, 290.0)?;
-    draw(backend, 625.0, 290.0, 625.0, 410.0)?;
+    // S (angular zigzag)
+    draw(backend, 635.0, 290.0, 715.0, 290.0)?;
+    draw(backend, 715.0, 290.0, 715.0, 350.0)?;
+    draw(backend, 715.0, 350.0, 635.0, 350.0)?;
+    draw(backend, 635.0, 350.0, 635.0, 410.0)?;
+    draw(backend, 635.0, 410.0, 715.0, 410.0)?;
     // I
-    draw(backend, 685.0, 290.0, 685.0, 410.0)?;
-    // M
-    draw(backend, 715.0, 410.0, 715.0, 290.0)?;
-    draw(backend, 715.0, 290.0, 760.0, 355.0)?;
-    draw(backend, 760.0, 355.0, 805.0, 290.0)?;
-    draw(backend, 805.0, 290.0, 805.0, 410.0)?;
-    // I
-    draw(backend, 835.0, 290.0, 835.0, 410.0)?;
-    // T
-    draw(backend, 865.0, 290.0, 925.0, 290.0)?;
-    draw(backend, 895.0, 290.0, 895.0, 410.0)?;
-    // Right bracket
+    draw(backend, 755.0, 290.0, 755.0, 410.0)?;
+    // S (second)
+    draw(backend, 795.0, 290.0, 875.0, 290.0)?;
+    draw(backend, 875.0, 290.0, 875.0, 350.0)?;
+    draw(backend, 875.0, 350.0, 795.0, 350.0)?;
+    draw(backend, 795.0, 350.0, 795.0, 410.0)?;
+    draw(backend, 795.0, 410.0, 875.0, 410.0)?;
+    // Right bracket: ] (with extended bottom leg)
     draw(backend, 965.0, 290.0, 1005.0, 290.0)?;
     draw(backend, 1005.0, 290.0, 1005.0, 445.0)?;
     draw(backend, 1005.0, 445.0, 860.0, 445.0)?;
