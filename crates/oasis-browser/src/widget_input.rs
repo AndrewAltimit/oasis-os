@@ -757,12 +757,37 @@ impl BrowserWidget {
         let is_submit = matches!(input_type.as_str(), "submit" | "image")
             || (tag == TagName::Button && !matches!(input_type.as_str(), "button" | "reset"));
 
-        // Look up which form owns this element so we can focus it.
-        let fi_owning = self
-            .form_manager
-            .forms
-            .iter()
-            .position(|f| f.has_element(&name));
+        // Resolve the owning form by DOM ancestry rather than by
+        // element name. Name-based matching fails for
+        // `FormElement::ResetButton` (no `name` field — `has_element`
+        // only matches the sentinel `"__reset__"`), for anonymous
+        // submit buttons, and for named elements shared across
+        // sibling forms (position returns the first match, not the
+        // actual owner). `populate_forms_from_dom` registers forms
+        // in document order, so the N-th `<form>` node corresponds
+        // to `form_manager.forms[N]`.
+        let fi_owning = {
+            let mut form_ancestor = None;
+            let mut cur = Some(target_nid);
+            while let Some(id) = cur {
+                if let NodeKind::Element(ref e) = doc.nodes[id].kind
+                    && e.tag == TagName::Form
+                {
+                    form_ancestor = Some(id);
+                    break;
+                }
+                cur = doc.nodes[id].parent;
+            }
+            form_ancestor.and_then(|target| {
+                doc.nodes
+                    .iter()
+                    .enumerate()
+                    .filter(
+                        |(_, n)| matches!(&n.kind, NodeKind::Element(e) if e.tag == TagName::Form),
+                    )
+                    .position(|(nid, _)| nid == target)
+            })
+        };
 
         if let Some(fi) = fi_owning {
             self.form_manager.focused_form = Some(fi);

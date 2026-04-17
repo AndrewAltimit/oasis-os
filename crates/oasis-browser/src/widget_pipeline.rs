@@ -922,7 +922,11 @@ impl BrowserWidget {
             let form_id = form_manager.add_form(&action, method);
 
             // DFS the form's subtree collecting form-element descendants.
-            let mut stack = form_node.children.clone();
+            // Reverse the initial children so `pop()` yields them in
+            // document order (matches the inner `iter().rev()` push).
+            // Without this, direct <form> children are visited in reverse,
+            // making submitted form data appear in reverse document order.
+            let mut stack: Vec<usize> = form_node.children.iter().rev().copied().collect();
             while let Some(nid) = stack.pop() {
                 let node = &doc.nodes[nid];
                 for &c in node.children.iter().rev() {
