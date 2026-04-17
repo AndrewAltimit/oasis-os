@@ -101,7 +101,15 @@ td { border: 1px solid rgba(255,255,255,20); }
 
 <blockquote>Built from scratch in Rust (2026), inspired by PSP homebrew shells like PSIX.</blockquote>
 
-<h2>Links</h2>
+<h2>Real-world test pages</h2>
+<p>Sites we're actively tuning the engine against &mdash; one click to open:</p>
+<ul>
+<li><a href="https://old.reddit.com/">old.reddit.com</a> &mdash; float sidebars, sprite votes, nested comments</li>
+<li><a href="https://en.wikipedia.org/wiki/Main_Page">wikipedia.org</a> &mdash; infoboxes, @media queries, 62.5% rem baseline</li>
+<li><a href="https://www.google.com/">google.com</a> &mdash; search form, centered layout</li>
+</ul>
+
+<h2>Internal test pages</h2>
 <ol>
 <li><a href="/sites/home/about.html">About OASIS Browser</a></li>
 <li><a href="/sites/home/features.html">CSS Feature Test</a></li>
