@@ -24,8 +24,7 @@ pub const ROOT_FONT_SIZE: f32 = 8.0;
 // each other (desktop-viewport and PSP-viewport visual regressions
 // cascade concurrent pages with different html font-sizes) and so
 // backends that style multiple pages on different threads don't
-// observe each other's roots. The `Cell` is a `u32` (bits of `f32`)
-// because `f32` isn't `Copy` inside `Cell` without the wrapper.
+// observe each other's roots.
 //
 // Using thread-local state is the pragmatic choice: `rem` resolution
 // happens inside `parse_length`-family string helpers that sit well
@@ -33,8 +32,8 @@ pub const ROOT_FONT_SIZE: f32 = 8.0;
 // through dozens of call sites would be high-touch with no semantic
 // change.
 std::thread_local! {
-    static ROOT_FONT_SIZE_PX: std::cell::Cell<u32> =
-        const { std::cell::Cell::new(ROOT_FONT_SIZE.to_bits()) };
+    static ROOT_FONT_SIZE_PX: std::cell::Cell<f32> =
+        const { std::cell::Cell::new(ROOT_FONT_SIZE) };
 }
 
 /// Store the resolved root font-size for subsequent `rem` unit resolution.
@@ -42,7 +41,7 @@ std::thread_local! {
 /// Called by the cascade immediately after the `<html>` element's
 /// `font-size` has been computed.
 pub fn set_root_font_size(px: f32) {
-    ROOT_FONT_SIZE_PX.with(|cell| cell.set(px.to_bits()));
+    ROOT_FONT_SIZE_PX.with(|cell| cell.set(px));
 }
 
 /// Read the current root font-size used for `rem` unit resolution.
@@ -51,7 +50,7 @@ pub fn set_root_font_size(px: f32) {
 /// [`set_root_font_size`]), or [`ROOT_FONT_SIZE`] (8px) before the html
 /// element has been styled.
 pub fn current_root_font_size() -> f32 {
-    ROOT_FONT_SIZE_PX.with(|cell| f32::from_bits(cell.get()))
+    ROOT_FONT_SIZE_PX.with(|cell| cell.get())
 }
 
 // -----------------------------------------------------------------------

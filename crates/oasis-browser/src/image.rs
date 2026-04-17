@@ -87,10 +87,19 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
 fn looks_like_svg(data: &[u8]) -> bool {
     let probe_len = data.len().min(1024);
     let probe = &data[..probe_len];
-    // Fast path: skip leading whitespace.
-    let start = probe
+    // Skip an optional UTF-8 BOM before the whitespace scan — BOM bytes
+    // are not ASCII whitespace, so a BOM-prefixed SVG would otherwise
+    // fall through all the prefix checks below.
+    let bom_len = if probe.starts_with(b"\xEF\xBB\xBF") {
+        3
+    } else {
+        0
+    };
+    // Fast path: skip leading whitespace after the BOM.
+    let start = probe[bom_len..]
         .iter()
         .position(|&b| !b.is_ascii_whitespace())
+        .map(|p| p + bom_len)
         .unwrap_or(probe_len);
     let tail = &probe[start..];
     // Accept with or without XML prolog / doctype.
@@ -410,8 +419,10 @@ fn decode_svg_placeholder(data: &[u8]) -> Option<DecodedImage> {
     // Find the opening `<svg` tag.
     let svg_start = header.find("<svg")?;
     // Find the end of the opening tag so we don't pick up attrs from
-    // descendants (viewport-sized rects etc.).
-    let tag_end = header[svg_start..].find('>')? + svg_start;
+    // descendants (viewport-sized rects etc.). Scan for `>` outside of
+    // quoted attribute values — a raw `find('>')` would match `>` inside
+    // e.g. `data-foo="a>b"` and truncate the tag prematurely.
+    let tag_end = find_tag_end(&header[svg_start..])? + svg_start;
     let tag = &header[svg_start..tag_end];
 
     let width = extract_length_attr(tag, "width");
@@ -434,6 +445,23 @@ fn decode_svg_placeholder(data: &[u8]) -> Option<DecodedImage> {
     // Transparent RGBA.
     let pixels = vec![0u8; (w * h * 4) as usize];
     Some(DecodedImage::new(w, h, pixels))
+}
+
+/// Find the byte offset of the `>` that closes the first tag in `s`,
+/// tracking quoted attribute values so `>` inside `"…"` or `'…'` is
+/// not mistaken for the tag terminator.
+fn find_tag_end(s: &str) -> Option<usize> {
+    let mut in_quote: Option<u8> = None;
+    for (i, b) in s.bytes().enumerate() {
+        match (in_quote, b) {
+            (None, b'"') => in_quote = Some(b'"'),
+            (None, b'\'') => in_quote = Some(b'\''),
+            (Some(q), c) if c == q => in_quote = None,
+            (None, b'>') => return Some(i),
+            _ => {},
+        }
+    }
+    None
 }
 
 /// Extract a numeric attribute value from an SVG opening tag.
