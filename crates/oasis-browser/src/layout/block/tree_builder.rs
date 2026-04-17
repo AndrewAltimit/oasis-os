@@ -220,20 +220,26 @@ fn build_box_for_node(
 
             // For table cells, encode colspan/rowspan in the style
             // using the convention expected by the table layout engine.
+            // The scale factor lives in `crate::layout::table` as
+            // `COLSPAN_ENCODING_SCALE`; both sides must agree or
+            // `extract_explicit_width` silently filters legitimate
+            // widths.
             if matches!(lb.box_type, BoxType::TableCell) {
                 if let Some(cs) = elem
                     .get_attribute("colspan")
                     .and_then(|v| v.parse::<usize>().ok())
                     .filter(|&cs| cs > 1)
                 {
-                    lb.style.min_width = Dimension::Px(cs as f32 * 1000.0);
+                    lb.style.min_width =
+                        Dimension::Px(cs as f32 * crate::layout::table::COLSPAN_ENCODING_SCALE);
                 }
                 if let Some(rs) = elem
                     .get_attribute("rowspan")
                     .and_then(|v| v.parse::<usize>().ok())
                     .filter(|&rs| rs > 1)
                 {
-                    lb.style.max_width = Dimension::Px(rs as f32 * 1000.0);
+                    lb.style.max_width =
+                        Dimension::Px(rs as f32 * crate::layout::table::COLSPAN_ENCODING_SCALE);
                 }
             }
 

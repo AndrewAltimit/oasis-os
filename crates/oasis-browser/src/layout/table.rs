@@ -10,6 +10,20 @@ use super::block::TextMeasurer;
 use super::box_model::*;
 use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display, VerticalAlign};
 
+/// Pixel multiplier used to encode a table cell's `colspan` /
+/// `rowspan` inside the computed-style `min_width` / `max_width`
+/// fields. The DOM-to-layout bridge writes
+/// `Dimension::Px(span * COLSPAN_ENCODING_SCALE)` and
+/// [`extract_explicit_width`] filters out any `Px` value at or above
+/// this threshold so a legitimate `width="1200"` is *not* legal — the
+/// encoding scale must stay larger than any plausible CSS pixel width.
+///
+/// Shared between [`make_cell_with_spans`], [`extract_span_attrs`],
+/// [`extract_explicit_width`], and the DOM-to-layout bridge in
+/// `crate::layout::block::tree_builder` so changing the scale in one
+/// place updates the sentinel everywhere.
+pub(crate) const COLSPAN_ENCODING_SCALE: f32 = 1000.0;
+
 // -------------------------------------------------------------------
 // Table cell representation
 // -------------------------------------------------------------------
@@ -308,11 +322,12 @@ fn parse_bare_cell(
 /// Extract a cell's explicit CSS width as (px, percent).
 ///
 /// Multi-column cells propagate their width constraint across spanned
-/// columns during distribution. Values ≥ 1000 px are the colspan
-/// sentinel set by the DOM-to-layout bridge and are ignored here.
+/// columns during distribution. Values at or above
+/// [`COLSPAN_ENCODING_SCALE`] are the colspan sentinel set by the
+/// DOM-to-layout bridge and are ignored here.
 fn extract_explicit_width(cell_box: &LayoutBox) -> (Option<f32>, Option<f32>) {
     match cell_box.style.width {
-        Dimension::Px(v) if v > 0.0 && v < 1000.0 => (Some(v), None),
+        Dimension::Px(v) if v > 0.0 && v < COLSPAN_ENCODING_SCALE => (Some(v), None),
         Dimension::Percent(p) if p > 0.0 && p <= 100.0 => (None, Some(p)),
         _ => (None, None),
     }
@@ -373,11 +388,11 @@ fn extract_span_attrs(cell_box: &LayoutBox) -> (usize, usize) {
     // The public API `make_cell_with_spans` allows tests and callers
     // to embed span metadata.
     let colspan = match cell_box.style.min_width {
-        Dimension::Px(v) if v >= 1000.0 => (v / 1000.0) as usize,
+        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
         _ => 1,
     };
     let rowspan = match cell_box.style.max_width {
-        Dimension::Px(v) if v >= 1000.0 => (v / 1000.0) as usize,
+        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
         _ => 1,
     };
     (colspan.max(1), rowspan.max(1))
@@ -502,16 +517,26 @@ fn compute_column_widths(tl: &mut TableLayout) {
     // width across the *non-pinned* spanned columns. Columns that
     // already have an explicit CSS pixel width stay at that width;
     // the remaining columns absorb the slack.
+    //
+    // When every spanned column is already pinned (`flex_cols == 0`)
+    // we still have to place the extra somewhere; split it evenly
+    // across the pinned columns instead of adding it to each
+    // individually (which would multiply the growth by the span width).
     for cell in &tl.cells {
         if cell.colspan <= 1 {
             continue;
         }
         let end = (cell.col + cell.colspan).min(tl.num_cols);
         let span_range = cell.col..end;
+        let span_len = end - cell.col;
         let flex_cols: usize = (span_range.clone())
             .filter(|i| !col_explicit_px[*i])
             .count();
-        let divisor = flex_cols.max(1) as f32;
+        let divisor = if flex_cols == 0 {
+            span_len.max(1) as f32
+        } else {
+            flex_cols as f32
+        };
 
         let sum_min: f32 = col_min[span_range.clone()].iter().sum();
         if cell.min_width > sum_min {
@@ -1083,8 +1108,9 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
 /// Create a table cell `LayoutBox` with colspan and rowspan encoded
 /// in the style for use in tests and the table layout algorithm.
 ///
-/// `colspan` is encoded as `min_width: Px(colspan * 1000.0)`.
-/// `rowspan` is encoded as `max_width: Px(rowspan * 1000.0)`.
+/// `colspan` is encoded as
+/// `min_width: Px(colspan * COLSPAN_ENCODING_SCALE)`. `rowspan` is
+/// encoded as `max_width: Px(rowspan * COLSPAN_ENCODING_SCALE)`.
 #[cfg(test)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
@@ -1095,10 +1121,10 @@ pub fn make_cell_with_spans(
     let mut cell_style = style.clone();
     cell_style.display = Display::TableCell;
     if colspan > 1 {
-        cell_style.min_width = Dimension::Px(colspan as f32 * 1000.0);
+        cell_style.min_width = Dimension::Px(colspan as f32 * COLSPAN_ENCODING_SCALE);
     }
     if rowspan > 1 {
-        cell_style.max_width = Dimension::Px(rowspan as f32 * 1000.0);
+        cell_style.max_width = Dimension::Px(rowspan as f32 * COLSPAN_ENCODING_SCALE);
     }
     let mut lb = LayoutBox::new(BoxType::TableCell, cell_style, None);
     lb.children = children;

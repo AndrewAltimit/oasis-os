@@ -1074,7 +1074,24 @@ impl BrowserWidget {
                         let name = elem.get_attribute("name").unwrap_or("").to_string();
                         let mut options = Vec::new();
                         let mut selected_index = None;
-                        for (idx, &opt_id) in node.children.iter().enumerate() {
+                        // Walk every descendant of the <select> so
+                        // <option> elements wrapped in <optgroup> are
+                        // collected too. `<optgroup>` is parsed as
+                        // `TagName::Unknown("optgroup")` since the
+                        // enum has no dedicated variant. We push
+                        // children in reverse onto the stack so the
+                        // DFS yields them back in document order,
+                        // which keeps `selected_index` stable.
+                        let mut opt_stack: Vec<usize> =
+                            node.children.iter().rev().copied().collect();
+                        let mut ordered: Vec<usize> = Vec::new();
+                        while let Some(nid) = opt_stack.pop() {
+                            ordered.push(nid);
+                            for &c in doc.nodes[nid].children.iter().rev() {
+                                opt_stack.push(c);
+                            }
+                        }
+                        for opt_id in ordered {
                             if let NodeKind::Element(ref opt) = doc.nodes[opt_id].kind
                                 && opt.tag == TagName::Option
                             {
@@ -1087,7 +1104,6 @@ impl BrowserWidget {
                                 if opt.get_attribute("selected").is_some() {
                                     selected_index = Some(options.len());
                                 }
-                                let _ = idx;
                                 options.push(SelectOption {
                                     value,
                                     label,

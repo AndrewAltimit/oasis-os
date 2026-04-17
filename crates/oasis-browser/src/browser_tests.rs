@@ -2331,24 +2331,24 @@ fn js_dom_get_attribute() {
 /// return the center of its rendered rectangle in screen space.
 fn input_center(browser: &BrowserWidget) -> (i32, i32) {
     use crate::layout::box_model::{BoxType, LayoutBox, ReplacedContent};
-    fn walk(lb: &LayoutBox, offset_y: i32) -> Option<(i32, i32)> {
+    fn walk(lb: &LayoutBox) -> Option<(i32, i32)> {
         if let BoxType::Replaced(ReplacedContent::TextInput { .. }) = &lb.box_type {
             let r = &lb.dimensions.content;
-            return Some((
-                (r.x + r.width / 2.0) as i32,
-                (r.y + r.height / 2.0) as i32 + offset_y,
-            ));
+            return Some(((r.x + r.width / 2.0) as i32, (r.y + r.height / 2.0) as i32));
         }
         for c in &lb.children {
-            if let Some(p) = walk(c, offset_y) {
+            if let Some(p) = walk(c) {
                 return Some(p);
             }
         }
         None
     }
-    let offset_y = browser.config.url_bar_height as i32;
     let root = browser.layout_root.as_ref().expect("layout present");
-    walk(root, offset_y).expect("no text input in layout")
+    let (lx, ly) = walk(root).expect("no text input in layout");
+    (
+        lx + browser.window_x - browser.scroll.scroll_x,
+        ly + browser.window_y + browser.config.url_bar_height as i32 - browser.scroll.scroll_y,
+    )
 }
 
 #[test]

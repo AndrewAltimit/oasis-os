@@ -1339,10 +1339,39 @@ impl BrowserWidget {
     /// the original HTML attribute.
     fn sync_form_values_to_dom(&mut self) {
         use crate::forms::FormElement;
+        use crate::html::dom::{NodeKind, TagName};
         let Some(doc) = self.document.as_mut() else {
             return;
         };
-        for form in &self.form_manager.forms {
+        // Build the list of `<form>` DOM node ids in document order.
+        // `populate_forms_from_dom` registers forms in this same order,
+        // so the N-th `<form>` node corresponds to
+        // `form_manager.forms[N]`. Scoping the name lookup to each
+        // form's subtree prevents two forms sharing a field name
+        // (e.g. both with `<input name="q">`) from overwriting each
+        // other's in-flight value.
+        let mut form_dom_ids: Vec<usize> = Vec::with_capacity(self.form_manager.forms.len());
+        for (nid, node) in doc.nodes.iter().enumerate() {
+            if let NodeKind::Element(e) = &node.kind
+                && e.tag == TagName::Form
+            {
+                form_dom_ids.push(nid);
+            }
+        }
+        for (idx, form) in self.form_manager.forms.iter().enumerate() {
+            let Some(&form_nid) = form_dom_ids.get(idx) else {
+                continue;
+            };
+            // Collect every descendant node id of this <form> so we
+            // can gate the mutable pass on form ownership.
+            let mut descendants: Vec<usize> = Vec::new();
+            let mut stack: Vec<usize> = doc.nodes[form_nid].children.clone();
+            while let Some(nid) = stack.pop() {
+                descendants.push(nid);
+                for &c in &doc.nodes[nid].children {
+                    stack.push(c);
+                }
+            }
             for elem in form.elements() {
                 let (name, value) = match elem {
                     FormElement::TextInput { name, value, .. }
@@ -1352,15 +1381,9 @@ impl BrowserWidget {
                 if name.is_empty() {
                     continue;
                 }
-                // Locate the matching <input>/<textarea> by its `name`
-                // attribute. `get_element_by_id` only indexes ids, so
-                // fall back to a linear walk.
-                for node in doc.nodes.iter_mut() {
-                    if let crate::html::dom::NodeKind::Element(ref mut e) = node.kind
-                        && matches!(
-                            e.tag,
-                            crate::html::dom::TagName::Input | crate::html::dom::TagName::Textarea
-                        )
+                for &nid in &descendants {
+                    if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind
+                        && matches!(e.tag, TagName::Input | TagName::Textarea)
                         && e.get_attribute("name") == Some(name.as_str())
                     {
                         e.set_attribute("value", &value);
