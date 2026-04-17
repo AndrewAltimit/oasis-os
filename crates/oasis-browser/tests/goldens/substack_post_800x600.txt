@@ -1,561 +1,222 @@
 # viewport 800x600
-draw_text "Spare ", 8, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 8, 14, 39, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Cycles", 44, 8, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 44, 14, 40, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Notes ", 8, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 44, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "systems ", 62, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "programming ", 110, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 182, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "retro ", 206, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hardware", 242, 20, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Why ", 8, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Why ", 9, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 32, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 33, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "built ", 44, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "built ", 45, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 80, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 81, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "browser ", 92, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "browser ", 93, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine ", 140, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine ", 141, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 182, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 183, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 206, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 207, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "22-year-old ", 218, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "22-year-old ", 219, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "handheld", 290, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "handheld", 291, 32, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PSP ", 32, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "shipped ", 56, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 104, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2004 ", 122, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with ", 152, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "32 ", 182, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MB ", 200, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 218, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "RAM ", 236, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 260, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 284, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "333 ", 296, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MHz ", 320, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MIPS ", 344, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "CPU. ", 374, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "In ", 404, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2026, ", 422, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 458, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "can ", 476, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "run ", 500, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 524, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "from-scratch ", 536, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 614, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "browser ", 644, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine ", 692, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with", 734, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "working ", 8, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "JavaScript. ", 56, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Here's ", 128, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "how.", 170, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Andrew ", 8, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Lee", 50, 90, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "April ", 8, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "15, ", 44, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2026 ", 68, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "· ", 98, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "12 ", 116, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "min ", 134, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "read", 158, 102, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Every ", 8, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "so ", 44, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "often ", 62, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 98, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "get ", 110, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "asked ", 134, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "why ", 170, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I'm ", 194, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "pouring ", 218, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "this ", 266, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "much ", 296, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "effort ", 326, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "into ", 368, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 398, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "handheld ", 410, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 464, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "stopped ", 494, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "shipping ", 542, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "over ", 596, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 626, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "decade ", 638, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ago. ", 680, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 710, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "honest", 734, 122, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "answer ", 8, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 50, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 68, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 98, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PSP ", 122, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 146, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 164, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "last ", 188, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "device ", 218, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 260, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "my ", 278, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "collection ", 296, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "where ", 362, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 398, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "can ", 410, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fit ", 434, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 458, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "entire ", 482, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "system ", 524, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 566, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "my ", 584, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "head ", 602, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "— ", 632, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "no ", 656, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hidden ", 674, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "secure", 716, 134, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "enclaves, ", 8, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "no ", 68, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "undocumented ", 86, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "firmware ", 164, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "blobs ", 218, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 254, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "can't ", 266, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "touch, ", 302, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "no ", 344, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "coprocessors ", 362, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "running ", 440, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "blobs ", 488, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "signed ", 524, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "by ", 566, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 584, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "vendor ", 596, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 638, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "went ", 668, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "out ", 698, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of", 722, 146, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "business.", 8, 158, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "When ", 8, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Apple ", 38, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "locked ", 74, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "down ", 116, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 146, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "iPod ", 170, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "click ", 200, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "wheel, ", 236, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I ", 278, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "lost ", 290, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 320, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ability ", 344, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 392, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "write ", 410, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "code ", 446, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 476, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 500, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "device ", 524, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 566, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "got ", 596, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "me ", 620, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "into ", 638, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "programming. ", 668, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "When", 746, 178, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Nintendo ", 8, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "sealed ", 62, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 104, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "3DS, ", 128, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 158, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "homebrew ", 182, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "scene ", 236, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "pivoted ", 272, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 320, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "exploits ", 338, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "instead ", 392, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 440, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "SDKs. ", 458, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 494, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PSP ", 518, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 542, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 560, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "last ", 584, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "handheld ", 614, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "where ", 668, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 704, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "community", 728, 190, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 8, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 32, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "complete ", 44, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "toolchain, ", 98, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 164, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "working ", 176, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "custom ", 224, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "firmware, ", 266, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 326, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "documented ", 350, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "access ", 416, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 458, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "every ", 476, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "peripheral.", 512, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 18, 222, 3, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "It's ", 31, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "not ", 61, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "nostalgia ", 85, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "if ", 145, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 163, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "constraint ", 187, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "makes ", 253, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 289, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 313, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "better ", 325, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engineer.", 367, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 9, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "constraint ", 32, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "constraint ", 33, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 98, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 99, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 116, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 117, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "point", 140, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "point", 141, 244, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I've ", 8, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "been ", 38, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "writing ", 68, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 116, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "professionally ", 146, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "since ", 236, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2017. ", 272, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Most ", 308, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 338, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 356, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 386, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "been ", 410, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 440, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "machines ", 458, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "where ", 512, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 548, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "answer ", 572, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 614, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "\"how ", 632, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "much ", 662, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "memory ", 692, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "does", 734, 272, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "this ", 8, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "need?\" ", 38, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 80, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "shrug-emoji. ", 98, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 176, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PSP ", 200, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 224, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "24 ", 248, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MB ", 266, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 284, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "user-addressable ", 302, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "memory, ", 404, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 452, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that's ", 476, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "before ", 518, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you've ", 560, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "loaded ", 602, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "any ", 644, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "textures, ", 668, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 728, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "TLS", 752, 284, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "stack, ", 8, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "or ", 50, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 68, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "JavaScript ", 80, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine. ", 146, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 194, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "don't ", 218, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "get ", 254, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 278, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "shrug.", 296, 296, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "That ", 8, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "constraint ", 38, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "forces ", 104, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "decisions ", 146, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 206, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "would ", 230, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "never ", 266, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "make ", 302, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 332, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 350, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "server. ", 362, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 410, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "don't ", 434, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "embed ", 470, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "V8; ", 506, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 530, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "pick ", 554, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "QuickJS ", 584, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "because ", 632, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 680, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fits ", 698, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 728, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "600 ", 746, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "KB", 770, 316, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 8, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "code. ", 26, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 62, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "don't ", 86, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "build ", 122, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 158, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fancy ", 170, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "compositor; ", 206, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 278, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "write ", 302, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 338, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "display ", 350, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "list ", 398, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 428, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "batch ", 452, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 488, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "draw ", 512, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "calls. ", 542, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 584, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "don't ", 608, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "link ", 644, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "newlib; ", 674, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 722, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "write", 746, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "40 ", 8, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "libc ", 26, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "shims ", 56, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "by ", 92, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hand ", 110, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "so ", 140, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 158, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 188, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "control ", 212, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "every ", 260, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "byte ", 296, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 326, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "C ", 350, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "code ", 362, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "can ", 392, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "touch.", 416, 340, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "What ", 8, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "What ", 9, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 38, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 39, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "actually ", 56, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "actually ", 57, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "looks ", 110, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "looks ", 111, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "like", 146, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "like", 147, 362, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "[screenshot: ", 8, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "oasis-os ", 86, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "browser ", 140, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "rendering ", 188, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hacker ", 248, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "news]", 290, 390, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "oasis-os ", 32, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "browser ", 86, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "rendering ", 134, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 194, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Hacker ", 206, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News ", 248, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "mirror ", 278, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 320, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "real ", 338, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PSP ", 368, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hardware, ", 392, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "April ", 452, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2026.", 488, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Everything ", 8, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 74, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 92, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "screenshot ", 116, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "above ", 182, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 218, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "running ", 236, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 284, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "24 ", 302, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MB: ", 320, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 344, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "HTML ", 368, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "tree ", 398, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "builder, ", 428, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 482, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "CSS ", 506, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cascade ", 530, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with ", 578, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 608, 422, 60, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 608, 422, 60, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "@container", 608, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " queries, ", 668, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 728, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "full", 740, 422, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "flex/grid ", 8, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "layout ", 68, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine, ", 110, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 158, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "QuickJS ", 182, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "JavaScript ", 230, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "runtime, ", 296, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 350, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 374, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "TLS ", 398, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "1.3 ", 422, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "stack ", 446, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "needed ", 482, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 524, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fetch ", 542, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 578, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "page ", 602, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "over ", 632, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "HTTPS ", 662, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 698, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 716, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "first", 740, 434, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "place.", 8, 446, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "whole ", 32, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "thing ", 68, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "compiles ", 104, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with ", 158, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "stock ", 188, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 224, 466, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 224, 466, 48, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "rust-psp", 224, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " nightly ", 272, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 326, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 350, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "vendored ", 362, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "pspdev ", 416, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "toolchain ", 458, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 518, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Docker. ", 536, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "CI ", 584, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "runs ", 602, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 632, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "entire ", 656, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "build ", 698, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 734, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "every", 752, 466, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "push, ", 8, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "boots ", 44, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 80, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 98, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PPSSPP ", 116, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "headless, ", 158, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 218, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "snapshots ", 242, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 302, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "framebuffer ", 326, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 398, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "visual ", 422, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "regression. ", 464, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 536, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "build ", 560, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 596, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "currently ", 614, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "around ", 674, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "6.8 ", 716, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "MB, ", 740, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of", 764, 478, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "which ", 8, 490, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "QuickJS ", 44, 490, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 92, 490, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "900 ", 110, 490, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "KB.", 134, 490, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "What's ", 8, 512, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "What's ", 9, 512, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "next", 50, 512, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "next", 51, 512, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "next ", 32, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "milestone ", 62, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 122, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 140, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "public ", 152, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "launch ", 194, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "targeting ", 236, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "April ", 296, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "or ", 332, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "May. ", 350, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 380, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "blockers ", 404, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "are ", 458, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "boring: ", 482, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "visual ", 530, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "regression ", 572, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "harness ", 638, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "coverage, ", 686, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a", 746, 540, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "real-world ", 8, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "layout ", 74, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "budget ", 116, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "gate ", 158, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 188, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "CI, ", 206, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 230, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "closing ", 254, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "out ", 302, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 326, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "handful ", 338, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 386, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "CSS ", 404, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "long-tail ", 428, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "items ", 488, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "(", 524, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 530, 552, 66, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 530, 552, 66, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "text-wrap: ", 530, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 596, 552, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 596, 552, 42, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "balance", 596, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " is ", 638, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 662, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "big ", 686, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "one). ", 710, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The", 746, 552, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engine ", 8, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 50, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "already ", 68, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "~50% ", 116, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 146, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 164, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "way ", 188, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "there.", 212, 564, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "If ", 8, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 26, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "want ", 50, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 80, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "follow ", 98, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "along, ", 140, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 182, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "repository ", 206, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 272, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "public ", 290, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 332, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "every ", 356, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "commit ", 392, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 434, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Claude-authored ", 452, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with ", 548, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 578, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "human ", 590, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "reviewer ", 626, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 680, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 698, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "loop. ", 722, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "I'll", 758, 584, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "post ", 8, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "another ", 38, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "update ", 86, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "when ", 128, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 158, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "corpus ", 182, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hits ", 224, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "20 ", 254, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fixtures.", 272, 596, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=11 draw_text=548 other=0
+fill_rect 0, 0, 800, 1626, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 77, 800, 1, Color { r: 224, g: 224, b: 224, a: 255 }
+draw_text "Spare ", 364, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Spare ", 365, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Cycles", 400, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Cycles", 401, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Notes ", 259, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "on ", 295, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "systems ", 313, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "programming ", 361, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "and ", 433, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "retro ", 457, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "hardware", 493, 46, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "Why ", 24, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Why ", 25, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 48, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 49, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "built ", 60, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "built ", 61, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 96, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 97, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "browser ", 108, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "browser ", 109, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "engine ", 156, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "engine ", 157, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "for ", 198, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "for ", 199, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 222, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 223, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "22-year-old ", 234, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "22-year-old ", 235, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "handheld", 306, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "handheld", 307, 126, 36, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "The ", 24, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "PSP ", 48, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "shipped ", 72, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "in ", 120, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "2004 ", 138, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "with ", 168, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "32 ", 198, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "MB ", 216, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "of ", 234, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "RAM ", 252, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "and ", 276, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "a ", 300, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "333 ", 312, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "MHz ", 336, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "MIPS ", 360, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "CPU. ", 390, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "In ", 420, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "2026, ", 438, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "it ", 474, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "can ", 492, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "run ", 516, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "a ", 540, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "from-scratch ", 552, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "Rust", 630, 181, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "browser ", 24, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "engine ", 72, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "with ", 114, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "working ", 144, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "JavaScript. ", 192, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "Here's ", 264, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "how.", 306, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
+draw_text "Andrew Lee", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Andrew Lee", 1, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "April 15, 2026 · 12 min read", 0, 0, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "Every ", 24, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "so ", 60, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "often ", 78, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 114, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "get ", 126, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "asked ", 150, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "why ", 186, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I'm ", 210, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "pouring ", 234, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "this ", 282, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "much ", 312, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "effort ", 342, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "into ", 384, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 414, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "handheld ", 426, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "that ", 480, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "stopped ", 510, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "shipping ", 558, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "over ", 612, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 642, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "decade", 654, 263, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "ago. ", 24, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "The ", 54, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "honest ", 78, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "answer ", 120, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is ", 162, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "that ", 180, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 210, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "PSP ", 234, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is ", 258, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 276, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "last ", 300, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "device ", 330, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "in ", 372, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "my ", 390, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "collection ", 408, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "where ", 474, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 510, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "can ", 522, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fit ", 546, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 570, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "entire ", 594, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "system ", 636, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "in", 678, 291, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "my ", 24, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "head ", 42, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "— ", 72, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "no ", 96, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "hidden ", 114, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "secure ", 156, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "enclaves, ", 198, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "no ", 258, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "undocumented ", 276, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "firmware ", 354, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "blobs ", 408, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 444, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "can't ", 456, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "touch, ", 492, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "no ", 534, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "coprocessors ", 552, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "running", 630, 320, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "blobs ", 24, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "signed ", 60, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "by ", 102, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 120, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "vendor ", 132, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "that ", 174, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "went ", 204, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "out ", 234, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "of ", 258, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "business.", 276, 349, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "When ", 24, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Apple ", 54, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "locked ", 90, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "down ", 132, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 162, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "iPod ", 186, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "click ", 216, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "wheel, ", 252, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "I ", 294, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "lost ", 306, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 336, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "ability ", 360, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "to ", 408, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "write ", 426, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "code ", 462, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "for ", 492, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 516, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "device ", 540, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "that ", 582, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "got ", 612, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "me ", 636, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "into", 654, 396, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "programming. ", 24, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "When ", 102, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Nintendo ", 132, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "sealed ", 186, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 228, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "3DS, ", 252, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 282, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "homebrew ", 306, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "scene ", 360, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "pivoted ", 396, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "to ", 444, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "exploits ", 462, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "instead ", 516, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "of ", 564, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "SDKs. ", 582, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "The ", 618, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "PSP ", 642, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is", 666, 424, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 24, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "last ", 48, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "handheld ", 78, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "where ", 132, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 168, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "community ", 192, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "has ", 252, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 276, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "complete ", 288, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "toolchain, ", 342, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 408, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "working ", 420, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "custom ", 468, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "firmware, ", 510, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "and ", 570, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "documented ", 594, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "access", 660, 453, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "to ", 24, 482, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "every ", 42, 482, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "peripheral.", 78, 482, 18, Color { r: 26, g: 26, b: 26, a: 255 }
+fill_rect 24, 535, 4, 47, Color { r: 224, g: 108, b: 0, a: 255 }
+draw_text "It's ", 48, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "not ", 78, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "nostalgia ", 102, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "if ", 162, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "the ", 180, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "constraint ", 204, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "makes ", 270, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "you ", 306, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "a ", 330, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "better ", 342, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "engineer.", 384, 543, 24, Color { r: 85, g: 85, b: 85, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
+draw_text "Andrew Lee", 0, 0, 16, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Andrew Lee", 1, 0, 16, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Systems programmer in Tokyo. Writes about Rust, retro hardware, and the art of fitting big ideas in small memory footprints.", 0, 0, 14, Color { r: 85, g: 85, b: 85, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
+draw_text "Subscribe", 0, 0, 13, Color { r: 255, g: 255, b: 255, a: 255 }
+# totals fill_rect=9 draw_text=211 other=0

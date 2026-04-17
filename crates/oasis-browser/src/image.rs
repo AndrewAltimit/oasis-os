@@ -42,6 +42,13 @@ pub enum ImageFormat {
     Bmp,
     Gif,
     Webp,
+    /// SVG (XML-based, not a raster format). Detected by textual probe
+    /// rather than magic bytes. We don't have a full rasterizer so we
+    /// currently return a transparent-pixel placeholder sized from the
+    /// SVG's `viewBox`/`width`/`height` attributes — enough to preserve
+    /// layout and avoid the broken-image `×` glyph for CSS patterns like
+    /// Wikipedia's sprite sheets.
+    Svg,
     Unknown,
 }
 
@@ -61,9 +68,41 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
         ImageFormat::Gif
     } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         ImageFormat::Webp
+    } else if looks_like_svg(data) {
+        ImageFormat::Svg
     } else {
         ImageFormat::Unknown
     }
+}
+
+/// Textual probe for SVG content. The specification permits an XML
+/// declaration, a doctype, comments, and arbitrary whitespace before
+/// the `<svg` root, so we scan the first 1 KiB for the literal token.
+///
+/// 1 KiB is an empirical ceiling — real SVG files ship their opening
+/// tag well within the first few hundred bytes, and scanning further
+/// both slows down detection of non-SVG payloads that happen to contain
+/// `<svg` deep in their body and invites false positives on, e.g., HTML
+/// pages describing SVG.
+fn looks_like_svg(data: &[u8]) -> bool {
+    let probe_len = data.len().min(1024);
+    let probe = &data[..probe_len];
+    // Fast path: skip leading whitespace.
+    let start = probe
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(probe_len);
+    let tail = &probe[start..];
+    // Accept with or without XML prolog / doctype.
+    let is_xml_or_svg = tail.starts_with(b"<?xml")
+        || tail.starts_with(b"<!DOCTYPE")
+        || tail.starts_with(b"<svg")
+        || tail.starts_with(b"<!--");
+    if !is_xml_or_svg {
+        return false;
+    }
+    // Look for `<svg` somewhere in the probe window.
+    probe.windows(4).any(|w| w == b"<svg")
 }
 
 /// Decode an image from raw bytes.
@@ -83,6 +122,7 @@ pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
         ImageFormat::Jpeg => decode_jpeg_safe(data),
         ImageFormat::Gif => decode_gif_safe(data),
         ImageFormat::Webp => decode_webp_safe(data),
+        ImageFormat::Svg => decode_svg_placeholder(data),
         ImageFormat::Unknown => None,
     }?;
 
@@ -167,7 +207,12 @@ fn decode_png_safe(data: &[u8]) -> Option<DecodedImage> {
 
 /// Decode a PNG image using the `png` crate.
 fn decode_png(data: &[u8]) -> Option<DecodedImage> {
-    let decoder = png::Decoder::new(data);
+    let mut decoder = png::Decoder::new(data);
+    // Expand indexed-palette images to RGB, sub-8-bit grayscale to 8-bit,
+    // and tRNS chunks to alpha channels. Without this, any PNG using a
+    // palette (the majority of small icons and sprites) would fall out
+    // the bottom of the color-type match as unsupported.
+    decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info().ok()?;
     let info_header = reader.info();
     if info_header.width > MAX_IMAGE_DIMENSION || info_header.height > MAX_IMAGE_DIMENSION {
@@ -206,7 +251,10 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
             rgba
         },
         png::ColorType::Indexed => {
-            // Indexed color requires palette expansion -- not common for web.
+            // `EXPAND` should have already converted palette → RGB/RGBA;
+            // falling through here means the decoder refused the
+            // expansion for some reason (non-standard chunk ordering,
+            // etc.). Decline rather than produce garbage output.
             return None;
         },
     };
@@ -336,6 +384,99 @@ fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
     {
         // WebP decoding requires the `webp` feature (adds the `image` crate).
         let _ = data;
+        None
+    }
+}
+
+/// Produce a transparent placeholder image sized from an SVG document's
+/// declared dimensions.
+///
+/// A real SVG rasterizer is out of scope for this module — full SVG
+/// support (filters, gradients, transforms, text) lives in `svg.rs` and
+/// renders through an `SdiBackend`, which isn't available during image
+/// decode. What we can do cheaply here is:
+///
+/// 1. Parse just enough of the SVG header to recover the intrinsic
+///    width/height (`width=`, `height=`, or `viewBox="x y w h"`).
+/// 2. Return a transparent RGBA buffer of that size.
+///
+/// The layout engine then reserves the correct space for the element
+/// and the broken-image `×` glyph stops appearing. This is substantially
+/// better than treating SVGs as unknown-format (which yields the broken
+/// placeholder) even though no visual SVG content is drawn.
+fn decode_svg_placeholder(data: &[u8]) -> Option<DecodedImage> {
+    let header_len = data.len().min(4096);
+    let header = std::str::from_utf8(&data[..header_len]).ok()?;
+    // Find the opening `<svg` tag.
+    let svg_start = header.find("<svg")?;
+    // Find the end of the opening tag so we don't pick up attrs from
+    // descendants (viewport-sized rects etc.).
+    let tag_end = header[svg_start..].find('>')? + svg_start;
+    let tag = &header[svg_start..tag_end];
+
+    let width = extract_length_attr(tag, "width");
+    let height = extract_length_attr(tag, "height");
+    let viewbox = extract_viewbox(tag);
+
+    // Fall back to viewBox when explicit width/height are missing, then
+    // to a neutral 32×32 so degenerate cases still reserve some space.
+    let w = width
+        .or(viewbox.map(|(_, _, w, _)| w))
+        .unwrap_or(32.0)
+        .max(1.0)
+        .min(MAX_IMAGE_DIMENSION as f32) as u32;
+    let h = height
+        .or(viewbox.map(|(_, _, _, h)| h))
+        .unwrap_or(32.0)
+        .max(1.0)
+        .min(MAX_IMAGE_DIMENSION as f32) as u32;
+
+    // Transparent RGBA.
+    let pixels = vec![0u8; (w * h * 4) as usize];
+    Some(DecodedImage::new(w, h, pixels))
+}
+
+/// Extract a numeric attribute value from an SVG opening tag.
+/// Handles both double- and single-quoted values and trims the `px`
+/// unit suffix, which is the only one commonly seen on `<svg>` tags.
+fn extract_length_attr(tag: &str, attr: &str) -> Option<f32> {
+    let needle_d = format!("{attr}=\"");
+    let needle_s = format!("{attr}='");
+    let (after, quote) = if let Some(idx) = tag.find(&needle_d) {
+        (&tag[idx + needle_d.len()..], '"')
+    } else if let Some(idx) = tag.find(&needle_s) {
+        (&tag[idx + needle_s.len()..], '\'')
+    } else {
+        return None;
+    };
+    let end = after.find(quote)?;
+    let raw = after[..end].trim();
+    let stripped = raw.strip_suffix("px").unwrap_or(raw).trim();
+    stripped.parse::<f32>().ok()
+}
+
+/// Extract `viewBox="min-x min-y width height"` from an SVG opening tag.
+fn extract_viewbox(tag: &str) -> Option<(f32, f32, f32, f32)> {
+    // Try both lowercase and the canonical camelCase spelling. The
+    // `viewBox` attribute is case-sensitive in XML but some producers
+    // emit it lowercase; accept both.
+    let needle = tag
+        .find("viewBox=\"")
+        .or_else(|| tag.find("viewbox=\""))
+        .or_else(|| tag.find("viewBox='"))
+        .or_else(|| tag.find("viewbox='"))?;
+    let attr_len = "viewBox=\"".len();
+    let after = &tag[needle + attr_len..];
+    let end = after.find(['"', '\''])?;
+    let raw = &after[..end];
+    let parts: Vec<f32> = raw
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<f32>().ok())
+        .collect();
+    if parts.len() >= 4 {
+        Some((parts[0], parts[1], parts[2], parts[3]))
+    } else {
         None
     }
 }
@@ -871,5 +1012,83 @@ mod tests {
     #[test]
     fn decode_empty_data_returns_none() {
         assert!(decode_image(&[]).is_none());
+    }
+
+    #[test]
+    fn detect_svg_with_xml_prolog() {
+        let svg = b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"></svg>";
+        assert_eq!(detect_format(svg), ImageFormat::Svg);
+    }
+
+    #[test]
+    fn detect_svg_plain_root() {
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\"/></svg>";
+        assert_eq!(detect_format(svg), ImageFormat::Svg);
+    }
+
+    #[test]
+    fn detect_svg_leading_whitespace() {
+        let svg = b"\n  \t<svg></svg>";
+        assert_eq!(detect_format(svg), ImageFormat::Svg);
+    }
+
+    #[test]
+    fn detect_html_is_not_svg() {
+        let html = b"<!DOCTYPE html><html><body>mention svg in body</body></html>";
+        assert_ne!(detect_format(html), ImageFormat::Svg);
+    }
+
+    #[test]
+    fn decode_svg_uses_width_height_attrs() {
+        let svg =
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"60\"><rect/></svg>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        assert_eq!(img.width, 120);
+        assert_eq!(img.height, 60);
+        // All pixels transparent.
+        assert!(img.pixels.iter().all(|&b| b == 0));
+        assert!(img.has_transparency);
+    }
+
+    #[test]
+    fn decode_svg_falls_back_to_viewbox() {
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 128\"></svg>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        assert_eq!(img.width, 256);
+        assert_eq!(img.height, 128);
+    }
+
+    #[test]
+    fn decode_svg_strips_px_suffix() {
+        let svg =
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"48px\" height=\"48px\"></svg>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        assert_eq!(img.width, 48);
+        assert_eq!(img.height, 48);
+    }
+
+    #[test]
+    fn decode_svg_with_xml_prolog_and_viewbox() {
+        let svg = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 22 22\"><circle cx=\"11\" cy=\"11\" r=\"10\"/></svg>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        assert_eq!(img.width, 22);
+        assert_eq!(img.height, 22);
+    }
+
+    #[test]
+    fn decode_svg_single_quoted_attrs() {
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg' width='80' height='40'/>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        assert_eq!(img.width, 80);
+        assert_eq!(img.height, 40);
+    }
+
+    #[test]
+    fn decode_svg_falls_back_to_default_when_no_dimensions() {
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+        let img = decode_image(svg).expect("SVG placeholder decodes");
+        // Neutral 32x32 fallback.
+        assert_eq!(img.width, 32);
+        assert_eq!(img.height, 32);
     }
 }

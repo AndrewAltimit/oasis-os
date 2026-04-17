@@ -136,15 +136,23 @@ fn apply_absolute_position(layout_box: &mut LayoutBox, containing_block: &Rect) 
         },
     };
 
-    // Set the content position from the resolved margin-box position.
-    layout_box.dimensions.content.x = x
+    // Compute the new content position from the resolved margin-box
+    // position, then apply the delta to the whole subtree so in-flow
+    // descendants follow the box (they were laid out relative to the
+    // box's pre-positioning static location).
+    let new_content_x = x
         + layout_box.dimensions.margin.left
         + layout_box.dimensions.border.left
         + layout_box.dimensions.padding.left;
-    layout_box.dimensions.content.y = y
+    let new_content_y = y
         + layout_box.dimensions.margin.top
         + layout_box.dimensions.border.top
         + layout_box.dimensions.padding.top;
+    let dx = new_content_x - layout_box.dimensions.content.x;
+    let dy = new_content_y - layout_box.dimensions.content.y;
+    if dx != 0.0 || dy != 0.0 {
+        offset_box(layout_box, dx, dy);
+    }
 }
 
 /// Resolve horizontal offset (left vs right).

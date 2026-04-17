@@ -1,136 +1,121 @@
 # viewport 480x272
-draw_text "On ", 8, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "On ", 9, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "simplicity", 26, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "simplicity", 27, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Posted ", 8, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 50, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "April ", 68, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "12, ", 104, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2026 ", 128, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "by ", 158, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "someone", 176, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Software ", 8, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "engineers ", 62, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "reach ", 122, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 158, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "complexity ", 182, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "too ", 248, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "fast. ", 272, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "This ", 308, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "post ", 338, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "argues ", 368, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "we ", 410, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "should", 428, 62, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "reach ", 8, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 44, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 68, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "more ", 86, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "slowly", 116, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text ", ", 152, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 164, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 188, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 218, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cost ", 242, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 272, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "doing ", 290, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "so ", 326, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 344, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "rarely ", 362, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "what ", 404, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "we", 434, 74, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "think ", 8, 86, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "it ", 44, 86, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is.", 62, 86, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 9, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "myth ", 32, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "myth ", 33, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 62, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 63, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 80, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 81, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "generic ", 104, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "generic ", 105, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "abstraction", 152, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "abstraction", 153, 108, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 8, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "open ", 32, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 62, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "file. ", 74, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "You ", 110, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "write ", 134, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "five ", 170, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "lines. ", 200, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "They ", 242, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "work. ", 272, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Then ", 308, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "someone ", 338, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 386, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 404, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "team", 428, 136, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "says ", 8, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "“we ", 38, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "should ", 74, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "make ", 116, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "this ", 146, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "generic” ", 176, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 242, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "suddenly ", 266, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "you ", 320, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "have ", 344, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 374, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "builder", 386, 148, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "pattern, ", 8, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "three ", 62, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "traits, ", 98, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "and ", 146, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 170, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "factory.", 182, 160, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 9, 181, 462, 48, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 8, 180, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 471, 180, 1, 50, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 8, 229, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 8, 180, 1, 50, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 17, 187, 132, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 17, 187, 132, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "fn hello() -> String {", 17, 187, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 17, 199, 126, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 17, 199, 126, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "   String::from(\"hi\")", 17, 199, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 17, 211, 6, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 17, 211, 6, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "}", 17, 211, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "generic ", 32, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "version ", 80, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 128, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "not ", 146, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "an ", 170, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "improvement. ", 188, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 266, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "generic ", 290, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "version ", 338, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "is ", 386, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 404, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "bet", 416, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " on ", 434, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a", 458, 238, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "future ", 8, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 50, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 80, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "not ", 104, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "arrived. ", 128, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "That ", 182, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "bet ", 212, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "costs ", 236, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "every ", 272, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "reader ", 308, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 350, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 374, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "rest ", 398, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "of ", 428, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the", 446, 250, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "file’s ", 8, 262, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "life.", 62, 262, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=11 draw_text=123 other=0
+draw_text "On ", 8, 16, 16, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "On ", 9, 16, 16, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "simplicity", 26, 16, 16, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "simplicity", 27, 16, 16, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Posted ", 8, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "on ", 50, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "April ", 68, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "12, ", 104, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "2026 ", 128, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "by ", 158, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "someone", 176, 51, 6, Color { r: 153, g: 153, b: 153, a: 255 }
+draw_text "Software ", 8, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "engineers ", 62, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "reach ", 122, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "for ", 158, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "complexity ", 182, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "too ", 248, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "fast. ", 272, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "This ", 308, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "post ", 338, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "argues ", 368, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "we ", 410, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "should", 428, 70, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "reach ", 8, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "for ", 44, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "it ", 68, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "more ", 86, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "slowly", 116, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text ", ", 152, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "and ", 164, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "that ", 188, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "the ", 218, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "cost ", 242, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "of ", 272, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "doing ", 290, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "so ", 326, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "is ", 344, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "rarely ", 362, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "what ", 404, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "we", 434, 82, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "think ", 8, 94, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "it ", 44, 94, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "is.", 62, 94, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "The ", 8, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "The ", 9, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "myth ", 32, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "myth ", 33, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "of ", 62, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "of ", 63, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "the ", 80, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "the ", 81, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "generic ", 104, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "generic ", 105, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "abstraction", 152, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "abstraction", 153, 128, 12, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "You ", 8, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "open ", 32, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "a ", 62, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "file. ", 74, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "You ", 110, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "write ", 134, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "five ", 170, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "lines. ", 200, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "They ", 242, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "work. ", 272, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Then ", 308, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "someone ", 338, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "on ", 386, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "the ", 404, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "team", 428, 157, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "says ", 8, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "“we ", 38, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "should ", 74, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "make ", 116, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "this ", 146, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "generic” ", 176, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "and ", 242, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "suddenly ", 266, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "you ", 320, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "have ", 344, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "a ", 374, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "builder", 386, 169, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "pattern, ", 8, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "three ", 62, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "traits, ", 98, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "and ", 146, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "a ", 170, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "factory.", 182, 182, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+fill_rect 11, 203, 460, 47, Color { r: 244, g: 244, b: 244, a: 255 }
+fill_rect 8, 202, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 471, 202, 1, 49, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 250, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 8, 202, 3, 49, Color { r: 0, g: 153, b: 204, a: 255 }
+set_clip_rect 18, 210, 445, 33
+fill_rect 18, 210, 132, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+fill_rect 18, 210, 132, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+draw_text "fn hello() -> String {", 18, 210, 7, Color { r: 51, g: 51, b: 51, a: 255 }
+fill_rect 18, 221, 126, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+fill_rect 18, 221, 126, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+draw_text "   String::from(\"hi\")", 18, 221, 7, Color { r: 51, g: 51, b: 51, a: 255 }
+fill_rect 18, 233, 6, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+fill_rect 18, 233, 6, 11, Color { r: 244, g: 244, b: 244, a: 255 }
+draw_text "}", 18, 233, 7, Color { r: 51, g: 51, b: 51, a: 255 }
+reset_clip_rect
+draw_text "The ", 8, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "generic ", 32, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "version ", 80, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "is ", 128, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "not ", 146, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "an ", 170, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "improvement. ", 188, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "The ", 266, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "generic ", 290, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "version ", 338, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "is ", 386, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "a ", 404, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "bet", 416, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text " on ", 434, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "a", 458, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
+# totals fill_rect=11 draw_text=106 other=2

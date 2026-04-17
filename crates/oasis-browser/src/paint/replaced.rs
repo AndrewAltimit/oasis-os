@@ -47,6 +47,23 @@ pub(super) fn paint_replaced(
         },
         ReplacedContent::Image { alt, .. } => {
             // Broken image placeholder: thin border + alt text or X.
+            //
+            // Skip drawing entirely when the box has zero content
+            // dimensions — this is the common case for sprite elements
+            // whose `width`/`height` are only supplied via CSS and the
+            // `src` failed to load. Drawing the `×` glyph at (x, y) in
+            // that case leaves a stray marker floating around the page.
+            if content.width <= 0.0 || content.height <= 0.0 {
+                return Ok(());
+            }
+            // Paint the broken-image frame + alt text, clipped to the
+            // box so long `alt=""` values don't bleed into siblings.
+            //
+            // The frame uses the element's `color`. The label font size
+            // follows the element's computed `font-size` (clamped to
+            // what fits inside the box vertically) rather than a hard-
+            // coded 8px, so tiny sprites don't overflow and large
+            // banners get proportionally-sized placeholders.
             let w = content.width.max(16.0) as u32;
             let h = content.height.max(16.0) as u32;
             let color = layout_box.style.color;
@@ -58,9 +75,26 @@ pub(super) fn paint_replaced(
             backend.fill_rect(x, y, 1, h, color)?;
             // Right edge
             backend.fill_rect(x + w as i32 - 1, y, 1, h, color)?;
-            // Alt text or multiplication sign
-            let label = if alt.is_empty() { "\u{00D7}" } else { alt };
-            backend.draw_text(label, x + 2, y + 2, 8, color)?;
+            // Alt text or multiplication sign.
+            //
+            // Treat `×` and real alt text differently. `×` is an icon —
+            // keep it small (8px) and draw it in the corner where real
+            // browsers put the broken-image chip. Alt text is intended
+            // to be read, so scale it to the element's computed font-
+            // size and clip to the box so long values don't bleed into
+            // siblings. The interior-height cap prevents a large
+            // inherited font-size (e.g. Wikipedia's 3rem logo wrapper)
+            // from being drawn at 30px inside a 22x22 sprite.
+            let interior_h = h.saturating_sub(4).max(6) as u16;
+            backend.set_clip_rect(x, y, w, h)?;
+            if alt.is_empty() {
+                backend.draw_text("\u{00D7}", x + 2, y + 2, 8u16.min(interior_h), color)?;
+            } else {
+                let style_fs = layout_box.style.font_size.round().max(6.0) as u16;
+                let font_size = style_fs.min(interior_h);
+                backend.draw_text(alt, x + 2, y + 2, font_size, color)?;
+            }
+            backend.reset_clip_rect()?;
         },
         ReplacedContent::HorizontalRule => {
             let style = &layout_box.style;

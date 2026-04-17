@@ -1,254 +1,130 @@
 # viewport 800x600
-draw_text "Tech ", 8, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Tech ", 9, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News ", 38, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News ", 39, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Daily", 68, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Daily", 69, 8, 16, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "•", 28, 42, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Home", 48, 42, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 48, 29, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 54, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "AI", 48, 54, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 60, 14, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 66, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Hardware", 48, 66, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 72, 57, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 78, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "About", 48, 78, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 84, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Major ", 8, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Major ", 9, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Linux ", 44, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Linux ", 45, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 80, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 81, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "release ", 122, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "release ", 123, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ships ", 170, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ships ", 171, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "today", 206, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "today", 207, 98, 12, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Filed ", 8, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "by ", 44, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "J. ", 62, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Reporter ", 80, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "· ", 134, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2 ", 152, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "hours ", 164, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ago", 200, 126, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Inside ", 8, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Inside ", 9, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 50, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 51, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 74, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 75, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "scheduler", 98, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "scheduler", 99, 146, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 8, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "release ", 32, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "brings ", 80, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "changes ", 122, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 170, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 188, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 212, 170, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 212, 170, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "sched_ext", 212, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " subsystem, ", 266, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "letting ", 338, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "developers ", 386, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "plug ", 452, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 482, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "BPF-based ", 500, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "schedulers ", 560, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "without ", 626, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "recompiling ", 674, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the", 746, 170, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel.", 8, 182, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Core ", 8, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "maintainers ", 38, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "emphasised ", 110, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that ", 176, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 206, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 230, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "APIs ", 254, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "are ", 284, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "experimental", 308, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "experimental", 309, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text ", ", 380, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "but ", 392, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "early ", 416, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "benchmarks ", 452, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "show ", 518, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "latency ", 548, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "improvements ", 596, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 674, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "mixed ", 692, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "workloads.", 728, 202, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Read ", 8, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "more ", 38, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "→", 68, 222, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 8, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 9, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 38, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 39, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 56, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 57, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 80, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 81, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expands", 122, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expands", 123, 242, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 8, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "support ", 38, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 86, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "landed ", 110, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for ", 152, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "additional ", 176, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "driver ", 242, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "subsystems. ", 284, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 356, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "maintainers ", 380, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expect ", 452, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "more ", 494, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "drivers ", 524, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 572, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "migrate ", 590, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "over ", 638, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 668, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "next ", 692, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "two ", 722, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cycles.", 746, 265, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 18, 285, 3, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "“The ", 31, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "safety ", 73, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "wins ", 115, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "are ", 145, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "real,” ", 169, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "said ", 223, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "one ", 253, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "contributor.", 277, 285, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Benchmarks: ", 8, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Benchmarks: ", 9, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "database ", 80, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "database ", 81, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "throughput ", 134, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "throughput ", 135, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "up ", 200, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "up ", 201, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "12%", 218, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "12%", 219, 305, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Synthetic ", 8, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "benchmarks ", 68, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "under ", 134, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "PostgreSQL ", 170, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "show ", 236, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "a ", 266, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "measurable ", 278, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "throughput ", 344, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "increase ", 410, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 464, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "NUMA ", 482, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "systems ", 512, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "with ", 560, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "many ", 590, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cores.", 620, 328, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 349, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 268, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 366, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Workload", 13, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Workload", 14, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 269, 349, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 529, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 366, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Before", 274, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Before", 275, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 531, 349, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 791, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 366, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 349, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "After", 535, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "After", 536, 351, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 367, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 268, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 384, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "OLTP", 13, 369, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 269, 367, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 529, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 384, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "42k tps", 274, 369, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 531, 367, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 791, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 384, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 367, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "47k tps", 535, 369, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 385, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 268, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 402, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 8, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "Analytical", 13, 387, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 269, 385, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 529, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 402, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 269, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "1.2M rows/s", 274, 387, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 531, 385, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 791, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 402, 260, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 531, 385, 0, 17, Color { r: 204, g: 204, b: 204, a: 255 }
-draw_text "1.4M rows/s", 535, 387, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Trending", 8, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Trending", 9, 402, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "•", 28, 425, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Why ", 48, 425, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 431, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "syscalls ", 72, 425, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 72, 431, 56, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "are ", 126, 425, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 126, 431, 25, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "getting ", 150, 425, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 150, 431, 51, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "cheaper", 198, 425, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 198, 431, 49, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 437, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "io_uring ", 48, 437, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 443, 57, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "at ", 102, 437, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 102, 443, 18, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "5 ", 120, 437, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 120, 443, 11, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "years", 132, 437, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 132, 443, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 28, 449, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "WebAssembly ", 48, 449, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 48, 455, 81, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "component ", 120, 449, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 120, 455, 68, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "model", 180, 449, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 180, 455, 34, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Newsletter", 8, 472, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Newsletter", 9, 472, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 8, 494, 168, 18, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 8, 494, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 8, 494, 1, 18, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 8, 511, 168, 1, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 175, 494, 1, 18, Color { r: 200, g: 200, b: 200, a: 255 }
-draw_text "you@example.com", 11, 499, 8, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 176, 494, 86, 20, Color { r: 239, g: 239, b: 239, a: 255 }
-fill_rect 176, 494, 86, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 176, 494, 1, 20, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 176, 513, 86, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 261, 494, 1, 20, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Subscribe", 188, 500, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "© ", 8, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "2026 ", 26, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Tech ", 56, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News ", 86, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Daily. ", 116, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "All ", 158, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "rights ", 182, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "reserved.", 224, 514, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=65 draw_text=187 other=0
+fill_rect 0, 0, 800, 137, Color { r: 250, g: 250, b: 250, a: 255 }
+fill_rect 0, 0, 800, 32, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Tech ", 8, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Tech ", 9, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "News ", 38, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "News ", 39, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Daily", 68, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Daily", 69, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Home", 0, 0, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 0, 6, 29, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "AI", 0, 0, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 0, 6, 14, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Hardware", 0, 0, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 0, 6, 57, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "About", 0, 0, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 0, 6, 35, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 0, 32, 800, 81, Color { r: 204, g: 0, b: 0, a: 255 }
+draw_text "Major ", 16, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Major ", 17, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Linux ", 52, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Linux ", 53, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "kernel ", 88, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "kernel ", 89, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "release ", 130, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "release ", 131, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "ships ", 178, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "ships ", 179, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "today", 214, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "today", 215, 48, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Filed ", 16, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "by ", 52, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "J. ", 70, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "Reporter ", 88, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "· ", 142, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "2 ", 160, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "hours ", 172, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "ago", 208, 80, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Inside the new scheduler", 0, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Inside the new scheduler", 1, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "The release brings changes to the ", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "sched_ext", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " subsystem, letting developers plug in BPF-based schedulers without recompiling the kernel.", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Core maintainers emphasised that the new APIs are ", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "experimental", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "experimental", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ", but early benchmarks show latency improvements on mixed workloads.", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Read more →", 0, 0, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Rust in the kernel expands", 0, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust in the kernel expands", 1, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Rust support has landed for additional driver subsystems. The maintainers expect more drivers to migrate over the next two cycles.", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "“The safety wins are real,” said one contributor.", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Benchmarks: database throughput up 12%", 0, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Benchmarks: database throughput up 12%", 1, 0, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Synthetic benchmarks under PostgreSQL show a measurable throughput increase on NUMA systems with many cores.", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Workload", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Workload", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Before", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Before", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "After", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "After", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "OLTP", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "42k tps", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "47k tps", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Analytical", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "1.2M rows/s", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "1.4M rows/s", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Trending", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Trending", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Why syscalls are getting cheaper", 0, 0, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 0, 6, 207, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "io_uring at 5 years", 0, 0, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 0, 6, 121, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", -20, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "WebAssembly component model", 0, 0, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 0, 6, 183, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Newsletter", 0, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Newsletter", 1, 0, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 0, 1, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 0, 0, 1, 0, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 0, -1, 0, 1, Color { r: 200, g: 200, b: 200, a: 255 }
+fill_rect -1, 0, 1, 0, Color { r: 200, g: 200, b: 200, a: 255 }
+draw_text "you@example.com", 3, 1, 8, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 0, 0, 0, 0, Color { r: 239, g: 239, b: 239, a: 255 }
+fill_rect 0, 0, 0, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 1, 0, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, -1, 0, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect -1, 0, 1, 0, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "Subscribe", -30, -4, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 0, 113, 800, 23, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 265, 120, 18, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 265, 120, 18, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "© ", 265, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 283, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 283, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "2026 ", 283, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 313, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 313, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Tech ", 313, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 343, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 343, 120, 30, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "News ", 343, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 373, 120, 42, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 373, 120, 42, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Daily. ", 373, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 415, 120, 24, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 415, 120, 24, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "All ", 415, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 439, 120, 42, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 439, 120, 42, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "rights ", 439, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+fill_rect 481, 120, 54, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 481, 120, 54, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "reserved.", 481, 120, 6, Color { r: 170, g: 170, b: 170, a: 255 }
+# totals fill_rect=45 draw_text=83 other=0

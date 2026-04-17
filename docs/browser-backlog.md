@@ -4,7 +4,7 @@ Forward-looking gap analysis for `oasis-browser`. Open work only —
 shipped epics are summarised in a single "Recently shipped" section
 and otherwise tracked via `git log`.
 
-Last updated: 2026-04-16
+Last updated: 2026-04-17
 
 ## Recently shipped (pointers only)
 
@@ -72,6 +72,46 @@ so you can `git show` for specifics.
   z-index opt-outs, template scope isolation for table/select,
   RTL/bidi + responsive grid corpus fixtures, triage `--parallel`
   flag, benchmark CI gate.
+- **Wikipedia rendering fixes** (`feat/browser-wikipedia-rendering`).
+  Six production bugs that broke every page using modern CSS
+  patterns, exposed by treating www.wikipedia.org as the canonical
+  test case. `Stylesheet::parse()` was using the 480x272 default
+  viewport for `@media` evaluation, so every desktop window silently
+  got the mobile breakpoints of any page with `@media (max-width:
+  ...)` — fixed by threading the real window viewport through
+  `widget_pipeline::collect_style_sheets`. Absolute-positioned boxes
+  got auto-margin absorption from the block-flow constraint solver
+  (a 124.8-wide box inside a 436.8-wide container ended up with
+  `margin-right: 312` and painted hundreds of pixels off-screen);
+  the over-constrained-margin rule now short-circuits for
+  `position: absolute/fixed`. `apply_absolute_position` moved the
+  box itself but not its descendants, so `<strong>`/`<small>` inside
+  a positioned `<div>` kept their pre-positioning coordinates —
+  fixed by shifting the whole subtree by the delta. `margin: 0 auto`
+  horizontal centering computed the auto-margin but never updated
+  `content.x`, because `calculate_block_width` resolved auto margins
+  *after* `layout_block_children` had baked the pre-resolution
+  margin into x; fixed by snapshotting x before the recursive layout
+  call and shifting the subtree by the post-layout delta in both
+  `layout_block_children` and `layout_children_incremental`. The
+  `<html>` element now seeds its parent-font-size with the CSS
+  "medium" baseline (16px) so Wikipedia-style `html { font-size:
+  62.5% }` resolves to 10px as authors intend, rather than 5px
+  against our 8px engine default. `rem` resolution now reads a
+  thread-local cell that the cascade sets once the html element has
+  been styled, so `1.4rem` on Wikipedia's body is 14px instead of
+  11.2px — thread-local (not atomic) so parallel-test cascades for
+  desktop and PSP viewports don't race. Image improvements on the
+  same branch: multi-layer `background-image` picks the URL layer
+  (Wikipedia's `linear-gradient(transparent,transparent), url(...)`
+  sprite pattern used to drop the sprite silently); `image/svg+xml`
+  (including data URIs) is detected by a textual probe and produces
+  a transparent RGBA placeholder sized from the SVG's
+  `width`/`height`/`viewBox` so layout reserves the right space and
+  the broken-image `×` stops appearing for sprite elements; PNG
+  indexed-palette decode is now enabled via
+  `Transformations::EXPAND`; broken-image alt text scales with the
+  element's computed font-size and is clipped to the box.
 - **Follow-up batch 12** (`feat/browser-backlog-batch-12`). CPU
   blend-mode compositing for filter/mask pop path (all 16 CSS blend
   modes), `FillPolygon` display list item with 4-corner perspective

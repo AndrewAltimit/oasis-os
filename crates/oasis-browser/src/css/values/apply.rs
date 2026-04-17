@@ -1014,13 +1014,30 @@ impl ComputedStyle {
             // would fall through every branch and leave the property
             // unchanged — effectively dropping the whole declaration.
             "background-image" => {
-                let first = match value {
-                    CssValue::Multiple(vs) => {
-                        debug_assert!(!vs.is_empty(), "empty Multiple in background-image");
-                        vs.first().unwrap_or(value)
-                    },
-                    _ => value,
+                // `background-image` is a comma-separated layer stack; the
+                // first value is the TOPMOST layer and the last is the
+                // bottom. The engine only stores one layer today, so we
+                // have to pick one. Naively taking the first value breaks
+                // the widespread "transparent-gradient-over-URL" fallback
+                // pattern (Wikipedia's `.sprite{background-image:
+                // linear-gradient(transparent,transparent),url(...svg)}`)
+                // where the gradient is a no-op overlay and the URL is
+                // the actual sprite. Walk the layers and prefer a `url(...)`
+                // whenever one exists; otherwise fall back to the first
+                // non-`none` layer.
+                let chosen: Option<&CssValue> = match value {
+                    CssValue::Multiple(vs) => vs
+                        .iter()
+                        .find(|v| matches!(v, CssValue::Url(_)))
+                        .or_else(|| {
+                            vs.iter().find(|v| {
+                                matches!(v, CssValue::Gradient(_) | CssValue::RadialGradient(_))
+                            })
+                        })
+                        .or_else(|| vs.first()),
+                    _ => Some(value),
                 };
+                let Some(first) = chosen else { return };
                 if let Some(kw) = as_keyword(first) {
                     if kw == "none" {
                         self.background_image = BackgroundImage::None;
@@ -2859,7 +2876,7 @@ fn parse_transform(
         } else if let Some(em) = s.strip_suffix("em") {
             em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
         } else if let Some(rem) = s.strip_suffix("rem") {
-            rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::ROOT_FONT_SIZE
+            rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::current_root_font_size()
         } else {
             // Bare number treated as px.
             s.parse::<f32>().unwrap_or(0.0)
@@ -2992,7 +3009,7 @@ fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
     } else if let Some(em) = s.strip_suffix("em") {
         em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
     } else if let Some(rem) = s.strip_suffix("rem") {
-        rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::ROOT_FONT_SIZE
+        rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::current_root_font_size()
     } else {
         s.parse::<f32>().unwrap_or(0.0)
     }
@@ -3145,7 +3162,7 @@ fn parse_clip_path(value: &CssValue, parent_font_size: f32) -> Option<super::typ
                 .parse::<f32>()
                 .ok()
                 .filter(|v| *v >= 0.0)
-                .map(|v| ClipLength::Px(v * super::types::ROOT_FONT_SIZE))
+                .map(|v| ClipLength::Px(v * super::types::current_root_font_size()))
         } else if tok == "0" {
             Some(ClipLength::Px(0.0))
         } else {

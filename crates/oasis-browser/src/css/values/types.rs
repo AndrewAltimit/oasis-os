@@ -2,10 +2,57 @@
 
 use oasis_types::backend::Color;
 
-/// Root font size in pixels. Standard CSS uses 16px but the OASIS
-/// native resolution is 480x272 so we use 8px (the bitmap glyph size)
-/// to keep text readable.
+/// Default root font size in pixels. Standard CSS uses 16px but the
+/// OASIS native resolution is 480x272 so we use 8px (the bitmap glyph
+/// size) to keep text readable.
+///
+/// Pages that set `html { font-size: X }` override this via
+/// [`current_root_font_size`] during the cascade — this constant is the
+/// value used before the html element has been styled and the initial
+/// value of `ROOT_FONT_SIZE_PX`.
 pub const ROOT_FONT_SIZE: f32 = 8.0;
+
+// Current root font size in pixels, stored per-thread.
+//
+// Updated by the cascade once the `<html>` element has been styled, so
+// that pages using the `html { font-size: 62.5% }` pattern (Wikipedia,
+// most modern CSS design systems) resolve `rem` correctly. `1rem` on
+// those pages means 10px of whatever the author designed against, not
+// the engine-default 8px.
+//
+// The storage is thread-local so parallel test runners don't stomp on
+// each other (desktop-viewport and PSP-viewport visual regressions
+// cascade concurrent pages with different html font-sizes) and so
+// backends that style multiple pages on different threads don't
+// observe each other's roots. The `Cell` is a `u32` (bits of `f32`)
+// because `f32` isn't `Copy` inside `Cell` without the wrapper.
+//
+// Using thread-local state is the pragmatic choice: `rem` resolution
+// happens inside `parse_length`-family string helpers that sit well
+// below the cascade pass, so threading a `root_font_size` parameter
+// through dozens of call sites would be high-touch with no semantic
+// change.
+std::thread_local! {
+    static ROOT_FONT_SIZE_PX: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(ROOT_FONT_SIZE.to_bits()) };
+}
+
+/// Store the resolved root font-size for subsequent `rem` unit resolution.
+///
+/// Called by the cascade immediately after the `<html>` element's
+/// `font-size` has been computed.
+pub fn set_root_font_size(px: f32) {
+    ROOT_FONT_SIZE_PX.with(|cell| cell.set(px.to_bits()));
+}
+
+/// Read the current root font-size used for `rem` unit resolution.
+///
+/// Returns the html element's computed font-size (as set by
+/// [`set_root_font_size`]), or [`ROOT_FONT_SIZE`] (8px) before the html
+/// element has been styled.
+pub fn current_root_font_size() -> f32 {
+    ROOT_FONT_SIZE_PX.with(|cell| f32::from_bits(cell.get()))
+}
 
 // -----------------------------------------------------------------------
 // Enums
