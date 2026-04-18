@@ -808,7 +808,7 @@ fn format_thousands(n: u64) -> String {
 /// need to call it once per (char, size) pair at a fully-transparent
 /// color so nothing visibly leaks onto the current frame.
 fn prewarm_glyph_cache(
-    backend: &mut dyn oasis_core::backend::SdiBackend,
+    backend: &mut impl oasis_core::backend::SdiBackend,
     _theme: &oasis_core::active_theme::ActiveTheme,
 ) {
     // A conservative sample of the character set real UI text uses:

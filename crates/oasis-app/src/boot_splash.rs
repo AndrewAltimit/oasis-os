@@ -280,12 +280,19 @@ impl BootSplash {
         let result: Result<()> = (|| {
             if !skipped {
                 // Fade out to black over ~0.3s.
+                //
+                // Render the current splash frame as the BASE every
+                // iteration so the increasing-alpha black overlay has
+                // something to fade FROM. The original code cleared to
+                // solid black before the overlay, which meant every
+                // alpha value produced pure black and the "fade" was
+                // actually an instant cut — reviewers spotted it.
                 let fade_start = std::time::Instant::now();
                 while fade_start.elapsed().as_secs_f32() < 0.3 {
                     let frame_start = std::time::Instant::now();
                     let t = fade_start.elapsed().as_secs_f32() / 0.3;
                     let alpha = (t * 255.0).min(255.0) as u8;
-                    backend.clear(Color::rgb(0, 0, 0))?;
+                    self.render_frame(backend)?;
                     backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
                     backend.swap_buffers()?;
                     // Same deadline-based frame cap as run_until so the
@@ -943,6 +950,13 @@ fn paint_bios_status_line(
         truncated.pop();
         truncated.pop();
         truncated.push('…');
+    }
+    // The loop bottoms out at `"…"` (3 bytes) once the shrink budget is
+    // exhausted. If even the lone ellipsis glyph is wider than `max_w`
+    // on extremely narrow viewports, bail out entirely rather than draw
+    // it past the margin.
+    if backend.measure_text(&truncated, fs) as i32 > max_w {
+        return Ok(());
     }
     backend.draw_text(&truncated, cx, y, fs, text_c)?;
 

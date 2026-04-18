@@ -79,7 +79,7 @@ pub fn total_vfs_bytes(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (u64, bool
         depth: usize,
         truncated: &mut bool,
     ) {
-        if depth > VFS_WALK_MAX_DEPTH {
+        if depth >= VFS_WALK_MAX_DEPTH {
             *truncated = true;
             return;
         }
@@ -137,7 +137,7 @@ pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, 
         depth: usize,
         truncated: &mut bool,
     ) {
-        if depth > VFS_WALK_MAX_DEPTH {
+        if depth >= VFS_WALK_MAX_DEPTH {
             *truncated = true;
             return;
         }
