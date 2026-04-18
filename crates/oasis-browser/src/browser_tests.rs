@@ -3306,5 +3306,14 @@ fn is_print_only_media_query_matches_print_variants_only() {
     ));
     assert!(!BrowserWidget::is_print_only_media_query("not print"));
     assert!(!BrowserWidget::is_print_only_media_query("not screen"));
+    // `not all and (feature)` matches media where the feature is false
+    // (e.g. monochrome screens for `not all and (color)`) so must NOT
+    // be filtered as print-only. Only the bare `not all` string does.
+    assert!(!BrowserWidget::is_print_only_media_query(
+        "not all and (color)"
+    ));
+    assert!(!BrowserWidget::is_print_only_media_query(
+        "not all and (min-width: 500px)"
+    ));
     assert!(!BrowserWidget::is_print_only_media_query(""));
 }

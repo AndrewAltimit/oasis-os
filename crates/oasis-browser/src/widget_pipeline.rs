@@ -1376,12 +1376,12 @@ impl BrowserWidget {
         let rest = if let Some(r) = trimmed.strip_prefix("only ") {
             r.trim_start()
         } else if let Some(r) = trimmed.strip_prefix("not ") {
-            // `not all` matches zero media types so the sheet never
-            // applies to screen — treat it like print-only so it gets
-            // filtered out. Any other `not <type>` (e.g. `not screen`)
-            // still matches *some* media so must not be dropped here.
-            let negated = r.split_whitespace().next().unwrap_or("");
-            return negated == "all";
+            // Only bare `not all` matches zero media types. A query of the
+            // form `not all and (feature)` matches media where `(feature)`
+            // is false (e.g. `not all and (color)` matches monochrome
+            // screens) so must not be filtered here. Any other `not <type>`
+            // (e.g. `not screen`, `not print`) still matches *some* media.
+            return r.trim() == "all";
         } else {
             trimmed
         };
