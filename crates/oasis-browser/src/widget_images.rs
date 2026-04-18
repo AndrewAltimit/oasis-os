@@ -442,7 +442,7 @@ impl BrowserWidget {
         // as a follow-up so the PSP image-loading path keeps its
         // current behaviour during the JS-integration PR.
         #[cfg(not(feature = "psp"))]
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         #[cfg(not(feature = "psp"))]
         let budget = std::time::Duration::from_millis(budget_ms as u64);
 

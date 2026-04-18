@@ -421,7 +421,7 @@ pub struct BrowserWidget {
     container_lookup: Option<css::cascade::ContainerLookup>,
 
     /// Last time a hover restyle was performed (for throttling).
-    last_hover_time: Option<std::time::Instant>,
+    last_hover_time: Option<web_time::Instant>,
 
     /// Buffered JavaScript console output from the most recent page load.
     #[cfg(feature = "javascript")]
@@ -476,7 +476,7 @@ pub struct BrowserWidget {
     animation_engine: css::animation::AnimationEngine,
 
     /// Timestamp of the last `tick()` call for computing animation deltas.
-    last_tick_time: Option<std::time::Instant>,
+    last_tick_time: Option<web_time::Instant>,
 
     /// Content Security Policy for the current page (parsed from HTTP
     /// response headers).
@@ -484,7 +484,7 @@ pub struct BrowserWidget {
 
     /// Timestamp when loading started (for progress bar animation).
     #[allow(dead_code)]
-    loading_start: Option<std::time::Instant>,
+    loading_start: Option<web_time::Instant>,
 
     /// In-page search state: the current search query (empty = inactive).
     #[allow(dead_code)]

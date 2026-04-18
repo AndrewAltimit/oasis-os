@@ -70,7 +70,7 @@ impl BrowserWidget {
         self.load_web_fonts(vfs);
 
         // Compute frame delta for animations/transitions.
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let dt_ms = self
             .last_tick_time
             .map_or(16.0, |prev| prev.elapsed().as_secs_f32() * 1000.0);
