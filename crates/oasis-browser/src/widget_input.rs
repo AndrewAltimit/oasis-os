@@ -1006,7 +1006,6 @@ impl BrowserWidget {
             .layout_root
             .as_ref()
             .and_then(|root| root.hit_test(lx, ly));
-
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
             Self::dispatch_js_event_prevent(engine, nid, "click")
         } else {
@@ -1346,15 +1345,6 @@ impl BrowserWidget {
         for sheet in &self.cached_author_sheets {
             all_sheets.push(sheet);
         }
-        let inline_map: FxHashMap<NodeId, &[css::parser::Declaration]> = self
-            .cached_inline_styles
-            .iter()
-            .map(|(nid, decls)| (*nid, decls.as_slice()))
-            .collect();
-        // `style_tree` takes a slice-of-slices; build the temporary
-        // vector the cascade expects.
-        let inline_vec: Vec<(NodeId, Vec<css::parser::Declaration>)> =
-            self.cached_inline_styles.clone();
         let ctx = css::cascade::CascadeContext {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
@@ -1363,15 +1353,15 @@ impl BrowserWidget {
             global_layers: None,
         };
         if let Some(doc) = &self.document {
-            self.styles = css::cascade::style_tree(doc, &all_sheets, &inline_vec, &ctx);
-            #[cfg(feature = "javascript")]
-            {
-                *self.js_styles.borrow_mut() = self.styles.clone();
-            }
+            self.styles =
+                css::cascade::style_tree(doc, &all_sheets, &self.cached_inline_styles, &ctx);
+            *self.js_styles.borrow_mut() = self.styles.clone();
             // Rebuild link map from mutated DOM so new anchors are clickable.
             self.href_map = BrowserWidget::build_link_map(doc);
         }
-        let _ = inline_map; // silence unused when there are no inline rules.
+        // Geometry may have changed (class toggles, display:none, new
+        // nodes from innerHTML) — force both a fresh layout pass and a
+        // full display-list rebuild on the next tick.
         self.layout_dirty = true;
         self.full_repaint_needed = true;
     }

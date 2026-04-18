@@ -606,15 +606,11 @@ fn install_document_global_full(
                         NodeKind::Element(e) => e,
                         _ => return false,
                     };
-                    let changed = classlist_op(e, &op, &cls);
-                    // add/remove/toggle all mutate unless the operation
-                    // was a no-op (`contains`, which returns a bool that
-                    // doesn't mean "changed" — but no mutation). Err on
-                    // the side of marking dirty for any mutating op.
-                    if op != "contains" {
+                    let (js_ret, mutated) = classlist_op_mutated(e, &op, &cls);
+                    if mutated {
                         mark_dirty(&dirty);
                     }
-                    changed
+                    js_ret
                 },
             )?,
         )?;
@@ -923,14 +919,10 @@ pub fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
     }
     return null;
   }
-  function hasClass(el, c) {
-    if (!el) return false;
-    if (el.classList && el.classList.contains) return el.classList.contains(c);
-    var cls = el.className || '';
-    return (' ' + cls + ' ').indexOf(' ' + c + ' ') >= 0;
-  }
   function nearestComment(el) {
-    return climb(el, function(n){ return hasClass(n, 'comment'); });
+    return climb(el, function(n){
+      return n.classList && n.classList.contains('comment');
+    });
   }
   if (typeof globalThis.togglecomment === 'undefined') {
     globalThis.togglecomment = function(el) {
@@ -1138,22 +1130,30 @@ fn find_matching(
 
 /// Perform a classList operation on an element's `class` attribute.
 /// Returns a bool (meaningful for "contains" and "toggle").
-fn classlist_op(elem: &mut ElementData, op: &str, cls: &str) -> bool {
+/// Apply a `classList` op. Returns `(js_return_value, mutated)` where
+/// `mutated` is `true` only if the serialized `class` attribute actually
+/// changed — `classList.add` of a token the element already has is a
+/// DOM no-op and shouldn't force a relayout.
+fn classlist_op_mutated(elem: &mut ElementData, op: &str, cls: &str) -> (bool, bool) {
     let current = elem.get_attribute("class").unwrap_or("").to_string();
     let mut parts: Vec<String> = current.split_ascii_whitespace().map(String::from).collect();
 
-    match op {
+    let (js_ret, new_parts): (bool, Option<Vec<String>>) = match op {
         "add" => {
-            if !parts.iter().any(|c| c == cls) {
+            if parts.iter().any(|c| c == cls) {
+                (true, None)
+            } else {
                 parts.push(cls.to_string());
+                (true, Some(parts))
             }
-            elem.set_attribute("class", &parts.join(" "));
-            true
         },
         "remove" => {
-            parts.retain(|c| c != cls);
-            elem.set_attribute("class", &parts.join(" "));
-            false
+            if parts.iter().any(|c| c == cls) {
+                parts.retain(|c| c != cls);
+                (false, Some(parts))
+            } else {
+                (false, None)
+            }
         },
         "toggle" => {
             let had = parts.iter().any(|c| c == cls);
@@ -1162,11 +1162,23 @@ fn classlist_op(elem: &mut ElementData, op: &str, cls: &str) -> bool {
             } else {
                 parts.push(cls.to_string());
             }
-            elem.set_attribute("class", &parts.join(" "));
-            !had
+            (!had, Some(parts))
         },
-        "contains" => parts.iter().any(|c| c == cls),
-        _ => false,
+        "contains" => (parts.iter().any(|c| c == cls), None),
+        _ => (false, None),
+    };
+
+    match new_parts {
+        Some(tokens) => {
+            let serialized = tokens.join(" ");
+            if serialized == current {
+                (js_ret, false)
+            } else {
+                elem.set_attribute("class", &serialized);
+                (js_ret, true)
+            }
+        },
+        None => (js_ret, false),
     }
 }
 

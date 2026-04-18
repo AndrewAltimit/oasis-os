@@ -2603,3 +2603,110 @@ fn reddit_expand_click_collapses_subtree() {
         class_of(&browser, comment_nid),
     );
 }
+
+/// Find the first element with the given `id` attribute.
+#[cfg(feature = "javascript")]
+fn find_by_id(browser: &BrowserWidget, id: &str) -> crate::html::dom::NodeId {
+    let doc = browser.document.as_ref().expect("doc");
+    for (nid, node) in doc.nodes.iter().enumerate() {
+        if let crate::html::dom::NodeKind::Element(e) = &node.kind
+            && e.get_attribute("id") == Some(id)
+        {
+            return nid;
+        }
+    }
+    panic!("element with id={id} not in DOM");
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_vote_arrow_toggles_class() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_comments.html");
+    vfs.write("/sites/reddit/comments.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/comments.html", &vfs);
+
+    let up_nid = find_by_id(&browser, "vote-up-aaaa001");
+    let initial = class_of(&browser, up_nid);
+    assert!(
+        initial.split_whitespace().any(|w| w == "up")
+            && !initial.split_whitespace().any(|w| w == "upmod"),
+        "precondition: up arrow starts un-voted; class={initial:?}",
+    );
+
+    let (cx, cy) = node_center(&browser, up_nid);
+    browser.handle_click(cx, cy, &vfs);
+
+    let after = class_of(&browser, up_nid);
+    assert!(
+        after.split_whitespace().any(|w| w == "upmod")
+            && !after.split_whitespace().any(|w| w == "up"),
+        "click on up arrow should swap 'up' → 'upmod'; got class={after:?}",
+    );
+
+    // Clicking again should un-vote back to `.up`.
+    browser.handle_click(cx, cy, &vfs);
+    let after2 = class_of(&browser, up_nid);
+    assert!(
+        after2.split_whitespace().any(|w| w == "up")
+            && !after2.split_whitespace().any(|w| w == "upmod"),
+        "second click should toggle back to 'up'; got class={after2:?}",
+    );
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_morechildren_click_does_not_navigate() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_comments.html");
+    vfs.write("/sites/reddit/comments.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/comments.html", &vfs);
+
+    // Walk DOM to find first <a> inside a `.morechildren` wrapper.
+    let anchor_nid = {
+        let doc = browser.document.as_ref().expect("doc");
+        let mut found = None;
+        'outer: for (nid, node) in doc.nodes.iter().enumerate() {
+            if let crate::html::dom::NodeKind::Element(e) = &node.kind
+                && e.tag == crate::html::dom::TagName::A
+            {
+                let mut cur = node.parent;
+                while let Some(pid) = cur {
+                    if let crate::html::dom::NodeKind::Element(pe) = &doc.nodes[pid].kind
+                        && pe
+                            .get_attribute("class")
+                            .is_some_and(|c| c.split_whitespace().any(|w| w == "morechildren"))
+                    {
+                        found = Some(nid);
+                        break 'outer;
+                    }
+                    cur = doc.nodes[pid].parent;
+                }
+            }
+        }
+        found.expect("no .morechildren > a in fixture")
+    };
+
+    let before_url = browser.current_url().unwrap_or("").to_string();
+    let (cx, cy) = node_center(&browser, anchor_nid);
+    browser.handle_click(cx, cy, &vfs);
+    let after_url = browser.current_url().unwrap_or("").to_string();
+
+    assert_eq!(
+        before_url, after_url,
+        "morechildren() shim must return false + preventDefault, \
+         suppressing the `#` link follow-up",
+    );
+}

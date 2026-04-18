@@ -1052,6 +1052,36 @@ fn float_auto_margins_resolve_to_zero() {
 }
 
 #[test]
+fn float_left_anchored_to_containing_block_content_x() {
+    // A float:left placed inside a parent whose content area starts at
+    // x=50 must land at x=50, not x=0. Previously we used the BFC-local
+    // coordinate directly as the absolute x, which caused floats to
+    // overhang the left edge of their containing block — so hit-testing
+    // couldn't find the float's descendants (old.reddit vote arrows,
+    // which live inside a `.midcol { float: left }` side column).
+    let m = FixedMeasurer;
+    let mut float_style = block_style();
+    float_style.float = Float::Left;
+    float_style.width = Dimension::Px(50.0);
+    let float_child = LayoutBox::new(BoxType::Block, float_style, None);
+
+    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+    parent.children = vec![float_child];
+    // Simulate a parent whose content origin is at (50, 0) — mirrors
+    // the real case where an ancestor's padding + border pushed the
+    // containing block's content edge rightward.
+    parent.dimensions.content.x = 50.0;
+    layout_block(&mut parent, 480.0, &m);
+
+    let placed_x = parent.children[0].dimensions.content.x;
+    assert!(
+        (placed_x - 50.0).abs() < 0.01,
+        "float:left inside a parent at content.x=50 should land at x=50, \
+         got {placed_x}",
+    );
+}
+
+#[test]
 fn non_float_auto_width_still_fills_container() {
     // Regression guard: shrink-to-fit must only fire for floats, not
     // for normal-flow blocks (which fill the container per §10.3.3).

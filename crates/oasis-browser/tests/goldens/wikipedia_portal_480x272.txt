@@ -12,27 +12,27 @@ draw_text "Free ", 202, 93, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "Encyclopedia", 232, 93, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 set_clip_rect 166, 80, 150, 25
 reset_clip_rect
-draw_text "English", 53, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "English", 54, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "7,166,000+ ", 18, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "articles", 84, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "日本語", 197, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "日本語", 198, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1,497,000+ ", 177, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "記事", 243, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Deutsch", 353, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Deutsch", 354, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "3.111.000+ ", 323, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Artikel", 389, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Русский", 32, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Русский", 33, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{a0}094\u{a0}000+", 50, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Français", 197, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Français", 198, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{202f}750\u{202f}000+", 191, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Español", 350, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Español", 351, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2.106.000+", 359, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "English", 66, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "English", 67, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "7,166,000+ ", 31, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "articles", 97, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "日本語", 210, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "日本語", 211, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "1,497,000+ ", 190, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "記事", 256, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Deutsch", 366, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Deutsch", 367, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "3.111.000+ ", 336, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Artikel", 402, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Русский", 45, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Русский", 46, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2\u{a0}094\u{a0}000+", 63, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Français", 210, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Français", 211, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2\u{202f}750\u{202f}000+", 204, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Español", 363, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Español", 364, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2.106.000+", 372, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
 fill_rect 10, 101, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 10, 101, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 10, 101, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }

@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 2714, Color { r: 218, g: 224, b: 230, a: 255 }
+fill_rect 0, 0, 480, 2852, Color { r: 218, g: 224, b: 230, a: 255 }
 fill_rect 174, 36, 300, 118, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 173, 35, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 474, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }
@@ -26,10 +26,10 @@ fill_rect 169, 40, 1, 206, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 15, 245, 155, 1, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 15, 40, 1, 206, Color { r: 199, g: 199, b: 199, a: 255 }
 set_clip_rect 24, 49, 137, 188
-fill_rect 9, 49, 15, 14, Color { r: 255, g: 69, b: 0, a: 255 }
-draw_text "842", 8, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
-draw_text "842", 9, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
-fill_rect 9, 81, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
+fill_rect 33, 49, 15, 14, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 32, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+draw_text "842", 33, 63, 12, Color { r: 255, g: 69, b: 0, a: 255 }
+fill_rect 33, 81, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
 draw_text "Rust ", 24, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "1.91 ", 54, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "released", 84, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }

@@ -855,17 +855,19 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 cursor_y,
                 content_width,
             );
-            // layout_block positioned the float's descendants relative
-            // to the float's *pre-placement* content.x/y (which
-            // defaulted to (0, 0) during the recursive layout). Now
-            // that place_float has the real position, shift the whole
-            // subtree by the delta so descendants paint inside the
-            // floated box instead of staying at the containing block's
-            // origin. Same pattern we already use for `margin: 0 auto`
-            // centering below.
+            // `place_float` returns a position in BFC-local coordinates
+            // (origin at the containing block's content edge). To turn
+            // that into absolute (layout-tree) coordinates we must add
+            // the parent's `content_x`/content.y — otherwise a float
+            // inside a comment at absolute x=15 would land at x=0, which
+            // also prevents hit-testing from finding the float's
+            // descendants (their rects then overhang the parent's
+            // bounding box on the left). Same pattern we already use
+            // for `margin: 0 auto` centering below.
             let pre_x = child.dimensions.content.x;
             let pre_y = child.dimensions.content.y;
-            let resolved_x = float_box.rect.x
+            let resolved_x = content_x
+                + float_box.rect.x
                 + child.dimensions.margin.left
                 + child.dimensions.border.left
                 + child.dimensions.padding.left;

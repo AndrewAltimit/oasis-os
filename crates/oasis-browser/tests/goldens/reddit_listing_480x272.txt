@@ -151,11 +151,11 @@ draw_text "1", 14, 154, 13, Color { r: 198, g: 198, b: 198, a: 255 }
 draw_text "1", 15, 154, 13, Color { r: 198, g: 198, b: 198, a: 255 }
 reset_clip_rect
 set_clip_rect 14, 154, 131, 170
-set_clip_rect 14, 176, 15, 43
-fill_rect 9, 176, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
-draw_text "124", 8, 190, 10, Color { r: 198, g: 198, b: 198, a: 255 }
-draw_text "124", 9, 190, 10, Color { r: 198, g: 198, b: 198, a: 255 }
-fill_rect 9, 205, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
+set_clip_rect 19, 176, 24, 43
+fill_rect 23, 176, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
+draw_text "124", 22, 190, 10, Color { r: 198, g: 198, b: 198, a: 255 }
+draw_text "124", 23, 190, 10, Color { r: 198, g: 198, b: 198, a: 255 }
+fill_rect 23, 205, 15, 14, Color { r: 215, g: 218, b: 220, a: 255 }
 reset_clip_rect
 set_clip_rect 14, 154, 131, 170
 set_clip_rect 14, 171, 131, 15
