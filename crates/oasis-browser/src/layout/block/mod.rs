@@ -480,25 +480,53 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     }
     let origin_x = layout_box.dimensions.content.x;
     let available = layout_box.dimensions.content.width;
-    // Measure max-content ≈ rightmost child border-box edge. We do NOT
-    // include margin-right because the normal-flow over-constrained
-    // rule (§10.3.3) absorbs leftover containing-block width into the
-    // child's margin-right — that slack is not real content extent.
-    // Inline children were laid out against the available width, so
-    // any line whose text happened to wrap reports the wrapped extent,
-    // giving `min(max-content, available)` in one pass.
-    let max_child_right = layout_box
-        .children
-        .iter()
-        .map(|c| {
+
+    // When the float's children are inline fragments produced by
+    // `layout_inline` (all `BoxType::Inline`/`Replaced`), using the
+    // rightmost border-box edge as max-content is wrong: `text-align:
+    // right|center` positions fragments at the right/center of the
+    // content box, so `bb.x + bb.width == content.width` regardless of
+    // the actual text extent, and shrink-to-fit would never fire. The
+    // natural max-content for inline content is the widest line's
+    // summed fragment widths. Group children by y to reconstruct per-
+    // line totals; fragments on the same line share a y position after
+    // `lines_to_children`.
+    let inline_only = !layout_box.children.is_empty()
+        && layout_box
+            .children
+            .iter()
+            .all(|c| matches!(c.box_type, BoxType::Inline | BoxType::Replaced(_)));
+    let max_child_right = if inline_only {
+        let mut by_y: Vec<(f32, f32)> = Vec::new();
+        for c in &layout_box.children {
             let bb = c.dimensions.border_box();
-            bb.x + bb.width - origin_x
-        })
-        .fold(0.0_f32, f32::max);
-    // When the float has only inline content, the border-box walk
-    // above reports 0 (anonymous inline wrappers are tracked via
-    // `content.height`). Fall back to the float's own content.width
-    // set by the inline layout pass.
+            let y = c.dimensions.content.y;
+            if let Some(row) = by_y.iter_mut().find(|(ry, _)| (*ry - y).abs() < 0.5) {
+                row.1 += bb.width;
+            } else {
+                by_y.push((y, bb.width));
+            }
+        }
+        by_y.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)
+    } else {
+        // Block/mixed children: use the rightmost border-box edge. We
+        // do NOT include margin-right because the normal-flow over-
+        // constrained rule (§10.3.3) absorbs leftover containing-block
+        // width into the child's margin-right — that slack is not real
+        // content extent.
+        layout_box
+            .children
+            .iter()
+            .map(|c| {
+                let bb = c.dimensions.border_box();
+                bb.x + bb.width - origin_x
+            })
+            .fold(0.0_f32, f32::max)
+    };
+
+    // When the float has no children (empty element with just padding/
+    // border), fall back to the provisional content width so the float
+    // still has its declared intrinsic size.
     let measured = if max_child_right > 0.0 {
         max_child_right
     } else {
