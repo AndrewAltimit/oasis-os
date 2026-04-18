@@ -565,6 +565,11 @@ impl BrowserWidget {
                             loaded.response.url,
                             body.len()
                         );
+                        // Slot stays `None` but still flag a cascade pass so
+                        // any peer sheets that *did* arrive this tick get
+                        // applied; otherwise a single oversized sheet can
+                        // strand the page unstyled with no retry signal.
+                        self.pending_external_css_apply = true;
                         continue;
                     }
                     let css_text = String::from_utf8_lossy(&body).into_owned();
@@ -580,6 +585,7 @@ impl BrowserWidget {
                 },
                 Err(e) => {
                     log::debug!("external stylesheet fetch failed: {e}");
+                    self.pending_external_css_apply = true;
                     continue;
                 },
             };
