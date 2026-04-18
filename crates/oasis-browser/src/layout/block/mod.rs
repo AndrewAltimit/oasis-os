@@ -949,18 +949,32 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // Standard blocks flow underneath floats (their
                 // inline content flows around), so this only applies
                 // when the child starts a new BFC.
+                //
+                // Approximations:
+                // - Height probe is `1.0` because the child's actual
+                //   height isn't known until after layout. A tall BFC
+                //   child whose float ends partway down may shift right
+                //   based on only the top edge's float coverage. Per
+                //   CSS 2.1 §9.5 the non-overlap rule applies to the
+                //   block's full extent — a second-pass correction
+                //   would be more accurate but is out of scope here.
+                // - `child_avail_width` is also passed to `layout_block`
+                //   as the containing-block width. Per CSS 2.1 §10.1,
+                //   percentage widths inside the BFC child should
+                //   resolve against the parent's content box, not the
+                //   float-narrowed available space. This diverges only
+                //   when a percentage-width descendant sits in a BFC
+                //   adjacent to a float.
                 let child_bfc = establishes_bfc(&child.style);
                 let child_y_for_float = cursor_y + collapsed;
-                let (float_left, float_right, child_avail_width) =
-                    if child_bfc && !float_ctx.is_empty() {
-                        let fl = float_ctx.left_offset(child_y_for_float, 1.0);
-                        let fr = float_ctx.right_offset(child_y_for_float, 1.0, content_width);
-                        let avail = (fr - fl).max(0.0);
-                        (fl, fr, avail)
-                    } else {
-                        (0.0, content_width, content_width)
-                    };
-                let _ = float_right;
+                let (float_left, child_avail_width) = if child_bfc && !float_ctx.is_empty() {
+                    let fl = float_ctx.left_offset(child_y_for_float, 1.0);
+                    let fr = float_ctx.right_offset(child_y_for_float, 1.0, content_width);
+                    let avail = (fr - fl).max(0.0);
+                    (fl, avail)
+                } else {
+                    (0.0, content_width)
+                };
 
                 // Position child's content area.
                 child.dimensions.content.x = content_x
