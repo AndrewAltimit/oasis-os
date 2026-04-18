@@ -2710,3 +2710,438 @@ fn reddit_morechildren_click_does_not_navigate() {
          suppressing the `#` link follow-up",
     );
 }
+
+/// Find the first arrow (`<div class="arrow up">` / similar) inside the
+/// N-th `.thing`, skipping arrows that already have an inline `onclick`
+/// attribute. Used by the listing-page delegation test, which exercises
+/// the `wireListingArrows()` path in `install_site_compat_shims`.
+#[cfg(feature = "javascript")]
+fn find_nth_thing_arrow(
+    browser: &BrowserWidget,
+    skip_things: usize,
+    direction: &str,
+) -> crate::html::dom::NodeId {
+    let doc = browser.document.as_ref().expect("doc");
+    let mut things_seen = 0usize;
+    for node in doc.nodes.iter() {
+        if let crate::html::dom::NodeKind::Element(e) = &node.kind
+            && e.get_attribute("class")
+                .is_some_and(|c| c.split_whitespace().any(|w| w == "thing"))
+        {
+            if things_seen < skip_things {
+                things_seen += 1;
+                continue;
+            }
+            // Found the target `.thing` — descend to its first
+            // `.arrow` with the requested direction token.
+            let mut stack: Vec<crate::html::dom::NodeId> = node.children.clone();
+            while let Some(child) = stack.pop() {
+                if let crate::html::dom::NodeKind::Element(ce) = &doc.nodes[child].kind {
+                    let classes = ce.get_attribute("class").unwrap_or("");
+                    let has_arrow = classes.split_whitespace().any(|w| w == "arrow");
+                    let has_dir = classes.split_whitespace().any(|w| w == direction);
+                    if has_arrow && has_dir {
+                        // Skip arrows that have a pre-wired inline handler so
+                        // the test actually exercises the shim's fallback.
+                        if ce.get_attribute("onclick").is_none() {
+                            return child;
+                        }
+                    }
+                    // Push children in reverse for a left-to-right walk.
+                    for &c in doc.nodes[child].children.iter().rev() {
+                        stack.push(c);
+                    }
+                }
+            }
+            panic!("no matching .arrow.{direction} inside nth .thing");
+        }
+    }
+    panic!("not enough .thing nodes in fixture");
+}
+
+/// Read the full text content of a node (concatenates descendant text).
+#[cfg(feature = "javascript")]
+fn text_content(browser: &BrowserWidget, nid: crate::html::dom::NodeId) -> String {
+    let doc = browser.document.as_ref().expect("doc");
+    fn walk(doc: &crate::html::dom::Document, nid: crate::html::dom::NodeId, out: &mut String) {
+        match &doc.nodes[nid].kind {
+            crate::html::dom::NodeKind::Text(t) => out.push_str(t),
+            crate::html::dom::NodeKind::Element(_) => {
+                for &c in &doc.nodes[nid].children {
+                    walk(doc, c, out);
+                }
+            },
+            _ => {},
+        }
+    }
+    let mut s = String::new();
+    walk(doc, nid, &mut s);
+    s
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_listing_vote_arrow_fires_without_onclick() {
+    // On the listing fixture every `.arrow` renders without an inline
+    // onclick — real reddit delegates from a bound body-level handler.
+    // The compat shim's `wireListingArrows()` has to find those arrows
+    // and attach a fallback click listener so users can still vote.
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_listing.html");
+    vfs.write("/sites/reddit/listing.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/listing.html", &vfs);
+
+    // Post #3 (`Rust 1.91 released`) starts fully unvoted — neither
+    // arrow carries a modifier class.
+    let up_nid = find_nth_thing_arrow(&browser, 2, "up");
+    let before = class_of(&browser, up_nid);
+    assert!(
+        before.split_whitespace().any(|w| w == "up")
+            && !before.split_whitespace().any(|w| w == "upmod"),
+        "precondition: listing arrow starts as `up`; got {before:?}",
+    );
+
+    let (cx, cy) = node_center(&browser, up_nid);
+    browser.handle_click(cx, cy, &vfs);
+
+    let after = class_of(&browser, up_nid);
+    assert!(
+        after.split_whitespace().any(|w| w == "upmod"),
+        "shim should have wired a fallback click handler that swaps the \
+         `up` class to `upmod`; got {after:?}",
+    );
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_vote_updates_score_text_and_class() {
+    // On listing pages the `.score` lives inside the `.midcol` alongside
+    // the up/down arrows, so clicking the up arrow must:
+    //   1. toggle `up` → `upmod`
+    //   2. rewrite the sibling `.score` text from "124" → "125"
+    //   3. swap the score's colour class to `.likes`
+    // Comments-page scores live in the tagline (no midcol sibling) and
+    // are intentionally left alone — real reddit also can't update them
+    // without a backend roundtrip.
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_listing.html");
+    vfs.write("/sites/reddit/listing.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/listing.html", &vfs);
+
+    // Grab the first post's un-voted up arrow (via the shim-wired path).
+    let up_nid = find_nth_thing_arrow(&browser, 0, "up");
+
+    // Score element is the sibling `.score` inside the same `.midcol`.
+    let score_nid = {
+        let doc = browser.document.as_ref().expect("doc");
+        let midcol = doc.nodes[up_nid].parent.expect("arrow has parent");
+        let mut found = None;
+        for &c in &doc.nodes[midcol].children {
+            if let crate::html::dom::NodeKind::Element(e) = &doc.nodes[c].kind
+                && e.get_attribute("class")
+                    .is_some_and(|cl| cl.split_whitespace().any(|w| w == "score"))
+            {
+                found = Some(c);
+                break;
+            }
+        }
+        found.expect("listing midcol has .score child")
+    };
+
+    let parse_leading = |s: &str| -> i64 {
+        let trimmed = s.trim();
+        let digits: String = trimmed
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        digits.parse().unwrap_or(0)
+    };
+
+    let before_text = text_content(&browser, score_nid);
+    let before_n = parse_leading(&before_text);
+
+    let (cx, cy) = node_center(&browser, up_nid);
+    browser.handle_click(cx, cy, &vfs);
+
+    let after_text = text_content(&browser, score_nid);
+    assert_eq!(
+        parse_leading(&after_text),
+        before_n + 1,
+        "score should increment by 1 on upvote; before={before_text:?} after={after_text:?}",
+    );
+    let score_class = class_of(&browser, score_nid);
+    assert!(
+        score_class.split_whitespace().any(|w| w == "likes"),
+        "score must gain `.likes` class on upvote; got {score_class:?}",
+    );
+
+    // Un-vote and confirm the score returns to its baseline.
+    browser.handle_click(cx, cy, &vfs);
+    let final_text = text_content(&browser, score_nid);
+    assert_eq!(
+        parse_leading(&final_text),
+        before_n,
+        "second click should restore the baseline score; got {final_text:?}",
+    );
+    let final_class = class_of(&browser, score_nid);
+    assert!(
+        !final_class.split_whitespace().any(|w| w == "likes"),
+        "score should lose `.likes` after un-voting; got {final_class:?}",
+    );
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_hide_button_hides_thing() {
+    // "hide" in a post's `.buttons` row should make the surrounding
+    // `.thing` receive a `.hidden` class so the stylesheet rule
+    // `.thing.hidden { display: none }` removes it from layout.
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_listing.html");
+    vfs.write("/sites/reddit/listing.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/listing.html", &vfs);
+
+    // Find the first `<a>` whose text is "hide" inside a `.thing .buttons`.
+    let (anchor_nid, thing_nid) = {
+        let doc = browser.document.as_ref().expect("doc");
+        let mut found: Option<(crate::html::dom::NodeId, crate::html::dom::NodeId)> = None;
+        'outer: for (nid, node) in doc.nodes.iter().enumerate() {
+            if let crate::html::dom::NodeKind::Element(e) = &node.kind
+                && e.tag == crate::html::dom::TagName::A
+            {
+                let text = {
+                    let mut s = String::new();
+                    for &c in &node.children {
+                        if let crate::html::dom::NodeKind::Text(t) = &doc.nodes[c].kind {
+                            s.push_str(t);
+                        }
+                    }
+                    s.trim().to_lowercase()
+                };
+                if text != "hide" {
+                    continue;
+                }
+                // Walk up to confirm we're inside `.thing .buttons`.
+                let mut in_buttons = false;
+                let mut thing = None;
+                let mut cur = node.parent;
+                while let Some(pid) = cur {
+                    if let crate::html::dom::NodeKind::Element(pe) = &doc.nodes[pid].kind {
+                        let cls = pe.get_attribute("class").unwrap_or("");
+                        if cls.split_whitespace().any(|w| w == "buttons") {
+                            in_buttons = true;
+                        }
+                        if cls.split_whitespace().any(|w| w == "thing") {
+                            thing = Some(pid);
+                            break;
+                        }
+                    }
+                    cur = doc.nodes[pid].parent;
+                }
+                if in_buttons && let Some(t) = thing {
+                    found = Some((nid, t));
+                    break 'outer;
+                }
+            }
+        }
+        found.expect("no `hide` anchor inside .thing .buttons")
+    };
+
+    assert!(
+        !class_of(&browser, thing_nid)
+            .split_whitespace()
+            .any(|w| w == "hidden"),
+        "precondition: thing not yet hidden",
+    );
+
+    let (cx, cy) = node_center(&browser, anchor_nid);
+    browser.handle_click(cx, cy, &vfs);
+
+    assert!(
+        class_of(&browser, thing_nid)
+            .split_whitespace()
+            .any(|w| w == "hidden"),
+        "hide-click should add `.hidden` to the parent thing; class={:?}",
+        class_of(&browser, thing_nid),
+    );
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_tabmenu_click_moves_selected() {
+    // Clicking the `new` tab in the listing header should move
+    // the `.selected` class from the currently-active `hot` li to `new`,
+    // mirroring reddit's own behaviour after a page navigation. Real
+    // reddit re-loads the page; we mutate the DOM locally so the visual
+    // state is at least consistent with the user's click.
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_listing.html");
+    vfs.write("/sites/reddit/listing.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/listing.html", &vfs);
+
+    // Locate the `new` tab anchor inside `.tabmenu` and its `li` parent.
+    let (new_anchor, new_li, hot_li) = {
+        let doc = browser.document.as_ref().expect("doc");
+        let mut new_anchor = None;
+        let mut new_li = None;
+        let mut hot_li = None;
+        for (nid, node) in doc.nodes.iter().enumerate() {
+            if let crate::html::dom::NodeKind::Element(e) = &node.kind
+                && e.tag == crate::html::dom::TagName::A
+            {
+                // Find the .tabmenu ancestor — we only care about tabs
+                // inside the nav, not the sort row of the listing body.
+                let mut in_tabmenu = false;
+                let mut cur = node.parent;
+                while let Some(pid) = cur {
+                    if let crate::html::dom::NodeKind::Element(pe) = &doc.nodes[pid].kind
+                        && pe
+                            .get_attribute("class")
+                            .is_some_and(|c| c.split_whitespace().any(|w| w == "tabmenu"))
+                    {
+                        in_tabmenu = true;
+                        break;
+                    }
+                    cur = doc.nodes[pid].parent;
+                }
+                if !in_tabmenu {
+                    continue;
+                }
+                let text = {
+                    let mut s = String::new();
+                    for &c in &node.children {
+                        if let crate::html::dom::NodeKind::Text(t) = &doc.nodes[c].kind {
+                            s.push_str(t);
+                        }
+                    }
+                    s.trim().to_lowercase()
+                };
+                if text == "new" {
+                    new_anchor = Some(nid);
+                    new_li = node.parent;
+                } else if text == "hot" {
+                    hot_li = node.parent;
+                }
+            }
+        }
+        (
+            new_anchor.expect("no `new` tab"),
+            new_li.expect("`new` anchor has parent li"),
+            hot_li.expect("no `hot` tab"),
+        )
+    };
+
+    // Precondition: `hot` li is currently `.selected`.
+    assert!(
+        class_of(&browser, hot_li)
+            .split_whitespace()
+            .any(|w| w == "selected"),
+        "precondition: hot tab starts selected",
+    );
+
+    let (cx, cy) = node_center(&browser, new_anchor);
+    browser.handle_click(cx, cy, &vfs);
+
+    assert!(
+        class_of(&browser, new_li)
+            .split_whitespace()
+            .any(|w| w == "selected"),
+        "clicked `new` tab should gain `.selected`; got {:?}",
+        class_of(&browser, new_li),
+    );
+    assert!(
+        !class_of(&browser, hot_li)
+            .split_whitespace()
+            .any(|w| w == "selected"),
+        "previously-selected `hot` tab should lose `.selected`; got {:?}",
+        class_of(&browser, hot_li),
+    );
+}
+
+// ---------------------------------------------------------------
+// iframe_http_mode — WASM-style iframe overlay short-circuit
+// ---------------------------------------------------------------
+
+#[test]
+fn iframe_http_mode_skips_fetch_and_sets_url() {
+    // With `iframe_http_mode` on, navigating to an http(s) URL must
+    // update `current_url` for the chrome bar but NOT attempt any
+    // load — no DOM, no layout, no JS engine. The WASM backend relies
+    // on this so an external `<iframe>` overlay can render the page
+    // while the OASIS engine stays idle.
+    let vfs = MemoryVfs::new();
+    let mut config = BrowserConfig::default();
+    config.features.iframe_http_mode = true;
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("https://example.com/page.html", &vfs);
+
+    assert_eq!(
+        browser.current_url(),
+        Some("https://example.com/page.html"),
+        "iframe mode should still update the nav URL for chrome display",
+    );
+    assert!(
+        browser.document.is_none(),
+        "iframe mode must not build a DOM for http(s) pages",
+    );
+    assert!(
+        browser.layout_root.is_none(),
+        "iframe mode must not produce a layout tree for http(s) pages",
+    );
+    assert_eq!(
+        browser.loading_state(),
+        crate::LoadingState::Idle,
+        "iframe mode shouldn't leave the browser in Loading or Error state",
+    );
+}
+
+#[test]
+fn iframe_http_mode_still_loads_vfs_pages() {
+    // VFS URLs aren't iframe-able — the engine must still render them
+    // normally even when iframe_http_mode is set.
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/local").unwrap();
+    vfs.write(
+        "/sites/local/index.html",
+        b"<html><body><h1>hi</h1></body></html>",
+    )
+    .unwrap();
+
+    let mut config = BrowserConfig::default();
+    config.features.iframe_http_mode = true;
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/local/index.html", &vfs);
+
+    assert_eq!(browser.current_url(), Some("vfs://sites/local/index.html"),);
+    assert!(
+        browser.document.is_some(),
+        "VFS pages must still build a DOM even with iframe_http_mode on",
+    );
+}

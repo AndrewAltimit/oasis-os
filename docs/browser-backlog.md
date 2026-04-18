@@ -12,6 +12,43 @@ The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
 
+- **Smooth triangle glyphs** (same branch). The 8×8 bitmap font's
+  ▲ / ▼ glyphs scaled up chunky — a 6-row triangle pattern stretched
+  to 18 px on real hardware. `oasis_types::bitmap_font::smooth_triangle_span()`
+  now computes a per-row inclusive `(x0, x1)` span for ▲ and ▼ at the
+  target resolution, and both the SDL and WASM text renderers
+  special-case those codepoints to draw clean edges instead of
+  running the bitmap-scale path. The helper is single-backend-agnostic
+  (return a span, not a draw call) and covered by five unit tests.
+  Visible benefit: vote arrows on the reddit fixtures now look like
+  actual arrowheads at any font size.
+
+- **old.reddit.com visual polish + richer interactivity + WASM
+  iframe fallback** (`feat/browser-old-reddit-improvements`).
+  Follow-up to the initial reddit rendering work. Vote arrows now
+  render as coloured ▲/▼ triangles via `::before` pseudo-elements
+  instead of the raw `background-color` rectangles the sprite-less
+  CSS produced, making the vote state immediately legible.
+  `install_site_compat_shims` grew four new behaviours:
+  event-delegated arrow clicks on listing pages (reddit relies on a
+  jQuery body handler that never loads here), baseline-aware
+  `.score` text updates with `.likes` / `.dislikes` colour-class
+  swap, a `hide` button that adds `.hidden` to the parent `.thing`
+  (stylesheet rule is now `display: none`), and `.tabmenu li`
+  `.selected`-class switching on sort-tab clicks. Four new
+  interactive tests cover each behaviour end-to-end.
+
+  Bundled with this branch: `BrowserFeatures.iframe_http_mode` —
+  when set, `navigate_vfs` short-circuits for `http(s)://` URLs,
+  updating only the nav URL (for the chrome bar) and clearing
+  document/layout. VFS pages still render normally. The WASM
+  backend turns the flag on so the `<iframe>` overlay handles real
+  network pages while the OASIS engine stays idle — previously the
+  engine attempted a sync fetch that can't work in a browser, fell
+  through to an error page, and initialised QuickJS on every
+  navigation, which was the "launching browser crashes the WASM
+  app" report.
+
 - **old.reddit.com interactivity + inline whitespace + float
   positioning** (`feat/browser-reddit-rendering`). Screenshot-driven
   iteration on old.reddit's listing and comments pages surfaced four

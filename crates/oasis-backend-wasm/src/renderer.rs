@@ -218,6 +218,28 @@ impl WasmBackend {
         };
         off_ctx.set_fill_style_str(&css);
 
+        // Smooth-triangle glyphs get their own row-span path so the
+        // edges stay crisp instead of the 6-row bitmap scaling blocks.
+        if oasis_types::bitmap_font::is_smooth_triangle(ch) {
+            let gw = cw as i32;
+            let gh = ch_height as i32;
+            for y in 0..gh {
+                if let Some((x0, x1)) =
+                    oasis_types::bitmap_font::smooth_triangle_span(ch, y, gw, gh)
+                {
+                    let rw = (x1 - x0 + 1) as f64;
+                    off_ctx.fill_rect(x0 as f64, y as f64, rw, 1.0);
+                    if bold {
+                        // Shift-right span draw is equivalent to SDL's
+                        // per-pixel `x + 1` bold loop: both cover
+                        // [x0, x1 + 1] on this row.
+                        off_ctx.fill_rect((x0 + 1) as f64, y as f64, rw, 1.0);
+                    }
+                }
+            }
+            return Ok(offscreen);
+        }
+
         let glyph = font::glyph(ch);
         let (left_pad, _) = font::glyph_metrics(ch);
         let left_pad = left_pad as i32;

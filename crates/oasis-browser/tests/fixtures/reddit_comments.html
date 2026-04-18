@@ -96,6 +96,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: 8px;
   overflow: hidden;
 }
+.thing.hidden { display: none; }
 .thing.link .midcol {
   float: left;
   width: 4.1ex;
@@ -103,15 +104,24 @@ a:hover { text-decoration: underline; }
   text-align: center;
 }
 .thing.link .midcol .arrow {
-  background: #c6c6c6;
-  border-radius: 2px;
+  cursor: pointer;
   display: block;
-  height: 14px;
+  height: 18px;
   margin: 0 auto;
-  width: 15px;
+  width: 18px;
+  line-height: 18px;
+  font-size: 18px;
+  text-align: center;
+  color: #878a8c;
+  background: transparent;
 }
-.thing.link .midcol .arrow.upmod { background: #ff4500; }
-.thing.link .midcol .arrow.down { background: #d7dadc; margin-top: 2px; }
+.thing.link .midcol .arrow.up::before { content: '▲'; }
+.thing.link .midcol .arrow.upmod::before { content: '▲'; }
+.thing.link .midcol .arrow.down::before { content: '▼'; }
+.thing.link .midcol .arrow.downmod::before { content: '▼'; }
+.thing.link .midcol .arrow.upmod { color: #ff4500; }
+.thing.link .midcol .arrow.down { color: #878a8c; margin-top: 2px; }
+.thing.link .midcol .arrow.downmod { color: #7193ff; margin-top: 2px; }
 .thing.link .midcol .score.likes { color: #ff4500; font-weight: bold; }
 .thing.link .entry { margin-left: 40px; overflow: hidden; }
 .thing.link .entry .title {
@@ -184,15 +194,24 @@ a:hover { text-decoration: underline; }
   padding: 3px 4px 0 0;
 }
 .comment .midcol .arrow {
-  background: #c6c6c6;
-  border-radius: 2px;
+  cursor: pointer;
   display: block;
-  height: 12px;
+  height: 16px;
   margin: 0 auto;
-  width: 13px;
+  width: 16px;
+  line-height: 16px;
+  font-size: 16px;
+  text-align: center;
+  color: #878a8c;
+  background: transparent;
 }
-.comment .midcol .arrow.upmod { background: #ff4500; }
-.comment .midcol .arrow.down { background: #d7dadc; margin-top: 1px; }
+.comment .midcol .arrow.up::before { content: '▲'; }
+.comment .midcol .arrow.upmod::before { content: '▲'; }
+.comment .midcol .arrow.down::before { content: '▼'; }
+.comment .midcol .arrow.downmod::before { content: '▼'; }
+.comment .midcol .arrow.upmod { color: #ff4500; }
+.comment .midcol .arrow.down { color: #878a8c; margin-top: 1px; }
+.comment .midcol .arrow.downmod { color: #7193ff; margin-top: 1px; }
 
 .comment .entry {
   margin: 0 0 0 30px;

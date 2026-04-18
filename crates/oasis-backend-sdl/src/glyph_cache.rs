@@ -39,33 +39,52 @@ impl SdlBackend {
         let gh = font_size.max(1) as u32;
         let mut rgba = vec![0u8; (gw * gh * 4) as usize];
 
-        let glyph_data = font::glyph(ch);
-        let (left_pad, _) = font::glyph_metrics(ch);
-        let left_pad = left_pad as i32;
-
-        for row in 0..8i32 {
-            let bits = glyph_data[row as usize];
-            if bits == 0 {
-                continue;
+        // Triangle glyphs (▲ / ▼) scale up chunky through the bitmap
+        // path because the 8×8 source only has six rows of triangle
+        // data. Render them directly at the target resolution.
+        if oasis_types::bitmap_font::is_smooth_triangle(ch) {
+            for y in 0..gh as i32 {
+                let Some((x0, x1)) =
+                    oasis_types::bitmap_font::smooth_triangle_span(ch, y, gw as i32, gh as i32)
+                else {
+                    continue;
+                };
+                for x in x0..=x1 {
+                    Self::set_glyph_pixel(&mut rgba, gw, gh, x, y, color);
+                    if bold {
+                        Self::set_glyph_pixel(&mut rgba, gw, gh, x + 1, y, color);
+                    }
+                }
             }
-            let oy0 = row * fs / 8;
-            let oy1 = (row + 1) * fs / 8;
-            let italic_off = if italic { (7 - row) * fs / 32 } else { 0 };
+        } else {
+            let glyph_data = font::glyph(ch);
+            let (left_pad, _) = font::glyph_metrics(ch);
+            let left_pad = left_pad as i32;
 
-            for col in 0..8i32 {
-                if bits & (0x80 >> col) == 0 {
+            for row in 0..8i32 {
+                let bits = glyph_data[row as usize];
+                if bits == 0 {
                     continue;
                 }
-                let src_col = col - left_pad;
-                let ox0 = src_col * fs / 8;
-                let ox1 = (src_col + 1) * fs / 8;
-                // Fill the scaled rectangle in the buffer.
-                for py in oy0..oy1.max(oy0 + 1) {
-                    for px in ox0..ox1.max(ox0 + 1) {
-                        let bx = px + italic_off;
-                        Self::set_glyph_pixel(&mut rgba, gw, gh, bx, py, color);
-                        if bold {
-                            Self::set_glyph_pixel(&mut rgba, gw, gh, bx + 1, py, color);
+                let oy0 = row * fs / 8;
+                let oy1 = (row + 1) * fs / 8;
+                let italic_off = if italic { (7 - row) * fs / 32 } else { 0 };
+
+                for col in 0..8i32 {
+                    if bits & (0x80 >> col) == 0 {
+                        continue;
+                    }
+                    let src_col = col - left_pad;
+                    let ox0 = src_col * fs / 8;
+                    let ox1 = (src_col + 1) * fs / 8;
+                    // Fill the scaled rectangle in the buffer.
+                    for py in oy0..oy1.max(oy0 + 1) {
+                        for px in ox0..ox1.max(ox0 + 1) {
+                            let bx = px + italic_off;
+                            Self::set_glyph_pixel(&mut rgba, gw, gh, bx, py, color);
+                            if bold {
+                                Self::set_glyph_pixel(&mut rgba, gw, gh, bx + 1, py, color);
+                            }
                         }
                     }
                 }

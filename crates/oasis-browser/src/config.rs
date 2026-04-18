@@ -23,6 +23,12 @@ pub struct BrowserFeatures {
     pub home_url: String,
     /// Resource cache limit in MB.
     pub max_cache_mb: usize,
+    /// Defer http/https pages to the host (e.g. a `<iframe>` overlay in
+    /// the WASM backend) instead of loading + rendering them in-engine.
+    /// `navigate_vfs` becomes a URL-bar-only update for HTTP(S) URLs —
+    /// no sync fetch attempt, no JS engine init, no layout. VFS pages
+    /// still render normally.
+    pub iframe_http_mode: bool,
 }
 
 impl Default for BrowserFeatures {
@@ -36,6 +42,7 @@ impl Default for BrowserFeatures {
             sandbox_only: false,
             home_url: "vfs://sites/home/index.html".to_string(),
             max_cache_mb: 8,
+            iframe_http_mode: false,
         }
     }
 }
