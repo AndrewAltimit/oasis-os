@@ -536,8 +536,11 @@ fn install_document_global_full(
                 }
                 doc.nodes[id].children.clear();
 
-                // Parse the fragment via the tokenizer +
-                // tree builder, then transplant body children.
+                // Parse and transplant unconditionally — the before/after
+                // serialize comparison below uses the post-transplant state
+                // to detect no-ops. The DOM is always updated to the parsed
+                // result; only mark_dirty (cascade + relayout) is skipped
+                // when old_html == new_html.
                 use crate::html::tokenizer::Tokenizer;
                 use crate::html::tree_builder::TreeBuilder;
                 let wrapped = format!("<html><body>{html}</body></html>");
