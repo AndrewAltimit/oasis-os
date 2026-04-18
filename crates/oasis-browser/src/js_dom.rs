@@ -952,6 +952,16 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
       return n.classList && n.classList.contains('comment');
     });
   }
+  function nearestMidcol(el) {
+    return climb(el, function(n){
+      return n.classList && n.classList.contains('midcol');
+    });
+  }
+  function nearestThing(el) {
+    return climb(el, function(n){
+      return n.classList && n.classList.contains('thing');
+    });
+  }
   if (typeof globalThis.togglecomment === 'undefined') {
     globalThis.togglecomment = function(el) {
       var c = nearestComment(el);
@@ -985,24 +995,159 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
   if (typeof globalThis.morechildren === 'undefined') {
     globalThis.morechildren = function(){ return false; };
   }
-  // Vote arrows: toggle an `upmod`/`downmod` class on the .arrow. This
-  // matches how reddit's own sheet styles active votes, giving visual
-  // feedback even without a backend roundtrip.
+  // Score-update helper: reads the midcol's stored baseline score, adds
+  // +1 / -1 / 0 based on which sibling arrow is active, and writes the
+  // new total back into `.score`. Also swaps the score's colour class
+  // (`likes` orange / `dislikes` blue / `unvoted` gray) so the number
+  // changes hue when the user toggles a vote.
+  function updateScore(midcol) {
+    if (!midcol) return;
+    var score = midcol.querySelector('.score');
+    if (!score) return;
+    // Stash the original score value once, then recompute from it
+    // every toggle so the math stays idempotent across re-clicks.
+    var base;
+    if (midcol.getAttribute('data-base-score')) {
+      base = parseInt(midcol.getAttribute('data-base-score'), 10);
+    } else {
+      var m = ((score.textContent || '').trim()).match(/^(-?\d+)/);
+      base = m ? parseInt(m[1], 10) : 0;
+      midcol.setAttribute('data-base-score', String(base));
+      // Stash original suffix too — "412 points" vs plain "412".
+      var suf = ((score.textContent || '').trim()).replace(/^-?\d+/, '');
+      midcol.setAttribute('data-score-suffix', suf);
+    }
+    var suffix = midcol.getAttribute('data-score-suffix') || '';
+    var arrows = midcol.querySelectorAll('.arrow');
+    var delta = 0;
+    var upActive = false, downActive = false;
+    for (var i = 0; i < arrows.length; i++) {
+      if (arrows[i].classList.contains('upmod')) { delta += 1; upActive = true; }
+      else if (arrows[i].classList.contains('downmod')) { delta -= 1; downActive = true; }
+    }
+    score.textContent = (base + delta) + suffix;
+    score.classList.remove('likes');
+    score.classList.remove('dislikes');
+    score.classList.remove('unvoted');
+    if (upActive) score.classList.add('likes');
+    else if (downActive) score.classList.add('dislikes');
+    else score.classList.add('unvoted');
+  }
+  // Vote arrows: toggle `upmod`/`downmod` on the clicked arrow, clear
+  // the opposite arrow (reddit treats up+down as mutually exclusive),
+  // and recompute the displayed score. Clicking the same arrow twice
+  // returns to the unvoted state.
   if (typeof globalThis.togglevote === 'undefined') {
     globalThis.togglevote = function(el, dir) {
       if (!el || !el.classList) return false;
       var on = dir > 0 ? 'upmod' : 'downmod';
       var off = dir > 0 ? 'up' : 'down';
-      if (el.classList.contains(on)) {
+      var wasActive = el.classList.contains(on);
+      if (wasActive) {
         el.classList.remove(on);
         el.classList.add(off);
       } else {
         el.classList.add(on);
         el.classList.remove(off);
+        // Deactivate opposite arrow in the same midcol.
+        var midcol = nearestMidcol(el);
+        if (midcol) {
+          var opposite = dir > 0 ? 'downmod' : 'upmod';
+          var oppOff = dir > 0 ? 'down' : 'up';
+          var sibs = midcol.querySelectorAll('.arrow');
+          for (var i = 0; i < sibs.length; i++) {
+            var s = sibs[i];
+            if (s !== el && s.classList.contains(opposite)) {
+              s.classList.remove(opposite);
+              s.classList.add(oppOff);
+            }
+          }
+        }
       }
+      updateScore(nearestMidcol(el));
       return false;
     };
   }
+  // Listing pages don't wire an onclick on each arrow — reddit's real
+  // JS uses event delegation on the content block. We scan once at
+  // DOMContentLoaded and attach a fallback listener to every `.arrow`
+  // that doesn't already have an inline onclick. A DOM marker attribute
+  // keeps re-navigations idempotent.
+  function wireListingArrows() {
+    var arrows = document.querySelectorAll('.arrow');
+    for (var i = 0; i < arrows.length; i++) {
+      var a = arrows[i];
+      if (a.getAttribute('onclick')) continue;
+      if (a.getAttribute('data-oasis-vote-wired')) continue;
+      a.setAttribute('data-oasis-vote-wired', '1');
+      (function(arrow){
+        arrow.addEventListener('click', function(ev) {
+          var dir = (arrow.classList.contains('up') ||
+                     arrow.classList.contains('upmod')) ? 1 : -1;
+          globalThis.togglevote(arrow, dir);
+          if (ev && ev.preventDefault) ev.preventDefault();
+        });
+      })(a);
+    }
+  }
+  wireListingArrows();
+  // Hide button: reddit marks hidden posts with a `.hidden` class on
+  // the outer `.thing` and the stylesheet renders them as `display:none`.
+  // We attach a click handler to every `.thing .buttons a` whose text is
+  // literally "hide" so the link toggles the thing from the layout.
+  function wireHideButtons() {
+    var anchors = document.querySelectorAll('.thing .buttons a');
+    for (var i = 0; i < anchors.length; i++) {
+      var a = anchors[i];
+      if (a.getAttribute('onclick')) continue;
+      if (a.getAttribute('data-oasis-hide-wired')) continue;
+      var text = (a.textContent || '').trim().toLowerCase();
+      if (text !== 'hide' && text !== 'unhide') continue;
+      a.setAttribute('data-oasis-hide-wired', '1');
+      (function(anchor){
+        anchor.addEventListener('click', function(ev) {
+          var thing = nearestThing(anchor);
+          if (thing) {
+            if (thing.classList.contains('hidden')) {
+              thing.classList.remove('hidden');
+            } else {
+              thing.classList.add('hidden');
+            }
+          }
+          if (ev && ev.preventDefault) ev.preventDefault();
+        });
+      })(a);
+    }
+  }
+  wireHideButtons();
+  // Sort tabs inside `.tabmenu`: clicking an entry moves the
+  // `.selected` class to the parent `<li>` and suppresses navigation.
+  // Real reddit actually follows the link to a new URL (hot/new/top
+  // are separate pages) but visually marking the active tab without
+  // navigation is the correct behaviour inside our offline/fixture
+  // environment. Outside fixtures the link still renders fine.
+  function wireTabmenu() {
+    var tabs = document.querySelectorAll('.tabmenu li a');
+    for (var i = 0; i < tabs.length; i++) {
+      var a = tabs[i];
+      if (a.getAttribute('data-oasis-tab-wired')) continue;
+      a.setAttribute('data-oasis-tab-wired', '1');
+      (function(anchor){
+        anchor.addEventListener('click', function(ev) {
+          var li = anchor.parentNode;
+          if (li && li.parentNode) {
+            var siblings = li.parentNode.querySelectorAll('li');
+            for (var j = 0; j < siblings.length; j++) {
+              siblings[j].classList.remove('selected');
+            }
+            li.classList.add('selected');
+          }
+          if (ev && ev.preventDefault) ev.preventDefault();
+        });
+      })(a);
+    }
+  }
+  wireTabmenu();
 })();
 "#;
     let _ = engine.eval(shim);

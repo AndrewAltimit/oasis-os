@@ -180,6 +180,22 @@ impl BrowserWidget {
 
     /// Navigate to a URL using the VFS as the resource source.
     pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+        // iframe-overlay mode (WASM): an external browser iframe paints
+        // http(s) pages. The OASIS engine only needs to track the URL
+        // for the chrome bar and history, so skip the sync fetch, DOM
+        // parse, and JS engine init — every one of those would fail or
+        // panic without a network stack.
+        if self.config.features.iframe_http_mode
+            && (url.starts_with("http://") || url.starts_with("https://"))
+        {
+            self.reset_for_navigation();
+            self.document = None;
+            self.layout_root = None;
+            self.nav.navigate(url, "");
+            self.state = LoadingState::Idle;
+            return;
+        }
+
         self.reset_for_navigation();
 
         // Internal pages: serve directly without hitting the VFS or

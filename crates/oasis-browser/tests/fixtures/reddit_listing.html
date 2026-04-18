@@ -241,6 +241,9 @@ a:hover { text-decoration: underline; }
 .thing.even {
   background: transparent;
 }
+.thing.hidden {
+  display: none;
+}
 
 .thing .rank {
   color: #c6c6c6;
@@ -262,28 +265,29 @@ a:hover { text-decoration: underline; }
   width: 4.1ex;
   text-align: center;
 }
+/* Real old.reddit ships sprite PNGs for these; we approximate with
+   Unicode triangle glyphs colored per state. Layout matches the sprite
+   box (15x14, centered in midcol) so the hit-test region is identical. */
 .thing .arrow {
-  background: #c6c6c6;
-  border-radius: 2px;
   cursor: pointer;
   display: block;
   height: 14px;
   margin: 0 auto;
   width: 15px;
+  line-height: 14px;
+  font-size: 14px;
+  text-align: center;
+  color: #c6c6c6;
+  background: transparent;
 }
-.thing .arrow.up {
-  background: #d7dadc;
-}
-.thing .arrow.upmod {
-  background: #ff4500;
-}
-.thing .arrow.down {
-  background: #d7dadc;
-  margin-top: 2px;
-}
-.thing .arrow.downmod {
-  background: #7193ff;
-}
+.thing .arrow.up::before { content: '▲'; }
+.thing .arrow.upmod::before { content: '▲'; }
+.thing .arrow.down::before { content: '▼'; }
+.thing .arrow.downmod::before { content: '▼'; }
+.thing .arrow.up { color: #c6c6c6; }
+.thing .arrow.upmod { color: #ff4500; }
+.thing .arrow.down { color: #c6c6c6; margin-top: 2px; }
+.thing .arrow.downmod { color: #7193ff; margin-top: 2px; }
 .thing .score {
   color: #c6c6c6;
   font-weight: bold;
