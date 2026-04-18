@@ -12,6 +12,17 @@ The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
 
+- **Smooth triangle glyphs** (same branch). The 8×8 bitmap font's
+  ▲ / ▼ glyphs scaled up chunky — a 6-row triangle pattern stretched
+  to 18 px on real hardware. `oasis_types::bitmap_font::smooth_triangle_span()`
+  now computes a per-row inclusive `(x0, x1)` span for ▲ and ▼ at the
+  target resolution, and both the SDL and WASM text renderers
+  special-case those codepoints to draw clean edges instead of
+  running the bitmap-scale path. The helper is single-backend-agnostic
+  (return a span, not a draw call) and covered by five unit tests.
+  Visible benefit: vote arrows on the reddit fixtures now look like
+  actual arrowheads at any font size.
+
 - **old.reddit.com visual polish + richer interactivity + WASM
   iframe fallback** (`feat/browser-old-reddit-improvements`).
   Follow-up to the initial reddit rendering work. Vote arrows now

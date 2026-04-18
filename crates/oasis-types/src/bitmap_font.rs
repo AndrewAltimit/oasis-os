@@ -619,6 +619,60 @@ pub fn for_each_glyph_pixel(ch: char, mut emit: impl FnMut(i32, i32)) {
     }
 }
 
+/// Return the horizontal span for row `y` of a smooth triangle glyph
+/// of dimensions `(w, h)`, or `None` for rows that fall outside the
+/// triangle or characters that aren't smooth triangles.
+///
+/// When a backend's glyph renderer encounters ▲ / ▼ it produces a
+/// chunky scaled bitmap because the 8×8 source only has six rows of
+/// triangle data. This helper lets each backend opt in to drawing
+/// clean triangles at the target resolution instead. The returned
+/// span is inclusive on both ends: `[x0, x1]`.
+///
+/// The vertical inset is 1/8 of the glyph height on both sides so the
+/// triangle has breathing room inside its cell — matches the original
+/// 8×8 bitmap's framing.
+#[inline]
+pub fn smooth_triangle_span(ch: char, y: i32, w: i32, h: i32) -> Option<(i32, i32)> {
+    if w < 2 || h < 4 || y < 0 || y >= h {
+        return None;
+    }
+    let apex_top = match ch {
+        '\u{25B2}' => true,  // ▲
+        '\u{25BC}' => false, // ▼
+        _ => return None,
+    };
+    let margin_y = (h / 8).max(1);
+    let tri_top = margin_y;
+    let tri_bot = h - margin_y;
+    let tri_h = tri_bot - tri_top;
+    if y < tri_top || y >= tri_bot || tri_h < 1 {
+        return None;
+    }
+    let inner_y = y - tri_top;
+    let denom = (tri_h - 1).max(1) as f32;
+    let t = if apex_top {
+        inner_y as f32 / denom
+    } else {
+        (tri_h - 1 - inner_y) as f32 / denom
+    };
+    // Leave one pixel of horizontal breathing room on each side.
+    let inner_w = (w - 2).max(1);
+    let row_w = (1.0 + t * (inner_w - 1).max(1) as f32).round() as i32;
+    let row_w = row_w.clamp(1, w);
+    let x0 = (w - row_w) / 2;
+    let x1 = x0 + row_w - 1;
+    Some((x0, x1))
+}
+
+/// Whether `ch` is a smooth-triangle codepoint (▲ or ▼). Backends check
+/// this up front to choose between the bitmap and triangle rendering
+/// paths without doing the `match` twice.
+#[inline]
+pub fn is_smooth_triangle(ch: char) -> bool {
+    matches!(ch, '\u{25B2}' | '\u{25BC}')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,5 +882,67 @@ mod tests {
         let mut actual = Vec::new();
         for_each_glyph_pixel(ch, |col, row| actual.push((col, row)));
         assert_eq!(actual, expected);
+    }
+
+    // -- smooth_triangle_span --------------------------------------------
+
+    #[test]
+    fn up_triangle_apex_is_narrow_base_is_wide() {
+        // ▲ at 18×18: top of the inner region is 1 pixel, bottom is full.
+        let top_span = smooth_triangle_span('\u{25B2}', 2, 18, 18).unwrap();
+        let bot_span = smooth_triangle_span('\u{25B2}', 15, 18, 18).unwrap();
+        let top_w = top_span.1 - top_span.0 + 1;
+        let bot_w = bot_span.1 - bot_span.0 + 1;
+        assert!(
+            bot_w > top_w,
+            "base should be wider than apex; top={top_w} bot={bot_w}",
+        );
+        assert_eq!(top_w, 1, "apex should be exactly 1 pixel wide");
+    }
+
+    #[test]
+    fn down_triangle_is_mirror_of_up() {
+        // ▼ at any row should match the vertically-flipped ▲ row.
+        let (w, h) = (18, 18);
+        for y in 0..h {
+            let up = smooth_triangle_span('\u{25B2}', y, w, h);
+            let down = smooth_triangle_span('\u{25BC}', h - 1 - y, w, h);
+            assert_eq!(up, down, "▲@{y} should equal ▼@{}", h - 1 - y);
+        }
+    }
+
+    #[test]
+    fn triangle_margin_rows_return_none() {
+        // 1/8 of the glyph height on each side is reserved margin —
+        // no triangle span should be emitted there.
+        assert_eq!(smooth_triangle_span('\u{25B2}', 0, 18, 18), None);
+        assert_eq!(smooth_triangle_span('\u{25B2}', 17, 18, 18), None);
+    }
+
+    #[test]
+    fn triangle_span_centred_horizontally() {
+        // The triangle is centred inside its cell for every row where
+        // a span exists. `x0 + x1` should be roughly `w - 1` modulo
+        // integer-divison parity — apex at (w-1)/2 .. (w-1)/2 + row_w
+        // mirrored to the right half.
+        for y in 1..17 {
+            if let Some((x0, x1)) = smooth_triangle_span('\u{25B2}', y, 18, 18) {
+                let left_gap = x0;
+                let right_gap = 17 - x1;
+                assert!(
+                    (left_gap - right_gap).abs() <= 1,
+                    "asymmetric span at y={y}: x0={x0} x1={x1}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_triangle_char_returns_none() {
+        assert_eq!(smooth_triangle_span('A', 5, 18, 18), None);
+        assert_eq!(smooth_triangle_span(' ', 5, 18, 18), None);
+        assert!(!is_smooth_triangle('A'));
+        assert!(is_smooth_triangle('\u{25B2}'));
+        assert!(is_smooth_triangle('\u{25BC}'));
     }
 }
