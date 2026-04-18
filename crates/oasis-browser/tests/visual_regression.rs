@@ -91,6 +91,19 @@ impl TextMeasurer for FixedMeasurer {
 /// regression-guarded goes here. On first run with no golden present,
 /// the harness fails loudly instead of silently accepting new output —
 /// use `UPDATE_GOLDENS=1` to seed the golden.
+//
+// KNOWN-WRONG (tracked, do not regenerate away):
+//   - `wikipedia_portal_480x272.txt` line 48..=54: the floated `<button
+//     type="submit">` renders at (348, 190, 96×60) instead of its
+//     pre-PR approximation of (378, 122, 64×20). The width is now
+//     correct (intrinsic via `replaced_dimensions()` from PR #141); the
+//     y-position and height are still wrong because the containing-block
+//     and margin computation upstream of `shrink_float_to_fit` does not
+//     yet pin replaced-float descendants against their static block
+//     position. Fixing this requires a corrective second layout pass
+//     and is deliberately out of scope for PR #141. If a future
+//     layout change moves the button back toward (378, 122, 64×20) the
+//     golden *should* be regenerated — that is a fix, not a regression.
 const FIXTURES: &[&str] = &[
     "wikipedia_article.html",
     "wikipedia_portal.html",
