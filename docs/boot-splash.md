@@ -29,7 +29,6 @@ order, minus the animation.
 |   4.0 s | Logo entrance (scale + brightness)                 | `SdiRegistry::apply_layout_scaled`         |
 |   4.6 s | (splash continues)                                 | Wallpaper generate + upload                |
 |   5.2 s | (splash continues)                                 | Cursor generate + upload; auto-launch      |
-|   5.5 s | Progress note fades in: "SYSTEM MODULES INITIALIZED" | —                                        |
 |   6.5 s | Fade out, release GPU textures                     | —                                          |
 
 The actual work distribution is set by the caller; the `BootSplash`
@@ -49,8 +48,6 @@ Stateful; the caller drives it frame by frame:
 - `set_status(text)` — set the live `> [spinner] {text}...` line below
   the BIOS block. Empty string hides the line. The spinner cycles
   `| / - \` at 10 Hz.
-- `set_progress_note(text)` — set the text shown at the bottom of the
-  splash phase (5.5s onward; defaults to "SYSTEM MODULES INITIALIZED").
 - `run_to_end(backend)` — convenience wrapper for `run_until(.., 6.5)`.
 - `finish(backend)` — consume, fade to black (if not skipped), release
   GPU textures.
@@ -67,7 +64,6 @@ splash.run_until(&mut backend, BIOS_REVEAL_TIMES[2])?;
 
 // ... repeat for each line / splash-phase step ...
 
-splash.set_progress_note("SYSTEM MODULES INITIALIZED");
 splash.run_to_end(&mut backend)?;
 splash.finish(&mut backend)?;
 ```
