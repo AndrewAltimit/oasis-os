@@ -1076,8 +1076,12 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
   // DOMContentLoaded and attach a fallback listener to every `.arrow`
   // that doesn't already have an inline onclick. A DOM marker attribute
   // keeps re-navigations idempotent.
+  // Scope to `.midcol .arrow` so non-Reddit pages that happen to use
+  // `.arrow` for nav chevrons / dropdowns don't have reddit vote
+  // semantics injected (the togglevote handler would otherwise add
+  // `upmod`/`downmod` classes to unrelated elements).
   function wireListingArrows() {
-    var arrows = document.querySelectorAll('.arrow');
+    var arrows = document.querySelectorAll('.midcol .arrow');
     for (var i = 0; i < arrows.length; i++) {
       var a = arrows[i];
       if (a.getAttribute('onclick')) continue;
