@@ -819,8 +819,12 @@ impl OasisWasm {
         }
 
         // Draw cursor on top of everything (after windows, scrollbar,
-        // transition overlay).
+        // transition overlay). Hide it while the pointer is over the
+        // iframe overlay or off the page — the canvas stops receiving
+        // mousemove events there so the cursor would otherwise freeze
+        // at its last tracked position, looking trapped.
         if self.mouse_cursor.visible
+            && self.input.pointer_on_canvas()
             && let Some(tex) = self.cursor_texture
             && let Err(e) = self.backend.blit(
                 tex,

@@ -59,7 +59,11 @@ pub(crate) const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
 /// Stored as `(window_id, click_time, x, y)`. A follow-up titlebar click
 /// within [`DOUBLE_CLICK_WINDOW`] and [`DOUBLE_CLICK_RADIUS`] on the same
 /// window toggles maximize/restore.
-pub(crate) type TitlebarClickStamp = (WindowId, std::time::Instant, i32, i32);
+///
+/// `web_time::Instant` delegates to `std::time::Instant` on native and to
+/// `performance.now()` in the browser — `std::time::Instant::now()` aborts
+/// on `wasm32-unknown-unknown`.
+pub(crate) type TitlebarClickStamp = (WindowId, web_time::Instant, i32, i32);
 
 /// Maximum interval between two clicks to register as a double-click.
 pub(crate) const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);

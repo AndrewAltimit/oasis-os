@@ -107,7 +107,7 @@ impl WindowManager {
                     return self.toggle_maximize(&id, sdi);
                 }
 
-                self.last_titlebar_click = Some((id.clone(), std::time::Instant::now(), x, y));
+                self.last_titlebar_click = Some((id.clone(), web_time::Instant::now(), x, y));
 
                 // Start drag if the window is draggable.
                 if let Some(window) = self.windows.iter().find(|w| w.id == id)

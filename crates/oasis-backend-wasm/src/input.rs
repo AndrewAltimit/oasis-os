@@ -1,6 +1,6 @@
 //! `InputBackend` implementation using DOM event listeners.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
@@ -15,6 +15,11 @@ use oasis_types::input::{Button, InputEvent, Trigger};
 
 pub struct WasmInputBackend {
     events: Rc<RefCell<Vec<InputEvent>>>,
+    /// Whether the mouse pointer is currently over the canvas. False while
+    /// the pointer hovers the iframe overlay or left the page — the render
+    /// loop reads this to hide the OASIS-rendered cursor, since mousemove
+    /// events stop firing on the canvas once the pointer enters the iframe.
+    pointer_on_canvas: Rc<Cell<bool>>,
     // Store closures to prevent them from being dropped.
     _closures: Vec<Closure<dyn FnMut(web_sys::Event)>>,
 }
@@ -23,6 +28,7 @@ impl WasmInputBackend {
     /// Create a new input backend that listens on the given canvas.
     pub fn new(canvas: &HtmlCanvasElement, width: u32, height: u32) -> Self {
         let events: Rc<RefCell<Vec<InputEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let pointer_on_canvas: Rc<Cell<bool>> = Rc::new(Cell::new(true));
         let mut closures: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
 
         let target: &EventTarget = canvas.as_ref();
@@ -82,6 +88,7 @@ impl WasmInputBackend {
         // mousemove
         {
             let ev = Rc::clone(&events);
+            let on_canvas = Rc::clone(&pointer_on_canvas);
             let cw = width;
             let ch = height;
             let canvas_clone = canvas.clone();
@@ -89,11 +96,38 @@ impl WasmInputBackend {
                 let Ok(me) = e.dyn_into::<MouseEvent>() else {
                     return;
                 };
+                on_canvas.set(true);
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::CursorMove { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
             let _ = target
                 .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
+            closures.push(closure);
+        }
+
+        // mouseleave — fires when the pointer exits the canvas, including
+        // when it enters the iframe overlay. Flip the flag so the render
+        // loop hides the OASIS cursor; the native browser cursor takes
+        // over visually.
+        {
+            let on_canvas = Rc::clone(&pointer_on_canvas);
+            let closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
+                on_canvas.set(false);
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            let _ = target
+                .add_event_listener_with_callback("mouseleave", closure.as_ref().unchecked_ref());
+            closures.push(closure);
+        }
+
+        // mouseenter — pointer re-entered the canvas (returning from the
+        // iframe or outside the window). Restore the OASIS cursor.
+        {
+            let on_canvas = Rc::clone(&pointer_on_canvas);
+            let closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
+                on_canvas.set(true);
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            let _ = target
+                .add_event_listener_with_callback("mouseenter", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -236,8 +270,15 @@ impl WasmInputBackend {
 
         Self {
             events,
+            pointer_on_canvas,
             _closures: closures,
         }
+    }
+
+    /// Whether the pointer is currently over the canvas element. Returns
+    /// `false` while it hovers the iframe overlay or has left the page.
+    pub fn pointer_on_canvas(&self) -> bool {
+        self.pointer_on_canvas.get()
     }
 }
 

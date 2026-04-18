@@ -1404,6 +1404,7 @@ dependencies = [
  "log",
  "oasis-sdi",
  "oasis-types",
+ "web-time",
 ]
 
 [[package]]

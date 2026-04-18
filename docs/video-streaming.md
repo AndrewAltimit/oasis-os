@@ -34,6 +34,15 @@ symphonia decodes from the same buffer via `Read + Seek`.
 - **Seek restart** — after probe discovers `moov`, the download
   restarts from the estimated byte offset via a Range request.
   Linear interpolation: `(seek_secs / duration) * file_size`.
+- **HTTPS ALPN pinning** — every blocking TLS client in the streaming
+  path (`fetch_range_inner`, `open_range_connection_inner`,
+  `stream_download_inner`, plus the catalog `https_get_body`) is an
+  HTTP/1.1 parser. The shared rustls config also advertises `h2` so
+  the in-app browser can negotiate HTTP/2, so these clients call
+  `connect_tls_with_alpn(.., &[b"http/1.1"])` to pin the server to
+  HTTP/1.1. Without this, archive.org CDN endpoints select `h2` and
+  the `\r\n\r\n` header parser trips on HTTP/2 frames — surfacing as
+  `"connection closed before headers complete"`.
 
 ## Related docs
 

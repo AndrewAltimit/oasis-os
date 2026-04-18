@@ -12,6 +12,7 @@ documentation = "https://docs.rs/oasis-wm"
 oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 log = { workspace = true }
+web-time = { workspace = true }
 
 [lints]
 workspace = true
