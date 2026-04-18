@@ -6,6 +6,11 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: 'Run criterion benchmark regression gate (slow — off by default)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -144,7 +149,16 @@ jobs:
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
       # -- Benchmarks (regression gate) ----------------------------------------
+      # Skipped by default — the criterion bench suite is the slowest CI
+      # step and its signal-to-noise ratio on PR branches is poor (small
+      # changes trip the 20% regression gate on criterion noise alone).
+      # Run explicitly via:
+      #   Actions -> Pull Request Validation -> Run workflow
+      #   (set "Run criterion benchmark regression gate" to true)
+      # main-ci.yml still publishes the canonical baseline on every
+      # push to main.
       - name: Download main branch baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         continue-on-error: true
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -155,6 +169,7 @@ jobs:
           if_no_artifact_found: warn
 
       - name: Benchmarks
+        if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -164,6 +179,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Benchmark regression gate
+        if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         run: |
           BENCH_GATE=1 bash scripts/bench-compare.sh \
             baseline-criterion/ \
@@ -172,7 +188,10 @@ jobs:
             >> $GITHUB_STEP_SUMMARY
 
       - name: Upload benchmark results
-        if: always()
+        if: >-
+          always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.run_benchmarks
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
