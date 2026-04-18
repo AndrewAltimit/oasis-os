@@ -199,6 +199,15 @@ impl WindowManager {
                 start_win_x,
                 start_win_y,
             } => {
+                // Actual drag movement invalidates any pending double-click.
+                // Jitter within DOUBLE_CLICK_RADIUS still counts as a steady
+                // click so release-then-reclick at the same spot toggles maximize.
+                if (x - start_cursor_x).abs() > DOUBLE_CLICK_RADIUS
+                    || (y - start_cursor_y).abs() > DOUBLE_CLICK_RADIUS
+                {
+                    self.last_titlebar_click = None;
+                }
+
                 let raw_x = start_win_x + (x - start_cursor_x);
                 let raw_y = start_win_y + (y - start_cursor_y);
 
@@ -1068,6 +1077,53 @@ mod tests {
         wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
         let result = click_titlebar(&mut wm, &mut sdi, "dlg");
         assert!(matches!(result, WmEvent::WindowFocused(_)));
+    }
+
+    #[test]
+    fn drag_then_click_does_not_double_click() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(wm.theme()).unwrap();
+        let click_x = tx + 4;
+        let click_y = ty + th as i32 / 2;
+
+        // Click, drag well beyond the double-click radius, release.
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: click_x,
+                y: click_y,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: click_x + 50,
+                y: click_y + 30,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+
+        // A click back at the original screen position must NOT trigger
+        // maximize: the prior drag invalidated the titlebar stamp.
+        let result = wm.handle_input(
+            &InputEvent::PointerClick {
+                x: click_x,
+                y: click_y,
+            },
+            &mut sdi,
+        );
+        assert!(
+            matches!(
+                result,
+                WmEvent::WindowFocused(_) | WmEvent::DesktopClick(_, _)
+            ),
+            "click after drag+release should not maximize, got {result:?}"
+        );
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
     }
 
     #[test]
