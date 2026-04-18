@@ -1148,7 +1148,10 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
           }
           // Only suppress navigation in offline/VFS-like contexts
           // where the href can't resolve. Live http(s) pages should
-          // follow the link normally.
+          // follow the link normally. Fail-closed on purpose: if the
+          // __oasis_location binding is unavailable (throws), `here`
+          // stays '' and we suppress navigation — safer than letting
+          // an unresolvable href load a blank page.
           var here = '';
           try { here = String(__oasis_location() || ''); } catch (e) {}
           if (here.indexOf('http://') !== 0 && here.indexOf('https://') !== 0

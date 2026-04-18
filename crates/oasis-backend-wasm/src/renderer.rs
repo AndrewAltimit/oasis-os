@@ -230,6 +230,9 @@ impl WasmBackend {
                     let rw = (x1 - x0 + 1) as f64;
                     off_ctx.fill_rect(x0 as f64, y as f64, rw, 1.0);
                     if bold {
+                        // Shift-right span draw is equivalent to SDL's
+                        // per-pixel `x + 1` bold loop: both cover
+                        // [x0, x1 + 1] on this row.
                         off_ctx.fill_rect((x0 + 1) as f64, y as f64, rw, 1.0);
                     }
                 }
