@@ -203,6 +203,10 @@ fn install_document_global_full(
                 if id < doc.nodes.len()
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
+                    // Skip dirty mark when value is identical — pages
+                    // that re-assert the same `aria-expanded="true"`
+                    // every frame shouldn't trigger a relayout.
+                    let unchanged = e.get_attribute(&name) == Some(value.as_str());
                     // Update the ID index when the `id` attribute changes.
                     if name == "id" {
                         let old_id = e.id().map(String::from);
@@ -211,7 +215,9 @@ fn install_document_global_full(
                     } else {
                         e.set_attribute(&name, &value);
                     }
-                    mark_dirty(&dirty);
+                    if !unchanged {
+                        mark_dirty(&dirty);
+                    }
                 }
             })?,
         )?;
@@ -632,8 +638,9 @@ fn install_document_global_full(
                     NodeKind::Element(e) => e,
                     _ => return,
                 };
-                set_inline_style(e, &prop, &value);
-                mark_dirty(&dirty);
+                if set_inline_style(e, &prop, &value) {
+                    mark_dirty(&dirty);
+                }
             })?,
         )?;
     }
@@ -1187,7 +1194,12 @@ fn classlist_op_mutated(elem: &mut ElementData, op: &str, cls: &str) -> (bool, b
 // ------------------------------------------------------------------
 
 /// Set a CSS property in the element's `style` attribute.
-fn set_inline_style(elem: &mut ElementData, prop: &str, value: &str) {
+///
+/// Returns `true` if the rebuilt `style` attribute differs from the
+/// previous value — animation loops that re-assign the same value
+/// (`element.style.opacity = element.style.opacity`) shouldn't cause
+/// a cascade + relayout on every tick.
+fn set_inline_style(elem: &mut ElementData, prop: &str, value: &str) -> bool {
     let current = elem.get_attribute("style").unwrap_or("").to_string();
     let mut decls: Vec<(String, String)> = parse_style_attr(&current);
     let prop_lower = prop.to_ascii_lowercase();
@@ -1201,7 +1213,11 @@ fn set_inline_style(elem: &mut ElementData, prop: &str, value: &str) {
         .map(|(p, v)| format!("{p}: {v}"))
         .collect::<Vec<_>>()
         .join("; ");
-    elem.set_attribute("style", &rebuilt);
+    let changed = rebuilt != current;
+    if changed {
+        elem.set_attribute("style", &rebuilt);
+    }
+    changed
 }
 
 /// Get a CSS property value from the element's `style` attribute.

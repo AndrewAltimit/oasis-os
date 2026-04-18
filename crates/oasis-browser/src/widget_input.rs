@@ -1138,6 +1138,12 @@ impl BrowserWidget {
                     Self::dispatch_js_mouse_event_to(engine, new_nid, x, y, "mousemove");
                 }
             }
+            // If a hover handler mutated the DOM (e.g. a tooltip
+            // shim toggling `aria-expanded`), flush the dirty flag
+            // so the next frame reflects the change — symmetric with
+            // the click and text-input dispatch paths.
+            #[cfg(feature = "javascript")]
+            self.apply_js_dom_mutations();
 
             self.restyle_hover_affected(old_hover);
         }
