@@ -481,6 +481,19 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     let origin_x = layout_box.dimensions.content.x;
     let available = layout_box.dimensions.content.width;
 
+    // Replaced floats (e.g. `<button type="submit">` with `float:right`)
+    // carry no children, so the `max_child_right`-based paths below
+    // would fall back to the provisional containing width. Use the
+    // element's intrinsic dimension as its max-content instead so the
+    // float shrinks to its natural size (e.g. the ~52 px wide Search
+    // label, not the parent form's 378 px width).
+    if let BoxType::Replaced(ref replaced) = layout_box.box_type {
+        let (intrinsic_w, _) = super::inline::replaced_dimensions(replaced, &layout_box.style);
+        let shrunk = intrinsic_w.min(available).max(0.0);
+        layout_box.dimensions.content.width = shrunk;
+        return;
+    }
+
     // When the float's children are inline fragments produced by
     // `layout_inline` (all `BoxType::Inline`/`Replaced`), using the
     // rightmost border-box edge as max-content is wrong: `text-align:

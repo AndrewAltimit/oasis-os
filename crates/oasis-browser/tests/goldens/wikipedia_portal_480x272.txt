@@ -54,13 +54,13 @@ fill_rect 390, 132, 1, 24, Color { r: 118, g: 118, b: 118, a: 255 }
 draw_text "English", 284, 137, 14, Color { r: 84, g: 89, b: 93, a: 255 }
 draw_text "v", 381, 137, 14, Color { r: 84, g: 89, b: 93, a: 255 }
 reset_clip_rect
-fill_rect 66, 190, 378, 60, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 82, 198, 346, 44, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 82, 198, 346, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 82, 198, 1, 44, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 82, 241, 346, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 348, 190, 96, 60, Color { r: 51, g: 102, b: 204, a: 255 }
+fill_rect 364, 198, 64, 44, Color { r: 51, g: 102, b: 204, a: 255 }
+fill_rect 364, 198, 64, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 364, 198, 1, 44, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 364, 241, 64, 1, Color { r: 160, g: 160, b: 160, a: 255 }
 fill_rect 427, 198, 1, 44, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Search", 213, 212, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Search", 354, 212, 16, Color { r: 255, g: 255, b: 255, a: 255 }
 set_clip_rect 0, 4, 0, 0
 draw_text " ", 0, 4, 13, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "\n", 0, 4, 13, Color { r: 32, g: 33, b: 34, a: 255 }
