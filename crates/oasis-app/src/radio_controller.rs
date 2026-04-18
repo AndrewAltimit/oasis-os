@@ -121,10 +121,13 @@ fn process_tune_request(state: &mut AppState, target: &str) {
             .and_then(|stream| {
                 if tls {
                     use oasis_core::net::TlsProvider;
+                    // IcecastSource is an HTTP/1.1 client — force ALPN so
+                    // servers don't hand us an h2 stream.
                     state
                         .net
                         .tls_provider
-                        .connect_tls(stream, &host)
+                        .connect_tls_with_alpn(stream, &host, &[b"http/1.1"])
+                        .map(|c| c.stream)
                         .map_err(|e| format!("TLS: {e}"))
                 } else {
                     Ok(stream)

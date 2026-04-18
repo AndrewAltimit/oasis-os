@@ -34,6 +34,7 @@ gif = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["webp"], optional = true }
 rayon = { workspace = true, optional = true }
 fontdue = { workspace = true, optional = true }
+web-time = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true

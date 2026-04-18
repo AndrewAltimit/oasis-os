@@ -54,6 +54,23 @@ pub(crate) const CASCADE_OFFSET: i32 = 24;
 /// SDI object name for the semi-transparent modal backdrop.
 pub(crate) const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
 
+/// Last titlebar click record used to detect double-clicks.
+///
+/// Stored as `(window_id, click_time, x, y)`. A follow-up titlebar click
+/// within [`DOUBLE_CLICK_WINDOW`] and [`DOUBLE_CLICK_RADIUS`] on the same
+/// window toggles maximize/restore.
+///
+/// `web_time::Instant` delegates to `std::time::Instant` on native and to
+/// `performance.now()` in the browser — `std::time::Instant::now()` aborts
+/// on `wasm32-unknown-unknown`.
+pub(crate) type TitlebarClickStamp = (WindowId, web_time::Instant, i32, i32);
+
+/// Maximum interval between two clicks to register as a double-click.
+pub(crate) const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Maximum movement between two clicks to register as a double-click (px).
+pub(crate) const DOUBLE_CLICK_RADIUS: i32 = 6;
+
 /// The window manager.
 ///
 /// Manages a list of windows ordered by z-depth (last = topmost).
@@ -75,6 +92,9 @@ pub struct WindowManager {
     pub(crate) drag: Option<DragState>,
     /// Currently hovered window button (for hover color feedback).
     pub(crate) hover_button: Option<(WindowId, ButtonKind)>,
+    /// Most recent titlebar click, used to detect double-clicks that toggle
+    /// maximize/restore.
+    pub(crate) last_titlebar_click: Option<TitlebarClickStamp>,
 }
 
 impl WindowManager {
@@ -90,6 +110,7 @@ impl WindowManager {
             active_window: None,
             drag: None,
             hover_button: None,
+            last_titlebar_click: None,
         }
     }
 

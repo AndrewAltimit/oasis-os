@@ -278,9 +278,10 @@ fn test_tv_guide_real_fetch() -> bool {
         .expect("TCP connect should succeed");
 
     let mut stream = tls
-        .connect_tls(tcp, "archive.org")
+        .connect_tls_with_alpn(tcp, "archive.org", &[b"http/1.1"])
         .map_err(|e| format!("TLS: {e}"))
-        .expect("TLS handshake should succeed");
+        .expect("TLS handshake should succeed")
+        .stream;
 
     // Build and send HTTP request using NetworkStream::write.
     let request = format!(

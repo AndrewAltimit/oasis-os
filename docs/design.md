@@ -455,8 +455,8 @@ Each window is a `Window` struct in the WM that tracks its SDI child objects, st
 
 When a `PointerClick(x, y)` event arrives, the WM performs hit testing to determine the target. The test walks the window list in reverse z-order (topmost first) and checks regions in priority order:
 
-1. **Titlebar buttons** -- close, minimize, maximize. Triggers the corresponding window operation.
-2. **Titlebar body** -- initiates a drag operation. Subsequent `CursorMove` events move the window until pointer release.
+1. **Titlebar buttons** -- minimize, maximize, close (left to right, regardless of `button_side`). Triggers the corresponding window operation.
+2. **Titlebar body** -- initiates a drag operation. Subsequent `CursorMove` events move the window until pointer release. A second click within 500 ms and 6 px of the first is treated as a double-click and toggles maximize/restore.
 3. **Resize handles** -- initiates a resize operation on the corresponding edge/corner.
 4. **Content area** -- forwards the click (translated to content-local coordinates) to the app running inside the window.
 5. **No hit** -- click landed on the desktop background. Deselects all windows, optionally triggers a desktop context menu.

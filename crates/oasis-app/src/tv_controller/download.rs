@@ -90,9 +90,13 @@ fn fetch_range_inner(
     let tcp = net
         .connect(host, 443)
         .map_err(|e| format!("connect: {e}"))?;
+    // This is an HTTP/1.1 client; force ALPN to http/1.1 so the shared
+    // config's h2 offer doesn't put us on a frame-encoded stream we can't
+    // parse.
     let mut stream = tls
-        .connect_tls(tcp, host)
-        .map_err(|e| format!("TLS: {e}"))?;
+        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+        .map_err(|e| format!("TLS: {e}"))?
+        .stream;
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
@@ -489,9 +493,11 @@ fn open_range_connection_inner(
     let tcp = net
         .connect(host, 443)
         .map_err(|e| format!("connect: {e}"))?;
+    // Force HTTP/1.1 ALPN — see comment in fetch_range_inner.
     let mut stream = tls
-        .connect_tls(tcp, host)
-        .map_err(|e| format!("TLS: {e}"))?;
+        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+        .map_err(|e| format!("TLS: {e}"))?
+        .stream;
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
@@ -850,9 +856,11 @@ fn stream_download_inner(
         .connect(host, 443)
         .map_err(|e| format!("connect: {e}"))?;
 
+    // Force HTTP/1.1 ALPN — see comment in fetch_range_inner.
     let mut stream = tls
-        .connect_tls(tcp, host)
-        .map_err(|e| format!("TLS: {e}"))?;
+        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+        .map_err(|e| format!("TLS: {e}"))?
+        .stream;
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\

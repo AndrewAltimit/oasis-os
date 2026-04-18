@@ -1141,7 +1141,7 @@ impl BrowserWidget {
 
         if new_hover != self.hover_node {
             // Throttle hover restyles to at most 20/sec.
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             if let Some(last) = self.last_hover_time
                 && now.duration_since(last).as_millis() < 50
             {

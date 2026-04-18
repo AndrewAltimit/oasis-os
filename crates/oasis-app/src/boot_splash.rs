@@ -64,9 +64,6 @@ const DEFAULT_BIOS_LINES: [&str; 7] = [
     "STARTING DISPLAY MANAGER",
 ];
 
-/// Default progress note shown during the splash phase (5.5s+).
-const DEFAULT_PROGRESS_NOTE: &str = "SYSTEM MODULES INITIALIZED";
-
 /// Pre-computed GPU textures for splash effects.
 struct SplashTextures {
     /// Full-screen CRT vignette (dark edges, clear center).
@@ -153,8 +150,6 @@ pub struct BootSplash {
     /// Live "currently loading" status line below the BIOS block.
     /// Updates freely — shows in-flight work with a rotating spinner.
     status_line: String,
-    /// Bottom-of-splash-phase progress note (visible at 5.5s+).
-    progress_note: String,
     skipped: bool,
 }
 
@@ -180,7 +175,6 @@ impl BootSplash {
             textures,
             bios_lines: DEFAULT_BIOS_LINES.map(String::from),
             status_line: String::new(),
-            progress_note: DEFAULT_PROGRESS_NOTE.to_string(),
             skipped: false,
         })
     }
@@ -198,12 +192,6 @@ impl BootSplash {
         if let Some(slot) = self.bios_lines.get_mut(idx) {
             *slot = text.into();
         }
-    }
-
-    /// Set the text shown at the bottom of the splash phase (replaces
-    /// "SYSTEM MODULES INITIALIZED"). Visible from 5.5s onward.
-    pub fn set_progress_note(&mut self, text: impl Into<String>) {
-        self.progress_note = text.into();
     }
 
     /// Set the live "currently loading" status line displayed below the
@@ -384,7 +372,6 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.textures,
-                &self.progress_note,
             )?;
         }
 
@@ -977,7 +964,6 @@ fn paint_splash_screen(
     sy: f32,
     scale: f32,
     textures: &SplashTextures,
-    progress_note: &str,
 ) -> Result<()> {
     let splash_t = elapsed - 3.5;
     let splash_opacity = (splash_t / 0.01).clamp(0.0, 1.0); // instant reveal
@@ -1074,36 +1060,6 @@ fn paint_splash_screen(
         // Crisp logo strokes with scale + brightness.
         let sw = (7.0 * scale).max(2.0) as u32;
         paint_logo_scaled(backend, sx, sy, logo_opacity, sw, logo_scale, brightness)?;
-    }
-
-    // Loading text (appears at 5.5s, base opacity 0.8 per SVG).
-    if elapsed >= 5.5 {
-        let load_t = (elapsed - 5.5) / 0.5;
-        let load_opacity = load_t.clamp(0.0, 1.0) * splash_opacity * 0.8;
-        let fs = (14.0 * scale).max(8.0) as u16;
-        let text = progress_note;
-        // Letter-spacing rendering (letter-spacing="2" in SVG).
-        let ls = (2.0 * scale) as i32;
-        // Measure total width with letter-spacing for centering.
-        let total_w: i32 = text
-            .chars()
-            .map(|ch| {
-                let mut buf = [0u8; 4];
-                let s = ch.encode_utf8(&mut buf);
-                backend.measure_text(s, fs) as i32 + ls
-            })
-            .sum::<i32>()
-            - ls; // don't count trailing space
-        let mut cx = (screen_w as i32 - total_w) / 2;
-        let y = (660.0 * sy) as i32;
-        let c = apply_alpha(Color::rgb(170, 136, 255), load_opacity);
-        for ch in text.chars() {
-            let mut buf = [0u8; 4];
-            let s = ch.encode_utf8(&mut buf);
-            backend.draw_text(s, cx, y, fs, c)?;
-            let cw = backend.measure_text(s, fs) as i32;
-            cx += cw + ls;
-        }
     }
 
     // Scanline overlay (subtle).

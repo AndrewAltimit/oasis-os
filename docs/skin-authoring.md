@@ -197,7 +197,19 @@ titlebar_gradient = true
 frame_shadow_level = 1
 frame_border_radius = 2
 button_radius = 8
+# Button side: "right" (default) or "left" (macOS convention).
+# Regardless of side, physical L-to-R order is always
+# minimize → maximize → close.
+button_side = "right"
+# Glyphs drawn inside the buttons. Defaults: "-" / "\u25A1" / "x".
+glyph_minimize = "-"
+glyph_maximize = "□"
+glyph_close = "x"
 ```
+
+Double-clicking the titlebar body toggles maximize/restore for windows
+that support it (AppWindow). The toggle uses a 500 ms / 6 px gate and
+shares its code path with the maximize button.
 
 ### Fine-Grained Overrides
 

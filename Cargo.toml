@@ -114,6 +114,12 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 
+# Monotonic time that works on both native and wasm32-unknown-unknown.
+# `std::time::Instant::now()` aborts in the browser — `web_time::Instant`
+# is a drop-in replacement that delegates to `performance.now()` there
+# and to `std::time::Instant` everywhere else.
+web-time = "1"
+
 # Compression
 flate2 = "1"
 brotli = { version = "7", default-features = false, features = ["std"] }

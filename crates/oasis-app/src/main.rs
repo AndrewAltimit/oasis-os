@@ -481,9 +481,6 @@ fn main() -> Result<()> {
     // deferred to frame 0 and caused a visible hitch on first paint;
     // doing it here hides the cost under the splash animation.
     splash_status!("Generating wallpaper texture...");
-    if let Some(sp) = splash.as_mut() {
-        sp.set_progress_note("GENERATING WALLPAPER");
-    }
     let wallpaper_tex = {
         let wp_data = wallpaper::generate_from_config(
             state.config.screen_width,
@@ -512,9 +509,6 @@ fn main() -> Result<()> {
 
     // Generate + upload cursor texture.
     splash_status!("Uploading cursor texture...");
-    if let Some(sp) = splash.as_mut() {
-        sp.set_progress_note("LOADING CURSOR");
-    }
     let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
     let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
     state.ui.mouse_cursor.update_sdi(&mut sdi);
@@ -560,13 +554,9 @@ fn main() -> Result<()> {
         }
     }
 
-    // Final splash note shown at 5.5s onward. Clear the status line
-    // since the banner also hid after the BIOS phase ended at 3.6s, but
-    // the progress_note at the bottom of the splash replaces it.
+    // BIOS phase ended at 3.6s; clear the status line so nothing lingers
+    // under the splash-phase logo.
     splash_status!("");
-    if let Some(sp) = splash.as_mut() {
-        sp.set_progress_note("SYSTEM MODULES INITIALIZED");
-    }
 
     // Finish the splash: run the rest of the animation (or skip to end)
     // then fade out and release GPU textures.
@@ -880,11 +870,17 @@ fn https_get_body(
 
     log::debug!("HTTPS: TCP connected to {host}:443");
 
-    let mut stream = tls_provider
-        .connect_tls(tcp, host)
+    // This is a minimal HTTP/1.1 blocking client. The shared TLS config
+    // advertises both `h2` and `http/1.1` so the browser can negotiate
+    // HTTP/2 with CDNs that require it; if we used the default `connect_tls`
+    // here, archive.org would select `h2` and our `\r\n\r\n` parser would
+    // trip on HTTP/2 frames. Force `http/1.1` only.
+    let tls_conn = tls_provider
+        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
         .map_err(|e| format!("TLS: {e}"))?;
+    let mut stream = tls_conn.stream;
 
-    log::debug!("HTTPS: TLS handshake complete");
+    log::debug!("HTTPS: TLS handshake complete (alpn={:?})", tls_conn.alpn);
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
@@ -1032,9 +1028,13 @@ fn connect_archive_source(
         let tcp = net_backend
             .connect(&host, 443)
             .map_err(|e| format!("connect: {e}"))?;
+        // Force HTTP/1.1 ALPN: ArchiveSource speaks HTTP/1.1 and the shared
+        // TLS config also offers `h2` for the browser, so without this the
+        // server may hand us an h2 stream that the source can't parse.
         let stream = tls_provider
-            .connect_tls(tcp, &host)
-            .map_err(|e| format!("TLS: {e}"))?;
+            .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream;
 
         let mut source =
             oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
