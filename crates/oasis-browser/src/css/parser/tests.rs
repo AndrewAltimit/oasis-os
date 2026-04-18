@@ -1001,6 +1001,55 @@ fn has_specificity_takes_max_of_inner() {
     assert_eq!(spec.types, 1);
 }
 
+// Regression: descendant combinator followed by an attribute selector
+// (e.g. `.foo [type="submit"]`). Previously `is_selector_start` did
+// not list `[` so the selector stopped after `.foo`; the parser then
+// failed to see `{` and invoked `skip_to_close_brace`, which used to
+// fall through and consume every subsequent rule. Verify both the
+// selector parses correctly AND later rules survive.
+#[test]
+fn descendant_attribute_selector_preserves_following_rules() {
+    let sheet = parse(
+        ".working [type=\"submit\"] { color: red; } \
+         #after { color: blue; }",
+    );
+    assert_eq!(
+        sheet.rules.len(),
+        2,
+        "rule after descendant+attr selector must not be dropped"
+    );
+    // First rule is the descendant combinator.
+    let first = &sheet.rules[0].selectors.selectors[0];
+    assert_eq!(first.parts.len(), 2);
+    assert_eq!(first.parts[1].1, Some(Combinator::Descendant));
+    // Second rule's #after id is intact.
+    let second = &sheet.rules[1].selectors.selectors[0];
+    assert_eq!(
+        second.parts[0].0.parts,
+        vec![SimpleSelector::Id("after".into())]
+    );
+}
+
+// Regression: a malformed top-level rule must not swallow the
+// remainder of the stylesheet. `skip_to_close_brace` used to track
+// depth starting at 0 before the opening `{`, so it broke on a `}`
+// at depth 0 — which never happens in well-formed CSS and so the
+// recovery walked to EOF.
+#[test]
+fn malformed_rule_does_not_eat_following_rules() {
+    // First rule has an unclosed value but a matching `}`. Parser
+    // should recover and still pick up the second rule.
+    let sheet = parse("bogus @!!! { color: ; } #after { color: blue; }");
+    assert!(
+        sheet.rules.iter().any(|r| {
+            r.selectors.selectors.iter().any(
+                |s| matches!(s.parts[0].0.parts[0], SimpleSelector::Id(ref id) if id == "after"),
+            )
+        }),
+        "rule after malformed block must survive"
+    );
+}
+
 mod prop {
     use super::*;
     use crate::css::helpers::named_color;

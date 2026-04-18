@@ -180,6 +180,12 @@ fn all_scenarios() -> Vec<Scenario> {
         "web_fonts",
         "reddit_listing",
         "reddit_comments",
+        "reddit_listing_real",
+        "reddit_comments_real",
+        "reddit_listing_inlinecss",
+        "reddit_comments_inlinecss",
+        "reddit_listing_basecss",
+        "bfc_float_test",
     ];
     for page in &pages {
         scenarios.push(Scenario {

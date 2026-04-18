@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; font-family: sans-serif; font-size: 14px; }
+.container { background: #eee; padding: 10px; }
+.floated { float: left; width: 100px; background: orange; padding: 10px; }
+.bfc { background: lightblue; overflow: hidden; padding: 10px; }
+.normal { background: lightpink; padding: 10px; }
+</style></head>
+<body>
+<h2>Normal block after float (should flow below visually, but content shifts right):</h2>
+<div class="container"><div class="floated">FLOATED</div><div class="normal">This is a normal block. It should visually start at the left, but its text should shift right of the float.</div></div>
+<h2>BFC block after float (should sit NEXT TO the float):</h2>
+<div class="container"><div class="floated">FLOATED</div><div class="bfc">This is a BFC block with overflow:hidden. It should sit alongside the float, not flow underneath.</div></div>
+</body></html>

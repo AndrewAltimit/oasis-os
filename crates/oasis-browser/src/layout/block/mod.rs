@@ -913,8 +913,30 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 };
                 is_first_in_flow = false;
 
+                // CSS 2.1 §9.5: the border box of a block that
+                // establishes a new BFC must not overlap the margin
+                // box of any floats in the same BFC. Shift the child
+                // right of active left floats and shrink the
+                // available width to fit between active floats.
+                // Standard blocks flow underneath floats (their
+                // inline content flows around), so this only applies
+                // when the child starts a new BFC.
+                let child_bfc = establishes_bfc(&child.style);
+                let child_y_for_float = cursor_y + collapsed;
+                let (float_left, float_right, child_avail_width) =
+                    if child_bfc && !float_ctx.is_empty() {
+                        let fl = float_ctx.left_offset(child_y_for_float, 1.0);
+                        let fr = float_ctx.right_offset(child_y_for_float, 1.0, content_width);
+                        let avail = (fr - fl).max(0.0);
+                        (fl, fr, avail)
+                    } else {
+                        (0.0, content_width, content_width)
+                    };
+                let _ = float_right;
+
                 // Position child's content area.
                 child.dimensions.content.x = content_x
+                    + float_left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;
@@ -932,9 +954,10 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // paint at their parent's origin.
                 let pre_x = child.dimensions.content.x;
 
-                layout_block(child, content_width, measurer);
+                layout_block(child, child_avail_width, measurer);
 
                 let resolved_x = content_x
+                    + float_left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;

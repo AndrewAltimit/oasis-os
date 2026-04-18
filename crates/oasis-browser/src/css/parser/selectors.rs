@@ -88,6 +88,7 @@ impl CssParser {
                 | CssToken::Dot
                 | CssToken::Star
                 | CssToken::Colon
+                | CssToken::OpenBracket
                 | CssToken::Delim('&')
         )
     }
