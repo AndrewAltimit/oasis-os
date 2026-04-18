@@ -292,8 +292,8 @@ impl Default for WmTheme {
             button_radius: 0,
             button_side: "right".to_string(),
             glyph_close: "x".to_string(),
-            glyph_minimize: "_".to_string(),
-            glyph_maximize: "+".to_string(),
+            glyph_minimize: "-".to_string(),
+            glyph_maximize: "\u{25A1}".to_string(),
             title_align: "left".to_string(),
             separator_enabled: false,
             separator_color: Color::rgba(255, 255, 255, 30),
@@ -443,8 +443,12 @@ impl Window {
         (theme.titlebar_height as i32 / 8).max(1)
     }
 
-    /// Compute a button's X position given its index
-    /// (0=close, 1=minimize, 2=maximize).
+    /// Compute a button's X position given its index.
+    ///
+    /// Indices are assigned so that physical left-to-right order is always
+    /// minimize (leftmost), maximize (middle), close (rightmost), regardless
+    /// of whether `button_side` is "left" or "right". `idx` counts from the
+    /// edge indicated by `button_side` inward.
     fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
         let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
         let sp = theme.button_spacing;
@@ -456,6 +460,31 @@ impl Window {
         }
     }
 
+    /// Index of the minimize button (leftmost when present).
+    fn minimize_btn_idx(&self, theme: &WmTheme) -> i32 {
+        if theme.button_side == "left" { 0 } else { 2 }
+    }
+
+    /// Index of the maximize button (middle when present).
+    fn maximize_btn_idx(&self) -> i32 {
+        1
+    }
+
+    /// Index of the close button (rightmost when present).
+    ///
+    /// When close is the only button on the titlebar (Dialog, FloatingWidget),
+    /// put it at the edge so it doesn't float out in empty space.
+    fn close_btn_idx(&self, theme: &WmTheme) -> i32 {
+        let alone = !self.has_minimize_button() && !self.has_maximize_button();
+        if alone {
+            0
+        } else if theme.button_side == "left" {
+            2
+        } else {
+            0
+        }
+    }
+
     /// Compute close button rectangle.
     pub fn close_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
         let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
@@ -463,7 +492,7 @@ impl Window {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, 0);
+        let bx = self.button_x(theme, tx, tw, self.close_btn_idx(theme));
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
@@ -475,7 +504,7 @@ impl Window {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, 1);
+        let bx = self.button_x(theme, tx, tw, self.minimize_btn_idx(theme));
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
@@ -487,7 +516,7 @@ impl Window {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, 2);
+        let bx = self.button_x(theme, tx, tw, self.maximize_btn_idx());
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }

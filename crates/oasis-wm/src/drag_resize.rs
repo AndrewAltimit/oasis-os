@@ -7,7 +7,7 @@
 use oasis_sdi::SdiRegistry;
 
 use super::hit_test::{ButtonKind, HitRegion, ResizeEdge, hit_test};
-use super::manager::{WindowManager, WmEvent};
+use super::manager::{DOUBLE_CLICK_RADIUS, DOUBLE_CLICK_WINDOW, WindowManager, WmEvent};
 use super::window::{Geometry, WindowId, WindowState};
 
 /// Active drag/resize operation.
@@ -67,41 +67,48 @@ impl WindowManager {
 
         match region {
             HitRegion::TitlebarButton(id, ButtonKind::Close) => {
+                self.last_titlebar_click = None;
                 if let Err(e) = self.close_window(&id, sdi) {
                     log::debug!("close_window({id}): {e}");
                 }
                 WmEvent::WindowClosed(id)
             },
             HitRegion::TitlebarButton(id, ButtonKind::Minimize) => {
+                self.last_titlebar_click = None;
                 if let Err(e) = self.minimize_window(&id, sdi) {
                     log::debug!("minimize_window({id}): {e}");
                 }
                 WmEvent::WindowMinimized(id)
             },
             HitRegion::TitlebarButton(id, ButtonKind::Maximize) => {
-                // Toggle: if maximized, restore; otherwise maximize.
-                let is_maximized = self
-                    .windows
-                    .iter()
-                    .find(|w| w.id == id)
-                    .map(|w| w.state == WindowState::Maximized)
-                    .unwrap_or(false);
-
-                if is_maximized {
-                    if let Err(e) = self.restore_window(&id, sdi) {
-                        log::debug!("restore_window({id}): {e}");
-                    }
-                    WmEvent::WindowRestored(id)
-                } else {
-                    self.focus_window_internal(&id, sdi);
-                    if let Err(e) = self.maximize_window(&id, sdi) {
-                        log::debug!("maximize_window({id}): {e}");
-                    }
-                    WmEvent::WindowMaximized(id)
-                }
+                self.last_titlebar_click = None;
+                self.toggle_maximize(&id, sdi)
             },
             HitRegion::Titlebar(id) => {
                 self.focus_window_internal(&id, sdi);
+
+                // Double-click on the titlebar body toggles maximize/restore.
+                let is_double = self.last_titlebar_click.as_ref().is_some_and(|last| {
+                    last.0 == id
+                        && last.1.elapsed() <= DOUBLE_CLICK_WINDOW
+                        && (last.2 - x).abs() <= DOUBLE_CLICK_RADIUS
+                        && (last.3 - y).abs() <= DOUBLE_CLICK_RADIUS
+                });
+                let can_maximize = self
+                    .windows
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map(|w| w.has_maximize_button())
+                    .unwrap_or(false);
+
+                if is_double && can_maximize {
+                    // Consume the stamp so a third click doesn't chain.
+                    self.last_titlebar_click = None;
+                    return self.toggle_maximize(&id, sdi);
+                }
+
+                self.last_titlebar_click = Some((id.clone(), std::time::Instant::now(), x, y));
+
                 // Start drag if the window is draggable.
                 if let Some(window) = self.windows.iter().find(|w| w.id == id)
                     && window.is_draggable()
@@ -117,6 +124,7 @@ impl WindowManager {
                 WmEvent::WindowFocused(id)
             },
             HitRegion::ResizeHandle(id, edge) => {
+                self.last_titlebar_click = None;
                 self.focus_window_internal(&id, sdi);
                 if let Some(window) = self.windows.iter().find(|w| w.id == id) {
                     self.drag = Some(DragState::Resizing {
@@ -135,13 +143,41 @@ impl WindowManager {
                 WmEvent::WindowFocused(id)
             },
             HitRegion::Content(id, lx, ly) => {
+                self.last_titlebar_click = None;
                 self.focus_window_internal(&id, sdi);
                 WmEvent::ContentClick(id, lx, ly)
             },
             HitRegion::Desktop => {
+                self.last_titlebar_click = None;
                 self.active_window = None;
                 WmEvent::DesktopClick(x, y)
             },
+        }
+    }
+
+    /// Toggle maximize/restore state for a window that supports it.
+    /// Returns the appropriate WmEvent. If the window doesn't support
+    /// maximize, returns [`WmEvent::None`].
+    pub(crate) fn toggle_maximize(&mut self, id: &WindowId, sdi: &mut SdiRegistry) -> WmEvent {
+        let Some(window) = self.windows.iter().find(|w| w.id == *id) else {
+            return WmEvent::None;
+        };
+        if !window.has_maximize_button() {
+            return WmEvent::None;
+        }
+        let is_maximized = window.state == WindowState::Maximized;
+
+        if is_maximized {
+            if let Err(e) = self.restore_window(id.as_str(), sdi) {
+                log::debug!("restore_window({id}): {e}");
+            }
+            WmEvent::WindowRestored(id.clone())
+        } else {
+            self.focus_window_internal(id, sdi);
+            if let Err(e) = self.maximize_window(id.as_str(), sdi) {
+                log::debug!("maximize_window({id}): {e}");
+            }
+            WmEvent::WindowMaximized(id.clone())
         }
     }
 
@@ -949,5 +985,188 @@ mod tests {
             &mut sdi,
         );
         assert_eq!(event, WmEvent::None);
+    }
+
+    // ---- Double-click titlebar to toggle maximize ----
+
+    /// Click the titlebar drag region (left of any buttons) at a point guaranteed
+    /// to fall outside all window buttons.
+    fn click_titlebar(wm: &mut WindowManager, sdi: &mut SdiRegistry, id: &str) -> WmEvent {
+        let win = wm.get_window(id).unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(wm.theme()).unwrap();
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 4,
+                y: ty + th as i32 / 2,
+            },
+            sdi,
+        )
+    }
+
+    #[test]
+    fn double_click_titlebar_maximizes() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
+
+        click_titlebar(&mut wm, &mut sdi, "w1");
+        // Release ends the drag started by the first click.
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        let result = click_titlebar(&mut wm, &mut sdi, "w1");
+
+        assert_eq!(result, WmEvent::WindowMaximized(WindowId::from("w1")));
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Maximized);
+    }
+
+    #[test]
+    fn double_click_maximized_restores() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.maximize_window("w1", &mut sdi).unwrap();
+
+        click_titlebar(&mut wm, &mut sdi, "w1");
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        let result = click_titlebar(&mut wm, &mut sdi, "w1");
+
+        assert_eq!(result, WmEvent::WindowRestored(WindowId::from("w1")));
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
+    }
+
+    #[test]
+    fn third_click_does_not_chain() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        click_titlebar(&mut wm, &mut sdi, "w1");
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        click_titlebar(&mut wm, &mut sdi, "w1"); // maximizes
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Maximized);
+
+        // A third click shouldn't restore immediately — it starts a new
+        // double-click cycle instead.
+        let result = click_titlebar(&mut wm, &mut sdi, "w1");
+        assert!(
+            matches!(result, WmEvent::WindowFocused(_)),
+            "third click should be a fresh focus, got {result:?}"
+        );
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Maximized);
+    }
+
+    #[test]
+    fn dialog_double_click_titlebar_ignored() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+
+        // Dialog cannot maximize, so double-clicks on its titlebar must not
+        // attempt to toggle state.
+        click_titlebar(&mut wm, &mut sdi, "dlg");
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        let result = click_titlebar(&mut wm, &mut sdi, "dlg");
+        assert!(matches!(result, WmEvent::WindowFocused(_)));
+    }
+
+    #[test]
+    fn click_elsewhere_between_breaks_double_click() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        click_titlebar(&mut wm, &mut sdi, "w1");
+        wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+
+        // Click into the content area. This should clear the titlebar stamp.
+        let (cx, cy, _cw, _ch) = wm.get_window("w1").unwrap().content_rect(&wm.theme);
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: cx + 10,
+                y: cy + 10,
+            },
+            &mut sdi,
+        );
+
+        let result = click_titlebar(&mut wm, &mut sdi, "w1");
+        assert!(
+            matches!(result, WmEvent::WindowFocused(_)),
+            "titlebar click after content click must not double-click, got {result:?}"
+        );
+        assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
+    }
+
+    // ---- Button order (minimize, maximize, close, left-to-right) ----
+
+    #[test]
+    fn button_order_right_side_is_minimize_maximize_close() {
+        let theme = crate::window::WmTheme::default();
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let min_x = win.minimize_btn_rect(&wm.theme).unwrap().0;
+        let max_x = win.maximize_btn_rect(&wm.theme).unwrap().0;
+        let close_x = win.close_btn_rect(&wm.theme).unwrap().0;
+
+        assert!(
+            min_x < max_x,
+            "minimize ({min_x}) should be left of maximize ({max_x})"
+        );
+        assert!(
+            max_x < close_x,
+            "maximize ({max_x}) should be left of close ({close_x})"
+        );
+    }
+
+    #[test]
+    fn button_order_left_side_is_minimize_maximize_close() {
+        let theme = crate::window::WmTheme {
+            button_side: "left".to_string(),
+            ..crate::window::WmTheme::default()
+        };
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let min_x = win.minimize_btn_rect(&wm.theme).unwrap().0;
+        let max_x = win.maximize_btn_rect(&wm.theme).unwrap().0;
+        let close_x = win.close_btn_rect(&wm.theme).unwrap().0;
+
+        assert!(
+            min_x < max_x,
+            "minimize ({min_x}) should be left of maximize ({max_x})"
+        );
+        assert!(
+            max_x < close_x,
+            "maximize ({max_x}) should be left of close ({close_x})"
+        );
+    }
+
+    #[test]
+    fn dialog_close_button_at_edge_even_left_side() {
+        // Dialog only has close. It should sit flush against the edge, not
+        // offset by empty minimize/maximize slots.
+        let theme = crate::window::WmTheme {
+            button_side: "left".to_string(),
+            ..crate::window::WmTheme::default()
+        };
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+
+        let win = wm.get_window("dlg").unwrap();
+        let (tx, _ty, _tw, _th) = win.titlebar_rect(&wm.theme).unwrap();
+        let (bx, _, _, _) = win.close_btn_rect(&wm.theme).unwrap();
+        // With left-side layout and only a close button, the button should be
+        // near the titlebar's left edge — within one inset.
+        let max_inset = wm.theme.titlebar_height as i32 / 2;
+        assert!(
+            bx - tx <= max_inset,
+            "close button x={bx} too far from titlebar left tx={tx}"
+        );
     }
 }
