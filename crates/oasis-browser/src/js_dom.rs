@@ -520,7 +520,14 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return;
                 }
-                mark_dirty(&dirty);
+                // Serialize existing children so we can detect no-op writes
+                // (e.g. animation loops setting innerHTML to the same string
+                // each frame). Mirrors the guard pattern in
+                // `classlist_op_mutated` / `__oasis_setattr`.
+                let mut old_html = String::new();
+                for &child in &doc.nodes[id].children {
+                    serialize_node(&doc, child, &mut old_html);
+                }
                 // Recursively free existing children and all descendants
                 // (ID index entries, arena slots).
                 let old: Vec<NodeId> = doc.nodes[id].children.clone();
@@ -545,6 +552,17 @@ fn install_document_global_full(
                 for &src_child in &src_children {
                     let new_id = deep_copy_node(&frag, &mut doc, src_child);
                     doc.append_child(id, new_id);
+                }
+
+                // Re-serialize the freshly-transplanted subtree and compare
+                // against the pre-mutation serialization. Only trigger a
+                // cascade/relayout when the effective DOM actually changed.
+                let mut new_html = String::new();
+                for &child in &doc.nodes[id].children {
+                    serialize_node(&doc, child, &mut new_html);
+                }
+                if old_html != new_html {
+                    mark_dirty(&dirty);
                 }
             })?,
         )?;

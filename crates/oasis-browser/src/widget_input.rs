@@ -1371,7 +1371,11 @@ impl BrowserWidget {
             self.styles =
                 css::cascade::style_tree(doc, &all_sheets, &self.cached_inline_styles, &ctx);
             *self.js_styles.borrow_mut() = self.styles.clone();
-            // Rebuild link map from mutated DOM so new anchors are clickable.
+            // Rebuild href_map (NodeId -> href) from the mutated DOM so
+            // anchor fragment lookups see newly-inserted <a> elements.
+            // Note: link_map (the Vec<LinkRegion> used by click hit-testing)
+            // is rebuilt by the layout pass triggered via `layout_dirty`
+            // below, not here.
             self.href_map = BrowserWidget::build_link_map(doc);
         }
         // Geometry may have changed (class toggles, display:none, new
