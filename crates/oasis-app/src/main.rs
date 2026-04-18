@@ -880,11 +880,17 @@ fn https_get_body(
 
     log::debug!("HTTPS: TCP connected to {host}:443");
 
-    let mut stream = tls_provider
-        .connect_tls(tcp, host)
+    // This is a minimal HTTP/1.1 blocking client. The shared TLS config
+    // advertises both `h2` and `http/1.1` so the browser can negotiate
+    // HTTP/2 with CDNs that require it; if we used the default `connect_tls`
+    // here, archive.org would select `h2` and our `\r\n\r\n` parser would
+    // trip on HTTP/2 frames. Force `http/1.1` only.
+    let tls_conn = tls_provider
+        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
         .map_err(|e| format!("TLS: {e}"))?;
+    let mut stream = tls_conn.stream;
 
-    log::debug!("HTTPS: TLS handshake complete");
+    log::debug!("HTTPS: TLS handshake complete (alpn={:?})", tls_conn.alpn);
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
