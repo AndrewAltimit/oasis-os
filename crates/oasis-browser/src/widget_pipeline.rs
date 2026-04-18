@@ -446,6 +446,7 @@ impl BrowserWidget {
         // Drain all available results.
         let mut page_results = Vec::new();
         let mut image_results = Vec::new();
+        let mut stylesheet_results = Vec::new();
 
         while let Some(result) = io.poll() {
             // Apply cookie updates to the main-thread jar.
@@ -458,6 +459,7 @@ impl BrowserWidget {
             match result.kind {
                 IoRequestKind::PageLoad => page_results.push(result),
                 IoRequestKind::Image => image_results.push(result),
+                IoRequestKind::Stylesheet => stylesheet_results.push(result),
             }
         }
 
@@ -542,6 +544,54 @@ impl BrowserWidget {
                     self.image_info_dirty = true;
                     self.layout_dirty = true;
                 },
+            }
+        }
+
+        // Process external stylesheet results. Each fills the pre-allocated
+        // slot at the DOM-order index that was recorded when the fetch was
+        // submitted, then flags `pending_external_css_apply` so the next
+        // tick re-cascades and relays out with the now-fuller style set.
+        const MAX_STYLESHEET_BYTES: usize = 512 * 1024;
+        for result in stylesheet_results {
+            let Some(idx) = self.pending_io_stylesheets.remove(&result.id) else {
+                continue;
+            };
+            let sheet = match result.result {
+                Ok(loaded) => {
+                    let body = loaded.response.body;
+                    if body.len() > MAX_STYLESHEET_BYTES {
+                        log::warn!(
+                            "external stylesheet {} too large ({} bytes), skipping",
+                            loaded.response.url,
+                            body.len()
+                        );
+                        // Slot stays `None` but still flag a cascade pass so
+                        // any peer sheets that *did* arrive this tick get
+                        // applied; otherwise a single oversized sheet can
+                        // strand the page unstyled with no retry signal.
+                        self.pending_external_css_apply = true;
+                        continue;
+                    }
+                    let css_text = String::from_utf8_lossy(&body).into_owned();
+                    let viewport = css::parser::MediaViewport {
+                        width: self.window_w as f32,
+                        height: self.window_h as f32,
+                        dark_mode: false,
+                        prefers_reduced_motion: false,
+                        hover: true,
+                        pointer: "fine",
+                    };
+                    css::parser::Stylesheet::parse_with_viewport(&css_text, viewport)
+                },
+                Err(e) => {
+                    log::debug!("external stylesheet fetch failed: {e}");
+                    self.pending_external_css_apply = true;
+                    continue;
+                },
+            };
+            if idx < self.external_stylesheets.len() {
+                self.external_stylesheets[idx] = Some(sheet);
+                self.pending_external_css_apply = true;
             }
         }
     }
@@ -745,13 +795,34 @@ impl BrowserWidget {
             hover: true,
             pointer: "fine",
         };
-        let author_sheets = Self::collect_style_sheets(&doc, media_viewport);
+        let (author_sheets, author_sheet_positions) =
+            Self::collect_style_sheets(&doc, media_viewport);
         let inline_styles = Self::collect_inline_styles(&doc);
         self.diag(&format!(
             "[BR] collect stylesheets done: {} sheets, {} inline",
             author_sheets.len(),
             inline_styles.len()
         ));
+
+        // 3b. Collect `<link rel="stylesheet" href>` URLs and dispatch
+        //     async fetches. The initial render applies only inline
+        //     `<style>` sheets so the page appears immediately; external
+        //     sheets are re-cascaded and relaid out as they arrive. This
+        //     is the primary reason old.reddit.com renders as unstyled
+        //     bullets without this pass — the site ships essentially no
+        //     inline CSS.
+        let (linked_urls, linked_positions) = Self::collect_linked_stylesheet_urls(&doc, url);
+        self.external_stylesheets = vec![None; linked_urls.len()];
+        self.external_stylesheet_positions = linked_positions;
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        {
+            self.pending_io_stylesheets.clear();
+            self.pending_vfs_stylesheets.clear();
+        }
+        self.pending_external_css_apply = false;
+        if !linked_urls.is_empty() {
+            self.submit_external_stylesheets(linked_urls, url);
+        }
 
         // 4. CSS cascade: user-agent + author stylesheets + inline styles.
         self.diag("[BR] cascade start");
@@ -884,6 +955,7 @@ impl BrowserWidget {
 
         // Cache parsed sheets and selector index for hover restyles.
         self.cached_author_sheets = author_sheets;
+        self.cached_author_sheet_positions = author_sheet_positions;
         self.cached_inline_styles = inline_styles;
         self.cached_selector_index = Some(selector_index);
         self.container_lookup = container_lookup;
@@ -1275,8 +1347,9 @@ impl BrowserWidget {
     fn collect_style_sheets(
         doc: &html::dom::Document,
         viewport: css::parser::MediaViewport,
-    ) -> Vec<css::parser::Stylesheet> {
+    ) -> (Vec<css::parser::Stylesheet>, Vec<html::dom::NodeId>) {
         let mut sheets = Vec::new();
+        let mut positions = Vec::new();
         for (id, node) in doc.nodes.iter().enumerate() {
             if let html::dom::NodeKind::Element(elem) = &node.kind
                 && elem.tag == html::dom::TagName::Style
@@ -1286,10 +1359,338 @@ impl BrowserWidget {
                     sheets.push(css::parser::Stylesheet::parse_with_viewport(
                         &css_text, viewport,
                     ));
+                    positions.push(id);
                 }
             }
         }
-        sheets
+        (sheets, positions)
+    }
+
+    /// Return `true` if a single comma-separated media-query token
+    /// (e.g. `print`, `only print`, `print and (color)`) targets the
+    /// print medium exclusively. Used by `<link media="…">` filtering
+    /// to drop print-only sheets without swallowing mixed lists like
+    /// `print, screen` or queries like `(min-width: 500px)`.
+    pub(crate) fn is_print_only_media_query(token: &str) -> bool {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        // Drop a leading `only` / `not` modifier before inspecting the
+        // media type. `not print` is *not* print-only — it matches
+        // everything except print — so treat it as non-print.
+        let rest = if let Some(r) = trimmed.strip_prefix("only ") {
+            r.trim_start()
+        } else if let Some(r) = trimmed.strip_prefix("not ") {
+            // Only bare `not all` matches zero media types. A query of the
+            // form `not all and (feature)` matches media where `(feature)`
+            // is false (e.g. `not all and (color)` matches monochrome
+            // screens) so must not be filtered here. Any other `not <type>`
+            // (e.g. `not screen`, `not print`) still matches *some* media.
+            return r.trim() == "all";
+        } else {
+            trimmed
+        };
+        // The media type is the first whitespace-delimited word.
+        let media_type = rest.split_whitespace().next().unwrap_or("");
+        media_type == "print"
+    }
+
+    /// Walk the DOM and collect `<link rel="stylesheet" href="...">`
+    /// URLs, resolved against `base_url`.
+    ///
+    /// Skips `rel="alternate stylesheet"` and links whose `media` attr
+    /// is a `print`-only query (the layout pipeline renders with
+    /// `@media screen` semantics). Data URIs are rejected here because
+    /// the async loader expects an HTTP/VFS fetchable resource; inline
+    /// `data:` stylesheets should use a `<style>` block anyway.
+    ///
+    /// The returned vector preserves DOM order so the cascade applies
+    /// external sheets in the same sequence the author wrote them. The
+    /// parallel `Vec<NodeId>` gives each retained URL its originating
+    /// DOM node index so callers can interleave external sheets with
+    /// inline `<style>` blocks by DOM order in the cascade.
+    fn collect_linked_stylesheet_urls(
+        doc: &html::dom::Document,
+        base_url: &str,
+    ) -> (Vec<String>, Vec<html::dom::NodeId>) {
+        const MAX_LINKED_STYLESHEETS: usize = 16;
+        let mut urls = Vec::new();
+        let mut positions = Vec::new();
+        let base_parsed = loader::Url::parse(base_url);
+        for (node_id, node) in doc.nodes.iter().enumerate() {
+            if urls.len() >= MAX_LINKED_STYLESHEETS {
+                log::warn!(
+                    "external stylesheet limit ({MAX_LINKED_STYLESHEETS}) \
+                     reached; remaining <link rel=\"stylesheet\"> tags dropped"
+                );
+                break;
+            }
+            let html::dom::NodeKind::Element(elem) = &node.kind else {
+                continue;
+            };
+            if elem.tag != html::dom::TagName::Link {
+                continue;
+            }
+            let rel = elem.get_attribute("rel").unwrap_or("");
+            let is_stylesheet = rel
+                .split_ascii_whitespace()
+                .any(|t| t.eq_ignore_ascii_case("stylesheet"));
+            let is_alternate = rel
+                .split_ascii_whitespace()
+                .any(|t| t.eq_ignore_ascii_case("alternate"));
+            if !is_stylesheet || is_alternate {
+                continue;
+            }
+            // Skip print-only stylesheets. `media` is a comma-separated
+            // list of media queries; if *every* entry targets `print`
+            // exclusively, the sheet is irrelevant to screen rendering.
+            // A mixed list like `print, screen` still matches screen and
+            // must not be skipped.
+            if let Some(media) = elem.get_attribute("media") {
+                let m = media.trim().to_ascii_lowercase();
+                if !m.is_empty() && m.split(',').all(Self::is_print_only_media_query) {
+                    continue;
+                }
+            }
+            let Some(href) = elem.get_attribute("href") else {
+                continue;
+            };
+            let href = href.trim();
+            if href.is_empty() || href.starts_with("data:") {
+                continue;
+            }
+            let resolved = match &base_parsed {
+                Some(base) => base
+                    .resolve(href)
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|| href.to_string()),
+                None => href.to_string(),
+            };
+            // Reject resolved URLs the loader can't actually fetch.
+            // `file://` (used as the base for local fixture pages) can't
+            // follow protocol-relative `//cdn/...` references since the
+            // network loader rejects the `file` scheme. Silently drop
+            // them rather than spamming the I/O thread with certain-fail
+            // requests.
+            let scheme = loader::Url::parse(&resolved)
+                .map(|u| u.scheme.clone())
+                .unwrap_or_default();
+            match scheme.as_str() {
+                "http" | "https" | "vfs" => {},
+                _ => continue,
+            }
+            if urls.iter().any(|u| u == &resolved) {
+                continue;
+            }
+            urls.push(resolved);
+            positions.push(node_id);
+        }
+        (urls, positions)
+    }
+
+    /// Submit each linked stylesheet URL to the I/O thread for fetch.
+    /// Each slot in `external_stylesheets` is keyed by its index in the
+    /// submitted vec; the `poll_io_thread` handler fills the slot when
+    /// the CSS bytes arrive.
+    ///
+    /// VFS-scheme stylesheets (`vfs://…/foo.css`) are loaded synchronously
+    /// here rather than round-tripped through the I/O thread — that thread
+    /// doesn't hold a VFS handle, so routing a VFS request through it
+    /// would always return "unsupported network scheme: vfs" and the
+    /// slot would never fill.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn submit_external_stylesheets(&mut self, urls: Vec<String>, base_url: &str) {
+        let source = if self.config.features.sandbox_only {
+            ResourceSource::Vfs
+        } else {
+            ResourceSource::VfsThenNetwork
+        };
+        let referrer = loader::strip_referrer(base_url);
+        let base = Some(base_url.to_string());
+        let mut pending_network: Vec<(usize, ResourceRequest)> = Vec::new();
+        for (idx, url) in urls.into_iter().enumerate() {
+            let request = ResourceRequest {
+                url: url.clone(),
+                base_url: base.clone(),
+                source,
+                method: crate::loader::HttpMethod::Get,
+                body: None,
+                referrer: referrer.clone(),
+            };
+            if url.starts_with("vfs://") {
+                // VFS lookups require the caller's `Vfs` handle, which
+                // we don't hold during `load_html`. Stash them for the
+                // next `tick()` to resolve synchronously against the
+                // passed-in `vfs`.
+                self.pending_vfs_stylesheets.push((idx, request));
+                continue;
+            }
+            pending_network.push((idx, request));
+        }
+
+        if !pending_network.is_empty() {
+            self.ensure_io_thread();
+            if self.io_thread.is_none() {
+                log::warn!(
+                    "I/O thread unavailable; dropping {} external stylesheet fetch(es). \
+                     Page will render without linked CSS.",
+                    pending_network.len()
+                );
+                return;
+            }
+            // Safe: the `is_none()` check above early-returned, so the
+            // I/O thread is guaranteed present for the rest of this call.
+            let io = self
+                .io_thread
+                .as_mut()
+                .expect("io_thread checked non-None above");
+            for (idx, request) in pending_network {
+                let validators = self.cache.peek_validators(&request.url);
+                let id = io.send(IoRequestKind::Stylesheet, request, validators, None);
+                self.pending_io_stylesheets.insert(id, idx);
+            }
+        }
+    }
+
+    /// WASM/PSP stub: no async I/O path, skip external stylesheet loading.
+    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    fn submit_external_stylesheets(&mut self, _urls: Vec<String>, _base_url: &str) {}
+
+    /// Drain any VFS-scheme stylesheets queued during `load_html` and
+    /// parse them against the caller-supplied VFS. Called from `tick()`
+    /// so the initial paint can land without waiting.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pub(crate) fn load_pending_vfs_stylesheets(&mut self, vfs: &dyn Vfs) {
+        if self.pending_vfs_stylesheets.is_empty() {
+            return;
+        }
+        let viewport = css::parser::MediaViewport {
+            width: self.window_w as f32,
+            height: self.window_h as f32,
+            dark_mode: false,
+            prefers_reduced_motion: false,
+            hover: true,
+            pointer: "fine",
+        };
+        let drained: Vec<(usize, ResourceRequest)> =
+            std::mem::take(&mut self.pending_vfs_stylesheets);
+        for (idx, request) in drained {
+            match loader::vfs::load_from_vfs(vfs, &request) {
+                Ok(resp) => {
+                    let css_text = String::from_utf8_lossy(&resp.body).into_owned();
+                    let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
+                    if idx < self.external_stylesheets.len() {
+                        self.external_stylesheets[idx] = Some(sheet);
+                        self.pending_external_css_apply = true;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("vfs stylesheet fetch failed: {e}");
+                },
+            }
+        }
+    }
+
+    /// Interleave cached inline `<style>` sheets and fetched external
+    /// `<link>` sheets back into DOM order. Cascade precedence depends
+    /// on source position within the author origin, so a page with a
+    /// `<link>` before a `<style>` in `<head>` must apply the link's
+    /// rules first — grouping all inline sheets before all external
+    /// sheets (or vice-versa) would flip the winner for any rule of
+    /// equal specificity.
+    fn author_sheets_in_dom_order(&self) -> Vec<&css::parser::Stylesheet> {
+        let inline_n = self.cached_author_sheets.len();
+        let external_n = self.external_stylesheets.len();
+        let mut out: Vec<&css::parser::Stylesheet> = Vec::with_capacity(inline_n + external_n);
+        let mut i = 0; // inline cursor
+        let mut e = 0; // external cursor
+        while i < inline_n || e < external_n {
+            let inline_pos = self
+                .cached_author_sheet_positions
+                .get(i)
+                .copied()
+                .unwrap_or(usize::MAX);
+            let external_pos = self
+                .external_stylesheet_positions
+                .get(e)
+                .copied()
+                .unwrap_or(usize::MAX);
+            if inline_pos <= external_pos {
+                if i < inline_n {
+                    out.push(&self.cached_author_sheets[i]);
+                }
+                i += 1;
+            } else {
+                if let Some(Some(sheet)) = self.external_stylesheets.get(e) {
+                    out.push(sheet);
+                }
+                e += 1;
+            }
+        }
+        out
+    }
+
+    /// Apply any external stylesheets that have arrived since the last
+    /// cascade. Rebuilds `self.styles` from UA + cached inline sheets +
+    /// arrived external sheets and marks the layout dirty so the next
+    /// paint picks up the new visual state.
+    ///
+    /// Re-runs cascade only — keyframes, @font-face, animations, and
+    /// the scripts pipeline are left alone; style changes alone are
+    /// sufficient for the visual delta that matters for real-world
+    /// sites (old.reddit, MediaWiki) whose external CSS is declarative.
+    ///
+    /// Known limitation: `@import url(...)` rules inside fetched
+    /// external CSS are *not* followed. The parser captures them but
+    /// this pass does not chase the transitive closure, so pages whose
+    /// top-level stylesheet is a thin `@import` shim render with only
+    /// the shim's own rules applied. Acceptable for old.reddit /
+    /// MediaWiki (top-level sheets carry the rules directly); revisit
+    /// if another real-world target relies on `@import` chains.
+    pub(crate) fn apply_external_stylesheets_if_pending(&mut self) {
+        if !self.pending_external_css_apply {
+            return;
+        }
+        self.pending_external_css_apply = false;
+        let Some(doc) = self.document.as_ref() else {
+            return;
+        };
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
+        for sheet in self.author_sheets_in_dom_order() {
+            all_sheets.push(sheet);
+        }
+        // Preserve the container-query lookup captured during `load_html`'s
+        // post-layout restyle pass; without it, `@container` rules would
+        // silently stop matching on every re-cascade driven by a late-
+        // arriving external sheet. `global_layers` is intentionally left
+        // `None` — layer ordering is recomputed fresh from the merged
+        // sheet list below, matching the initial cascade path.
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+            focused_node: self.focused_node,
+            containers: self.container_lookup.as_ref(),
+            global_layers: None,
+        };
+        let styles = css::cascade::style_tree(doc, &all_sheets, &self.cached_inline_styles, &ctx);
+        let selector_index = css::cascade::SelectorIndex::build(&all_sheets);
+
+        #[cfg(feature = "web-fonts")]
+        {
+            let mut font_reg = self.font_registry.borrow_mut();
+            for sheet in &all_sheets {
+                font_reg.collect_font_faces(&sheet.font_faces);
+            }
+            self.fonts_load_attempted = false;
+        }
+
+        self.styles = styles;
+        self.cached_selector_index = Some(selector_index);
+        self.layout_dirty = true;
+        self.full_repaint_needed = true;
+        self.display_list.clear();
     }
 
     /// Walk the DOM to collect inline `style=""` attributes and parse
@@ -1434,7 +1835,10 @@ impl BrowserWidget {
                 let styles = css::cascade::style_tree(&reader_doc, &[ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);
                 self.cached_author_sheets = Vec::new();
+                self.cached_author_sheet_positions = Vec::new();
                 self.cached_inline_styles = Vec::new();
+                self.external_stylesheets = Vec::new();
+                self.external_stylesheet_positions = Vec::new();
                 self.document = Some(reader_doc);
                 self.styles = styles;
                 self.href_map = href_map;

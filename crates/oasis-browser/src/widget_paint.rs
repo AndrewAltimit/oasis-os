@@ -59,9 +59,21 @@ impl BrowserWidget {
     /// Call this once per frame before `paint()`. Images stream in
     /// progressively so the page is never blocked waiting for all images.
     pub fn tick(&mut self, vfs: &dyn Vfs) {
+        // Drain any VFS-scheme `<link rel=stylesheet>` entries queued
+        // during the previous `load_html`. VFS access requires the
+        // caller's handle, which only the tick path holds.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        self.load_pending_vfs_stylesheets(vfs);
+
         // Poll the I/O thread for completed network requests.
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         self.poll_io_thread();
+
+        // Re-cascade + relayout if external stylesheets arrived since
+        // the last tick. Must run before `load_next_image_batch()` so
+        // background-image URLs introduced by fresh CSS participate in
+        // the same image fetch pass.
+        self.apply_external_stylesheets_if_pending();
 
         self.load_next_image_batch(vfs, 8);
 
