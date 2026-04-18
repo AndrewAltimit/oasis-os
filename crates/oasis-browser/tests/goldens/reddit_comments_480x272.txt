@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 2662, Color { r: 218, g: 224, b: 230, a: 255 }
+fill_rect 0, 0, 480, 2714, Color { r: 218, g: 224, b: 230, a: 255 }
 fill_rect 174, 36, 300, 118, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 173, 35, 302, 1, Color { r: 199, g: 199, b: 199, a: 255 }
 fill_rect 474, 35, 1, 120, Color { r: 199, g: 199, b: 199, a: 255 }

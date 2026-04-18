@@ -2465,3 +2465,141 @@ fn form_enter_submits() {
         "Enter should submit the form; got: {current}"
     );
 }
+
+// ---------------------------------------------------------------
+// Reddit comment collapse — end-to-end interactivity
+// ---------------------------------------------------------------
+
+/// Find the node id of the first `<a class="expand">` anchor.
+#[cfg(feature = "javascript")]
+fn find_expand_anchor(browser: &BrowserWidget) -> crate::html::dom::NodeId {
+    let doc = browser.document.as_ref().expect("doc");
+    for (nid, node) in doc.nodes.iter().enumerate() {
+        if let crate::html::dom::NodeKind::Element(e) = &node.kind
+            && e.tag == crate::html::dom::TagName::A
+            && e.get_attribute("class")
+                .is_some_and(|c| c.split_whitespace().any(|w| w == "expand"))
+        {
+            return nid;
+        }
+    }
+    panic!("no <a class=\"expand\"> in fixture DOM");
+}
+
+/// Walk up the DOM from `start` to the nearest ancestor whose `class`
+/// attribute contains `token`.
+#[cfg(feature = "javascript")]
+fn nearest_ancestor_with_class(
+    browser: &BrowserWidget,
+    start: crate::html::dom::NodeId,
+    token: &str,
+) -> Option<crate::html::dom::NodeId> {
+    let doc = browser.document.as_ref()?;
+    let mut cur = Some(start);
+    while let Some(nid) = cur {
+        if let crate::html::dom::NodeKind::Element(e) = &doc.nodes[nid].kind
+            && e.get_attribute("class")
+                .is_some_and(|c| c.split_whitespace().any(|w| w == token))
+        {
+            return Some(nid);
+        }
+        cur = doc.nodes[nid].parent;
+    }
+    None
+}
+
+/// Find the screen-space center of the layout rect for a DOM node.
+#[cfg(feature = "javascript")]
+fn node_center(browser: &BrowserWidget, target: crate::html::dom::NodeId) -> (i32, i32) {
+    use crate::layout::box_model::LayoutBox;
+    fn walk(lb: &LayoutBox, target: crate::html::dom::NodeId) -> Option<(f32, f32, f32, f32)> {
+        if lb.node == Some(target) {
+            let r = &lb.dimensions.content;
+            return Some((r.x, r.y, r.width.max(1.0), r.height.max(1.0)));
+        }
+        for c in &lb.children {
+            if let Some(p) = walk(c, target) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    let root = browser.layout_root.as_ref().expect("layout");
+    let (x, y, w, h) = walk(root, target).expect("node in layout");
+    let lx = (x + w / 2.0) as i32;
+    let ly = (y + h / 2.0) as i32;
+    (
+        lx + browser.window_x - browser.scroll.scroll_x,
+        ly + browser.window_y + browser.config.url_bar_height as i32 - browser.scroll.scroll_y,
+    )
+}
+
+/// Read an element's `class` attribute.
+#[cfg(feature = "javascript")]
+fn class_of(browser: &BrowserWidget, nid: crate::html::dom::NodeId) -> String {
+    let doc = browser.document.as_ref().expect("doc");
+    if let crate::html::dom::NodeKind::Element(e) = &doc.nodes[nid].kind {
+        return e.get_attribute("class").unwrap_or("").to_string();
+    }
+    String::new()
+}
+
+#[cfg(feature = "javascript")]
+#[test]
+fn reddit_expand_click_collapses_subtree() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/reddit").unwrap();
+    let html = include_str!("../tests/fixtures/reddit_comments.html");
+    vfs.write("/sites/reddit/comments.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/reddit/comments.html", &vfs);
+
+    let expand_nid = find_expand_anchor(&browser);
+    let comment_nid = nearest_ancestor_with_class(&browser, expand_nid, "comment")
+        .expect("expand is inside a .comment");
+
+    // Initial state: the first expand anchor lives inside an expanded
+    // comment, so class should NOT contain "collapsed".
+    assert!(
+        !class_of(&browser, comment_nid)
+            .split_whitespace()
+            .any(|w| w == "collapsed"),
+        "precondition: first .comment starts expanded",
+    );
+
+    let (cx, cy) = node_center(&browser, expand_nid);
+    browser.handle_click(cx, cy, &vfs);
+
+    // After click, the togglecomment shim must have flipped the class.
+    assert!(
+        class_of(&browser, comment_nid)
+            .split_whitespace()
+            .any(|w| w == "collapsed"),
+        "click on <a class=\"expand\"> should add .collapsed to nearest .comment; \
+         got class={:?}",
+        class_of(&browser, comment_nid),
+    );
+
+    // URL must NOT have navigated to "#" — onclick returned false, so
+    // the wrapper called preventDefault and handle_click skipped the
+    // link follow-up.
+    let cur = browser.current_url().unwrap_or("");
+    assert!(
+        cur.ends_with("comments.html"),
+        "preventDefault should suppress '#' navigation; url={cur}",
+    );
+
+    // Second click un-collapses.
+    browser.handle_click(cx, cy, &vfs);
+    assert!(
+        !class_of(&browser, comment_nid)
+            .split_whitespace()
+            .any(|w| w == "collapsed"),
+        "second click should remove .collapsed; class={:?}",
+        class_of(&browser, comment_nid),
+    );
+}

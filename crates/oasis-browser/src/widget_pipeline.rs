@@ -624,6 +624,10 @@ impl BrowserWidget {
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
                     let js_sty = std::rc::Rc::clone(&self.js_styles);
                     let ls = std::rc::Rc::clone(&self.js_local_storage);
+                    let dirty = std::rc::Rc::clone(&self.js_dom_dirty);
+                    // Reset between page loads so a previous page's
+                    // mutation doesn't force an extra relayout here.
+                    dirty.set(false);
                     if let Err(e) = engine.with_context(|ctx| {
                         js_dom::install_document_global_with_csp(
                             &ctx,
@@ -633,6 +637,7 @@ impl BrowserWidget {
                             &js_sty,
                             self.page_csp.as_ref(),
                             Some(&ls),
+                            Some(&dirty),
                         )
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
@@ -655,6 +660,12 @@ impl BrowserWidget {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
                         engine.eval_all(&script_refs);
                     }
+                    // Install site-compat shims (togglecomment, etc.)
+                    // before wiring inline handlers, so onclick bodies
+                    // that reference them find defined globals. User
+                    // scripts already ran and can override if they
+                    // defined their own versions.
+                    js_dom::install_site_compat_shims(&engine);
                     // Register inline event handlers (onclick, etc.)
                     // after scripts so Element class is available.
                     {

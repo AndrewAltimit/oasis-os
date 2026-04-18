@@ -15,7 +15,7 @@
 //! `Element` constructor and `document` global, bridging the low-level
 //! Rust helpers into the familiar DOM API.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -33,6 +33,19 @@ pub type SharedStyles = Rc<RefCell<Vec<Option<ComputedStyle>>>>;
 /// Shared, interior-mutable localStorage backing store that persists
 /// across page navigations within the same `BrowserWidget` lifetime.
 pub type SharedLocalStorage = Rc<RefCell<HashMap<String, String>>>;
+
+/// Shared flag set by DOM-mutating JS bindings (setAttribute, classList,
+/// style, appendChild, innerHTML, etc.) so the widget can re-run the
+/// CSS cascade and layout after an event handler mutates the page.
+/// `None` during test contexts that don't care about relayout.
+pub type SharedDirty = Rc<Cell<bool>>;
+
+#[inline]
+fn mark_dirty(flag: &Option<SharedDirty>) {
+    if let Some(d) = flag {
+        d.set(true);
+    }
+}
 
 /// Sentinel returned when a DOM lookup produces no result.
 const NO_NODE: i32 = -1;
@@ -68,7 +81,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav, None, None, None)
+    install_document_global_full(ctx, doc, "", &nav, None, None, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -76,7 +89,7 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav, None, None, None)
+    install_document_global_full(ctx, doc, url, &nav, None, None, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
@@ -89,12 +102,13 @@ pub fn install_document_global_with_nav(
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, None, None, None)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None, None, None)
 }
 
 /// Like [`install_document_global_with_nav`] but also accepts an
 /// optional CSP policy to enforce `connect-src` on `fetch()` calls,
 /// and an optional persistent localStorage backing store.
+#[allow(clippy::too_many_arguments)]
 pub fn install_document_global_with_csp(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -103,6 +117,7 @@ pub fn install_document_global_with_csp(
     styles: &SharedStyles,
     csp: Option<&crate::loader::csp::CspPolicy>,
     persistent_local_storage: Option<&SharedLocalStorage>,
+    dom_dirty: Option<&SharedDirty>,
 ) -> JsResult<()> {
     install_document_global_full(
         ctx,
@@ -112,11 +127,13 @@ pub fn install_document_global_with_csp(
         Some(styles),
         csp,
         persistent_local_storage,
+        dom_dirty,
     )
 }
 
 /// Full installation: document global, location/history, nav actions,
 /// computed styles, fetch, localStorage/sessionStorage, document.cookie.
+#[allow(clippy::too_many_arguments)]
 fn install_document_global_full(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -125,7 +142,11 @@ fn install_document_global_full(
     styles: Option<&SharedStyles>,
     csp: Option<&crate::loader::csp::CspPolicy>,
     persistent_local_storage: Option<&SharedLocalStorage>,
+    dom_dirty: Option<&SharedDirty>,
 ) -> JsResult<()> {
+    // Local clone stored per binding closure so each `move` capture owns
+    // its own handle. `Option<Rc<Cell<bool>>>` is cheap to clone.
+    let dirty = dom_dirty.map(Rc::clone);
     let globals = ctx.globals();
 
     // -- __oasis_tagname(nid) -> String --------------------------------
@@ -173,6 +194,7 @@ fn install_document_global_full(
     // -- __oasis_setattr(nid, name, value) ----------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_setattr",
             Function::new(ctx.clone(), move |nid: i32, name: String, value: String| {
@@ -189,6 +211,7 @@ fn install_document_global_full(
                     } else {
                         e.set_attribute(&name, &value);
                     }
+                    mark_dirty(&dirty);
                 }
             })?,
         )?;
@@ -197,6 +220,7 @@ fn install_document_global_full(
     // -- __oasis_rmattr(nid, name) -> bool ----------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_rmattr",
             Function::new(ctx.clone(), move |nid: i32, name: String| -> bool {
@@ -211,10 +235,15 @@ fn install_document_global_full(
                         let removed = e.remove_attribute(&name);
                         if removed {
                             doc.update_id_index(id, old_id.as_deref(), None);
+                            mark_dirty(&dirty);
                         }
                         return removed;
                     }
-                    return e.remove_attribute(&name);
+                    let removed = e.remove_attribute(&name);
+                    if removed {
+                        mark_dirty(&dirty);
+                    }
+                    return removed;
                 }
                 false
             })?,
@@ -240,6 +269,7 @@ fn install_document_global_full(
     // -- __oasis_settext(nid, text) -----------------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_settext",
             Function::new(ctx.clone(), move |nid: i32, text: String| {
@@ -247,6 +277,7 @@ fn install_document_global_full(
                 let id = nid as NodeId;
                 if id < doc.nodes.len() {
                     doc.set_text_content(id, &text);
+                    mark_dirty(&dirty);
                 }
             })?,
         )?;
@@ -336,13 +367,17 @@ fn install_document_global_full(
         let d = Rc::clone(doc);
         globals.set(
             "__oasis_append",
-            Function::new(ctx.clone(), move |parent_nid: i32, child_nid: i32| {
-                let mut doc = d.borrow_mut();
-                let pid = parent_nid as NodeId;
-                let cid = child_nid as NodeId;
-                if pid < doc.nodes.len() && cid < doc.nodes.len() {
-                    doc.remove_child(cid);
-                    doc.append_child(pid, cid);
+            Function::new(ctx.clone(), {
+                let dirty = dirty.clone();
+                move |parent_nid: i32, child_nid: i32| {
+                    let mut doc = d.borrow_mut();
+                    let pid = parent_nid as NodeId;
+                    let cid = child_nid as NodeId;
+                    if pid < doc.nodes.len() && cid < doc.nodes.len() {
+                        doc.remove_child(cid);
+                        doc.append_child(pid, cid);
+                        mark_dirty(&dirty);
+                    }
                 }
             })?,
         )?;
@@ -351,6 +386,7 @@ fn install_document_global_full(
     // -- __oasis_remove(child_nid) -> i32 (former parent or -1) --------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_remove",
             Function::new(ctx.clone(), move |child_nid: i32| -> i32 {
@@ -359,7 +395,11 @@ fn install_document_global_full(
                 if cid >= doc.nodes.len() {
                     return NO_NODE;
                 }
-                doc.remove_child(cid).map_or(NO_NODE, |pid| pid as i32)
+                let res = doc.remove_child(cid);
+                if res.is_some() {
+                    mark_dirty(&dirty);
+                }
+                res.map_or(NO_NODE, |pid| pid as i32)
             })?,
         )?;
     }
@@ -367,6 +407,7 @@ fn install_document_global_full(
     // -- __oasis_insertbefore(parent_nid, new_nid, ref_nid) -----------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_insertbefore",
             Function::new(
@@ -397,6 +438,7 @@ fn install_document_global_full(
                             doc.append_child(pid, nid);
                         },
                     }
+                    mark_dirty(&dirty);
                 },
             )?,
         )?;
@@ -427,12 +469,14 @@ fn install_document_global_full(
     // -- __oasis_settitle(text) ---------------------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_settitle",
             Function::new(ctx.clone(), move |val: String| {
                 let mut doc = d.borrow_mut();
                 if let Some(tid) = doc.title_element() {
                     doc.set_text_content(tid, &val);
+                    mark_dirty(&dirty);
                 }
             })?,
         )?;
@@ -461,6 +505,7 @@ fn install_document_global_full(
     // -- __oasis_set_inner_html(nid, html) ----------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_set_inner_html",
             Function::new(ctx.clone(), move |nid: i32, html: String| {
@@ -469,6 +514,7 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return;
                 }
+                mark_dirty(&dirty);
                 // Recursively free existing children and all descendants
                 // (ID index entries, arena slots).
                 let old: Vec<NodeId> = doc.nodes[id].children.clone();
@@ -545,6 +591,7 @@ fn install_document_global_full(
     // -- __oasis_classlist_op(nid, op, cls) -> bool -------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_classlist_op",
             Function::new(
@@ -559,7 +606,15 @@ fn install_document_global_full(
                         NodeKind::Element(e) => e,
                         _ => return false,
                     };
-                    classlist_op(e, &op, &cls)
+                    let changed = classlist_op(e, &op, &cls);
+                    // add/remove/toggle all mutate unless the operation
+                    // was a no-op (`contains`, which returns a bool that
+                    // doesn't mean "changed" — but no mutation). Err on
+                    // the side of marking dirty for any mutating op.
+                    if op != "contains" {
+                        mark_dirty(&dirty);
+                    }
+                    changed
                 },
             )?,
         )?;
@@ -568,6 +623,7 @@ fn install_document_global_full(
     // -- __oasis_style_set(nid, prop, value) --------------------------
     {
         let d = Rc::clone(doc);
+        let dirty = dirty.clone();
         globals.set(
             "__oasis_style_set",
             Function::new(ctx.clone(), move |nid: i32, prop: String, value: String| {
@@ -581,6 +637,7 @@ fn install_document_global_full(
                     _ => return,
                 };
                 set_inline_style(e, &prop, &value);
+                mark_dirty(&dirty);
             })?,
         )?;
     }
@@ -841,6 +898,96 @@ const INLINE_HANDLERS: &[(&str, &str)] = &[
     ("onload", "load"),
 ];
 
+/// Install compatibility shims for common site-specific helpers that
+/// inline `onclick="..."` handlers call. Registered after `engine.eval_all()`
+/// so that a page's own `togglecomment`/`hidecomment` definitions (if they
+/// parse successfully) take precedence. When the page's script bundle
+/// doesn't load — old.reddit.com ships a ~1 MB bundle built around feature
+/// detection and jQuery — these shims let the page stay interactive.
+///
+/// The reddit shims all walk from the clicked element up to the nearest
+/// `.comment` ancestor and toggle a `collapsed` class; the fixture's CSS
+/// (and the real site's sheet) already hides `.comment.collapsed .child`
+/// and friends, so toggling one class is enough to collapse/expand a
+/// thread and its replies. Returning `false` from the onclick suppresses
+/// the default link navigation.
+pub fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
+    // Keep the JS small; each helper is a one-liner wrapped in
+    // `if typeof ... === 'undefined'` so a real site script wins.
+    let shim = r#"
+(function(){
+  function climb(el, pred) {
+    while (el) {
+      if (pred(el)) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+  function hasClass(el, c) {
+    if (!el) return false;
+    if (el.classList && el.classList.contains) return el.classList.contains(c);
+    var cls = el.className || '';
+    return (' ' + cls + ' ').indexOf(' ' + c + ' ') >= 0;
+  }
+  function nearestComment(el) {
+    return climb(el, function(n){ return hasClass(n, 'comment'); });
+  }
+  if (typeof globalThis.togglecomment === 'undefined') {
+    globalThis.togglecomment = function(el) {
+      var c = nearestComment(el);
+      if (!c) return false;
+      if (c.classList.contains('collapsed')) {
+        c.classList.remove('collapsed');
+        c.classList.add('noncollapsed');
+      } else {
+        c.classList.add('collapsed');
+        c.classList.remove('noncollapsed');
+      }
+      return false;
+    };
+  }
+  if (typeof globalThis.hidecomment === 'undefined') {
+    globalThis.hidecomment = function(el) {
+      var c = nearestComment(el);
+      if (c) { c.classList.add('collapsed'); c.classList.remove('noncollapsed'); }
+      return false;
+    };
+  }
+  if (typeof globalThis.unhidecomment === 'undefined') {
+    globalThis.unhidecomment = function(el) {
+      var c = nearestComment(el);
+      if (c) { c.classList.remove('collapsed'); c.classList.add('noncollapsed'); }
+      return false;
+    };
+  }
+  // Reddit's 'load more comments' can't actually fetch without a JSON
+  // bridge, but stubbing it prevents reference errors from onclick.
+  if (typeof globalThis.morechildren === 'undefined') {
+    globalThis.morechildren = function(){ return false; };
+  }
+  // Vote arrows: toggle an `upmod`/`downmod` class on the .arrow. This
+  // matches how reddit's own sheet styles active votes, giving visual
+  // feedback even without a backend roundtrip.
+  if (typeof globalThis.togglevote === 'undefined') {
+    globalThis.togglevote = function(el, dir) {
+      if (!el || !el.classList) return false;
+      var on = dir > 0 ? 'upmod' : 'downmod';
+      var off = dir > 0 ? 'up' : 'down';
+      if (el.classList.contains(on)) {
+        el.classList.remove(on);
+        el.classList.add(off);
+      } else {
+        el.classList.add(on);
+        el.classList.remove(off);
+      }
+      return false;
+    };
+  }
+})();
+"#;
+    let _ = engine.eval(shim);
+}
+
 /// Walk the DOM and register inline event handler attributes
 /// (e.g. `onclick="..."`) as `addEventListener` calls on the JS side.
 ///
@@ -851,10 +998,20 @@ pub fn register_inline_handlers(engine: &oasis_js::JsEngine, doc: &Document) {
         if let NodeKind::Element(elem) = &node.kind {
             for &(attr_name, event_type) in INLINE_HANDLERS {
                 if let Some(handler_body) = elem.get_attribute(attr_name) {
+                    // Wrap the handler so `return false` / a falsy
+                    // return calls `event.preventDefault()`, matching
+                    // the HTML spec. Without this, reddit-style
+                    // `onclick="return togglecomment(this)"` would
+                    // toggle the class then navigate to `#` anyway.
                     let js = format!(
                         "(function(){{ var el = new Element({id}); \
                          el.addEventListener(\"{event_type}\", \
-                         function(event) {{ {handler_body} }}); }})()"
+                         function(event) {{ \
+                           var __r = (function(){{ {handler_body} }}).call(el); \
+                           if (__r === false && event && event.preventDefault) \
+                             event.preventDefault(); \
+                           return __r; \
+                         }}); }})()"
                     );
                     let _ = engine.eval(&js);
                 }
@@ -1424,6 +1581,10 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       for (var i = ancestors.length - 1; i >= 0 && !evt._stopped; i--) {
         __fire(ancestors[i] + ":" + type, new Element(ancestors[i]), evt, 3);
       }
+      // Report default-prevented back to the Rust side so it can skip
+      // follow-up behaviors like link navigation when the page says
+      // "return false" from an inline onclick handler.
+      return evt._defaultPrevented;
     };
 
   var document = {
