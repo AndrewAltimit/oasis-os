@@ -3297,11 +3297,14 @@ fn is_print_only_media_query_matches_print_variants_only() {
     assert!(BrowserWidget::is_print_only_media_query(
         "print and (color)"
     ));
+    // `not all` matches zero media types — treat as skippable like print.
+    assert!(BrowserWidget::is_print_only_media_query("not all"));
     // Non-print — must not be flagged.
     assert!(!BrowserWidget::is_print_only_media_query("screen"));
     assert!(!BrowserWidget::is_print_only_media_query(
         "(min-width: 500px)"
     ));
     assert!(!BrowserWidget::is_print_only_media_query("not print"));
+    assert!(!BrowserWidget::is_print_only_media_query("not screen"));
     assert!(!BrowserWidget::is_print_only_media_query(""));
 }

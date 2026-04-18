@@ -1375,8 +1375,13 @@ impl BrowserWidget {
         // everything except print — so treat it as non-print.
         let rest = if let Some(r) = trimmed.strip_prefix("only ") {
             r.trim_start()
-        } else if trimmed.starts_with("not ") {
-            return false;
+        } else if let Some(r) = trimmed.strip_prefix("not ") {
+            // `not all` matches zero media types so the sheet never
+            // applies to screen — treat it like print-only so it gets
+            // filtered out. Any other `not <type>` (e.g. `not screen`)
+            // still matches *some* media so must not be dropped here.
+            let negated = r.split_whitespace().next().unwrap_or("");
+            return negated == "all";
         } else {
             trimmed
         };
@@ -1409,6 +1414,10 @@ impl BrowserWidget {
         let base_parsed = loader::Url::parse(base_url);
         for (node_id, node) in doc.nodes.iter().enumerate() {
             if urls.len() >= MAX_LINKED_STYLESHEETS {
+                log::warn!(
+                    "external stylesheet limit ({MAX_LINKED_STYLESHEETS}) \
+                     reached; remaining <link rel=\"stylesheet\"> tags dropped"
+                );
                 break;
             }
             let html::dom::NodeKind::Element(elem) = &node.kind else {
