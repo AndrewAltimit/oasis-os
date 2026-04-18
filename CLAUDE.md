@@ -215,6 +215,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
 - [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
 - [`docs/video-streaming.md`](docs/video-streaming.md) -- Desktop `StreamingBuffer` progressive playback
+- [`docs/boot-splash.md`](docs/boot-splash.md) -- Functional boot splash: BIOS phase probes, splash-phase warm-up, `BootSplash` API
 - [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
 - [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
 - [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy
