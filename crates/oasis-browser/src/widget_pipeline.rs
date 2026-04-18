@@ -1524,12 +1524,16 @@ impl BrowserWidget {
                 );
                 return;
             }
+            // Safe: the `is_none()` check above early-returned, so the
+            // I/O thread is guaranteed present for the rest of this call.
+            let io = self
+                .io_thread
+                .as_mut()
+                .expect("io_thread checked non-None above");
             for (idx, request) in pending_network {
                 let validators = self.cache.peek_validators(&request.url);
-                if let Some(ref mut io) = self.io_thread {
-                    let id = io.send(IoRequestKind::Stylesheet, request, validators, None);
-                    self.pending_io_stylesheets.insert(id, idx);
-                }
+                let id = io.send(IoRequestKind::Stylesheet, request, validators, None);
+                self.pending_io_stylesheets.insert(id, idx);
             }
         }
     }
@@ -1642,11 +1646,17 @@ impl BrowserWidget {
         for sheet in self.author_sheets_in_dom_order() {
             all_sheets.push(sheet);
         }
+        // Preserve the container-query lookup captured during `load_html`'s
+        // post-layout restyle pass; without it, `@container` rules would
+        // silently stop matching on every re-cascade driven by a late-
+        // arriving external sheet. `global_layers` is intentionally left
+        // `None` — layer ordering is recomputed fresh from the merged
+        // sheet list below, matching the initial cascade path.
         let ctx = css::cascade::CascadeContext {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
             focused_node: self.focused_node,
-            containers: None,
+            containers: self.container_lookup.as_ref(),
             global_layers: None,
         };
         let styles = css::cascade::style_tree(doc, &all_sheets, &self.cached_inline_styles, &ctx);

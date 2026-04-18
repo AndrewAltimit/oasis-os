@@ -3260,22 +3260,16 @@ fn external_stylesheet_cascade_order_matches_dom_order() {
         })
         .expect("h1 in fixture");
 
-    // Tick until external fetches have settled (both sheets applied).
+    // Tick until the external sheet slot is filled; the cascade is
+    // re-applied by `apply_external_stylesheets_if_pending` during
+    // tick, so the slot flipping `Some(_)` is the signal we need.
+    // (VFS-only fixture: no background I/O thread is spawned, so an
+    // `io_thread_in_flight`-based guard would be vacuous here.)
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
         browser.tick(&vfs);
-        if browser.io_thread_in_flight().unwrap_or(0) == 0
-            && browser
-                .document
-                .as_ref()
-                .map(|_| !browser.external_stylesheets.is_empty())
-                .unwrap_or(false)
-        {
-            // External sheet slot filled; cascade has been re-applied
-            // by apply_external_stylesheets_if_pending during tick.
-            if browser.external_stylesheets.iter().any(|s| s.is_some()) {
-                break;
-            }
+        if browser.external_stylesheets.iter().any(|s| s.is_some()) {
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
