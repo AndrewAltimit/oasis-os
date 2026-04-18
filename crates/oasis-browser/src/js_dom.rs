@@ -1011,7 +1011,10 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
       base = parseInt(midcol.getAttribute('data-base-score'), 10);
     } else {
       var m = ((score.textContent || '').trim()).match(/^(-?\d+)/);
-      base = m ? parseInt(m[1], 10) : 0;
+      // Hidden-score posts render as "•" with no numeric prefix;
+      // bail out so a toggle doesn't overwrite the bullet with "1".
+      if (!m) return;
+      base = parseInt(m[1], 10);
       midcol.setAttribute('data-base-score', String(base));
       // Stash original suffix too — "412 points" vs plain "412".
       var suf = ((score.textContent || '').trim()).replace(/^-?\d+/, '');
@@ -1121,11 +1124,12 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
   }
   wireHideButtons();
   // Sort tabs inside `.tabmenu`: clicking an entry moves the
-  // `.selected` class to the parent `<li>` and suppresses navigation.
-  // Real reddit actually follows the link to a new URL (hot/new/top
-  // are separate pages) but visually marking the active tab without
-  // navigation is the correct behaviour inside our offline/fixture
-  // environment. Outside fixtures the link still renders fine.
+  // `.selected` class to the parent `<li>` so the visual state at
+  // least tracks the user's click. On a VFS-served fixture there's
+  // nowhere to navigate to, so we also suppress the link; on a live
+  // http(s) page we let the click fall through to the engine's
+  // navigation (which will load the new URL and re-render the tab
+  // row with the correct `.selected` entry).
   function wireTabmenu() {
     var tabs = document.querySelectorAll('.tabmenu li a');
     for (var i = 0; i < tabs.length; i++) {
@@ -1142,7 +1146,15 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
             }
             li.classList.add('selected');
           }
-          if (ev && ev.preventDefault) ev.preventDefault();
+          // Only suppress navigation in offline/VFS-like contexts
+          // where the href can't resolve. Live http(s) pages should
+          // follow the link normally.
+          var here = '';
+          try { here = String(__oasis_location() || ''); } catch (e) {}
+          if (here.indexOf('http://') !== 0 && here.indexOf('https://') !== 0
+              && ev && ev.preventDefault) {
+            ev.preventDefault();
+          }
         });
       })(a);
     }

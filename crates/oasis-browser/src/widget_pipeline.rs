@@ -153,6 +153,11 @@ impl BrowserWidget {
     }
 
     /// Reset browser state in preparation for a new navigation.
+    ///
+    /// Clears the parsed document and layout tree along with all
+    /// per-page image/atlas caches so callers can rely on a blank slate
+    /// whether or not a fresh document ends up being loaded (error
+    /// pages, iframe-overlay mode, …).
     fn reset_for_navigation(&mut self) {
         self.state = LoadingState::Loading;
         self.selected_link = -1;
@@ -161,6 +166,8 @@ impl BrowserWidget {
         self.error_message = None;
         self.page_csp = None;
         self.page_errors.clear();
+        self.document = None;
+        self.layout_root = None;
         self.decoded_images.clear();
         self.broken_image_urls.clear();
         self.mask_image_arcs.clear();
@@ -189,9 +196,17 @@ impl BrowserWidget {
             && (url.starts_with("http://") || url.starts_with("https://"))
         {
             self.reset_for_navigation();
-            self.document = None;
-            self.layout_root = None;
-            self.nav.navigate(url, "");
+            // We don't parse the page so no <title> is ever extracted;
+            // use the hostname (falling back to the full URL) as a
+            // human-readable placeholder for the chrome bar and the
+            // back/forward history entries.
+            let parsed = loader::Url::parse(url);
+            let title = parsed
+                .as_ref()
+                .map(|u| u.host.as_str())
+                .filter(|h| !h.is_empty())
+                .unwrap_or(url);
+            self.nav.navigate(url, title);
             self.state = LoadingState::Idle;
             return;
         }
