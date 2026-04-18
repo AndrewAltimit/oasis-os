@@ -1345,6 +1345,15 @@ impl BrowserWidget {
         self.body_node_id = new_doc.body();
         self.document = Some(new_doc);
 
+        // Rebuild inline-style cache from the mutated DOM. JS may have
+        // overwritten `style=""` attributes via `element.style.prop = ...`
+        // (`__oasis_style_set` in js_dom.rs) or inserted new nodes with
+        // inline styles via `innerHTML`; the cached list was captured at
+        // page load and is now stale.
+        if let Some(doc) = &self.document {
+            self.cached_inline_styles = Self::collect_inline_styles(doc);
+        }
+
         // Build sheet references from cache (no re-parsing).
         let ua_sheet = css::default::default_stylesheet();
         let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];

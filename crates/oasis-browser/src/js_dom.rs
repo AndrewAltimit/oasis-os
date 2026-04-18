@@ -914,7 +914,7 @@ const INLINE_HANDLERS: &[(&str, &str)] = &[
 /// and friends, so toggling one class is enough to collapse/expand a
 /// thread and its replies. Returning `false` from the onclick suppresses
 /// the default link navigation.
-pub fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
+pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
     // Keep the JS small; each helper is a one-liner wrapped in
     // `if typeof ... === 'undefined'` so a real site script wins.
     let shim = r#"

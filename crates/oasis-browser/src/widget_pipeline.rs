@@ -1263,7 +1263,7 @@ impl BrowserWidget {
 
     /// Walk the DOM to collect inline `style=""` attributes and parse
     /// each into a list of declarations keyed by NodeId.
-    fn collect_inline_styles(
+    pub(crate) fn collect_inline_styles(
         doc: &html::dom::Document,
     ) -> Vec<(NodeId, Vec<css::parser::Declaration>)> {
         let mut result = Vec::new();
