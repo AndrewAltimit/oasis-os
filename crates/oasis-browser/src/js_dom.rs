@@ -1636,6 +1636,24 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       return evt._defaultPrevented;
     };
 
+  // Thin dispatch helpers called from Rust via `Function::call` on the
+  // already-compiled JS function (see `dispatch_js_event_fast` in
+  // widget_input.rs). These wrappers exist so the hot click/mousemove/
+  // keydown paths don't have to `format!` a JS source string and invoke
+  // `engine.eval()` — which parses and compiles the snippet every time.
+  // Parsing each event's fresh source string on a link-dense page (the
+  // reddit sidebar, a nested comment thread, scrolling through a
+  // listing with hover listeners) is measurable.
+  globalThis.__oasis_dispatch_click_fast = function(nid, type) {
+    return !!__oasis_dispatch_with_bubbling(nid, type, null);
+  };
+  globalThis.__oasis_dispatch_mouse_fast = function(nid, type, x, y) {
+    __oasis_dispatch_with_bubbling(nid, type, {clientX: x, clientY: y});
+  };
+  globalThis.__oasis_dispatch_key_fast = function(nid, type, key, code) {
+    __oasis_dispatch_with_bubbling(nid, type, {key: key, code: code});
+  };
+
   var document = {
     getElementById: function(id) {
       var nid = __oasis_getbyid(id);

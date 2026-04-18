@@ -1020,18 +1020,32 @@ impl BrowserWidget {
     }
 
     /// Dispatch and return whether the default action was prevented.
+    ///
+    /// Resolves the pre-compiled `__oasis_dispatch_click_fast` helper
+    /// from globals and calls it with typed args, which is measurably
+    /// cheaper than `format!`-ing a JS source string and handing it to
+    /// `engine.eval()` (every call re-parsed + re-compiled the snippet).
+    /// The helper is installed once by the DOM bootstrap JS; if it's
+    /// missing (engine not fully initialised) we fall back to `false`.
     #[cfg(feature = "javascript")]
     fn dispatch_js_event_prevent(
         engine: &oasis_js::JsEngine,
         node_id: NodeId,
         event_type: &str,
     ) -> bool {
-        let code = format!(
-            "(typeof __oasis_dispatch_with_bubbling==='function')?\
-             !!__oasis_dispatch_with_bubbling({},'{}',null):false",
-            node_id, event_type
-        );
-        matches!(engine.eval(&code), Ok(oasis_js::JsValue::Bool(true)))
+        use oasis_js::rquickjs;
+        engine
+            .with_context(|ctx| -> rquickjs::Result<bool> {
+                let globals = ctx.globals();
+                let Ok(dispatch): rquickjs::Result<rquickjs::Function> =
+                    globals.get("__oasis_dispatch_click_fast")
+                else {
+                    return Ok(false);
+                };
+                let ret: bool = dispatch.call((node_id as i32, event_type))?;
+                Ok(ret)
+            })
+            .unwrap_or(false)
     }
 
     /// Dispatch a mouse event (mousedown, mouseup, etc.) to the node at
@@ -1049,6 +1063,10 @@ impl BrowserWidget {
     }
 
     /// Dispatch a mouse event to a specific node with coordinates.
+    ///
+    /// Same pre-compiled-helper pattern as `dispatch_js_event_prevent`
+    /// — avoids `format!` + `engine.eval()` per event on the mousemove
+    /// hot path (hover-listener-heavy pages).
     #[cfg(feature = "javascript")]
     fn dispatch_js_mouse_event_to(
         engine: &oasis_js::JsEngine,
@@ -1057,13 +1075,16 @@ impl BrowserWidget {
         y: i32,
         event_type: &str,
     ) {
-        let code = format!(
-            "if(typeof __oasis_dispatch_with_bubbling==='function'){{\
-             var __e={{clientX:{},clientY:{}}};\
-             __oasis_dispatch_with_bubbling({},'{}',__e)}}",
-            x, y, node_id, event_type
-        );
-        let _ = engine.eval(&code);
+        use oasis_js::rquickjs;
+        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+            let globals = ctx.globals();
+            if let Ok(dispatch) =
+                globals.get::<_, rquickjs::Function>("__oasis_dispatch_mouse_fast")
+            {
+                dispatch.call::<_, rquickjs::Value>((node_id as i32, event_type, x, y))?;
+            }
+            Ok(())
+        });
     }
 
     /// Dispatch a keydown event to JS with key info as detail object.
@@ -1079,20 +1100,24 @@ impl BrowserWidget {
         key: char,
         event_type: &str,
     ) {
-        // Escape characters that break JS single-quoted string literals.
-        let escaped: String = match key {
-            '\\' => "\\\\".into(),
-            '\'' => "\\'".into(),
-            '\n' => "\\n".into(),
-            '\r' => "\\r".into(),
-            c => c.to_string(),
-        };
-        let code = format!(
-            "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'{event_type}',{{key:'{}',code:'{}'}})",
-            node_id, escaped, escaped
-        );
-        let _ = engine.eval(&code);
+        // Pre-compiled helper call — arguments pass through typed FFI,
+        // so we no longer need to escape characters that would break a
+        // single-quoted JS string literal (`'`, `\`, newline, CR).
+        use oasis_js::rquickjs;
+        let key_str = key.to_string();
+        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+            let globals = ctx.globals();
+            if let Ok(dispatch) = globals.get::<_, rquickjs::Function>("__oasis_dispatch_key_fast")
+            {
+                dispatch.call::<_, rquickjs::Value>((
+                    node_id as i32,
+                    event_type,
+                    key_str.as_str(),
+                    key_str.as_str(),
+                ))?;
+            }
+            Ok(())
+        });
     }
 
     /// Handle a cursor move at window-relative coordinates.
