@@ -406,11 +406,24 @@ pub struct BrowserWidget {
     /// on navigation, not on hover.
     cached_author_sheets: Vec<css::parser::Stylesheet>,
 
+    /// DOM node index for each entry in `cached_author_sheets`. Used
+    /// together with `external_stylesheet_positions` to interleave
+    /// inline and external sheets in true DOM order when rebuilding
+    /// the cascade after an external fetch arrives — otherwise a page
+    /// with `<link>` before `<style>` would invert author-origin
+    /// precedence.
+    cached_author_sheet_positions: Vec<NodeId>,
+
     /// Parsed external stylesheets from `<link rel="stylesheet">`. Stored
     /// in document order so ordered cascade precedence matches HTML.
     /// `None` slots are in-flight or failed fetches; present once the I/O
     /// thread response has been parsed.
     external_stylesheets: Vec<Option<css::parser::Stylesheet>>,
+
+    /// DOM node index for each entry in `external_stylesheets`, mirroring
+    /// `cached_author_sheet_positions` so the two lists can be merged
+    /// back into DOM order at cascade time.
+    external_stylesheet_positions: Vec<NodeId>,
 
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
@@ -666,7 +679,9 @@ impl BrowserWidget {
             cached_image_info: HashMap::new(),
             image_info_dirty: false,
             cached_author_sheets: Vec::new(),
+            cached_author_sheet_positions: Vec::new(),
             external_stylesheets: Vec::new(),
+            external_stylesheet_positions: Vec::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]

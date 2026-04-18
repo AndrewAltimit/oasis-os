@@ -3217,3 +3217,97 @@ fn external_stylesheet_fetched_and_applied() {
             .map(|s| s.color)
     );
 }
+
+/// Cascade precedence depends on source order within the author
+/// origin. A page that writes `<link>` *before* `<style>` in `<head>`
+/// should let the inline `<style>` win for equal-specificity rules
+/// because the inline block comes later in DOM order. Regression test
+/// for the earlier bug where all cached inline sheets were pushed
+/// before all external sheets unconditionally, flipping the winner.
+#[test]
+fn external_stylesheet_cascade_order_matches_dom_order() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/x").unwrap();
+    // External sheet paints the h1 red.
+    vfs.write("/sites/x/theme.css", b"h1 { color: rgb(255, 0, 0); }")
+        .unwrap();
+    // Inline <style> block appears *after* the <link>, so its rule
+    // should win over the external sheet's red rule.
+    vfs.write(
+        "/sites/x/index.html",
+        b"<html><head>\
+          <link rel=\"stylesheet\" href=\"theme.css\">\
+          <style>h1 { color: rgb(0, 0, 255); }</style>\
+          </head><body><h1>hi</h1></body></html>",
+    )
+    .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/x/index.html", &vfs);
+
+    let h1_nid = browser
+        .document
+        .as_ref()
+        .and_then(|d| {
+            d.nodes.iter().position(|n| {
+                matches!(
+                    &n.kind,
+                    crate::html::dom::NodeKind::Element(e) if e.tag == crate::html::dom::TagName::H1
+                )
+            })
+        })
+        .expect("h1 in fixture");
+
+    // Tick until external fetches have settled (both sheets applied).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        browser.tick(&vfs);
+        if browser.io_thread_in_flight().unwrap_or(0) == 0
+            && browser
+                .document
+                .as_ref()
+                .map(|_| !browser.external_stylesheets.is_empty())
+                .unwrap_or(false)
+        {
+            // External sheet slot filled; cascade has been re-applied
+            // by apply_external_stylesheets_if_pending during tick.
+            if browser.external_stylesheets.iter().any(|s| s.is_some()) {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let color = browser
+        .styles
+        .get(h1_nid)
+        .and_then(|s| s.as_ref())
+        .map(|s| s.color)
+        .expect("h1 must be styled");
+    // Later rule wins at equal specificity: inline <style> (blue) beats
+    // <link> (red) because the <style> appears after the <link> in DOM.
+    assert_eq!(
+        (color.r, color.g, color.b),
+        (0, 0, 255),
+        "inline <style> appearing after <link> must win the cascade"
+    );
+}
+
+#[test]
+fn is_print_only_media_query_matches_print_variants_only() {
+    assert!(BrowserWidget::is_print_only_media_query("print"));
+    assert!(BrowserWidget::is_print_only_media_query("  print  "));
+    assert!(BrowserWidget::is_print_only_media_query("only print"));
+    assert!(BrowserWidget::is_print_only_media_query(
+        "print and (color)"
+    ));
+    // Non-print — must not be flagged.
+    assert!(!BrowserWidget::is_print_only_media_query("screen"));
+    assert!(!BrowserWidget::is_print_only_media_query(
+        "(min-width: 500px)"
+    ));
+    assert!(!BrowserWidget::is_print_only_media_query("not print"));
+    assert!(!BrowserWidget::is_print_only_media_query(""));
+}
