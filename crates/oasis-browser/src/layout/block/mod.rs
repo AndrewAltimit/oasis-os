@@ -182,6 +182,7 @@ pub fn layout_block_incremental(
         layout_table_children(layout_box, measurer);
     } else {
         layout_children_incremental(layout_box, measurer, cache);
+        shrink_float_to_fit(layout_box);
         calculate_block_height(layout_box, None);
     }
 
@@ -452,9 +453,59 @@ pub(crate) fn layout_block_with_height(
         calculate_block_height(layout_box, containing_height);
     } else {
         layout_block_children(layout_box, measurer);
-        // 4. Calculate height.
+        // 4. Float shrink-to-fit (CSS 2.1 §10.3.5): after children
+        //    are laid out at the available width, clamp the float's
+        //    content.width down to the actual rightmost child extent.
+        //    This approximates `min(max-content, available)`.
+        shrink_float_to_fit(layout_box);
+        // 5. Calculate height.
         calculate_block_height(layout_box, containing_height);
     }
+}
+
+/// Apply CSS 2.1 §10.3.5 shrink-to-fit sizing to floats that declared
+/// `width: auto`. Called after children have been laid out at the
+/// provisional (available) width. Picks the greater of the rightmost
+/// child border-box edge and the rightmost placed-float edge so the
+/// float's own descendant floats stay inside its border box.
+fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
+    if layout_box.style.float == Float::None {
+        return;
+    }
+    if !matches!(
+        layout_box.style.width,
+        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent
+    ) {
+        return;
+    }
+    let origin_x = layout_box.dimensions.content.x;
+    let available = layout_box.dimensions.content.width;
+    // Measure max-content ≈ rightmost child border-box edge. We do NOT
+    // include margin-right because the normal-flow over-constrained
+    // rule (§10.3.3) absorbs leftover containing-block width into the
+    // child's margin-right — that slack is not real content extent.
+    // Inline children were laid out against the available width, so
+    // any line whose text happened to wrap reports the wrapped extent,
+    // giving `min(max-content, available)` in one pass.
+    let max_child_right = layout_box
+        .children
+        .iter()
+        .map(|c| {
+            let bb = c.dimensions.border_box();
+            bb.x + bb.width - origin_x
+        })
+        .fold(0.0_f32, f32::max);
+    // When the float has only inline content, the border-box walk
+    // above reports 0 (anonymous inline wrappers are tracked via
+    // `content.height`). Fall back to the float's own content.width
+    // set by the inline layout pass.
+    let measured = if max_child_right > 0.0 {
+        max_child_right
+    } else {
+        layout_box.dimensions.content.width
+    };
+    let shrunk = measured.min(available).max(0.0);
+    layout_box.dimensions.content.width = shrunk;
 }
 
 /// Resolve padding, border, and margin from the computed style into
@@ -634,16 +685,23 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             }
         },
         Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            // TODO: floats with `width: auto` should shrink-to-fit per
-            // CSS 2.1 §10.3.5 (`min(max-content, available)`), which
-            // needs a dedicated measurement pass. Until that lands,
-            // floats share the normal-flow fallback of filling the
-            // containing width — keeps paintable content on screen
-            // (the old.reddit sidebar at a fixed `width: 310px` goes
-            // through `Dimension::Px`, so this fallback only affects
-            // floats that declared `width: auto`).
+            // CSS 2.1 §10.3.5: floats with `width: auto` use shrink-to-
+            // fit = min(max-content, max(min-content, available)). We
+            // provisionally assign the available width here; after the
+            // children are laid out, `layout_block_with_height` clamps
+            // `content.width` down to the actual rightmost child extent
+            // (see `shrink_float_to_fit`). Auto margins on floats
+            // resolve to 0 per §10.3.5.
             let w = (containing_width - total_extra).max(0.0);
             layout_box.dimensions.content.width = w;
+            if is_float {
+                if ml_auto {
+                    layout_box.dimensions.margin.left = 0.0;
+                }
+                if mr_auto {
+                    layout_box.dimensions.margin.right = 0.0;
+                }
+            }
         },
     }
 
@@ -797,17 +855,19 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 cursor_y,
                 content_width,
             );
-            // layout_block positioned the float's descendants relative
-            // to the float's *pre-placement* content.x/y (which
-            // defaulted to (0, 0) during the recursive layout). Now
-            // that place_float has the real position, shift the whole
-            // subtree by the delta so descendants paint inside the
-            // floated box instead of staying at the containing block's
-            // origin. Same pattern we already use for `margin: 0 auto`
-            // centering below.
+            // `place_float` returns a position in BFC-local coordinates
+            // (origin at the containing block's content edge). To turn
+            // that into absolute (layout-tree) coordinates we must add
+            // the parent's `content_x`/content.y — otherwise a float
+            // inside a comment at absolute x=15 would land at x=0, which
+            // also prevents hit-testing from finding the float's
+            // descendants (their rects then overhang the parent's
+            // bounding box on the left). Same pattern we already use
+            // for `margin: 0 auto` centering below.
             let pre_x = child.dimensions.content.x;
             let pre_y = child.dimensions.content.y;
-            let resolved_x = float_box.rect.x
+            let resolved_x = content_x
+                + float_box.rect.x
                 + child.dimensions.margin.left
                 + child.dimensions.border.left
                 + child.dimensions.padding.left;

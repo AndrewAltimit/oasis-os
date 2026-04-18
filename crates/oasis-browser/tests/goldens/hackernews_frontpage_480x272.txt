@@ -1,30 +1,37 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 551, Color { r: 246, g: 246, b: 239, a: 255 }
+fill_rect 0, 0, 480, 567, Color { r: 246, g: 246, b: 239, a: 255 }
 fill_rect 0, 0, 480, 23, Color { r: 255, g: 102, b: 0, a: 255 }
-draw_text "Hacker ", 4, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Hacker ", 5, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News", 46, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "News", 47, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new", 70, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new", 71, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 88, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "past", 106, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "past", 107, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 130, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "comments", 148, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "comments", 149, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 196, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ask", 214, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "ask", 215, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 232, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "show", 250, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "show", 251, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 274, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "jobs", 292, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "jobs", 293, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text " | ", 316, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "submit", 334, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "submit", 335, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 4, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
+fill_rect 4, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
+draw_text " ", 4, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Hacker ", 10, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Hacker ", 11, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "News", 52, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "News", 53, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " ", 76, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new", 82, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new", 83, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 100, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "past", 118, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "past", 119, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 142, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "comments", 160, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "comments", 161, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 208, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ask", 226, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "ask", 227, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 244, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "show", 262, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "show", 263, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 286, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "jobs", 304, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "jobs", 305, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " | ", 328, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "submit", 346, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "submit", 347, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text " ", 382, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 388, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
+fill_rect 388, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
 fill_rect 4, 28, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 74, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -74,14 +81,15 @@ draw_text "412 ", 45, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " by ", 105, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "steveklabnik", 129, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "3 ", 201, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hours ", 213, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "ago", 249, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 267, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hide", 285, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 309, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "187 ", 327, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "comments", 351, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " ", 201, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "3 ", 207, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hours ", 219, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "ago", 255, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 273, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hide", 291, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 315, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "187 ", 333, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "comments", 357, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 fill_rect 4, 102, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 152, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -122,7 +130,8 @@ draw_text "Rust ", 363, 104, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "for ", 393, 104, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "PSP", 417, 104, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "homebrew", 63, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "(github.com/altimit)", 111, 124, 10, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " ", 111, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "(github.com/altimit)", 117, 124, 10, Color { r: 130, g: 130, b: 130, a: 255 }
 fill_rect 4, 154, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 475, 154, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 178, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -135,14 +144,15 @@ draw_text "298 ", 45, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " by ", 105, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "altimit", 129, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "5 ", 171, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hours ", 183, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "ago", 219, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 237, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hide", 255, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 279, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "94 ", 297, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "comments", 315, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " ", 171, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "5 ", 177, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hours ", 189, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "ago", 225, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 243, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hide", 261, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 285, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "94 ", 303, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "comments", 321, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 fill_rect 4, 180, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 226, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -192,14 +202,15 @@ draw_text "241 ", 45, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " by ", 105, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "dhh", 129, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "2 ", 147, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hours ", 159, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "ago", 195, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 213, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "hide", 231, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text " | ", 255, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "302 ", 273, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-draw_text "comments", 297, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " ", 147, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "2 ", 153, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hours ", 165, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "ago", 201, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 219, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "hide", 237, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text " | ", 261, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "302 ", 279, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
+draw_text "comments", 303, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 fill_rect 4, 254, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 300, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -233,4 +244,4 @@ draw_text "Component ", 159, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Model ", 219, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "finally ", 255, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "stabilizes", 303, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=126 draw_text=108 other=0
+# totals fill_rect=130 draw_text=115 other=0

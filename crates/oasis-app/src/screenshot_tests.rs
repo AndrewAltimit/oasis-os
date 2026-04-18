@@ -60,6 +60,10 @@ struct Args {
     bless: bool,
     /// Render full-page browser screenshots (scrolls entire content height).
     full_page: bool,
+    /// Override the render size. `None` uses `OasisConfig::default()`
+    /// (480x272 PSP native). Browser fixtures designed for desktop
+    /// widths are more legibly captured at e.g. 1024x768.
+    size: Option<(u32, u32)>,
 }
 
 fn parse_args() -> Args {
@@ -70,9 +74,10 @@ fn parse_args() -> Args {
         check: false,
         bless: false,
         full_page: false,
+        size: None,
     };
     let usage = "Usage: screenshot-tests [--scenario NAME] [--skin NAME] \
-                 [--report] [--check] [--bless] [--full-page]";
+                 [--report] [--check] [--bless] [--full-page] [--size WxH]";
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -94,6 +99,26 @@ fn parse_args() -> Args {
             "--check" => args.check = true,
             "--bless" => args.bless = true,
             "--full-page" => args.full_page = true,
+            "--size" => {
+                let val = iter.next().unwrap_or_else(|| {
+                    eprintln!("--size requires WxH (e.g. 1024x768)");
+                    eprintln!("{usage}");
+                    std::process::exit(1);
+                });
+                let (wstr, hstr) = val.split_once('x').unwrap_or_else(|| {
+                    eprintln!("--size expects WxH, got {val:?}");
+                    std::process::exit(1);
+                });
+                let w: u32 = wstr.parse().unwrap_or_else(|_| {
+                    eprintln!("invalid width in --size: {wstr}");
+                    std::process::exit(1);
+                });
+                let h: u32 = hstr.parse().unwrap_or_else(|_| {
+                    eprintln!("invalid height in --size: {hstr}");
+                    std::process::exit(1);
+                });
+                args.size = Some((w, h));
+            },
             other => {
                 eprintln!("Unknown argument: {other}");
                 eprintln!("{usage}");
@@ -153,6 +178,8 @@ fn all_scenarios() -> Vec<Scenario> {
         "font_face",
         "font_inherit",
         "web_fonts",
+        "reddit_listing",
+        "reddit_comments",
     ];
     for page in &pages {
         scenarios.push(Scenario {
@@ -1587,8 +1614,9 @@ fn main() -> anyhow::Result<()> {
     let args = parse_args();
 
     let config = OasisConfig::default();
-    let w = config.screen_width;
-    let h = config.screen_height;
+    let (w, h) = args
+        .size
+        .unwrap_or((config.screen_width, config.screen_height));
 
     let mut backend = SdlBackend::new("OASIS Screenshot Tests", w, h)?;
     backend.init(w, h)?;

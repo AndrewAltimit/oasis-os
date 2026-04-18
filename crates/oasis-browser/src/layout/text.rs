@@ -180,6 +180,26 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
 /// Split a single line (no embedded newlines) into space-separated
 /// words, further splitting on soft hyphen (U+00AD) boundaries.
 fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
+    if line.is_empty() {
+        return;
+    }
+    // CSS 2.1 §16.6: whitespace between inline-level siblings collapses
+    // to a single space that's rendered into the line flow. After our
+    // text-node-local `collapse_whitespace` pass, a text node sitting
+    // purely between two inline elements looks like " " — all spaces.
+    // Skipping it (the original split('.').filter-empty loop) swallowed
+    // the gap entirely, so `<a>A</a> <a>B</a>` painted as "AB".
+    // Emit a zero-width placeholder word whose `trailing_space` lets
+    // `make_text_fragments` contribute one `space_width` to the line.
+    if line.bytes().all(|b| b == b' ') {
+        out.push(TextWord {
+            text: String::new(),
+            leading_space: false,
+            trailing_space: true,
+            soft_hyphen: false,
+        });
+        return;
+    }
     let parts: Vec<&str> = line.split(' ').collect();
     let last_idx = parts.len().saturating_sub(1);
     let mut saw_empty = false;
@@ -428,6 +448,37 @@ mod tests {
             words[1].trailing_space,
             "trailing space from collapsed trailing ws"
         );
+    }
+
+    #[test]
+    fn split_whitespace_only_input_keeps_inter_element_space() {
+        // Regression guard: a text node containing only whitespace
+        // (the "\n        " gap between two inline siblings in source
+        // HTML) must produce a word that contributes a single space to
+        // paint. Previously we returned an empty vec, swallowing the
+        // space — old.reddit taglines rendered "[-]withoutboats412
+        // points" instead of "[-] withoutboats 412 points".
+        let words = split_into_words("\n        ", WhiteSpace::Normal);
+        assert_eq!(
+            words.len(),
+            1,
+            "whitespace-only input must emit one inter-element word"
+        );
+        assert_eq!(words[0].text, "");
+        assert!(
+            words[0].trailing_space,
+            "the word must carry a trailing space so paint_text writes \
+             one space_width into the line",
+        );
+    }
+
+    #[test]
+    fn split_single_space_keeps_inter_element_space() {
+        // Same invariant for the already-collapsed case.
+        let words = split_into_words(" ", WhiteSpace::Normal);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "");
+        assert!(words[0].trailing_space);
     }
 
     #[test]

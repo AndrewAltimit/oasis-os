@@ -85,7 +85,8 @@ draw_text "Andrew ", 24, 106, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Andrew ", 25, 106, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "L.", 66, 106, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "L.", 67, 106, 13, Color { r: 0, g: 102, b: 192, a: 255 }
-draw_text "★★★★★", 84, 106, 13, Color { r: 255, g: 164, b: 28, a: 255 }
+draw_text " ", 84, 106, 13, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "★★★★★", 90, 106, 13, Color { r: 255, g: 164, b: 28, a: 255 }
 draw_text "Still ", 24, 129, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "Still ", 25, 129, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "the ", 60, 129, 15, Color { r: 17, g: 17, b: 17, a: 255 }
@@ -144,7 +145,8 @@ draw_text "J. ", 24, 224, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "J. ", 25, 224, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Takagi", 42, 224, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Takagi", 43, 224, 13, Color { r: 0, g: 102, b: 192, a: 255 }
-draw_text "★★★★", 84, 224, 13, Color { r: 255, g: 164, b: 28, a: 255 }
+draw_text " ", 84, 224, 13, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "★★★★", 90, 224, 13, Color { r: 255, g: 164, b: 28, a: 255 }
 draw_text "Great ", 24, 247, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "Great ", 25, 247, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "refurb, ", 60, 247, 15, Color { r: 17, g: 17, b: 17, a: 255 }
@@ -182,4 +184,4 @@ draw_text "Monster ", 180, 293, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Hunter ", 228, 293, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Freedom ", 270, 293, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Unite.", 318, 293, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-# totals fill_rect=34 draw_text=149 other=0
+# totals fill_rect=34 draw_text=151 other=0

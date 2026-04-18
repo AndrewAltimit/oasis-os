@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 4, 480, 3787, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 4, 480, 3808, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 206, 4, 57, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 206, 55, 57, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 206, 4, 1, 52, Color { r: 32, g: 33, b: 34, a: 255 }
@@ -7,54 +7,51 @@ fill_rect 262, 4, 1, 52, Color { r: 32, g: 33, b: 34, a: 255 }
 set_clip_rect 206, 4, 57, 52
 draw_text "×", 208, 6, 8, Color { r: 32, g: 33, b: 34, a: 255 }
 reset_clip_rect
-draw_text "The ", 178, 93, 14, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Free ", 202, 93, 14, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Encyclopedia", 232, 93, 14, Color { r: 32, g: 33, b: 34, a: 255 }
-set_clip_rect 166, 80, 150, 25
+draw_text "The ", 178, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Free ", 202, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Encyclopedia", 232, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+set_clip_rect 166, 91, 150, 25
 reset_clip_rect
-draw_text "English", 53, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "English", 54, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "7,166,000+ ", 18, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "articles", 84, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "日本語", 197, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "日本語", 198, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1,497,000+ ", 177, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "記事", 243, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Deutsch", 353, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Deutsch", 354, 154, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "3.111.000+ ", 323, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Artikel", 389, 175, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Русский", 32, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Русский", 33, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{a0}094\u{a0}000+", 50, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Français", 197, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Français", 198, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{202f}750\u{202f}000+", 191, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Español", 350, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Español", 351, 234, 14, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2.106.000+", 359, 255, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-fill_rect 10, 101, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 10, 101, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 10, 101, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 10, 101, 1, 44, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 10, 144, 168, 1, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 177, 101, 1, 44, Color { r: 200, g: 200, b: 200, a: 255 }
-set_clip_rect 281, 111, 68, 24
-fill_rect 281, 111, 110, 24, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 281, 111, 110, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 281, 134, 110, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 281, 111, 1, 24, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 390, 111, 1, 24, Color { r: 118, g: 118, b: 118, a: 255 }
-draw_text "English", 284, 116, 14, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "v", 381, 116, 14, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "English", 66, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "English", 67, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "7,166,000+ ", 31, 217, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "articles", 97, 217, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "日本語", 210, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "日本語", 211, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "1,497,000+ ", 190, 196, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "記事", 256, 196, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Deutsch", 366, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Deutsch", 367, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "3.111.000+ ", 336, 217, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Artikel", 402, 217, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Русский", 45, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Русский", 46, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Français", 210, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Français", 211, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Español", 363, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Español", 364, 255, 14, Color { r: 51, g: 102, b: 204, a: 255 }
+fill_rect 10, 122, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 10, 122, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 10, 122, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 10, 122, 1, 44, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 10, 165, 168, 1, Color { r: 200, g: 200, b: 200, a: 255 }
+fill_rect 177, 122, 1, 44, Color { r: 200, g: 200, b: 200, a: 255 }
+set_clip_rect 281, 132, 68, 24
+fill_rect 281, 132, 110, 24, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 281, 132, 110, 1, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 281, 155, 110, 1, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 281, 132, 1, 24, Color { r: 118, g: 118, b: 118, a: 255 }
+fill_rect 390, 132, 1, 24, Color { r: 118, g: 118, b: 118, a: 255 }
+draw_text "English", 284, 137, 14, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "v", 381, 137, 14, Color { r: 84, g: 89, b: 93, a: 255 }
 reset_clip_rect
-fill_rect 378, 101, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 378, 101, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 378, 101, 64, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 378, 101, 1, 20, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 378, 120, 64, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 441, 101, 1, 20, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Search", 368, 103, 16, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 378, 122, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
+fill_rect 378, 122, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
+fill_rect 378, 122, 64, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 378, 122, 1, 20, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 378, 141, 64, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 441, 122, 1, 20, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "Search", 368, 124, 16, Color { r: 255, g: 255, b: 255, a: 255 }
 set_clip_rect 0, 4, 0, 0
 draw_text " ", 0, 4, 13, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "\n", 0, 4, 13, Color { r: 32, g: 33, b: 34, a: 255 }
@@ -186,4 +183,4 @@ draw_text "Privacy Policy", 0, 4, 13, Color { r: 51, g: 102, b: 204, a: 255 }
 draw_text "\n", 0, 4, 13, Color { r: 84, g: 89, b: 93, a: 255 }
 draw_text " ", 0, 4, 13, Color { r: 32, g: 33, b: 34, a: 255 }
 reset_clip_rect
-# totals fill_rect=24 draw_text=155 other=8
+# totals fill_rect=24 draw_text=152 other=8

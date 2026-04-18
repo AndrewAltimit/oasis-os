@@ -1,26 +1,10 @@
 # viewport 800x600
-fill_rect 0, 4, 800, 3812, Color { r: 255, g: 255, b: 255, a: 255 }
-set_clip_rect 169, 592, 1, 1
-draw_text "Search", 169, 592, 14, Color { r: 32, g: 33, b: 34, a: 255 }
+fill_rect 0, 4, 800, 3965, Color { r: 255, g: 255, b: 255, a: 255 }
+set_clip_rect 312, 195, 176, 32
 reset_clip_rect
-fill_rect 284, 593, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 284, 593, 168, 44, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 284, 593, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 284, 593, 1, 44, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 284, 636, 168, 1, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 451, 593, 1, 44, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 565, 593, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 565, 593, 64, 20, Color { r: 51, g: 102, b: 204, a: 255 }
-fill_rect 565, 593, 64, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 565, 593, 1, 20, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 565, 612, 64, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 628, 593, 1, 20, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Search", 555, 595, 16, Color { r: 255, g: 255, b: 255, a: 255 }
-set_clip_rect 312, 187, 176, 32
-reset_clip_rect
-draw_text "The ", 337, 219, 15, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Free ", 361, 219, 15, Color { r: 32, g: 33, b: 34, a: 255 }
-draw_text "Encyclopedia", 391, 219, 15, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "The ", 337, 235, 15, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Free ", 361, 235, 15, Color { r: 32, g: 33, b: 34, a: 255 }
+draw_text "Encyclopedia", 391, 235, 15, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 300, 162, 200, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 300, 344, 200, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 300, 162, 1, 183, Color { r: 32, g: 33, b: 34, a: 255 }
@@ -28,46 +12,34 @@ fill_rect 499, 162, 1, 183, Color { r: 32, g: 33, b: 34, a: 255 }
 set_clip_rect 300, 162, 200, 183
 draw_text "×", 302, 164, 8, Color { r: 32, g: 33, b: 34, a: 255 }
 reset_clip_rect
-draw_text "English", 246, 258, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "English", 247, 258, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "7,166,000+ ", 220, 282, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "articles", 286, 282, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "日本語", 505, 258, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "日本語", 506, 258, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1,497,000+ ", 495, 282, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "記事", 561, 282, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Deutsch", 191, 323, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Deutsch", 192, 323, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "3.111.000+ ", 170, 347, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Artikel", 236, 347, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Русский", 545, 323, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Русский", 546, 323, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{a0}094\u{a0}000+ ", 513, 347, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "статей", 591, 347, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Français", 174, 388, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Français", 175, 388, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2\u{202f}750\u{202f}000+ ", 137, 412, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "articles", 227, 412, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Español", 574, 388, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Español", 575, 388, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "2.106.000+ ", 542, 412, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "artículos", 608, 412, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "中文", 194, 453, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "中文", 195, 453, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1,530,000+ ", 134, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "条目 ", 200, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "/ ", 242, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "條目", 254, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Italiano", 563, 453, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Italiano", 564, 453, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1.964.000+ ", 558, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "voci", 624, 477, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Polski", 249, 518, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Polski", 250, 518, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1\u{a0}690\u{a0}000+ ", 220, 542, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "haseł", 298, 542, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "Português", 502, 518, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "Português", 503, 518, 16, Color { r: 51, g: 102, b: 204, a: 255 }
-draw_text "1.168.000+ ", 490, 542, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-draw_text "artigos", 556, 542, 13, Color { r: 84, g: 89, b: 93, a: 255 }
-# totals fill_rect=17 draw_text=48 other=6
+draw_text "English", 246, 364, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "English", 247, 364, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "7,166,000+ ", 220, 388, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "articles", 286, 388, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "日本語", 505, 364, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "日本語", 506, 364, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "1,497,000+ ", 495, 388, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "記事", 561, 388, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Deutsch", 191, 429, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Deutsch", 192, 429, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "3.111.000+ ", 170, 453, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Artikel", 236, 453, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Русский", 545, 429, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Русский", 546, 429, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2\u{a0}094\u{a0}000+ ", 513, 474, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "статей", 591, 474, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Français", 174, 494, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Français", 175, 494, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2\u{202f}750\u{202f}000+ ", 137, 518, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "articles", 227, 518, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "Español", 574, 494, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Español", 575, 494, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "2.106.000+ ", 542, 518, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "artículos", 608, 518, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "中文", 194, 559, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "中文", 195, 559, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Italiano", 563, 559, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "Italiano", 564, 559, 16, Color { r: 51, g: 102, b: 204, a: 255 }
+draw_text "1.964.000+ ", 558, 583, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+draw_text "voci", 624, 583, 13, Color { r: 84, g: 89, b: 93, a: 255 }
+# totals fill_rect=5 draw_text=34 other=4

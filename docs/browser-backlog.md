@@ -4,13 +4,101 @@ Forward-looking gap analysis for `oasis-browser`. Open work only —
 shipped epics are summarised in a single "Recently shipped" section
 and otherwise tracked via `git log`.
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
 
 ## Recently shipped (pointers only)
 
 The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
+
+- **old.reddit.com interactivity + inline whitespace + float
+  positioning** (`feat/browser-reddit-rendering`). Screenshot-driven
+  iteration on old.reddit's listing and comments pages surfaced four
+  gaps, each of which is a general engine improvement rather than a
+  reddit-specific hack:
+
+  1. **JS DOM mutations now trigger re-cascade + relayout.** A shared
+     `Rc<Cell<bool>>` dirty flag is flipped by every mutating JS
+     binding (`setAttribute`, `classList.add/remove/toggle`, inline
+     `style.*`, `innerHTML`, `appendChild`, etc.). After every JS
+     click / key / input event the widget clones the JS-shared
+     document back into `self.document`, re-runs `style_tree` against
+     cached sheets, rebuilds the link map, and marks layout + repaint
+     dirty. Before this, `onclick="this.classList.add('foo')"` updated
+     the DOM but the next paint still used the stale layout — reddit
+     comment collapse, upvote visual feedback, and every
+     click-to-toggle-class page was inert.
+
+  2. **`preventDefault` / `return false` suppresses link follow-up.**
+     `__oasis_dispatch_with_bubbling` returns `evt._defaultPrevented`,
+     and the inline-handler wrapper calls `event.preventDefault()`
+     when the body returns `false` (HTML spec). The Rust click path
+     skips the `link_map` follow-up when the JS handler prevented
+     default, so `onclick="return togglecomment(this)"` actually
+     toggles the class instead of also navigating to `href="#"`.
+
+  3. **Site-compat JS shims.** `install_site_compat_shims` registers
+     globals — `togglecomment` / `hidecomment` / `unhidecomment` /
+     `morechildren` / `togglevote` — that would otherwise only exist
+     inside reddit's 1 MB `reddit.js` bundle. Each shim is guarded by
+     `typeof ... === 'undefined'` so a real page script wins. The
+     togglers walk to the nearest `.comment` ancestor via `parentNode`
+     and flip a `collapsed` class that the page's existing CSS rules
+     already hide/show; `togglevote` switches `.up` ↔ `.upmod` (or
+     `.down` ↔ `.downmod`) on vote arrows. Lets reddit threads stay
+     interactive even when the full script bundle doesn't load.
+
+  4. **Float absolute-x fix.** `place_float` returns BFC-local
+     coordinates (origin at the containing block's content edge) but
+     `layout_block_children` was using the value verbatim as the
+     float's absolute `content.x`, so a float inside a padded parent
+     landed at `x=0` instead of the parent's content edge. Two visible
+     symptoms: (a) hit-testing failed on the float's descendants
+     because the parent's AABB check short-circuited the recursion
+     (old.reddit vote arrows unreachable to clicks), (b) the wikipedia
+     infobox and reddit link-post vote column overhung their card on
+     the left. Fix is one `content_x +` addition; four other fixtures'
+     goldens shifted inward as corrections.
+
+  5. **Float `width: auto` shrink-to-fit** (CSS 2.1 §10.3.5). Was a
+     documented TODO — floats with `width: auto` filled the entire
+     containing width instead of computing `min(max-content,
+     available)`. Now lays out children at the available width and
+     clamps `content.width` down to the rightmost child border-box
+     edge. Mirrors the existing inline-block shrink-to-fit approach.
+
+  6. **Inter-element whitespace preservation** (CSS 2.1 §16.6). A
+     text node containing only whitespace between inline siblings
+     collapsed to `" "` and then `split_line_into_words` returned an
+     empty vec because both sides of the `split(' ')` were empty
+     strings. Every `<a>foo</a>\n<a>bar</a>` chain lost its space —
+     reddit taglines rendered `[-]withoutboats412 points13 hours
+     ago`, the rust docs nav read `stdcorealloctest`, wikipedia
+     portal condensed whole prose runs. Fix: emit a zero-text,
+     `trailing_space: true` placeholder when the input is
+     whitespace-only; `make_text_fragments` contributes one
+     `space_width` to the line, and `trim_line_boundary_spaces` still
+     strips it at line edges. Eight goldens regenerated; each diff
+     shows inserted spaces between inline siblings and corresponds to
+     a legitimate reading improvement.
+
+  **Supporting work.** `screenshot-tests` gained a `--size WxH` flag
+  so desktop-width fixtures can be captured at 1024×768+ instead of
+  the PSP-native 480×272. `test-fixtures/html/reddit_{comments,
+  listing}.html` are symlinked to the browser tests' fixtures so the
+  display-list visual-regression harness and the PNG screenshot
+  binary render identical HTML. The comments fixture now includes
+  realistic `.submitter` / `.moderator` / `.edited-timestamp` /
+  `.morechildren` patterns, `.md blockquote` / `code` / `p` styling,
+  and `<a class="expand" onclick="return togglecomment(this)">[–]</a>`
+  anchors on every comment tagline. Three new interactive tests
+  (`reddit_expand_click_collapses_subtree`,
+  `reddit_vote_arrow_toggles_class`,
+  `reddit_morechildren_click_does_not_navigate`) cover the full
+  click → JS dispatch → DOM mutation → preventDefault → relayout
+  loop, plus four unit tests pinning the new layout / text
+  invariants.
 
 - **google.com rendering + form interactivity + click hit-testing**
   (`feat/browser-google-rendering`). The OASIS-UA variant of the

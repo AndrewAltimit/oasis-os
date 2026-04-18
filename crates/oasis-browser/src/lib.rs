@@ -455,6 +455,15 @@ pub struct BrowserWidget {
     #[cfg(feature = "javascript")]
     js_local_storage: js_dom::SharedLocalStorage,
 
+    /// Shared flag set by DOM-mutating JS bindings (innerHTML, classList,
+    /// style, setAttribute, …). Checked after every JS event dispatch so
+    /// the widget can re-cascade + relayout when a handler mutated the
+    /// page. Without this, clicking `<a onclick="this.classList.add(…)">`
+    /// would update the DOM but leave rendering unchanged until the next
+    /// navigation — the bug that broke old.reddit comment collapse.
+    #[cfg(feature = "javascript")]
+    js_dom_dirty: js_dom::SharedDirty,
+
     /// Shared canvas states keyed by DOM `NodeId`. Populated during
     /// layout for `<canvas>` elements, accessed by JS canvas bindings.
     #[cfg(feature = "javascript")]
@@ -654,6 +663,8 @@ impl BrowserWidget {
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
             js_local_storage: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            #[cfg(feature = "javascript")]
+            js_dom_dirty: std::rc::Rc::new(std::cell::Cell::new(false)),
             #[cfg(feature = "javascript")]
             canvas_states: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             transition_engine: css::transition::TransitionEngine::new(),

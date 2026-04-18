@@ -1,6 +1,8 @@
 # viewport 800x600
 fill_rect 0, 0, 800, 75, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 800, 46, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 24, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 24, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "altimit", 24, 12, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 66, 12, 18, 22, Color { r: 36, g: 41, b: 47, a: 255 }
 fill_rect 66, 12, 18, 22, Color { r: 36, g: 41, b: 47, a: 255 }
@@ -14,22 +16,49 @@ fill_rect 156, 10, 48, 22, Color { r: 63, g: 185, b: 80, a: 255 }
 fill_rect 162, 12, 36, 18, Color { r: 63, g: 185, b: 80, a: 255 }
 fill_rect 162, 12, 36, 18, Color { r: 63, g: 185, b: 80, a: 255 }
 draw_text "Public", 162, 12, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 208, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 208, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
 fill_rect 0, 46, 800, 28, Color { r: 246, g: 248, b: 250, a: 255 }
 fill_rect 0, 74, 800, 1, Color { r: 208, g: 215, b: 222, a: 255 }
+fill_rect 24, 54, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 24, 54, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
 draw_text "<> ", 24, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "<> ", 25, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "Code", 42, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "Code", 43, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Issues ", 82, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "42", 124, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Pull ", 152, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "requests ", 182, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "7", 236, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Actions", 258, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Projects", 316, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Wiki", 380, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Security", 420, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Insights", 484, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 82, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 82, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 82, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Issues ", 88, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "42", 130, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 158, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 158, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 158, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Pull ", 164, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "requests ", 194, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "7", 248, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 270, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 270, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 270, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Actions", 276, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 334, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 334, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 334, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Projects", 340, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 404, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 404, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 404, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Wiki", 410, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 450, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 450, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 450, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Security", 456, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 520, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 520, 54, 6, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+draw_text " ", 520, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Insights", 526, 54, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 590, 54, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
+fill_rect 590, 54, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
 fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "OASIS_OS", 0, 0, 16, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "OASIS_OS", 1, 0, 16, Color { r: 36, g: 41, b: 47, a: 255 }
@@ -129,4 +158,4 @@ draw_text "HTML", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "1.2%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "Other", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "0.5%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-# totals fill_rect=40 draw_text=88 other=2
+# totals fill_rect=62 draw_text=95 other=2

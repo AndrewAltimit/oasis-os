@@ -389,6 +389,8 @@ impl BrowserWidget {
                         Self::dispatch_js_event(engine, nid, "input");
                     }
                 }
+                #[cfg(feature = "javascript")]
+                self.apply_js_dom_mutations();
                 // When a text input is focused, deliver the character
                 // to the form manager instead of treating it as a page
                 // shortcut — typing in Google's search box shouldn't
@@ -644,13 +646,23 @@ impl BrowserWidget {
 
         // Dispatch mousedown, mouseup, then click to JS.
         #[cfg(feature = "javascript")]
-        {
+        let default_prevented = {
             self.dispatch_js_mouse_event(x, y, "mousedown");
             self.dispatch_js_mouse_event(x, y, "mouseup");
-            self.dispatch_js_click(x, y);
-        }
+            let prevented = self.dispatch_js_click(x, y);
+            // If any handler mutated the DOM, re-cascade + relayout so
+            // collapse/expand, hidden/shown, and other class/style
+            // toggles actually show on screen.
+            self.apply_js_dom_mutations();
+            prevented
+        };
+        #[cfg(not(feature = "javascript"))]
+        let default_prevented = false;
 
-        // Check link hit regions.
+        // Check link hit regions (unless JS prevented default navigation).
+        if default_prevented {
+            return;
+        }
         for link in &self.link_map {
             let lx = link.rect.x;
             let ly = link.rect.y;
@@ -984,28 +996,56 @@ impl BrowserWidget {
     }
 
     /// Dispatch a JS click event using the layout tree hit test.
+    /// Returns `true` if the JS handler called `event.preventDefault()`
+    /// (or an inline `onclick` returned `false`) — the caller should
+    /// then skip default behavior like following `<a href>` links.
     #[cfg(feature = "javascript")]
-    fn dispatch_js_click(&mut self, x: i32, y: i32) {
+    fn dispatch_js_click(&mut self, x: i32, y: i32) -> bool {
         let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
             .layout_root
             .as_ref()
             .and_then(|root| root.hit_test(lx, ly));
-
         if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
-            Self::dispatch_js_event(engine, nid, "click");
+            Self::dispatch_js_event_prevent(engine, nid, "click")
+        } else {
+            false
         }
     }
 
     /// Dispatch a named event to JS with bubbling.
     #[cfg(feature = "javascript")]
     fn dispatch_js_event(engine: &oasis_js::JsEngine, node_id: NodeId, event_type: &str) {
-        let code = format!(
-            "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'{}',null)",
-            node_id, event_type
-        );
-        let _ = engine.eval(&code);
+        let _ = Self::dispatch_js_event_prevent(engine, node_id, event_type);
+    }
+
+    /// Dispatch and return whether the default action was prevented.
+    ///
+    /// Resolves the pre-compiled `__oasis_dispatch_click_fast` helper
+    /// from globals and calls it with typed args, which is measurably
+    /// cheaper than `format!`-ing a JS source string and handing it to
+    /// `engine.eval()` (every call re-parsed + re-compiled the snippet).
+    /// The helper is installed once by the DOM bootstrap JS; if it's
+    /// missing (engine not fully initialised) we fall back to `false`.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_event_prevent(
+        engine: &oasis_js::JsEngine,
+        node_id: NodeId,
+        event_type: &str,
+    ) -> bool {
+        use oasis_js::rquickjs;
+        engine
+            .with_context(|ctx| -> rquickjs::Result<bool> {
+                let globals = ctx.globals();
+                let Ok(dispatch): rquickjs::Result<rquickjs::Function> =
+                    globals.get("__oasis_dispatch_click_fast")
+                else {
+                    return Ok(false);
+                };
+                let ret: bool = dispatch.call((node_id as i32, event_type))?;
+                Ok(ret)
+            })
+            .unwrap_or(false)
     }
 
     /// Dispatch a mouse event (mousedown, mouseup, etc.) to the node at
@@ -1023,6 +1063,10 @@ impl BrowserWidget {
     }
 
     /// Dispatch a mouse event to a specific node with coordinates.
+    ///
+    /// Same pre-compiled-helper pattern as `dispatch_js_event_prevent`
+    /// — avoids `format!` + `engine.eval()` per event on the mousemove
+    /// hot path (hover-listener-heavy pages).
     #[cfg(feature = "javascript")]
     fn dispatch_js_mouse_event_to(
         engine: &oasis_js::JsEngine,
@@ -1031,13 +1075,16 @@ impl BrowserWidget {
         y: i32,
         event_type: &str,
     ) {
-        let code = format!(
-            "if(typeof __oasis_dispatch_with_bubbling==='function'){{\
-             var __e={{clientX:{},clientY:{}}};\
-             __oasis_dispatch_with_bubbling({},'{}',__e)}}",
-            x, y, node_id, event_type
-        );
-        let _ = engine.eval(&code);
+        use oasis_js::rquickjs;
+        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+            let globals = ctx.globals();
+            if let Ok(dispatch) =
+                globals.get::<_, rquickjs::Function>("__oasis_dispatch_mouse_fast")
+            {
+                dispatch.call::<_, rquickjs::Value>((node_id as i32, event_type, x, y))?;
+            }
+            Ok(())
+        });
     }
 
     /// Dispatch a keydown event to JS with key info as detail object.
@@ -1053,20 +1100,24 @@ impl BrowserWidget {
         key: char,
         event_type: &str,
     ) {
-        // Escape characters that break JS single-quoted string literals.
-        let escaped: String = match key {
-            '\\' => "\\\\".into(),
-            '\'' => "\\'".into(),
-            '\n' => "\\n".into(),
-            '\r' => "\\r".into(),
-            c => c.to_string(),
-        };
-        let code = format!(
-            "if(typeof __oasis_dispatch_with_bubbling==='function')\
-             __oasis_dispatch_with_bubbling({},'{event_type}',{{key:'{}',code:'{}'}})",
-            node_id, escaped, escaped
-        );
-        let _ = engine.eval(&code);
+        // Pre-compiled helper call — arguments pass through typed FFI,
+        // so we no longer need to escape characters that would break a
+        // single-quoted JS string literal (`'`, `\`, newline, CR).
+        use oasis_js::rquickjs;
+        let key_str = key.to_string();
+        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+            let globals = ctx.globals();
+            if let Ok(dispatch) = globals.get::<_, rquickjs::Function>("__oasis_dispatch_key_fast")
+            {
+                dispatch.call::<_, rquickjs::Value>((
+                    node_id as i32,
+                    event_type,
+                    key_str.as_str(),
+                    key_str.as_str(),
+                ))?;
+            }
+            Ok(())
+        });
     }
 
     /// Handle a cursor move at window-relative coordinates.
@@ -1112,6 +1163,12 @@ impl BrowserWidget {
                     Self::dispatch_js_mouse_event_to(engine, new_nid, x, y, "mousemove");
                 }
             }
+            // If a hover handler mutated the DOM (e.g. a tooltip
+            // shim toggling `aria-expanded`), flush the dirty flag
+            // so the next frame reflects the change — symmetric with
+            // the click and text-input dispatch paths.
+            #[cfg(feature = "javascript")]
+            self.apply_js_dom_mutations();
 
             self.restyle_hover_affected(old_hover);
         }
@@ -1286,6 +1343,71 @@ impl BrowserWidget {
             // Could not find rects for any affected node — force full repaint.
             self.full_repaint_needed = true;
         }
+    }
+
+    /// Re-run the CSS cascade and rebuild layout after a JS event
+    /// handler mutated the DOM. No-op if the shared dirty flag is clear.
+    ///
+    /// The cheaper `restyle_hover_affected` / `relayout_if_dirty` paths
+    /// assume stylesheets and the DOM tree haven't changed — after a
+    /// `setAttribute`/`classList.add`/`innerHTML` the set of nodes
+    /// matching rules like `.comment.collapsed .child` changes and the
+    /// style vector needs a full re-cascade. We also sync `self.document`
+    /// from the JS-shared document since mutations landed on the latter.
+    #[cfg(feature = "javascript")]
+    pub(crate) fn apply_js_dom_mutations(&mut self) {
+        if !self.js_dom_dirty.get() {
+            return;
+        }
+        self.js_dom_dirty.set(false);
+        let Some(js_doc) = self.js_doc.as_ref() else {
+            return;
+        };
+        // Clone the JS-shared (mutated) document into the widget's
+        // authoritative slot so every downstream consumer — cascade,
+        // layout, paint, link map, form manager — sees the new tree.
+        let new_doc = js_doc.borrow().clone();
+        self.body_node_id = new_doc.body();
+        self.document = Some(new_doc);
+
+        // Rebuild inline-style cache from the mutated DOM. JS may have
+        // overwritten `style=""` attributes via `element.style.prop = ...`
+        // (`__oasis_style_set` in js_dom.rs) or inserted new nodes with
+        // inline styles via `innerHTML`; the cached list was captured at
+        // page load and is now stale.
+        if let Some(doc) = &self.document {
+            self.cached_inline_styles = Self::collect_inline_styles(doc);
+        }
+
+        // Build sheet references from cache (no re-parsing).
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
+        for sheet in &self.cached_author_sheets {
+            all_sheets.push(sheet);
+        }
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+            focused_node: self.focused_node,
+            containers: self.container_lookup.as_ref(),
+            global_layers: None,
+        };
+        if let Some(doc) = &self.document {
+            self.styles =
+                css::cascade::style_tree(doc, &all_sheets, &self.cached_inline_styles, &ctx);
+            *self.js_styles.borrow_mut() = self.styles.clone();
+            // Rebuild href_map (NodeId -> href) from the mutated DOM so
+            // anchor fragment lookups see newly-inserted <a> elements.
+            // Note: link_map (the Vec<LinkRegion> used by click hit-testing)
+            // is rebuilt by the layout pass triggered via `layout_dirty`
+            // below, not here.
+            self.href_map = BrowserWidget::build_link_map(doc);
+        }
+        // Geometry may have changed (class toggles, display:none, new
+        // nodes from innerHTML) — force both a fresh layout pass and a
+        // full display-list rebuild on the next tick.
+        self.layout_dirty = true;
+        self.full_repaint_needed = true;
     }
 
     /// Navigate to a URL, resolving relative references against

@@ -113,7 +113,7 @@ a:hover { text-decoration: underline; }
 .thing.link .midcol .arrow.upmod { background: #ff4500; }
 .thing.link .midcol .arrow.down { background: #d7dadc; margin-top: 2px; }
 .thing.link .midcol .score.likes { color: #ff4500; font-weight: bold; }
-.thing.link .entry { overflow: hidden; }
+.thing.link .entry { margin-left: 40px; overflow: hidden; }
 .thing.link .entry .title {
   font-size: medium;
   margin: 0;
@@ -264,7 +264,71 @@ a:hover { text-decoration: underline; }
 
 .comment.collapsed .entry .usertext { display: none; }
 .comment.collapsed .entry .buttons { display: none; }
+.comment.collapsed > .child { display: none; }
 .comment.collapsed .entry .tagline { color: #aaa; }
+
+/* Expand/collapse anchor — reddit renders the [–]/[+] toggle inline
+   with the tagline. The onclick handler flips the .collapsed class
+   on the nearest .comment ancestor via our togglecomment() shim. */
+.comment .expand {
+  color: #369;
+  font-weight: bold;
+  text-decoration: none;
+  padding-right: 4px;
+}
+.comment .expand:hover { text-decoration: underline; }
+
+/* Original poster highlight: a small pill-shaped badge behind the
+   author name. Real reddit uses a blue "S" after the name but the
+   tint on the anchor matches how most RES users see OP comments. */
+.comment .tagline a.author.submitter {
+  background: #e8f0ff;
+  color: #0055df;
+  padding: 0 3px;
+  border-radius: 2px;
+}
+/* Mod / admin distinguished comments get a green hue and [M] suffix. */
+.comment .tagline a.author.moderator {
+  color: #228822;
+  font-weight: bold;
+}
+.comment .tagline .userattrs { color: #888; }
+.comment .tagline .edited-timestamp {
+  color: #888;
+  font-style: italic;
+  padding-left: 2px;
+}
+
+/* Markdown rendering inside a comment body. Reddit's reader/.md rules
+   give blockquotes a subtle left border and a slight color tint so the
+   quoted text is distinguishable from the author's reply. Without this
+   the default UA style renders only a single '|' glyph, which reads as
+   stray punctuation when scanning a nested thread. */
+.md blockquote {
+  border-left: 2px solid #c5c1ad;
+  color: #4f4f4f;
+  margin: 5px 5px 5px 15px;
+  padding-left: 6px;
+}
+.md code {
+  background: #f5f5f5;
+  padding: 0 2px;
+}
+.md p { margin: 4px 0; }
+
+/* "load more X comments" placeholder row. onclick returns false via
+   our morechildren() shim so it doesn't follow the # anchor. */
+.morechildren {
+  font-size: x-small;
+  margin: 2px 0 2px 0;
+  padding: 2px 6px;
+}
+.morechildren a {
+  color: #369;
+  font-weight: bold;
+  text-decoration: none;
+}
+.morechildren a:hover { text-decoration: underline; }
 
 .deepthread > .child {
   border-left: 1px dashed #ccc;
@@ -331,14 +395,17 @@ a:hover { text-decoration: underline; }
 
     <div class="sitetable nestedlisting">
 
-      <!-- Top-level comment 1, with nested replies 3 deep -->
+      <!-- Top-level comment 1, with nested replies 3 deep.
+           First comment's arrows carry ids so the vote-toggle test can
+           click them by coord and then verify the class flipped. -->
       <div class="comment" data-fullname="t1_aaaa001">
         <div class="midcol">
-          <div class="arrow upmod"></div>
-          <div class="arrow down"></div>
+          <div class="arrow up" id="vote-up-aaaa001" onclick="return togglevote(this, 1)"></div>
+          <div class="arrow down" onclick="return togglevote(this, -1)"></div>
         </div>
         <div class="entry">
           <p class="tagline">
+            <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
             <a href="#" class="author submitter">withoutboats</a>
             <span class="score">412 points</span>
             <time>13 hours ago</time>
@@ -366,6 +433,7 @@ a:hover { text-decoration: underline; }
               </div>
               <div class="entry">
                 <p class="tagline">
+                  <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
                   <a href="#" class="author">altimit</a>
                   <span class="score">188 points</span>
                   <time>12 hours ago</time>
@@ -390,6 +458,7 @@ a:hover { text-decoration: underline; }
                     </div>
                     <div class="entry">
                       <p class="tagline">
+                        <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
                         <a href="#" class="author submitter">withoutboats</a>
                         <span class="score">144 points</span>
                         <time>12 hours ago</time>
@@ -414,9 +483,11 @@ a:hover { text-decoration: underline; }
                           </div>
                           <div class="entry">
                             <p class="tagline">
+                              <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
                               <a href="#" class="author">altimit</a>
                               <span class="score">72 points</span>
                               <time>11 hours ago</time>
+                              <span class="edited-timestamp">(edited 20m ago)</span>
                             </p>
                             <div class="usertext">
                               <div class="md">
@@ -425,8 +496,12 @@ a:hover { text-decoration: underline; }
                             </div>
                             <ul class="buttons">
                               <li><a href="#">permalink</a></li>
+                              <li><a href="#">parent</a></li>
                               <li><a href="#">reply</a></li>
                             </ul>
+                          </div>
+                          <div class="morechildren">
+                            <a href="#" onclick="return morechildren(this)">load more comments (3 replies)</a>
                           </div>
                         </div>
                       </div>
@@ -443,6 +518,7 @@ a:hover { text-decoration: underline; }
               </div>
               <div class="entry">
                 <p class="tagline">
+                  <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
                   <a href="#" class="author">mipsfan</a>
                   <span class="score">63 points</span>
                   <time>11 hours ago</time>
@@ -462,7 +538,7 @@ a:hover { text-decoration: underline; }
         </div>
       </div>
 
-      <!-- Top-level comment 2 with blockquote -->
+      <!-- Top-level comment 2 with blockquote, distinguished mod -->
       <div class="comment" data-fullname="t1_aaaa010">
         <div class="midcol">
           <div class="arrow upmod"></div>
@@ -470,7 +546,9 @@ a:hover { text-decoration: underline; }
         </div>
         <div class="entry">
           <p class="tagline">
-            <a href="#" class="author">overdrive</a>
+            <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
+            <a href="#" class="author moderator">overdrive</a>
+            <span class="userattrs">[M]</span>
             <span class="score">221 points</span>
             <time>10 hours ago</time>
           </p>
@@ -497,7 +575,7 @@ a:hover { text-decoration: underline; }
         </div>
         <div class="entry">
           <p class="tagline">
-            [&ndash;]
+            <a href="#" class="expand" onclick="return togglecomment(this)">[+]</a>
             <a href="#" class="author">hot_take_427</a>
             <span class="score">-18 points</span>
             <time>9 hours ago</time>
@@ -519,6 +597,7 @@ a:hover { text-decoration: underline; }
         </div>
         <div class="entry">
           <p class="tagline">
+            <a href="#" class="expand" onclick="return togglecomment(this)">[&ndash;]</a>
             <a href="#" class="author">tokio_fan_42</a>
             <span class="score">88 points</span>
             <time>8 hours ago</time>
