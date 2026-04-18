@@ -13,6 +13,7 @@ mod input;
 mod launch;
 mod radio_controller;
 mod render;
+mod sysinfo;
 mod tv_controller;
 mod video_player;
 use oasis_core::terminal_sdi;
@@ -93,14 +94,137 @@ fn main() -> Result<()> {
     backend.clear(Color::rgb(0, 0, 0))?;
     backend.swap_buffers()?;
 
-    // Boot splash screen — animated BIOS + splash logo sequence.
-    // Skip with OASIS_SKIP_SPLASH=1 env var for fast development iteration.
-    if std::env::var("OASIS_SKIP_SPLASH").as_deref() != Ok("1")
-        && let Err(e) =
-            boot_splash::run_boot_splash(&mut backend, config.screen_width, config.screen_height)
-    {
-        log::warn!("Boot splash failed: {e}");
+    // Functional boot: the splash animation runs in the foreground while
+    // real init work happens between BIOS-line reveals. Each BIOS line
+    // reflects a completed probe or registration step. After the last
+    // line, the splash phase (3.5–6.5s) warms heavy textures (wallpaper,
+    // cursor, shader bridge, SDI layout, audio) so the dashboard's first
+    // frame is hitch-free.
+    //
+    // Skip with OASIS_SKIP_SPLASH=1 for fast development iteration —
+    // the same init work still runs, just with no animation.
+    let skip_splash = std::env::var("OASIS_SKIP_SPLASH").as_deref() == Ok("1");
+
+    let mut splash: Option<boot_splash::BootSplash> = if skip_splash {
+        None
+    } else {
+        match boot_splash::BootSplash::start(
+            &mut backend,
+            config.screen_width,
+            config.screen_height,
+        ) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::warn!("Boot splash init failed: {e}");
+                None
+            },
+        }
+    };
+
+    // Helper: advance splash to `target_secs` (no-op if splash disabled).
+    // Skipping inside the splash consumes it so subsequent calls are cheap.
+    macro_rules! splash_wait {
+        ($target:expr) => {{
+            if let Some(sp) = splash.as_mut() {
+                if let Err(e) = sp.run_until(&mut backend, $target) {
+                    log::warn!("Boot splash frame failed: {e}");
+                }
+            }
+        }};
     }
+    macro_rules! splash_set_line {
+        ($idx:expr, $text:expr) => {{
+            if let Some(sp) = splash.as_mut() {
+                sp.set_bios_line($idx, $text);
+            }
+        }};
+    }
+
+    // -- BIOS phase: lines reveal at 0.4, 0.8, 1.2, 1.6, 2.1, 2.6, 3.0s --
+
+    // Line 0 (0.4s): kernel header. Static.
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[0]);
+
+    // Line 1 (0.8s): copyright. Static.
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[1]);
+
+    // Line 2 (1.2s): real RAM probe.
+    let ram_kb = sysinfo::total_ram_kb();
+    let cpu_cores = sysinfo::cpu_core_count();
+    splash_set_line!(
+        2,
+        match (ram_kb, cpu_cores) {
+            (Some(kb), Some(cores)) =>
+                format!("SYSTEM RAM CHECK... {kb}K OK ({cores} CPU CORES DETECTED)"),
+            (Some(kb), None) => format!("SYSTEM RAM CHECK... {kb}K OK"),
+            _ => "SYSTEM RAM CHECK... OK".to_string(),
+        }
+    );
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[2]);
+
+    // Line 3 (1.6s): VFS population. Run the work now so the line can
+    // report the real file count.
+    let mut vfs = MemoryVfs::new();
+    vfs_setup::populate_demo_vfs(&mut vfs);
+    oasis_core::terminal::populate_man_pages(&mut vfs);
+    oasis_core::terminal::populate_motd(&mut vfs);
+    oasis_core::terminal::populate_profile(&mut vfs);
+    let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
+    let (vfs_files, vfs_dirs) = sysinfo::count_vfs_entries(&vfs, "/");
+    splash_set_line!(
+        3,
+        format!("INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files} FILES, {vfs_dirs} DIRS OK")
+    );
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[3]);
+
+    // Line 4 (2.1s): skin info as the "boot drive" label.
+    splash_set_line!(
+        4,
+        format!(
+            "MOUNTING BOOT DRIVE /DEV/HDA1... SKIN \"{}\" V{} OK",
+            skin.manifest.name.to_uppercase(),
+            skin.manifest.version,
+        )
+    );
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[4]);
+
+    // Line 5 (2.6s): command + plugin registration.
+    let mut cmd_reg = CommandRegistry::new();
+    register_builtins(&mut cmd_reg);
+    oasis_core::script::register_script_commands(&mut cmd_reg);
+    oasis_core::transfer::register_transfer_commands(&mut cmd_reg);
+    oasis_core::update::register_update_commands(&mut cmd_reg);
+    register_plugin_commands(&mut cmd_reg);
+    register_agent_commands(&mut cmd_reg);
+    register_tv_commands(&mut cmd_reg);
+    oasis_core::terminal::register_browser_commands(&mut cmd_reg);
+
+    let mut plugin_manager = PluginManager::new();
+    register_builtin_plugins(&mut plugin_manager);
+    {
+        let mut plugin_sdi = SdiRegistry::new();
+        plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg);
+    }
+    let plugin_count = plugin_manager.active_count();
+    let plugin_app_count = plugin_manager.plugin_apps().len();
+    log::info!("Plugin system: {plugin_count} plugins active, {plugin_app_count} plugin apps");
+    splash_set_line!(
+        5,
+        format!("LOADING FRAGMENT... {plugin_count} PLUGINS, {plugin_app_count} APPS OK")
+    );
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[5]);
+
+    // Line 6 (3.0s): display manager handoff with the real resolution.
+    splash_set_line!(
+        6,
+        format!(
+            "STARTING DISPLAY MANAGER @ {}x{}",
+            config.screen_width, config.screen_height
+        )
+    );
+    splash_wait!(boot_splash::BIOS_REVEAL_TIMES[6]);
+
+    // -- Splash phase (3.5–6.5s): warm heavy subsystems. --
 
     // Attempt to initialize software shader bridge for background effects.
     let mut shader_bridge = oasis_backend_sdl::shader_bridge::SdlShaderBridge::new(
@@ -110,6 +234,7 @@ fn main() -> Result<()> {
     if shader_bridge.is_some() {
         log::info!("Shader bridge available");
     }
+    splash_wait!(3.8);
 
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
@@ -119,43 +244,6 @@ fn main() -> Result<()> {
 
     // Set up platform services.
     let platform = DesktopPlatform::new();
-
-    // Set up VFS with demo content + apps (placeholders only — real files
-    // are loaded on a background thread and merged in the main loop).
-    let mut vfs = MemoryVfs::new();
-    vfs_setup::populate_demo_vfs(&mut vfs);
-    let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
-
-    // Populate terminal documentation and shell profile in VFS.
-    oasis_core::terminal::populate_man_pages(&mut vfs);
-    oasis_core::terminal::populate_motd(&mut vfs);
-    oasis_core::terminal::populate_profile(&mut vfs);
-
-    // Set up command interpreter.
-    let mut cmd_reg = CommandRegistry::new();
-    register_builtins(&mut cmd_reg);
-    // Register additional command modules (script, transfer, update, plugin, agent, browser).
-    oasis_core::script::register_script_commands(&mut cmd_reg);
-    oasis_core::transfer::register_transfer_commands(&mut cmd_reg);
-    oasis_core::update::register_update_commands(&mut cmd_reg);
-    register_plugin_commands(&mut cmd_reg);
-    register_agent_commands(&mut cmd_reg);
-    register_tv_commands(&mut cmd_reg);
-    oasis_core::terminal::register_browser_commands(&mut cmd_reg);
-
-    // Initialize plugin system (uses a temporary SDI for init; the real
-    // scene graph is created after AppState assembly).
-    let mut plugin_manager = PluginManager::new();
-    register_builtin_plugins(&mut plugin_manager);
-    {
-        let mut plugin_sdi = SdiRegistry::new();
-        plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg);
-    }
-    log::info!(
-        "Plugin system: {} plugins active, {} plugin apps",
-        plugin_manager.active_count(),
-        plugin_manager.plugin_apps().len(),
-    );
 
     // Discover apps and merge plugin-registered apps.
     let mut apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
@@ -302,17 +390,60 @@ fn main() -> Result<()> {
         .and_then(|s| s.parse().ok());
     let mut tv_timeout_start: Option<std::time::Instant> = None;
 
-    // Set up scene graph and apply skin layout.
+    // Set up scene graph and apply skin layout (runs during the splash's
+    // logo-entrance phase at ~4.0s so the main loop's first frame has a
+    // fully-built scene).
     let mut sdi = SdiRegistry::new();
     state.skin.apply_layout_scaled(
         &mut sdi,
         state.config.screen_width,
         state.config.screen_height,
     );
+    splash_wait!(4.6);
 
-    // Wallpaper and cursor are deferred to the first loop iteration so
-    // the window appears immediately (the boot fade covers the delay).
-    let mut wallpaper_loaded = false;
+    // Generate + upload the wallpaper texture. This was previously
+    // deferred to frame 0 and caused a visible hitch on first paint;
+    // doing it here hides the cost under the splash animation.
+    if let Some(sp) = splash.as_mut() {
+        sp.set_progress_note("GENERATING WALLPAPER");
+    }
+    let wallpaper_tex = {
+        let wp_data = wallpaper::generate_from_config(
+            state.config.screen_width,
+            state.config.screen_height,
+            &state.active_theme,
+        );
+        backend.load_texture(
+            state.config.screen_width,
+            state.config.screen_height,
+            &wp_data,
+        )?
+    };
+    terminal_sdi::setup_wallpaper(
+        &mut sdi,
+        wallpaper_tex,
+        state.config.screen_width,
+        state.config.screen_height,
+    );
+    if get_shader_layer(&state.active_theme).is_some()
+        && let Ok(obj) = sdi.get_mut("wallpaper")
+    {
+        obj.visible = false;
+    }
+    log::info!("Wallpaper loaded");
+    splash_wait!(5.2);
+
+    // Generate + upload cursor texture.
+    if let Some(sp) = splash.as_mut() {
+        sp.set_progress_note("LOADING CURSOR");
+    }
+    let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
+    let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
+    state.ui.mouse_cursor.update_sdi(&mut sdi);
+    if let Ok(obj) = sdi.get_mut("mouse_cursor") {
+        obj.texture = Some(cursor_tex);
+    }
+    log::info!("Mouse cursor loaded");
 
     // Apply auto-launch (after scene graph is fully set up).
     if let Some(ref app_name) = auto_launch_app {
@@ -351,47 +482,24 @@ fn main() -> Result<()> {
         }
     }
 
+    // Final splash note shown at 5.5s onward.
+    if let Some(sp) = splash.as_mut() {
+        sp.set_progress_note("SYSTEM MODULES INITIALIZED");
+    }
+
+    // Finish the splash: run the rest of the animation (or skip to end)
+    // then fade out and release GPU textures.
+    if let Some(mut sp) = splash.take() {
+        if let Err(e) = sp.run_to_end(&mut backend) {
+            log::warn!("Boot splash tail failed: {e}");
+        }
+        if let Err(e) = sp.finish(&mut backend) {
+            log::warn!("Boot splash finish failed: {e}");
+        }
+    }
+
     'running: loop {
         state.frame_counter += 1;
-
-        // Generate wallpaper + cursor on the first frame (deferred from init).
-        if !wallpaper_loaded {
-            wallpaper_loaded = true;
-            let wallpaper_tex = {
-                let wp_data = wallpaper::generate_from_config(
-                    state.config.screen_width,
-                    state.config.screen_height,
-                    &state.active_theme,
-                );
-                backend.load_texture(
-                    state.config.screen_width,
-                    state.config.screen_height,
-                    &wp_data,
-                )?
-            };
-            terminal_sdi::setup_wallpaper(
-                &mut sdi,
-                wallpaper_tex,
-                state.config.screen_width,
-                state.config.screen_height,
-            );
-            // Hide wallpaper SDI object when a shader layer replaces it.
-            if get_shader_layer(&state.active_theme).is_some()
-                && let Ok(obj) = sdi.get_mut("wallpaper")
-            {
-                obj.visible = false;
-            }
-            log::info!("Wallpaper loaded");
-
-            let (cursor_pixels, cw, ch) =
-                cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
-            let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
-            state.ui.mouse_cursor.update_sdi(&mut sdi);
-            if let Ok(obj) = sdi.get_mut("mouse_cursor") {
-                obj.texture = Some(cursor_tex);
-            }
-            log::info!("Mouse cursor loaded");
-        }
 
         // Drain background disk sample loads (non-blocking).
         while let Ok((path, data)) = disk_sample_rx.try_recv() {
