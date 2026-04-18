@@ -139,31 +139,61 @@ fn main() -> Result<()> {
             }
         }};
     }
+    macro_rules! splash_status {
+        ($text:expr) => {{
+            if let Some(sp) = splash.as_mut() {
+                sp.set_status($text);
+            }
+        }};
+    }
 
     // -- BIOS phase: lines reveal at 0.4, 0.8, 1.2, 1.6, 2.1, 2.6, 3.0s --
 
-    // Line 0 (0.4s): kernel header. Static.
+    // Line 0 (0.4s): kernel header — kept short so the {arch} suffix
+    // fits inside the 1280px viewport even on aarch64-style long names.
+    splash_set_line!(
+        0,
+        format!(
+            "OASIS_KERNEL_V.7.0.4 BOOTING ON {}",
+            sysinfo::cpu_arch().to_uppercase(),
+        )
+    );
+    splash_status!("Powering on system bus...");
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[0]);
 
-    // Line 1 (0.8s): copyright. Static.
+    // Line 1 (0.8s): host OS details — replaces the generic copyright
+    // so every BIOS line carries real info.
+    splash_status!("Verifying boot signature...");
+    splash_set_line!(
+        1,
+        format!(
+            "HOST KERNEL: {} | OASIS_OS V{}",
+            sysinfo::os_release().to_uppercase(),
+            env!("CARGO_PKG_VERSION"),
+        )
+    );
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[1]);
 
-    // Line 2 (1.2s): real RAM probe.
+    // Line 2 (1.2s): real RAM + core count probe.
+    splash_status!("Probing physical memory and CPU topology...");
     let ram_kb = sysinfo::total_ram_kb();
     let cpu_cores = sysinfo::cpu_core_count();
     splash_set_line!(
         2,
         match (ram_kb, cpu_cores) {
-            (Some(kb), Some(cores)) =>
-                format!("SYSTEM RAM CHECK... {kb}K OK ({cores} CPU CORES DETECTED)"),
-            (Some(kb), None) => format!("SYSTEM RAM CHECK... {kb}K OK"),
+            (Some(kb), Some(cores)) => format!(
+                "SYSTEM RAM CHECK... {}K OK ({cores} LOGICAL CORES DETECTED)",
+                format_thousands(kb)
+            ),
+            (Some(kb), None) => format!("SYSTEM RAM CHECK... {}K OK", format_thousands(kb)),
             _ => "SYSTEM RAM CHECK... OK".to_string(),
         }
     );
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[2]);
 
     // Line 3 (1.6s): VFS population. Run the work now so the line can
-    // report the real file count.
+    // report the real file count + byte total.
+    splash_status!("Mounting virtual file system and seeding /etc, /apps, /home...");
     let mut vfs = MemoryVfs::new();
     vfs_setup::populate_demo_vfs(&mut vfs);
     oasis_core::terminal::populate_man_pages(&mut vfs);
@@ -171,24 +201,32 @@ fn main() -> Result<()> {
     oasis_core::terminal::populate_profile(&mut vfs);
     let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
     let (vfs_files, vfs_dirs) = sysinfo::count_vfs_entries(&vfs, "/");
+    let vfs_bytes = sysinfo::total_vfs_bytes(&vfs, "/");
     splash_set_line!(
         3,
-        format!("INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files} FILES, {vfs_dirs} DIRS OK")
+        format!(
+            "INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files} FILES, {vfs_dirs} DIRS, {} KB OK",
+            vfs_bytes / 1024,
+        )
     );
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[3]);
 
     // Line 4 (2.1s): skin info as the "boot drive" label.
+    splash_status!(format!("Verifying skin manifest: {}", skin.manifest.name));
     splash_set_line!(
         4,
         format!(
-            "MOUNTING BOOT DRIVE /DEV/HDA1... SKIN \"{}\" V{} OK",
+            "MOUNTING BOOT DRIVE /DEV/HDA1... SKIN \"{}\" V{} OK ({}x{})",
             skin.manifest.name.to_uppercase(),
             skin.manifest.version,
+            skin.manifest.screen_width,
+            skin.manifest.screen_height,
         )
     );
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[4]);
 
     // Line 5 (2.6s): command + plugin registration.
+    splash_status!("Registering shell commands...");
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
     oasis_core::script::register_script_commands(&mut cmd_reg);
@@ -199,6 +237,7 @@ fn main() -> Result<()> {
     register_tv_commands(&mut cmd_reg);
     oasis_core::terminal::register_browser_commands(&mut cmd_reg);
 
+    splash_status!("Initializing plugin system...");
     let mut plugin_manager = PluginManager::new();
     register_builtin_plugins(&mut plugin_manager);
     {
@@ -215,18 +254,23 @@ fn main() -> Result<()> {
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[5]);
 
     // Line 6 (3.0s): display manager handoff with the real resolution.
+    splash_status!("Handing off to display manager...");
     splash_set_line!(
         6,
         format!(
-            "STARTING DISPLAY MANAGER @ {}x{}",
+            "STARTING DISPLAY MANAGER @ {}x{} | BACKEND: SDL3",
             config.screen_width, config.screen_height
         )
     );
     splash_wait!(boot_splash::BIOS_REVEAL_TIMES[6]);
 
-    // -- Splash phase (3.5–6.5s): warm heavy subsystems. --
+    // -- Splash phase (3.5–6.5s): warm heavy subsystems. The BIOS lines
+    //    stay visible until 3.6s, so short init steps between 3.0 and 3.6
+    //    are covered by the BIOS status line; after 3.6s the status line
+    //    hides and the splash logo fades in. --
 
     // Attempt to initialize software shader bridge for background effects.
+    splash_status!("Compiling background shader pipeline...");
     let mut shader_bridge = oasis_backend_sdl::shader_bridge::SdlShaderBridge::new(
         config.screen_width,
         config.screen_height,
@@ -234,7 +278,6 @@ fn main() -> Result<()> {
     if shader_bridge.is_some() {
         log::info!("Shader bridge available");
     }
-    splash_wait!(3.8);
 
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
@@ -245,7 +288,17 @@ fn main() -> Result<()> {
     // Set up platform services.
     let platform = DesktopPlatform::new();
 
+    // Warm the bitmap font glyph cache: rendering never-seen characters
+    // allocates + uploads a texture on first use, which used to cause
+    // per-glyph hitches on the dashboard's first few frames. Pre-rasterize
+    // the common character set now so the cache is primed.
+    splash_status!("Rasterizing font atlas...");
+    prewarm_glyph_cache(&mut backend, &active_theme);
+
+    splash_wait!(3.8);
+
     // Discover apps and merge plugin-registered apps.
+    splash_status!("Indexing dashboard apps...");
     let mut apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
     for reg in plugin_manager.plugin_apps() {
         apps.push(reg.to_app_entry());
@@ -366,6 +419,18 @@ fn main() -> Result<()> {
         tv_current_url: None,
     };
 
+    // Prime the status bar with real time + power info so the first frame
+    // shows accurate values instead of the "--:--" / "--%" placeholders.
+    splash_status!("Polling clock and power services...");
+    {
+        let time = state.platform.now().ok();
+        let power = state.platform.power_info().ok();
+        state
+            .ui
+            .status_bar
+            .update_info(time.as_ref(), power.as_ref());
+    }
+
     // Show a welcome toast.
     state.toasts.show(
         format!("Skin: {}", state.skin.manifest.name),
@@ -374,6 +439,7 @@ fn main() -> Result<()> {
     );
 
     // Load radio stations from VFS.
+    splash_status!("Parsing radio station registry...");
     state
         .radio_manager
         .load_stations(&vfs, "/etc/radio/stations.toml")
@@ -393,6 +459,7 @@ fn main() -> Result<()> {
     // Set up scene graph and apply skin layout (runs during the splash's
     // logo-entrance phase at ~4.0s so the main loop's first frame has a
     // fully-built scene).
+    splash_status!("Composing SDI scene graph...");
     let mut sdi = SdiRegistry::new();
     state.skin.apply_layout_scaled(
         &mut sdi,
@@ -404,6 +471,7 @@ fn main() -> Result<()> {
     // Generate + upload the wallpaper texture. This was previously
     // deferred to frame 0 and caused a visible hitch on first paint;
     // doing it here hides the cost under the splash animation.
+    splash_status!("Generating wallpaper texture...");
     if let Some(sp) = splash.as_mut() {
         sp.set_progress_note("GENERATING WALLPAPER");
     }
@@ -434,6 +502,7 @@ fn main() -> Result<()> {
     splash_wait!(5.2);
 
     // Generate + upload cursor texture.
+    splash_status!("Uploading cursor texture...");
     if let Some(sp) = splash.as_mut() {
         sp.set_progress_note("LOADING CURSOR");
     }
@@ -482,7 +551,10 @@ fn main() -> Result<()> {
         }
     }
 
-    // Final splash note shown at 5.5s onward.
+    // Final splash note shown at 5.5s onward. Clear the status line
+    // since the banner also hid after the BIOS phase ended at 3.6s, but
+    // the progress_note at the bottom of the splash replaces it.
+    splash_status!("");
     if let Some(sp) = splash.as_mut() {
         sp.set_progress_note("SYSTEM MODULES INITIALIZED");
     }
@@ -703,6 +775,54 @@ fn is_tv_tune_request(runner: &oasis_core::apps::AppRunner) -> bool {
     runner.peek_pending_request().is_some_and(|req| {
         req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
     })
+}
+
+/// Format a large number with underscore thousand separators — matches the
+/// retro BIOS aesthetic when reporting RAM in KB (e.g. `127_539_224`).
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push('_');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
+/// Rasterize a common character set at common font sizes so the first
+/// dashboard frame doesn't stall uploading glyph textures one-by-one.
+///
+/// The backend's `draw_text` lazily renders + caches each glyph; we just
+/// need to call it once per (char, size) pair at a fully-transparent
+/// color so nothing visibly leaks onto the current frame.
+fn prewarm_glyph_cache(
+    backend: &mut dyn oasis_core::backend::SdiBackend,
+    _theme: &oasis_core::active_theme::ActiveTheme,
+) {
+    // A conservative sample of the character set real UI text uses:
+    // ASCII printable range + a handful of box/bullet glyphs that skins
+    // and the terminal commonly draw.
+    let sample: String = (0x20u8..=0x7Eu8).map(|b| b as char).collect();
+    let extras = "•▪▶▼▲◄→←↑↓…";
+
+    // Common font sizes across status/bottom bars, dashboard labels,
+    // window titles, terminal text, and toast/start-menu chrome.
+    let sizes: [u16; 6] = [8, 10, 12, 14, 16, 20];
+
+    let off_x = -10_000; // Draw off-screen so nothing flickers on screen.
+    let off_y = -10_000;
+    let col = oasis_core::backend::Color::rgba(255, 255, 255, 0);
+    for size in sizes {
+        for ch in sample.chars().chain(extras.chars()) {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            // Errors are fine — the cache entry still populates.
+            let _ = backend.draw_text(s, off_x, off_y, size, col);
+        }
+    }
 }
 
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).

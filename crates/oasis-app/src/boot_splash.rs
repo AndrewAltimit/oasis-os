@@ -125,7 +125,13 @@ pub struct BootSplash {
     sy: f32,
     scale: f32,
     textures: SplashTextures,
+    /// Seven BIOS lines that reveal at [`BIOS_REVEAL_TIMES`]. Overwritable
+    /// via [`BootSplash::set_bios_line`].
     bios_lines: [String; 7],
+    /// Live "currently loading" status line below the BIOS block.
+    /// Updates freely — shows in-flight work with a rotating spinner.
+    status_line: String,
+    /// Bottom-of-splash-phase progress note (visible at 5.5s+).
     progress_note: String,
     skipped: bool,
 }
@@ -151,6 +157,7 @@ impl BootSplash {
             scale,
             textures,
             bios_lines: DEFAULT_BIOS_LINES.map(String::from),
+            status_line: String::new(),
             progress_note: DEFAULT_PROGRESS_NOTE.to_string(),
             skipped: false,
         })
@@ -175,6 +182,15 @@ impl BootSplash {
     /// "SYSTEM MODULES INITIALIZED"). Visible from 5.5s onward.
     pub fn set_progress_note(&mut self, text: impl Into<String>) {
         self.progress_note = text.into();
+    }
+
+    /// Set the live "currently loading" status line displayed below the
+    /// BIOS block. Paired with an animated spinner glyph.
+    ///
+    /// Update freely as each init step starts; pass an empty string to
+    /// hide the line entirely (e.g. once all work is done).
+    pub fn set_status(&mut self, text: impl Into<String>) {
+        self.status_line = text.into();
     }
 
     /// Render frames until `target_secs` is reached, the user skips, or
@@ -260,6 +276,14 @@ impl BootSplash {
         // Phase 1: BIOS screen (0.0 - 3.6s)
         let bios_opacity = if elapsed < 3.6 { 1.0 } else { 0.0 };
         if bios_opacity > 0.0 {
+            paint_bios_banner(
+                backend,
+                elapsed,
+                self.screen_w,
+                self.sx,
+                self.sy,
+                self.scale,
+            )?;
             paint_bios_screen(
                 backend,
                 elapsed,
@@ -267,6 +291,15 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.bios_lines,
+            )?;
+            paint_bios_status_line(
+                backend,
+                elapsed,
+                self.screen_w,
+                self.sx,
+                self.sy,
+                self.scale,
+                &self.status_line,
             )?;
         }
 
@@ -615,6 +648,228 @@ fn paint_bios_screen(
             backend.draw_text("_", cursor_x, py, fs, c)?;
         }
     }
+
+    Ok(())
+}
+
+// -----------------------------------------------------------------------
+// BIOS banner (top-of-screen header graphic)
+// -----------------------------------------------------------------------
+
+/// Paint the BIOS header banner: miniature \[OASIS\] glyph, subtitle, and
+/// a phase progress bar. Fades in over the first 0.2s of boot.
+fn paint_bios_banner(
+    backend: &mut dyn SdiBackend,
+    elapsed: f32,
+    screen_w: u32,
+    sx: f32,
+    sy: f32,
+    scale: f32,
+) -> Result<()> {
+    // Banner fades in over the first 0.2s so it feels like the monitor
+    // warming up before the kernel starts printing.
+    let banner_alpha = (elapsed / 0.2).clamp(0.0, 1.0);
+    if banner_alpha < 0.01 {
+        return Ok(());
+    }
+
+    // Banner rect in base-720 coords.
+    let bx = (10.0 * sx) as i32;
+    let by = (5.0 * sy) as i32;
+    let bw = screen_w.saturating_sub((20.0 * sx) as u32);
+    let bh = (44.0 * sy) as u32;
+
+    // Subtle dark fill for the banner interior.
+    backend.fill_rect(
+        bx,
+        by,
+        bw,
+        bh,
+        Color::rgba(18, 14, 36, (banner_alpha * 180.0) as u8),
+    )?;
+
+    // 1px top border + 2px bottom border (retro CRT frame).
+    let border_c = apply_alpha(Color::rgb(170, 136, 255), banner_alpha);
+    backend.fill_rect(bx, by, bw, 1, border_c)?;
+    backend.fill_rect(bx, by + bh as i32 - 2, bw, 2, border_c)?;
+    // Left/right edge accents.
+    backend.fill_rect(bx, by, 2, bh, border_c)?;
+    backend.fill_rect(bx + bw as i32 - 2, by, 2, bh, border_c)?;
+
+    // Miniature \[OASIS\] logo on the left side.
+    let logo_center_x = bx + (110.0 * sx) as i32;
+    let logo_center_y = by + (bh as i32) / 2;
+    let logo_scale = 0.19 * scale;
+    paint_mini_oasis_logo(
+        backend,
+        logo_center_x,
+        logo_center_y,
+        logo_scale,
+        banner_alpha,
+    )?;
+
+    // Right-side subtitle.
+    let subtitle = "BIOS / RUNTIME SERVICES CORE v7.0.4";
+    let sub_fs = (14.0 * scale).max(6.0) as u16;
+    let sub_c = apply_alpha(Color::rgb(204, 204, 204), banner_alpha);
+    let sub_w = backend.measure_text(subtitle, sub_fs) as i32;
+    let sub_x = bx + bw as i32 - sub_w - (16.0 * sx) as i32;
+    let sub_y = by + (bh as i32 - sub_fs as i32) / 2;
+    backend.draw_text(subtitle, sub_x, sub_y, sub_fs, sub_c)?;
+
+    // Bottom progress bar: reflects BIOS-phase completion (0..3.0s).
+    // Gives a visual sense that real work is flowing, not just a timer.
+    let phase_t = (elapsed / 3.0).clamp(0.0, 1.0);
+    let bar_y = by + bh as i32 + (3.0 * sy) as i32;
+    let bar_h = (2.0 * scale).max(1.0) as u32;
+    let bar_full_w = bw.saturating_sub(4);
+    let bar_fill_w = (bar_full_w as f32 * phase_t) as u32;
+    // Track: faint background.
+    backend.fill_rect(
+        bx + 2,
+        bar_y,
+        bar_full_w,
+        bar_h,
+        Color::rgba(170, 136, 255, (banner_alpha * 40.0) as u8),
+    )?;
+    // Fill: bright.
+    if bar_fill_w > 0 {
+        backend.fill_rect(
+            bx + 2,
+            bar_y,
+            bar_fill_w,
+            bar_h,
+            Color::rgba(170, 136, 255, (banner_alpha * 220.0) as u8),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Draw a miniature version of the `\[OASIS\]` logo using fill_rect strokes.
+///
+/// Uses the same source coordinates as [`paint_logo_scaled`] but centered
+/// at a caller-chosen point with a tiny scale. Stroke width is fixed at
+/// a minimum of 1px; letters stay legible down to ~100px wide.
+fn paint_mini_oasis_logo(
+    backend: &mut dyn SdiBackend,
+    cx: i32,
+    cy: i32,
+    s: f32,
+    opacity: f32,
+) -> Result<()> {
+    // Source logo center (from paint_logo_scaled): (640, 367).
+    let sc_x = 640.0f32;
+    let sc_y = 367.0f32;
+    let sw = ((3.0 * s) as u32).max(1);
+    let c = apply_alpha(Color::rgb(255, 255, 255), opacity);
+
+    let mut line = |x1: f32, y1: f32, x2: f32, y2: f32| -> Result<()> {
+        let px1 = cx + ((x1 - sc_x) * s) as i32;
+        let py1 = cy + ((y1 - sc_y) * s) as i32;
+        let px2 = cx + ((x2 - sc_x) * s) as i32;
+        let py2 = cy + ((y2 - sc_y) * s) as i32;
+        let dx = (px2 - px1).abs();
+        let dy = (py2 - py1).abs();
+        if dx == 0 || dy == 0 {
+            let lx = px1.min(px2);
+            let ly = py1.min(py2);
+            let lw = (dx as u32).max(sw);
+            let lh = (dy as u32).max(sw);
+            backend.fill_rect(lx, ly, lw, lh, c)?;
+        } else {
+            let steps = dx.max(dy);
+            for step in 0..=steps {
+                let t = step as f32 / steps.max(1) as f32;
+                let px = px1 + ((px2 - px1) as f32 * t) as i32;
+                let py = py1 + ((py2 - py1) as f32 * t) as i32;
+                backend.fill_rect(px, py, sw, sw, c)?;
+            }
+        }
+        Ok(())
+    };
+
+    // Left bracket: [
+    line(315.0, 290.0, 275.0, 290.0)?;
+    line(275.0, 290.0, 275.0, 445.0)?;
+    line(275.0, 445.0, 315.0, 445.0)?;
+    // O
+    line(410.0, 290.0, 490.0, 290.0)?;
+    line(490.0, 290.0, 490.0, 410.0)?;
+    line(490.0, 410.0, 410.0, 410.0)?;
+    line(410.0, 410.0, 410.0, 290.0)?;
+    // A
+    line(520.0, 410.0, 560.0, 290.0)?;
+    line(560.0, 290.0, 600.0, 410.0)?;
+    // S (first)
+    line(630.0, 290.0, 710.0, 290.0)?;
+    line(630.0, 290.0, 630.0, 350.0)?;
+    line(630.0, 350.0, 710.0, 350.0)?;
+    line(710.0, 350.0, 710.0, 410.0)?;
+    line(630.0, 410.0, 710.0, 410.0)?;
+    // I
+    line(740.0, 290.0, 740.0, 410.0)?;
+    // S (second)
+    line(770.0, 290.0, 850.0, 290.0)?;
+    line(770.0, 290.0, 770.0, 350.0)?;
+    line(770.0, 350.0, 850.0, 350.0)?;
+    line(850.0, 350.0, 850.0, 410.0)?;
+    line(770.0, 410.0, 850.0, 410.0)?;
+    // Right bracket: ]
+    line(965.0, 290.0, 1005.0, 290.0)?;
+    line(1005.0, 290.0, 1005.0, 445.0)?;
+    line(1005.0, 445.0, 965.0, 445.0)?;
+
+    Ok(())
+}
+
+/// Paint the live "currently loading" status line below the BIOS block.
+///
+/// Shows `> [spinner] {status_line}` and hides itself if the status is
+/// empty. The spinner cycles through four ASCII glyphs at 10 Hz for a
+/// subtle "something is happening" signal.
+#[allow(clippy::too_many_arguments)]
+fn paint_bios_status_line(
+    backend: &mut dyn SdiBackend,
+    elapsed: f32,
+    screen_w: u32,
+    sx: f32,
+    sy: f32,
+    scale: f32,
+    status: &str,
+) -> Result<()> {
+    if status.is_empty() {
+        return Ok(());
+    }
+    let fs = (18.0 * scale).max(7.0) as u16;
+    let x = (40.0 * sx) as i32;
+    let y = (360.0 * sy) as i32;
+    let chrome_c = Color::rgb(170, 136, 255);
+    let text_c = Color::rgb(230, 220, 255);
+
+    // Rotating spinner glyph — cycles ASCII style so it renders via the
+    // bitmap font without needing unicode block chars.
+    const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+    let spinner = SPINNER[((elapsed * 10.0) as usize) % SPINNER.len()];
+
+    // Draw: "> [spinner] status..."
+    let mut cx = x;
+    backend.draw_text("> [", cx, y, fs, chrome_c)?;
+    cx += backend.measure_text("> [", fs) as i32;
+    backend.draw_text(spinner, cx, y, fs, chrome_c)?;
+    cx += backend.measure_text(spinner, fs) as i32;
+    backend.draw_text("] ", cx, y, fs, chrome_c)?;
+    cx += backend.measure_text("] ", fs) as i32;
+
+    // Truncate status if it would overflow the screen (keep ~24px margin).
+    let max_w = screen_w as i32 - cx - (24.0 * sx) as i32;
+    let mut truncated = status.to_string();
+    while backend.measure_text(&truncated, fs) as i32 > max_w && truncated.len() > 3 {
+        truncated.pop();
+        truncated.pop();
+        truncated.push('…');
+    }
+    backend.draw_text(&truncated, cx, y, fs, text_c)?;
 
     Ok(())
 }
