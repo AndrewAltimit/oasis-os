@@ -54,15 +54,33 @@ pub fn cpu_arch() -> &'static str {
     std::env::consts::ARCH
 }
 
+/// Maximum depth the VFS probes descend before bailing out.
+///
+/// Set high enough to cover every mount seeded by the demo setup and any
+/// plausible skin/plugin overlay, but bounded so a pathological cycle or
+/// runaway tree can't stall the boot sequence. Callers receive a
+/// `truncated` flag so the BIOS line can signal when the result is
+/// partial rather than showing a plausible-but-wrong total.
+const VFS_WALK_MAX_DEPTH: usize = 16;
+
 /// Total size in bytes of the files reachable from `root` in the given VFS.
 ///
-/// Walks the tree and sums each regular file's size. Returns 0 on walk
-/// failure.
-pub fn total_vfs_bytes(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> u64 {
+/// Walks the tree and sums each regular file's size. Returns
+/// `(total_bytes, truncated)` where `truncated` is `true` if the walk
+/// bottomed out at `VFS_WALK_MAX_DEPTH` and the total is therefore a
+/// lower bound.
+pub fn total_vfs_bytes(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (u64, bool) {
     use oasis_core::vfs::EntryKind;
 
-    fn walk(vfs: &dyn oasis_core::vfs::Vfs, path: &str, total: &mut u64, depth: usize) {
-        if depth > 8 {
+    fn walk(
+        vfs: &dyn oasis_core::vfs::Vfs,
+        path: &str,
+        total: &mut u64,
+        depth: usize,
+        truncated: &mut bool,
+    ) {
+        if depth > VFS_WALK_MAX_DEPTH {
+            *truncated = true;
             return;
         }
         let Ok(entries) = vfs.readdir(path) else {
@@ -75,15 +93,16 @@ pub fn total_vfs_bytes(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> u64 {
                 format!("{path}/{}", entry.name)
             };
             match entry.kind {
-                EntryKind::Directory => walk(vfs, &child, total, depth + 1),
+                EntryKind::Directory => walk(vfs, &child, total, depth + 1, truncated),
                 EntryKind::File => *total = total.saturating_add(entry.size),
             }
         }
     }
 
     let mut total = 0u64;
-    walk(vfs, root, &mut total, 0);
-    total
+    let mut truncated = false;
+    walk(vfs, root, &mut total, 0, &mut truncated);
+    (total, truncated)
 }
 
 /// Report the number of logical CPU cores.
@@ -103,9 +122,11 @@ pub fn cpu_core_count() -> Option<usize> {
 
 /// Count files and directories reachable from `root` in the given VFS.
 ///
-/// Returns `(file_count, dir_count)`. Errors are swallowed so the probe
-/// can't fail the boot sequence.
-pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, usize) {
+/// Returns `(file_count, dir_count, truncated)`. `truncated` is `true`
+/// if the walk bottomed out at `VFS_WALK_MAX_DEPTH` and the counts are
+/// therefore lower bounds. Errors are swallowed so the probe can't fail
+/// the boot sequence.
+pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, usize, bool) {
     use oasis_core::vfs::EntryKind;
 
     fn walk(
@@ -114,9 +135,10 @@ pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, 
         files: &mut usize,
         dirs: &mut usize,
         depth: usize,
+        truncated: &mut bool,
     ) {
-        // Safety net: refuse to descend beyond a sane depth.
-        if depth > 8 {
+        if depth > VFS_WALK_MAX_DEPTH {
+            *truncated = true;
             return;
         }
         let Ok(entries) = vfs.readdir(path) else {
@@ -131,7 +153,7 @@ pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, 
             match entry.kind {
                 EntryKind::Directory => {
                     *dirs += 1;
-                    walk(vfs, &child, files, dirs, depth + 1);
+                    walk(vfs, &child, files, dirs, depth + 1, truncated);
                 },
                 EntryKind::File => {
                     *files += 1;
@@ -142,6 +164,7 @@ pub fn count_vfs_entries(vfs: &dyn oasis_core::vfs::Vfs, root: &str) -> (usize, 
 
     let mut files = 0;
     let mut dirs = 0;
-    walk(vfs, root, &mut files, &mut dirs, 0);
-    (files, dirs)
+    let mut truncated = false;
+    walk(vfs, root, &mut files, &mut dirs, 0, &mut truncated);
+    (files, dirs, truncated)
 }

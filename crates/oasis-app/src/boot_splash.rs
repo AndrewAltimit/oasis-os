@@ -862,7 +862,13 @@ fn paint_bios_status_line(
     cx += backend.measure_text("] ", fs) as i32;
 
     // Truncate status if it would overflow the screen (keep ~24px margin).
-    let max_w = screen_w as i32 - cx - (24.0 * sx) as i32;
+    // Clamp to ≥0 so a negative `max_w` (very narrow screen / long chrome
+    // prefix) short-circuits instead of drawing the fallback `"…"` past
+    // the viewport edge.
+    let max_w = (screen_w as i32 - cx - (24.0 * sx) as i32).max(0);
+    if max_w == 0 {
+        return Ok(());
+    }
     let mut truncated = status.to_string();
     while backend.measure_text(&truncated, fs) as i32 > max_w && truncated.len() > 3 {
         truncated.pop();

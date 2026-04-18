@@ -200,12 +200,21 @@ fn main() -> Result<()> {
     oasis_core::terminal::populate_motd(&mut vfs);
     oasis_core::terminal::populate_profile(&mut vfs);
     let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
-    let (vfs_files, vfs_dirs) = sysinfo::count_vfs_entries(&vfs, "/");
-    let vfs_bytes = sysinfo::total_vfs_bytes(&vfs, "/");
+    let (vfs_files, vfs_dirs, vfs_truncated) = sysinfo::count_vfs_entries(&vfs, "/");
+    let (vfs_bytes, bytes_truncated) = sysinfo::total_vfs_bytes(&vfs, "/");
+    // Append "+" to counts when the depth guard stopped the walk early —
+    // makes it obvious to the user that the numbers are lower bounds
+    // rather than showing a confident-but-wrong total.
+    let trunc_mark = if vfs_truncated || bytes_truncated {
+        "+"
+    } else {
+        ""
+    };
     splash_set_line!(
         3,
         format!(
-            "INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files} FILES, {vfs_dirs} DIRS, {} KB OK",
+            "INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files}{trunc_mark} FILES, \
+             {vfs_dirs}{trunc_mark} DIRS, {}{trunc_mark} KB OK",
             vfs_bytes / 1024,
         )
     );
@@ -812,15 +821,17 @@ fn prewarm_glyph_cache(
     // window titles, terminal text, and toast/start-menu chrome.
     let sizes: [u16; 6] = [8, 10, 12, 14, 16, 20];
 
-    let off_x = -10_000; // Draw off-screen so nothing flickers on screen.
-    let off_y = -10_000;
+    // Draw at (0, 0) with alpha=0 — backends may clip negative coordinates
+    // before populating the glyph cache, which would silently no-op the
+    // warm-up. Fully-transparent color keeps the pixel invisible while
+    // still exercising the rasterize + upload path.
     let col = oasis_core::backend::Color::rgba(255, 255, 255, 0);
     for size in sizes {
         for ch in sample.chars().chain(extras.chars()) {
             let mut buf = [0u8; 4];
             let s = ch.encode_utf8(&mut buf);
             // Errors are fine — the cache entry still populates.
-            let _ = backend.draw_text(s, off_x, off_y, size, col);
+            let _ = backend.draw_text(s, 0, 0, size, col);
         }
     }
 }
