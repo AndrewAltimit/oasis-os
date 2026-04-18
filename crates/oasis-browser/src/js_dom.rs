@@ -1098,11 +1098,28 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
     }
   }
   wireListingArrows();
+  // Gate reddit-specific DOM rewrites (`wireHideButtons`, `wireTabmenu`)
+  // to contexts where reddit semantics actually apply. Without this,
+  // clicking `.tabmenu li a` on MediaWiki / phpBB / any other CMS that
+  // uses the `.tabmenu` class (or a page with `.thing .buttons a`) would
+  // silently mutate their `.selected` state and break their own JS. For
+  // live http(s) pages we require `reddit.com` in the URL; offline
+  // contexts (vfs:// fixtures, file://, etc.) are allowed through so
+  // reddit fixtures continue to work in tests.
+  function isRedditContext() {
+    var here = '';
+    try { here = String(__oasis_location() || ''); } catch (e) { return false; }
+    if (here.indexOf('http://') === 0 || here.indexOf('https://') === 0) {
+      return here.indexOf('reddit.com') !== -1;
+    }
+    return true;
+  }
   // Hide button: reddit marks hidden posts with a `.hidden` class on
   // the outer `.thing` and the stylesheet renders them as `display:none`.
   // We attach a click handler to every `.thing .buttons a` whose text is
   // literally "hide" so the link toggles the thing from the layout.
   function wireHideButtons() {
+    if (!isRedditContext()) return;
     var anchors = document.querySelectorAll('.thing .buttons a');
     for (var i = 0; i < anchors.length; i++) {
       var a = anchors[i];
@@ -1135,6 +1152,7 @@ pub(crate) fn install_site_compat_shims(engine: &oasis_js::JsEngine) {
   // navigation (which will load the new URL and re-render the tab
   // row with the correct `.selected` entry).
   function wireTabmenu() {
+    if (!isRedditContext()) return;
     var tabs = document.querySelectorAll('.tabmenu li a');
     for (var i = 0; i < tabs.length; i++) {
       var a = tabs[i];
