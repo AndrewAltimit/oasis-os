@@ -146,6 +146,12 @@ impl OasisWasm {
     /// `skin_name` is an optional built-in skin name (e.g. "classic", "modern").
     #[wasm_bindgen(constructor)]
     pub fn new(canvas_id: &str, skin_name: Option<String>) -> Result<OasisWasm, JsValue> {
+        // Route Rust panics through console.error with a readable stack
+        // trace. Without this, WASM unwinds surface as "RuntimeError:
+        // unreachable" with only the JS frame, making panics inside
+        // tick() nearly impossible to diagnose from the browser.
+        console_error_panic_hook::set_once();
+
         // Get canvas element.
         let document = web_sys::window()
             .ok_or_else(|| JsValue::from_str("no window"))?

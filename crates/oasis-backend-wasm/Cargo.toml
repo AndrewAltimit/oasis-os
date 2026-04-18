@@ -42,6 +42,7 @@ wasm-bindgen = { workspace = true }
 web-sys = { workspace = true }
 js-sys = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+console_error_panic_hook = "0.1"
 
 [lints]
 workspace = true
