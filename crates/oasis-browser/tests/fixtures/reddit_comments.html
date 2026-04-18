@@ -113,7 +113,7 @@ a:hover { text-decoration: underline; }
 .thing.link .midcol .arrow.upmod { background: #ff4500; }
 .thing.link .midcol .arrow.down { background: #d7dadc; margin-top: 2px; }
 .thing.link .midcol .score.likes { color: #ff4500; font-weight: bold; }
-.thing.link .entry { overflow: hidden; }
+.thing.link .entry { margin-left: 40px; overflow: hidden; }
 .thing.link .entry .title {
   font-size: medium;
   margin: 0;
@@ -298,6 +298,23 @@ a:hover { text-decoration: underline; }
   font-style: italic;
   padding-left: 2px;
 }
+
+/* Markdown rendering inside a comment body. Reddit's reader/.md rules
+   give blockquotes a subtle left border and a slight color tint so the
+   quoted text is distinguishable from the author's reply. Without this
+   the default UA style renders only a single '|' glyph, which reads as
+   stray punctuation when scanning a nested thread. */
+.md blockquote {
+  border-left: 2px solid #c5c1ad;
+  color: #4f4f4f;
+  margin: 5px 5px 5px 15px;
+  padding-left: 6px;
+}
+.md code {
+  background: #f5f5f5;
+  padding: 0 2px;
+}
+.md p { margin: 4px 0; }
 
 /* "load more X comments" placeholder row. onclick returns false via
    our morechildren() shim so it doesn't follow the # anchor. */

@@ -70,6 +70,14 @@ pub(super) fn paint_text(
     offset_y: i32,
     ctx: &PaintContext,
 ) -> Result<()> {
+    // Skip empty text runs — these are left over when
+    // `trim_line_boundary_spaces` strips the single-space content from an
+    // inter-element whitespace fragment that ended up at a line edge.
+    // Emitting a `draw_text ""` is work-equivalent but clutters the
+    // display list and would confuse visual-regression diffs.
+    if text.is_empty() {
+        return Ok(());
+    }
     let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 

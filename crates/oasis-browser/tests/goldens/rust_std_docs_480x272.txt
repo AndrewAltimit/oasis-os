@@ -1,11 +1,27 @@
 # viewport 480x272
 fill_rect 0, 0, 480, 35, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 35, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text "std", 16, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "core", 46, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "alloc", 82, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "test", 124, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "proc_macro", 160, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+draw_text " ", 46, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "core", 52, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 88, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 88, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+draw_text " ", 88, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "alloc", 94, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 136, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 136, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+draw_text " ", 136, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "test", 142, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 178, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 178, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+draw_text " ", 178, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "proc_macro", 184, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
+fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 0, 0, 0, 0, Color { r: 247, g: 247, b: 247, a: 255 }
 draw_text "Struct Vec", 0, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "Struct Vec", 1, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
@@ -125,4 +141,4 @@ fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
 fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
 draw_text "true", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
 draw_text " if the vector contains no elements.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-# totals fill_rect=34 draw_text=90 other=2
+# totals fill_rect=46 draw_text=94 other=2
