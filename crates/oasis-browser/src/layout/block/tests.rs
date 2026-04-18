@@ -1,7 +1,7 @@
 //! Tests for the block layout engine.
 
 use super::*;
-use crate::css::values::Dimension;
+use crate::css::values::{Dimension, Float};
 
 /// Fixed-width text measurer: each character is 8 pixels wide.
 struct FixedMeasurer;
@@ -976,4 +976,93 @@ fn parent_child_bottom_margin_collapsing() {
         "child margin-bottom should be 0 (absorbed), got {}",
         parent.children[0].dimensions.margin.bottom,
     );
+}
+
+// -- float width: auto shrink-to-fit (CSS 2.1 §10.3.5) -------------
+
+#[test]
+fn float_auto_width_shrinks_to_child_extent() {
+    // A float with `width: auto` must shrink to its max-content width
+    // (= rightmost child border-box edge), not fill the container.
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.float = Float::Left;
+    // width defaults to Dimension::Auto.
+
+    let mut child_style = block_style();
+    child_style.width = Dimension::Px(120.0);
+    let child = LayoutBox::new(BoxType::Block, child_style, None);
+
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.children = vec![child];
+    layout_block(&mut lb, 480.0, &m);
+
+    assert!(
+        (lb.dimensions.content.width - 120.0).abs() < 0.01,
+        "auto-width float should shrink to 120 (max-content), got {}",
+        lb.dimensions.content.width,
+    );
+}
+
+#[test]
+fn float_auto_width_clamped_to_available() {
+    // A child that exceeds the container width (e.g. a 600px image
+    // inside a 480px body) must not blow the float past the container
+    // — shrink-to-fit = min(max-content, available).
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.float = Float::Right;
+
+    let mut child_style = block_style();
+    child_style.width = Dimension::Px(600.0);
+    let child = LayoutBox::new(BoxType::Block, child_style, None);
+
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.children = vec![child];
+    layout_block(&mut lb, 480.0, &m);
+
+    // Clamped to available (480) even though max-content is 600.
+    assert!(
+        (lb.dimensions.content.width - 480.0).abs() < 0.01,
+        "float width should clamp to available (480), got {}",
+        lb.dimensions.content.width,
+    );
+}
+
+#[test]
+fn float_auto_margins_resolve_to_zero() {
+    // Per CSS 2.1 §10.3.5, `auto` margins on floats compute to 0
+    // (not centered or distributed like normal-flow blocks).
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.float = Float::Left;
+    style.margin_left_auto = true;
+    style.margin_right_auto = true;
+
+    let mut child_style = block_style();
+    child_style.width = Dimension::Px(80.0);
+    let child = LayoutBox::new(BoxType::Block, child_style, None);
+
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    lb.children = vec![child];
+    layout_block(&mut lb, 480.0, &m);
+
+    assert_eq!(lb.dimensions.margin.left, 0.0);
+    assert_eq!(lb.dimensions.margin.right, 0.0);
+}
+
+#[test]
+fn non_float_auto_width_still_fills_container() {
+    // Regression guard: shrink-to-fit must only fire for floats, not
+    // for normal-flow blocks (which fill the container per §10.3.3).
+    let m = FixedMeasurer;
+    let mut child_style = block_style();
+    child_style.width = Dimension::Px(100.0);
+    let child = LayoutBox::new(BoxType::Block, child_style, None);
+
+    let mut lb = LayoutBox::new(BoxType::Block, block_style(), None);
+    lb.children = vec![child];
+    layout_block(&mut lb, 480.0, &m);
+
+    assert_eq!(lb.dimensions.content.width, 480.0);
 }
