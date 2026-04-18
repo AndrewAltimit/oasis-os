@@ -1038,9 +1038,13 @@ fn connect_archive_source(
         let tcp = net_backend
             .connect(&host, 443)
             .map_err(|e| format!("connect: {e}"))?;
+        // Force HTTP/1.1 ALPN: ArchiveSource speaks HTTP/1.1 and the shared
+        // TLS config also offers `h2` for the browser, so without this the
+        // server may hand us an h2 stream that the source can't parse.
         let stream = tls_provider
-            .connect_tls(tcp, &host)
-            .map_err(|e| format!("TLS: {e}"))?;
+            .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream;
 
         let mut source =
             oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
