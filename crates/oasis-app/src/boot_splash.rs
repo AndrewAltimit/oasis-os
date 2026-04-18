@@ -43,8 +43,14 @@ pub const SPLASH_DURATION_S: f32 = 6.5;
 /// Reveal times for the 7 BIOS lines (seconds since splash start).
 pub const BIOS_REVEAL_TIMES: [f32; 7] = [0.4, 0.8, 1.2, 1.6, 2.1, 2.6, 3.0];
 
-/// Minimum frame time to cap at ~60 FPS.
-const MIN_FRAME_MS: u128 = 16;
+/// Target frame budget at 60 FPS (microsecond precision).
+const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_micros(16_667);
+
+/// Busy-wait threshold: once we're within this many microseconds of the
+/// deadline, spin instead of sleeping. Covers typical Linux CLOCK_MONOTONIC
+/// scheduler jitter (~1 ms) so `thread::sleep` doesn't overshoot the frame
+/// target.
+const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Default BIOS lines — overridden by the caller via `set_bios_line`
 /// once real system probes complete.
@@ -77,16 +83,26 @@ struct SplashTextures {
     horizon_glow_w: u32,
     horizon_glow_h: u32,
     horizon_glow_y: i32,
+    /// Pre-rasterized miniature `[OASIS]` logo used in the BIOS banner.
+    /// Cached as a texture so each frame is a single tinted blit rather
+    /// than the ~200 `fill_rect` calls the per-frame stroke renderer
+    /// would issue.
+    mini_logo: Option<TextureId>,
+    mini_logo_w: u32,
+    mini_logo_h: u32,
 }
 
 impl SplashTextures {
     /// Pre-compute and upload effect textures.
-    fn create(backend: &mut dyn SdiBackend, screen_w: u32, screen_h: u32, scale: f32) -> Self {
+    fn create(backend: &mut impl SdiBackend, screen_w: u32, screen_h: u32, scale: f32) -> Self {
         let vignette = generate_vignette_texture(backend, screen_w, screen_h);
         let (logo_glow, gw, gh, gx, gy) =
             generate_logo_glow_texture(backend, screen_w, screen_h, scale);
         let (horizon_glow, hw, hh, hy) =
             generate_horizon_glow_texture(backend, screen_w, screen_h, scale);
+        // Mini logo renders at 0.19x the full scale, matching the factor
+        // the banner used to pass to `paint_mini_oasis_logo`.
+        let (mini_logo, mlw, mlh) = generate_mini_logo_texture(backend, 0.19 * scale);
         SplashTextures {
             vignette,
             logo_glow,
@@ -98,11 +114,14 @@ impl SplashTextures {
             horizon_glow_w: hw,
             horizon_glow_h: hh,
             horizon_glow_y: hy,
+            mini_logo,
+            mini_logo_w: mlw,
+            mini_logo_h: mlh,
         }
     }
 
     /// Release GPU textures.
-    fn destroy(&self, backend: &mut dyn SdiBackend) {
+    fn destroy(&self, backend: &mut impl SdiBackend) {
         if let Some(tex) = self.vignette {
             let _ = backend.destroy_texture(tex);
         }
@@ -110,6 +129,9 @@ impl SplashTextures {
             let _ = backend.destroy_texture(tex);
         }
         if let Some(tex) = self.horizon_glow {
+            let _ = backend.destroy_texture(tex);
+        }
+        if let Some(tex) = self.mini_logo {
             let _ = backend.destroy_texture(tex);
         }
     }
@@ -223,10 +245,19 @@ impl BootSplash {
             self.render_frame(backend)?;
             backend.swap_buffers()?;
 
-            // Frame rate cap.
-            let ft = frame_start.elapsed().as_millis();
-            if ft < MIN_FRAME_MS {
-                std::thread::sleep(std::time::Duration::from_millis((MIN_FRAME_MS - ft) as u64));
+            // Frame rate cap — deadline-based with a short spin at the end
+            // so the OS scheduler can't overshoot the 16.667 ms budget and
+            // drift the splash animation. For a sub-7s one-shot this
+            // matters less than in a hot render loop, but the reviewer
+            // flagged it and the fix is cheap.
+            let spent = frame_start.elapsed();
+            if let Some(remaining) = FRAME_BUDGET.checked_sub(spent) {
+                if remaining > SPIN_MARGIN {
+                    std::thread::sleep(remaining - SPIN_MARGIN);
+                }
+                while frame_start.elapsed() < FRAME_BUDGET {
+                    std::hint::spin_loop();
+                }
             }
         }
         Ok(false)
@@ -251,12 +282,23 @@ impl BootSplash {
                 // Fade out to black over ~0.3s.
                 let fade_start = std::time::Instant::now();
                 while fade_start.elapsed().as_secs_f32() < 0.3 {
+                    let frame_start = std::time::Instant::now();
                     let t = fade_start.elapsed().as_secs_f32() / 0.3;
                     let alpha = (t * 255.0).min(255.0) as u8;
                     backend.clear(Color::rgb(0, 0, 0))?;
                     backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
                     backend.swap_buffers()?;
-                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    // Same deadline-based frame cap as run_until so the
+                    // fade animates at a consistent 60 FPS.
+                    let spent = frame_start.elapsed();
+                    if let Some(remaining) = FRAME_BUDGET.checked_sub(spent) {
+                        if remaining > SPIN_MARGIN {
+                            std::thread::sleep(remaining - SPIN_MARGIN);
+                        }
+                        while frame_start.elapsed() < FRAME_BUDGET {
+                            std::hint::spin_loop();
+                        }
+                    }
                 }
             }
             backend.clear(Color::rgb(0, 0, 0))?;
@@ -283,6 +325,7 @@ impl BootSplash {
                 self.sx,
                 self.sy,
                 self.scale,
+                &self.textures,
             )?;
             paint_bios_screen(
                 backend,
@@ -347,7 +390,7 @@ impl BootSplash {
 /// Matches SVG: `<radialGradient id="vignette" cx="50%" cy="50%" r="75%">`
 /// with stops at 50% (transparent) → 100% (black at 0.85 opacity).
 fn generate_vignette_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
 ) -> Option<TextureId> {
@@ -390,7 +433,7 @@ fn generate_vignette_texture(
 /// blur (approximating Gaussian stdDeviation=4), and uploads as a
 /// texture with alpha for additive-style glow compositing.
 fn generate_logo_glow_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     scale: f32,
@@ -491,7 +534,7 @@ fn generate_logo_glow_texture(
 /// two blur passes (stdDeviation=8 and stdDeviation=2 from heavyGlow
 /// filter), and merges the results.
 fn generate_horizon_glow_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     scale: f32,
@@ -602,7 +645,7 @@ fn box_blur_rgba(buf: &mut [u8], w: u32, h: u32, half: i32) {
 // -----------------------------------------------------------------------
 
 fn paint_bios_screen(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     sx: f32,
     sy: f32,
@@ -659,12 +702,13 @@ fn paint_bios_screen(
 /// Paint the BIOS header banner: miniature \[OASIS\] glyph, subtitle, and
 /// a phase progress bar. Fades in over the first 0.2s of boot.
 fn paint_bios_banner(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     screen_w: u32,
     sx: f32,
     sy: f32,
     scale: f32,
+    textures: &SplashTextures,
 ) -> Result<()> {
     // Banner fades in over the first 0.2s so it feels like the monitor
     // warming up before the kernel starts printing.
@@ -696,17 +740,26 @@ fn paint_bios_banner(
     backend.fill_rect(bx, by, 2, bh, border_c)?;
     backend.fill_rect(bx + bw as i32 - 2, by, 2, bh, border_c)?;
 
-    // Miniature \[OASIS\] logo on the left side.
-    let logo_center_x = bx + (110.0 * sx) as i32;
-    let logo_center_y = by + (bh as i32) / 2;
-    let logo_scale = 0.19 * scale;
-    paint_mini_oasis_logo(
-        backend,
-        logo_center_x,
-        logo_center_y,
-        logo_scale,
-        banner_alpha,
-    )?;
+    // Miniature \[OASIS\] logo on the left side — single tinted blit of
+    // the pre-rasterized texture from `SplashTextures::create`.
+    if let Some(mini) = textures.mini_logo
+        && textures.mini_logo_w > 0
+        && textures.mini_logo_h > 0
+    {
+        let logo_center_x = bx + (110.0 * sx) as i32;
+        let logo_center_y = by + (bh as i32) / 2;
+        let mlx = logo_center_x - textures.mini_logo_w as i32 / 2;
+        let mly = logo_center_y - textures.mini_logo_h as i32 / 2;
+        let tint = Color::rgba(255, 255, 255, (banner_alpha * 255.0) as u8);
+        let _ = backend.blit_tinted(
+            mini,
+            mlx,
+            mly,
+            textures.mini_logo_w,
+            textures.mini_logo_h,
+            tint,
+        );
+    }
 
     // Right-side subtitle.
     let subtitle = "BIOS / RUNTIME SERVICES CORE v7.0.4";
@@ -746,81 +799,97 @@ fn paint_bios_banner(
     Ok(())
 }
 
-/// Draw a miniature version of the `\[OASIS\]` logo using fill_rect strokes.
+/// Rasterize the miniature `[OASIS]` logo into an RGBA buffer and upload
+/// as a texture.
 ///
-/// Uses the same source coordinates as [`paint_logo_scaled`] but centered
-/// at a caller-chosen point with a tiny scale. Stroke width is fixed at
-/// a minimum of 1px; letters stay legible down to ~100px wide.
-fn paint_mini_oasis_logo(
-    backend: &mut dyn SdiBackend,
-    cx: i32,
-    cy: i32,
+/// Uses the same source stroke coordinates as [`paint_logo_scaled`], but
+/// scaled down and drawn into a local pixel buffer. Returns
+/// `(texture, width, height)` — caller blits with `blit_tinted` per frame.
+/// Centered at the texture's midpoint so the caller can position by
+/// center.
+fn generate_mini_logo_texture(
+    backend: &mut impl SdiBackend,
     s: f32,
-    opacity: f32,
-) -> Result<()> {
-    // Source logo center (from paint_logo_scaled): (640, 367).
-    let sc_x = 640.0f32;
-    let sc_y = 367.0f32;
+) -> (Option<TextureId>, u32, u32) {
+    // Logo bounding box in source coords: 275..1005 × 280..445.
+    // Add a stroke-width worth of padding on each side so scaled strokes
+    // at the edges don't clip.
     let sw = ((3.0 * s) as u32).max(1);
-    let c = apply_alpha(Color::rgb(255, 255, 255), opacity);
+    let pad = sw as i32 + 1;
+    let src_w = (1005.0 - 275.0) * s;
+    let src_h = (445.0 - 280.0) * s;
+    let w = (src_w as i32 + pad * 2).max(4) as u32;
+    let h = (src_h as i32 + pad * 2).max(4) as u32;
 
-    let mut line = |x1: f32, y1: f32, x2: f32, y2: f32| -> Result<()> {
-        let px1 = cx + ((x1 - sc_x) * s) as i32;
-        let py1 = cy + ((y1 - sc_y) * s) as i32;
-        let px2 = cx + ((x2 - sc_x) * s) as i32;
-        let py2 = cy + ((y2 - sc_y) * s) as i32;
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+
+    // Convert source coords to buffer-local ints. The source logo spans
+    // (275..1005, 280..445); translate so the min corner lands at `pad`.
+    let map_x = |x: f32| -> i32 { ((x - 275.0) * s) as i32 + pad };
+    let map_y = |y: f32| -> i32 { ((y - 280.0) * s) as i32 + pad };
+
+    let mut line = |x1: f32, y1: f32, x2: f32, y2: f32| {
+        let px1 = map_x(x1);
+        let py1 = map_y(y1);
+        let px2 = map_x(x2);
+        let py2 = map_y(y2);
         let dx = (px2 - px1).abs();
         let dy = (py2 - py1).abs();
-        if dx == 0 || dy == 0 {
-            let lx = px1.min(px2);
-            let ly = py1.min(py2);
-            let lw = (dx as u32).max(sw);
-            let lh = (dy as u32).max(sw);
-            backend.fill_rect(lx, ly, lw, lh, c)?;
-        } else {
-            let steps = dx.max(dy);
-            for step in 0..=steps {
-                let t = step as f32 / steps.max(1) as f32;
-                let px = px1 + ((px2 - px1) as f32 * t) as i32;
-                let py = py1 + ((py2 - py1) as f32 * t) as i32;
-                backend.fill_rect(px, py, sw, sw, c)?;
+        let steps = dx.max(dy).max(1);
+        for step in 0..=steps {
+            let t = step as f32 / steps as f32;
+            let px = px1 + ((px2 - px1) as f32 * t) as i32;
+            let py = py1 + ((py2 - py1) as f32 * t) as i32;
+            // Splat an sw×sw white block at (px, py).
+            for oy in 0..sw as i32 {
+                for ox in 0..sw as i32 {
+                    let bx = px + ox;
+                    let by = py + oy;
+                    if bx >= 0 && by >= 0 && (bx as u32) < w && (by as u32) < h {
+                        let idx = ((by as u32 * w + bx as u32) * 4) as usize;
+                        buf[idx] = 255;
+                        buf[idx + 1] = 255;
+                        buf[idx + 2] = 255;
+                        buf[idx + 3] = 255;
+                    }
+                }
             }
         }
-        Ok(())
     };
 
     // Left bracket: [
-    line(315.0, 290.0, 275.0, 290.0)?;
-    line(275.0, 290.0, 275.0, 445.0)?;
-    line(275.0, 445.0, 315.0, 445.0)?;
+    line(315.0, 290.0, 275.0, 290.0);
+    line(275.0, 290.0, 275.0, 445.0);
+    line(275.0, 445.0, 315.0, 445.0);
     // O
-    line(410.0, 290.0, 490.0, 290.0)?;
-    line(490.0, 290.0, 490.0, 410.0)?;
-    line(490.0, 410.0, 410.0, 410.0)?;
-    line(410.0, 410.0, 410.0, 290.0)?;
+    line(410.0, 290.0, 490.0, 290.0);
+    line(490.0, 290.0, 490.0, 410.0);
+    line(490.0, 410.0, 410.0, 410.0);
+    line(410.0, 410.0, 410.0, 290.0);
     // A
-    line(520.0, 410.0, 560.0, 290.0)?;
-    line(560.0, 290.0, 600.0, 410.0)?;
+    line(520.0, 410.0, 560.0, 290.0);
+    line(560.0, 290.0, 600.0, 410.0);
     // S (first)
-    line(630.0, 290.0, 710.0, 290.0)?;
-    line(630.0, 290.0, 630.0, 350.0)?;
-    line(630.0, 350.0, 710.0, 350.0)?;
-    line(710.0, 350.0, 710.0, 410.0)?;
-    line(630.0, 410.0, 710.0, 410.0)?;
+    line(630.0, 290.0, 710.0, 290.0);
+    line(630.0, 290.0, 630.0, 350.0);
+    line(630.0, 350.0, 710.0, 350.0);
+    line(710.0, 350.0, 710.0, 410.0);
+    line(630.0, 410.0, 710.0, 410.0);
     // I
-    line(740.0, 290.0, 740.0, 410.0)?;
+    line(740.0, 290.0, 740.0, 410.0);
     // S (second)
-    line(770.0, 290.0, 850.0, 290.0)?;
-    line(770.0, 290.0, 770.0, 350.0)?;
-    line(770.0, 350.0, 850.0, 350.0)?;
-    line(850.0, 350.0, 850.0, 410.0)?;
-    line(770.0, 410.0, 850.0, 410.0)?;
+    line(770.0, 290.0, 850.0, 290.0);
+    line(770.0, 290.0, 770.0, 350.0);
+    line(770.0, 350.0, 850.0, 350.0);
+    line(850.0, 350.0, 850.0, 410.0);
+    line(770.0, 410.0, 850.0, 410.0);
     // Right bracket: ]
-    line(965.0, 290.0, 1005.0, 290.0)?;
-    line(1005.0, 290.0, 1005.0, 445.0)?;
-    line(1005.0, 445.0, 965.0, 445.0)?;
+    line(965.0, 290.0, 1005.0, 290.0);
+    line(1005.0, 290.0, 1005.0, 445.0);
+    line(1005.0, 445.0, 965.0, 445.0);
 
-    Ok(())
+    let tex = backend.load_texture(w, h, &buf).ok();
+    (tex, w, h)
 }
 
 /// Paint the live "currently loading" status line below the BIOS block.
@@ -830,7 +899,7 @@ fn paint_mini_oasis_logo(
 /// subtle "something is happening" signal.
 #[allow(clippy::too_many_arguments)]
 fn paint_bios_status_line(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     screen_w: u32,
     sx: f32,
@@ -886,7 +955,7 @@ fn paint_bios_status_line(
 
 #[allow(clippy::too_many_arguments)]
 fn paint_splash_screen(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     screen_w: u32,
     screen_h: u32,
@@ -1044,7 +1113,7 @@ fn paint_splash_screen(
 /// `logo_scale`: 1.0 = normal, 1.05 = 5% larger from center.
 /// `brightness`: 1.0 = normal white, 2.0 = double brightness (clamped).
 fn paint_logo_scaled(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     sx: f32,
     sy: f32,
     opacity: f32,
@@ -1160,7 +1229,7 @@ fn apply_alpha(c: Color, opacity: f32) -> Color {
 }
 
 fn paint_vertical_gradient(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     x: i32,
     y: i32,
     w: u32,
@@ -1220,7 +1289,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 fn paint_scanlines(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     sy: f32,
