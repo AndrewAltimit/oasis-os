@@ -406,6 +406,27 @@ pub struct BrowserWidget {
     /// on navigation, not on hover.
     cached_author_sheets: Vec<css::parser::Stylesheet>,
 
+    /// Parsed external stylesheets from `<link rel="stylesheet">`. Stored
+    /// in document order so ordered cascade precedence matches HTML.
+    /// `None` slots are in-flight or failed fetches; present once the I/O
+    /// thread response has been parsed.
+    external_stylesheets: Vec<Option<css::parser::Stylesheet>>,
+
+    /// In-flight external stylesheet requests on the I/O thread, keyed
+    /// by request ID mapped to the `external_stylesheets` slot index.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_io_stylesheets: std::collections::HashMap<loader::io_thread::IoRequestId, usize>,
+
+    /// VFS-scheme stylesheets queued during `load_html`. Drained by
+    /// `tick()` which holds the active VFS handle.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
+
+    /// Set once any external stylesheet has arrived that was not yet
+    /// applied to the cascade. A later `tick` call re-runs cascade +
+    /// layout so the new styles land on-screen.
+    pending_external_css_apply: bool,
+
     /// Cached inline `style=""` declarations. Re-parsed only on navigation.
     cached_inline_styles: Vec<(NodeId, Vec<css::parser::Declaration>)>,
 
@@ -645,6 +666,12 @@ impl BrowserWidget {
             cached_image_info: HashMap::new(),
             image_info_dirty: false,
             cached_author_sheets: Vec::new(),
+            external_stylesheets: Vec::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_io_stylesheets: std::collections::HashMap::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_vfs_stylesheets: Vec::new(),
+            pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
             cached_selector_index: None,
             container_lookup: None,
@@ -862,6 +889,26 @@ impl BrowserWidget {
     /// Get the current error message, if any.
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
+    }
+
+    /// Number of in-flight requests on the background I/O thread, or
+    /// `None` if the thread was never spawned (WASM/PSP or a pure
+    /// offline session).
+    ///
+    /// Exposed so screenshot tests and embedders can drive `tick()` to
+    /// quiescence when external stylesheets and images are still in
+    /// flight after `load_html()`.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pub fn io_thread_in_flight(&self) -> Option<usize> {
+        self.io_thread.as_ref().map(|t| t.in_flight())
+    }
+
+    /// Stub for platforms without a dedicated I/O thread — always
+    /// reports zero in-flight requests so drain loops terminate
+    /// immediately.
+    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    pub fn io_thread_in_flight(&self) -> Option<usize> {
+        None
     }
 
     /// Accumulated errors from the current page (network, parse, JS).

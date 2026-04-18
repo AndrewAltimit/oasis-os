@@ -39,6 +39,8 @@ mod inner {
         PageLoad,
         /// A sub-resource image fetch.
         Image,
+        /// An external `<link rel="stylesheet">` CSS fetch.
+        Stylesheet,
     }
 
     /// A request submitted to the I/O thread.

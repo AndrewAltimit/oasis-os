@@ -3145,3 +3145,75 @@ fn iframe_http_mode_still_loads_vfs_pages() {
         "VFS pages must still build a DOM even with iframe_http_mode on",
     );
 }
+
+/// Real old.reddit.com ships almost no inline CSS — nearly everything
+/// comes in via `<link rel="stylesheet">`. Without this pass the page
+/// renders as an unstyled vertical bullet list. Verify the engine
+/// fetches the linked sheet (via VFS here so the test is offline) and
+/// applies its rules after the first tick.
+#[test]
+fn external_stylesheet_fetched_and_applied() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/x").unwrap();
+    // Author CSS colors the <h1> red. Without external loading the UA
+    // default (black) would apply instead.
+    vfs.write("/sites/x/theme.css", b"h1 { color: rgb(255, 0, 0); }")
+        .unwrap();
+    vfs.write(
+        "/sites/x/index.html",
+        b"<html><head>\
+          <link rel=\"stylesheet\" href=\"theme.css\">\
+          </head><body><h1 id=\"t\">hello</h1></body></html>",
+    )
+    .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.navigate_vfs("vfs://sites/x/index.html", &vfs);
+
+    // The initial load cascades against UA + inline <style>; the
+    // external theme.css has been queued on the I/O thread but not
+    // yet parsed. `tick()` polls the I/O thread and applies any
+    // arrived sheets.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let h1_nid = browser
+        .document
+        .as_ref()
+        .and_then(|d| {
+            d.nodes.iter().position(|n| {
+                matches!(
+                    &n.kind,
+                    crate::html::dom::NodeKind::Element(e) if e.tag == crate::html::dom::TagName::H1
+                )
+            })
+        })
+        .expect("h1 in fixture");
+
+    let mut applied = false;
+    while std::time::Instant::now() < deadline {
+        browser.tick(&vfs);
+        let color = browser
+            .styles
+            .get(h1_nid)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.color);
+        if matches!(color, Some(c) if c.r == 255 && c.g == 0 && c.b == 0) {
+            applied = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    assert!(
+        applied,
+        "external <link rel=stylesheet> must be fetched and re-cascaded \
+         so its rules reach the paint pipeline (h1 should be red, got \
+         {:?})",
+        browser
+            .styles
+            .get(h1_nid)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.color)
+    );
+}

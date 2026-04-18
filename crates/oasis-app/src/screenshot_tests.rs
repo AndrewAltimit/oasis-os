@@ -835,6 +835,17 @@ fn run_skin_scenario(
     Ok(())
 }
 
+/// Return the canonical https base URL for a `*_real` fixture so
+/// protocol-relative and root-relative resources resolve to the live
+/// site during `OASIS_LIVE_CSS=1` captures.
+fn reddit_real_base_url(page_name: &str) -> Option<&'static str> {
+    match page_name {
+        "reddit_listing_real" => Some("https://old.reddit.com/r/rust/"),
+        "reddit_comments_real" => Some("https://old.reddit.com/r/rust/comments/"),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Browser page scenarios
 // ---------------------------------------------------------------------------
@@ -883,7 +894,53 @@ fn run_browser_scenario(
             let content = fs::read_to_string(&fixture_path).unwrap_or_else(|_| {
                 format!("<html><body><p>Missing fixture: {fixture_path}</p></body></html>")
             });
-            browser.load_html(&content, &format!("file://test/{page_name}.html"));
+            // For `*_real` fixtures (real-world HTML snapshots), enable a
+            // TLS provider and tick the widget until external stylesheet
+            // fetches settle. These fixtures reference external CSS files
+            // on the live web, and without fetching them old.reddit renders
+            // as an unstyled vertical list. Opt-in via `OASIS_LIVE_CSS=1`
+            // so the default test run never depends on network.
+            let live_css = page_name.ends_with("_real")
+                && std::env::var("OASIS_LIVE_CSS").ok().as_deref() == Some("1");
+            if live_css {
+                use oasis_core::net::RustlsTlsProvider;
+                browser.set_tls_provider(Box::new(RustlsTlsProvider::new()));
+            }
+            // Real-world fixtures (`*_real`) get an https base URL so
+            // protocol-relative references like `//cdn/foo.css` resolve
+            // to https rather than file://. Offline fixtures keep the
+            // original file:// scheme so their relative references stay
+            // within the fixture directory.
+            let base_url = if live_css {
+                reddit_real_base_url(page_name)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("file://test/{page_name}.html"))
+            } else {
+                format!("file://test/{page_name}.html")
+            };
+            browser.load_html(&content, &base_url);
+            if live_css {
+                let empty_vfs = MemoryVfs::new();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                loop {
+                    browser.tick(&empty_vfs);
+                    let in_flight = browser.io_thread_in_flight().unwrap_or(0);
+                    if in_flight == 0 {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        log::warn!(
+                            "{}: {} external stylesheet(s) still pending at deadline",
+                            page_name,
+                            in_flight
+                        );
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                // One more tick so any final apply gets picked up.
+                browser.tick(&empty_vfs);
+            }
             content
         },
     };
