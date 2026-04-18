@@ -4,34 +4,68 @@
 //! before handing off to the dashboard. Uses the SVG renderer
 //! directly — no browser engine or CSS animation engine required.
 //!
-//! The animation timing is hardcoded to match the CSS `animation-delay`
-//! values in `boot_8.svg`:
+//! ## Functional boot
+//!
+//! Unlike a pure decoration, the BIOS-phase lines are caller-driven:
+//! [`BootSplash::set_bios_line`] overwrites a line's text so `main.rs`
+//! can report actual system probes (RAM, VFS file count, skin name,
+//! command/plugin counts). The caller interleaves real init work
+//! with animation frames via [`BootSplash::run_until`] — advancing
+//! the splash to the next BIOS reveal time while the main thread
+//! runs one unit of startup work.
+//!
+//! The animation timing mirrors the CSS `animation-delay` values in
+//! the original `boot_8.svg`:
 //!
 //! | Element              | Delay (s) | Effect            |
 //! |----------------------|-----------|-------------------|
-//! | BIOS line 1          | 0.4       | opacity 0 → 1    |
-//! | BIOS line 2          | 0.8       | opacity 0 → 1    |
-//! | BIOS line 3          | 1.2       | opacity 0 → 1    |
-//! | BIOS line 4          | 1.6       | opacity 0 → 1    |
-//! | BIOS line 5          | 2.1       | opacity 0 → 1    |
-//! | BIOS line 6          | 2.6       | opacity 0 → 1    |
-//! | BIOS line 7          | 3.0       | opacity 0 → 1    |
+//! | BIOS line 0          | 0.4       | opacity 0 → 1    |
+//! | BIOS line 1          | 0.8       | opacity 0 → 1    |
+//! | BIOS line 2          | 1.2       | opacity 0 → 1    |
+//! | BIOS line 3          | 1.6       | opacity 0 → 1    |
+//! | BIOS line 4          | 2.1       | opacity 0 → 1    |
+//! | BIOS line 5          | 2.6       | opacity 0 → 1    |
+//! | BIOS line 6          | 3.0       | opacity 0 → 1    |
 //! | CRT flicker          | 3.4       | white flash       |
 //! | BIOS screen hide     | 3.6       | opacity 1 → 0    |
 //! | Splash BG reveal     | 3.5       | opacity 0 → 1    |
 //! | Horizon glow         | 3.8       | pulse start       |
 //! | Logo group           | 4.0       | opacity 0 → 1    |
-//! | Loading text          | 5.5       | opacity 0 → 1    |
+//! | Loading text         | 5.5       | opacity 0 → 1    |
 //! | End                  | 6.5       | fade to dashboard |
 
 use oasis_core::backend::{Color, InputBackend, SdiBackend, TextureId};
 use oasis_core::error::Result;
 
 /// Total duration of the boot splash in seconds.
-const SPLASH_DURATION_S: f32 = 6.5;
+pub const SPLASH_DURATION_S: f32 = 6.5;
 
-/// Minimum frame time to cap at ~60 FPS.
-const MIN_FRAME_MS: u128 = 16;
+/// Reveal times for the 7 BIOS lines (seconds since splash start).
+pub const BIOS_REVEAL_TIMES: [f32; 7] = [0.4, 0.8, 1.2, 1.6, 2.1, 2.6, 3.0];
+
+/// Target frame budget at 60 FPS (microsecond precision).
+const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_micros(16_667);
+
+/// Busy-wait threshold: once we're within this many microseconds of the
+/// deadline, spin instead of sleeping. Covers typical Linux CLOCK_MONOTONIC
+/// scheduler jitter (~1 ms) so `thread::sleep` doesn't overshoot the frame
+/// target.
+const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// Default BIOS lines — overridden by the caller via `set_bios_line`
+/// once real system probes complete.
+const DEFAULT_BIOS_LINES: [&str; 7] = [
+    "OASIS_KERNEL_V.7.0.4 BOOT SEQUENCE INITIATED",
+    "COPYRIGHT (C) 199X OASIS CORP. ALL RIGHTS RESERVED.",
+    "SYSTEM RAM CHECK... OK",
+    "INITIALIZING VIRTUAL FILE SYSTEM... OK",
+    "MOUNTING BOOT DRIVE /DEV/HDA1... OK",
+    "LOADING FRAGMENT... OK",
+    "STARTING DISPLAY MANAGER",
+];
+
+/// Default progress note shown during the splash phase (5.5s+).
+const DEFAULT_PROGRESS_NOTE: &str = "SYSTEM MODULES INITIALIZED";
 
 /// Pre-computed GPU textures for splash effects.
 struct SplashTextures {
@@ -49,16 +83,26 @@ struct SplashTextures {
     horizon_glow_w: u32,
     horizon_glow_h: u32,
     horizon_glow_y: i32,
+    /// Pre-rasterized miniature `[OASIS]` logo used in the BIOS banner.
+    /// Cached as a texture so each frame is a single tinted blit rather
+    /// than the ~200 `fill_rect` calls the per-frame stroke renderer
+    /// would issue.
+    mini_logo: Option<TextureId>,
+    mini_logo_w: u32,
+    mini_logo_h: u32,
 }
 
 impl SplashTextures {
     /// Pre-compute and upload effect textures.
-    fn create(backend: &mut dyn SdiBackend, screen_w: u32, screen_h: u32, scale: f32) -> Self {
+    fn create(backend: &mut impl SdiBackend, screen_w: u32, screen_h: u32, scale: f32) -> Self {
         let vignette = generate_vignette_texture(backend, screen_w, screen_h);
         let (logo_glow, gw, gh, gx, gy) =
             generate_logo_glow_texture(backend, screen_w, screen_h, scale);
         let (horizon_glow, hw, hh, hy) =
             generate_horizon_glow_texture(backend, screen_w, screen_h, scale);
+        // Mini logo renders at 0.19x the full scale, matching the factor
+        // the banner used to pass to `paint_mini_oasis_logo`.
+        let (mini_logo, mlw, mlh) = generate_mini_logo_texture(backend, 0.19 * scale);
         SplashTextures {
             vignette,
             logo_glow,
@@ -70,11 +114,14 @@ impl SplashTextures {
             horizon_glow_w: hw,
             horizon_glow_h: hh,
             horizon_glow_y: hy,
+            mini_logo,
+            mini_logo_w: mlw,
+            mini_logo_h: mlh,
         }
     }
 
     /// Release GPU textures.
-    fn destroy(&self, backend: &mut dyn SdiBackend) {
+    fn destroy(&self, backend: &mut impl SdiBackend) {
         if let Some(tex) = self.vignette {
             let _ = backend.destroy_texture(tex);
         }
@@ -84,6 +131,264 @@ impl SplashTextures {
         if let Some(tex) = self.horizon_glow {
             let _ = backend.destroy_texture(tex);
         }
+        if let Some(tex) = self.mini_logo {
+            let _ = backend.destroy_texture(tex);
+        }
+    }
+}
+
+/// Stateful boot splash. Keeps the animation running across multiple
+/// `run_until` calls while the caller runs real init work in between.
+pub struct BootSplash {
+    start: std::time::Instant,
+    screen_w: u32,
+    screen_h: u32,
+    sx: f32,
+    sy: f32,
+    scale: f32,
+    textures: SplashTextures,
+    /// Seven BIOS lines that reveal at [`BIOS_REVEAL_TIMES`]. Overwritable
+    /// via [`BootSplash::set_bios_line`].
+    bios_lines: [String; 7],
+    /// Live "currently loading" status line below the BIOS block.
+    /// Updates freely — shows in-flight work with a rotating spinner.
+    status_line: String,
+    /// Bottom-of-splash-phase progress note (visible at 5.5s+).
+    progress_note: String,
+    skipped: bool,
+}
+
+impl BootSplash {
+    /// Start the splash. Pre-computes GPU textures for the animation.
+    ///
+    /// The caller should call [`run_until`](Self::run_until) repeatedly,
+    /// interleaving real init work between calls. When done (or skipped),
+    /// call [`finish`](Self::finish) to fade out and release textures.
+    pub fn start(backend: &mut impl SdiBackend, screen_w: u32, screen_h: u32) -> Result<Self> {
+        let sx = screen_w as f32 / 1280.0;
+        let sy = screen_h as f32 / 720.0;
+        let scale = sx.min(sy);
+        let textures = SplashTextures::create(backend, screen_w, screen_h, scale);
+
+        Ok(Self {
+            start: std::time::Instant::now(),
+            screen_w,
+            screen_h,
+            sx,
+            sy,
+            scale,
+            textures,
+            bios_lines: DEFAULT_BIOS_LINES.map(String::from),
+            status_line: String::new(),
+            progress_note: DEFAULT_PROGRESS_NOTE.to_string(),
+            skipped: false,
+        })
+    }
+
+    /// Seconds since the splash started.
+    pub fn elapsed(&self) -> f32 {
+        self.start.elapsed().as_secs_f32()
+    }
+
+    /// Overwrite a BIOS line's text. Takes effect on the next render.
+    ///
+    /// `idx` must be 0..7. If the line is already revealed when updated,
+    /// the new text replaces the old in-place with no re-animation.
+    pub fn set_bios_line(&mut self, idx: usize, text: impl Into<String>) {
+        if let Some(slot) = self.bios_lines.get_mut(idx) {
+            *slot = text.into();
+        }
+    }
+
+    /// Set the text shown at the bottom of the splash phase (replaces
+    /// "SYSTEM MODULES INITIALIZED"). Visible from 5.5s onward.
+    pub fn set_progress_note(&mut self, text: impl Into<String>) {
+        self.progress_note = text.into();
+    }
+
+    /// Set the live "currently loading" status line displayed below the
+    /// BIOS block. Paired with an animated spinner glyph.
+    ///
+    /// Update freely as each init step starts; pass an empty string to
+    /// hide the line entirely (e.g. once all work is done).
+    pub fn set_status(&mut self, text: impl Into<String>) {
+        self.status_line = text.into();
+    }
+
+    /// Render frames until `target_secs` is reached, the user skips, or
+    /// the splash ends. Returns `Ok(true)` if the user skipped (now or
+    /// in a prior call), `Ok(false)` otherwise.
+    ///
+    /// Once skipped, this call returns immediately (no rendering).
+    pub fn run_until(
+        &mut self,
+        backend: &mut (impl SdiBackend + InputBackend),
+        target_secs: f32,
+    ) -> Result<bool> {
+        if self.skipped {
+            return Ok(true);
+        }
+        let target = target_secs.min(SPLASH_DURATION_S);
+        while self.elapsed() < target {
+            let frame_start = std::time::Instant::now();
+
+            // Skip on any button press.
+            let events = backend.poll_events();
+            if events
+                .iter()
+                .any(|e| matches!(e, oasis_core::input::InputEvent::ButtonPress(_)))
+            {
+                self.skipped = true;
+                return Ok(true);
+            }
+
+            self.render_frame(backend)?;
+            backend.swap_buffers()?;
+
+            // Frame rate cap — deadline-based with a short spin at the end
+            // so the OS scheduler can't overshoot the 16.667 ms budget and
+            // drift the splash animation. For a sub-7s one-shot this
+            // matters less than in a hot render loop, but the reviewer
+            // flagged it and the fix is cheap.
+            let spent = frame_start.elapsed();
+            if let Some(remaining) = FRAME_BUDGET.checked_sub(spent) {
+                if remaining > SPIN_MARGIN {
+                    std::thread::sleep(remaining - SPIN_MARGIN);
+                }
+                while frame_start.elapsed() < FRAME_BUDGET {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Run the animation to completion.
+    pub fn run_to_end(&mut self, backend: &mut (impl SdiBackend + InputBackend)) -> Result<bool> {
+        self.run_until(backend, SPLASH_DURATION_S)
+    }
+
+    /// Fade out to black, then release GPU textures. Consumes self.
+    ///
+    /// If the splash was skipped, fades directly to black without the
+    /// usual 0.3s transition.
+    pub fn finish(self, backend: &mut impl SdiBackend) -> Result<()> {
+        let skipped = self.skipped;
+        let screen_w = self.screen_w;
+        let screen_h = self.screen_h;
+
+        let result: Result<()> = (|| {
+            if !skipped {
+                // Fade out to black over ~0.3s.
+                //
+                // Render the current splash frame as the BASE every
+                // iteration so the increasing-alpha black overlay has
+                // something to fade FROM. The original code cleared to
+                // solid black before the overlay, which meant every
+                // alpha value produced pure black and the "fade" was
+                // actually an instant cut — reviewers spotted it.
+                let fade_start = std::time::Instant::now();
+                while fade_start.elapsed().as_secs_f32() < 0.3 {
+                    let frame_start = std::time::Instant::now();
+                    let t = fade_start.elapsed().as_secs_f32() / 0.3;
+                    let alpha = (t * 255.0).min(255.0) as u8;
+                    self.render_frame(backend)?;
+                    backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
+                    backend.swap_buffers()?;
+                    // Same deadline-based frame cap as run_until so the
+                    // fade animates at a consistent 60 FPS.
+                    let spent = frame_start.elapsed();
+                    if let Some(remaining) = FRAME_BUDGET.checked_sub(spent) {
+                        if remaining > SPIN_MARGIN {
+                            std::thread::sleep(remaining - SPIN_MARGIN);
+                        }
+                        while frame_start.elapsed() < FRAME_BUDGET {
+                            std::hint::spin_loop();
+                        }
+                    }
+                }
+            }
+            backend.clear(Color::rgb(0, 0, 0))?;
+            backend.swap_buffers()?;
+            Ok(())
+        })();
+
+        self.textures.destroy(backend);
+        result
+    }
+
+    /// Render a single splash frame at the current elapsed time.
+    fn render_frame(&self, backend: &mut impl SdiBackend) -> Result<()> {
+        let elapsed = self.elapsed();
+        backend.clear(Color::rgb(5, 5, 5))?;
+
+        // Phase 1: BIOS screen (0.0 - 3.6s)
+        let bios_opacity = if elapsed < 3.6 { 1.0 } else { 0.0 };
+        if bios_opacity > 0.0 {
+            paint_bios_banner(
+                backend,
+                elapsed,
+                self.screen_w,
+                self.sx,
+                self.sy,
+                self.scale,
+                &self.textures,
+            )?;
+            paint_bios_screen(
+                backend,
+                elapsed,
+                self.sx,
+                self.sy,
+                self.scale,
+                &self.bios_lines,
+            )?;
+            paint_bios_status_line(
+                backend,
+                elapsed,
+                self.screen_w,
+                self.sx,
+                self.sy,
+                self.scale,
+                &self.status_line,
+            )?;
+        }
+
+        // Phase transition: CRT flicker (3.4 - 3.9s)
+        if (3.4..3.9).contains(&elapsed) {
+            let t = (elapsed - 3.4) / 0.5;
+            let alpha = if t < 0.1 {
+                (t / 0.1 * 255.0) as u8
+            } else if t < 0.6 {
+                255
+            } else {
+                ((1.0 - (t - 0.6) / 0.4) * 255.0).max(0.0) as u8
+            };
+            let flicker_color = if t < 0.3 {
+                Color::rgba(255, 255, 255, alpha)
+            } else if t < 0.6 {
+                Color::rgba(191, 0, 255, alpha)
+            } else {
+                Color::rgba(255, 255, 255, alpha)
+            };
+            backend.fill_rect(0, 0, self.screen_w, self.screen_h, flicker_color)?;
+        }
+
+        // Phase 2: Splash screen (3.5s+)
+        if elapsed >= 3.5 {
+            paint_splash_screen(
+                backend,
+                elapsed,
+                self.screen_w,
+                self.screen_h,
+                self.sx,
+                self.sy,
+                self.scale,
+                &self.textures,
+                &self.progress_note,
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -92,7 +397,7 @@ impl SplashTextures {
 /// Matches SVG: `<radialGradient id="vignette" cx="50%" cy="50%" r="75%">`
 /// with stops at 50% (transparent) → 100% (black at 0.85 opacity).
 fn generate_vignette_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
 ) -> Option<TextureId> {
@@ -135,7 +440,7 @@ fn generate_vignette_texture(
 /// blur (approximating Gaussian stdDeviation=4), and uploads as a
 /// texture with alpha for additive-style glow compositing.
 fn generate_logo_glow_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     scale: f32,
@@ -236,7 +541,7 @@ fn generate_logo_glow_texture(
 /// two blur passes (stdDeviation=8 and stdDeviation=2 from heavyGlow
 /// filter), and merges the results.
 fn generate_horizon_glow_texture(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     scale: f32,
@@ -342,147 +647,30 @@ fn box_blur_rgba(buf: &mut [u8], w: u32, h: u32, half: i32) {
     }
 }
 
-/// Run the boot splash animation, blocking until complete.
-///
-/// Returns `Ok(())` when the animation finishes or the user presses
-/// a button to skip. The caller should proceed to normal init after
-/// this returns.
-pub fn run_boot_splash(
-    backend: &mut (impl SdiBackend + InputBackend),
-    screen_w: u32,
-    screen_h: u32,
-) -> Result<()> {
-    let start = std::time::Instant::now();
-
-    // Precompute layout constants scaled to screen.
-    let sx = screen_w as f32 / 1280.0;
-    let sy = screen_h as f32 / 720.0;
-    let scale = sx.min(sy);
-
-    // Pre-compute GPU textures for vignette and logo glow.
-    let textures = SplashTextures::create(backend, screen_w, screen_h, scale);
-
-    // Run the splash loop inside a closure so that any `?`-propagated
-    // backend error still lets us release the GPU textures on the way
-    // out — otherwise early-returns would leak them.
-    let result: Result<()> = (|| {
-        loop {
-            let frame_start = std::time::Instant::now();
-            let elapsed = start.elapsed().as_secs_f32();
-
-            // Allow skipping with any button press.
-            let events = backend.poll_events();
-            if events
-                .iter()
-                .any(|e| matches!(e, oasis_core::input::InputEvent::ButtonPress(_)))
-            {
-                break;
-            }
-
-            if elapsed >= SPLASH_DURATION_S {
-                break;
-            }
-
-            backend.clear(Color::rgb(5, 5, 5))?;
-
-            // Phase 1: BIOS screen (0.0 - 3.6s)
-            let bios_opacity = if elapsed < 3.6 { 1.0 } else { 0.0 };
-            if bios_opacity > 0.0 {
-                paint_bios_screen(backend, elapsed, sx, sy, scale)?;
-            }
-
-            // Phase transition: CRT flicker (3.4 - 3.9s)
-            if (3.4..3.9).contains(&elapsed) {
-                let t = (elapsed - 3.4) / 0.5;
-                let alpha = if t < 0.1 {
-                    (t / 0.1 * 255.0) as u8
-                } else if t < 0.6 {
-                    255
-                } else {
-                    ((1.0 - (t - 0.6) / 0.4) * 255.0).max(0.0) as u8
-                };
-                let flicker_color = if t < 0.3 {
-                    Color::rgba(255, 255, 255, alpha)
-                } else if t < 0.6 {
-                    Color::rgba(191, 0, 255, alpha)
-                } else {
-                    Color::rgba(255, 255, 255, alpha)
-                };
-                backend.fill_rect(0, 0, screen_w, screen_h, flicker_color)?;
-            }
-
-            // Phase 2: Splash screen (3.5s+)
-            if elapsed >= 3.5 {
-                paint_splash_screen(
-                    backend, elapsed, screen_w, screen_h, sx, sy, scale, &textures,
-                )?;
-            }
-
-            backend.swap_buffers()?;
-
-            // Frame rate limiting.
-            let frame_time = frame_start.elapsed().as_millis();
-            if frame_time < MIN_FRAME_MS {
-                std::thread::sleep(std::time::Duration::from_millis(
-                    (MIN_FRAME_MS - frame_time) as u64,
-                ));
-            }
-        }
-
-        // Fade out to black over ~0.3s.
-        let fade_start = std::time::Instant::now();
-        while fade_start.elapsed().as_secs_f32() < 0.3 {
-            let t = fade_start.elapsed().as_secs_f32() / 0.3;
-            let alpha = (t * 255.0).min(255.0) as u8;
-            backend.clear(Color::rgb(0, 0, 0))?;
-            backend.fill_rect(0, 0, screen_w, screen_h, Color::rgba(0, 0, 0, alpha))?;
-            backend.swap_buffers()?;
-            std::thread::sleep(std::time::Duration::from_millis(16));
-        }
-        backend.clear(Color::rgb(0, 0, 0))?;
-        backend.swap_buffers()?;
-
-        Ok(())
-    })();
-
-    // Release GPU textures regardless of how the splash loop exited.
-    textures.destroy(backend);
-
-    result
-}
-
 // -----------------------------------------------------------------------
 // BIOS screen painting
 // -----------------------------------------------------------------------
 
 fn paint_bios_screen(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     sx: f32,
     sy: f32,
     scale: f32,
+    lines: &[String; 7],
 ) -> Result<()> {
     let fs = (22.0 * scale).max(8.0) as u16;
     let c = Color::rgb(204, 204, 204);
-
-    let lines: &[(&str, f32)] = &[
-        ("OASIS_KERNEL_V.7.0.4 BOOT SEQUENCE INITIATED", 0.4),
-        ("COPYRIGHT (C) 199X OASIS CORP. ALL RIGHTS RESERVED.", 0.8),
-        ("SYSTEM RAM CHECK... 1024000K OK", 1.2),
-        ("INITIALIZING VIRTUAL FILE SYSTEM... OK", 1.6),
-        ("MOUNTING BOOT DRIVE /DEV/HDA1... OK", 2.1),
-        ("LOADING FRAGMENT... OK", 2.6),
-        ("STARTING DISPLAY MANAGER", 3.0),
-    ];
 
     let x = (40.0 * sx) as i32;
     let y_positions = [60.0, 95.0, 150.0, 185.0, 220.0, 275.0, 310.0];
 
     let ls = (1.0 * scale).round() as i32; // SVG: letter-spacing="1"
-    for (i, (text, delay)) in lines.iter().enumerate() {
-        if elapsed >= *delay {
+    for (i, text) in lines.iter().enumerate() {
+        let delay = BIOS_REVEAL_TIMES[i];
+        if elapsed >= delay {
             // Each line fades in over 100ms (SVG: animation 0.1s forwards).
-            let line_alpha = ((elapsed - *delay) / 0.1).clamp(0.0, 1.0);
+            let line_alpha = ((elapsed - delay) / 0.1).clamp(0.0, 1.0);
             let lc = apply_alpha(c, line_alpha);
             let py = (y_positions[i] * sy) as i32;
             if ls > 0 {
@@ -501,14 +689,276 @@ fn paint_bios_screen(
     }
 
     // Blinking cursor on last line.
-    if elapsed >= 3.0 {
+    if elapsed >= BIOS_REVEAL_TIMES[6] {
         let blink = ((elapsed * 2.0) as u32).is_multiple_of(2);
         if blink {
-            let cursor_x = x + backend.measure_text("STARTING DISPLAY MANAGER", fs) as i32;
+            let last_line = &lines[6];
+            let cursor_x = x + backend.measure_text(last_line, fs) as i32;
             let py = (310.0 * sy) as i32;
             backend.draw_text("_", cursor_x, py, fs, c)?;
         }
     }
+
+    Ok(())
+}
+
+// -----------------------------------------------------------------------
+// BIOS banner (top-of-screen header graphic)
+// -----------------------------------------------------------------------
+
+/// Paint the BIOS header banner: miniature \[OASIS\] glyph, subtitle, and
+/// a phase progress bar. Fades in over the first 0.2s of boot.
+fn paint_bios_banner(
+    backend: &mut impl SdiBackend,
+    elapsed: f32,
+    screen_w: u32,
+    sx: f32,
+    sy: f32,
+    scale: f32,
+    textures: &SplashTextures,
+) -> Result<()> {
+    // Banner fades in over the first 0.2s so it feels like the monitor
+    // warming up before the kernel starts printing.
+    let banner_alpha = (elapsed / 0.2).clamp(0.0, 1.0);
+    if banner_alpha < 0.01 {
+        return Ok(());
+    }
+
+    // Banner rect in base-720 coords.
+    let bx = (10.0 * sx) as i32;
+    let by = (5.0 * sy) as i32;
+    let bw = screen_w.saturating_sub((20.0 * sx) as u32);
+    let bh = (44.0 * sy) as u32;
+
+    // Subtle dark fill for the banner interior.
+    backend.fill_rect(
+        bx,
+        by,
+        bw,
+        bh,
+        Color::rgba(18, 14, 36, (banner_alpha * 180.0) as u8),
+    )?;
+
+    // 1px top border + 2px bottom border (retro CRT frame).
+    let border_c = apply_alpha(Color::rgb(170, 136, 255), banner_alpha);
+    backend.fill_rect(bx, by, bw, 1, border_c)?;
+    backend.fill_rect(bx, by + bh as i32 - 2, bw, 2, border_c)?;
+    // Left/right edge accents.
+    backend.fill_rect(bx, by, 2, bh, border_c)?;
+    backend.fill_rect(bx + bw as i32 - 2, by, 2, bh, border_c)?;
+
+    // Miniature \[OASIS\] logo on the left side — single tinted blit of
+    // the pre-rasterized texture from `SplashTextures::create`.
+    if let Some(mini) = textures.mini_logo
+        && textures.mini_logo_w > 0
+        && textures.mini_logo_h > 0
+    {
+        let logo_center_x = bx + (110.0 * sx) as i32;
+        let logo_center_y = by + (bh as i32) / 2;
+        let mlx = logo_center_x - textures.mini_logo_w as i32 / 2;
+        let mly = logo_center_y - textures.mini_logo_h as i32 / 2;
+        let tint = Color::rgba(255, 255, 255, (banner_alpha * 255.0) as u8);
+        let _ = backend.blit_tinted(
+            mini,
+            mlx,
+            mly,
+            textures.mini_logo_w,
+            textures.mini_logo_h,
+            tint,
+        );
+    }
+
+    // Right-side subtitle.
+    let subtitle = "BIOS / RUNTIME SERVICES CORE v7.0.4";
+    let sub_fs = (14.0 * scale).max(6.0) as u16;
+    let sub_c = apply_alpha(Color::rgb(204, 204, 204), banner_alpha);
+    let sub_w = backend.measure_text(subtitle, sub_fs) as i32;
+    let sub_x = bx + bw as i32 - sub_w - (16.0 * sx) as i32;
+    let sub_y = by + (bh as i32 - sub_fs as i32) / 2;
+    backend.draw_text(subtitle, sub_x, sub_y, sub_fs, sub_c)?;
+
+    // Bottom progress bar: reflects BIOS-phase completion (0..3.0s).
+    // Gives a visual sense that real work is flowing, not just a timer.
+    let phase_t = (elapsed / 3.0).clamp(0.0, 1.0);
+    let bar_y = by + bh as i32 + (3.0 * sy) as i32;
+    let bar_h = (2.0 * scale).max(1.0) as u32;
+    let bar_full_w = bw.saturating_sub(4);
+    let bar_fill_w = (bar_full_w as f32 * phase_t) as u32;
+    // Track: faint background.
+    backend.fill_rect(
+        bx + 2,
+        bar_y,
+        bar_full_w,
+        bar_h,
+        Color::rgba(170, 136, 255, (banner_alpha * 40.0) as u8),
+    )?;
+    // Fill: bright.
+    if bar_fill_w > 0 {
+        backend.fill_rect(
+            bx + 2,
+            bar_y,
+            bar_fill_w,
+            bar_h,
+            Color::rgba(170, 136, 255, (banner_alpha * 220.0) as u8),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Rasterize the miniature `[OASIS]` logo into an RGBA buffer and upload
+/// as a texture.
+///
+/// Uses the same source stroke coordinates as [`paint_logo_scaled`], but
+/// scaled down and drawn into a local pixel buffer. Returns
+/// `(texture, width, height)` — caller blits with `blit_tinted` per frame.
+/// Centered at the texture's midpoint so the caller can position by
+/// center.
+fn generate_mini_logo_texture(
+    backend: &mut impl SdiBackend,
+    s: f32,
+) -> (Option<TextureId>, u32, u32) {
+    // Logo bounding box in source coords: 275..1005 × 280..445.
+    // Add a stroke-width worth of padding on each side so scaled strokes
+    // at the edges don't clip.
+    let sw = ((3.0 * s) as u32).max(1);
+    let pad = sw as i32 + 1;
+    let src_w = (1005.0 - 275.0) * s;
+    let src_h = (445.0 - 280.0) * s;
+    let w = (src_w as i32 + pad * 2).max(4) as u32;
+    let h = (src_h as i32 + pad * 2).max(4) as u32;
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+
+    // Convert source coords to buffer-local ints. The source logo spans
+    // (275..1005, 280..445); translate so the min corner lands at `pad`.
+    let map_x = |x: f32| -> i32 { ((x - 275.0) * s) as i32 + pad };
+    let map_y = |y: f32| -> i32 { ((y - 280.0) * s) as i32 + pad };
+
+    let mut line = |x1: f32, y1: f32, x2: f32, y2: f32| {
+        let px1 = map_x(x1);
+        let py1 = map_y(y1);
+        let px2 = map_x(x2);
+        let py2 = map_y(y2);
+        let dx = (px2 - px1).abs();
+        let dy = (py2 - py1).abs();
+        let steps = dx.max(dy).max(1);
+        for step in 0..=steps {
+            let t = step as f32 / steps as f32;
+            let px = px1 + ((px2 - px1) as f32 * t) as i32;
+            let py = py1 + ((py2 - py1) as f32 * t) as i32;
+            // Splat an sw×sw white block at (px, py).
+            for oy in 0..sw as i32 {
+                for ox in 0..sw as i32 {
+                    let bx = px + ox;
+                    let by = py + oy;
+                    if bx >= 0 && by >= 0 && (bx as u32) < w && (by as u32) < h {
+                        let idx = ((by as u32 * w + bx as u32) * 4) as usize;
+                        buf[idx] = 255;
+                        buf[idx + 1] = 255;
+                        buf[idx + 2] = 255;
+                        buf[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+    };
+
+    // Left bracket: [
+    line(315.0, 290.0, 275.0, 290.0);
+    line(275.0, 290.0, 275.0, 445.0);
+    line(275.0, 445.0, 315.0, 445.0);
+    // O
+    line(410.0, 290.0, 490.0, 290.0);
+    line(490.0, 290.0, 490.0, 410.0);
+    line(490.0, 410.0, 410.0, 410.0);
+    line(410.0, 410.0, 410.0, 290.0);
+    // A
+    line(520.0, 410.0, 560.0, 290.0);
+    line(560.0, 290.0, 600.0, 410.0);
+    // S (first)
+    line(630.0, 290.0, 710.0, 290.0);
+    line(630.0, 290.0, 630.0, 350.0);
+    line(630.0, 350.0, 710.0, 350.0);
+    line(710.0, 350.0, 710.0, 410.0);
+    line(630.0, 410.0, 710.0, 410.0);
+    // I
+    line(740.0, 290.0, 740.0, 410.0);
+    // S (second)
+    line(770.0, 290.0, 850.0, 290.0);
+    line(770.0, 290.0, 770.0, 350.0);
+    line(770.0, 350.0, 850.0, 350.0);
+    line(850.0, 350.0, 850.0, 410.0);
+    line(770.0, 410.0, 850.0, 410.0);
+    // Right bracket: ]
+    line(965.0, 290.0, 1005.0, 290.0);
+    line(1005.0, 290.0, 1005.0, 445.0);
+    line(1005.0, 445.0, 965.0, 445.0);
+
+    let tex = backend.load_texture(w, h, &buf).ok();
+    (tex, w, h)
+}
+
+/// Paint the live "currently loading" status line below the BIOS block.
+///
+/// Shows `> [spinner] {status_line}` and hides itself if the status is
+/// empty. The spinner cycles through four ASCII glyphs at 10 Hz for a
+/// subtle "something is happening" signal.
+#[allow(clippy::too_many_arguments)]
+fn paint_bios_status_line(
+    backend: &mut impl SdiBackend,
+    elapsed: f32,
+    screen_w: u32,
+    sx: f32,
+    sy: f32,
+    scale: f32,
+    status: &str,
+) -> Result<()> {
+    if status.is_empty() {
+        return Ok(());
+    }
+    let fs = (18.0 * scale).max(7.0) as u16;
+    let x = (40.0 * sx) as i32;
+    let y = (360.0 * sy) as i32;
+    let chrome_c = Color::rgb(170, 136, 255);
+    let text_c = Color::rgb(230, 220, 255);
+
+    // Rotating spinner glyph — cycles ASCII style so it renders via the
+    // bitmap font without needing unicode block chars.
+    const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+    let spinner = SPINNER[((elapsed * 10.0) as usize) % SPINNER.len()];
+
+    // Draw: "> [spinner] status..."
+    let mut cx = x;
+    backend.draw_text("> [", cx, y, fs, chrome_c)?;
+    cx += backend.measure_text("> [", fs) as i32;
+    backend.draw_text(spinner, cx, y, fs, chrome_c)?;
+    cx += backend.measure_text(spinner, fs) as i32;
+    backend.draw_text("] ", cx, y, fs, chrome_c)?;
+    cx += backend.measure_text("] ", fs) as i32;
+
+    // Truncate status if it would overflow the screen (keep ~24px margin).
+    // Clamp to ≥0 so a negative `max_w` (very narrow screen / long chrome
+    // prefix) short-circuits instead of drawing the fallback `"…"` past
+    // the viewport edge.
+    let max_w = (screen_w as i32 - cx - (24.0 * sx) as i32).max(0);
+    if max_w == 0 {
+        return Ok(());
+    }
+    let mut truncated = status.to_string();
+    while backend.measure_text(&truncated, fs) as i32 > max_w && truncated.len() > 3 {
+        truncated.pop();
+        truncated.pop();
+        truncated.push('…');
+    }
+    // The loop bottoms out at `"…"` (3 bytes) once the shrink budget is
+    // exhausted. If even the lone ellipsis glyph is wider than `max_w`
+    // on extremely narrow viewports, bail out entirely rather than draw
+    // it past the margin.
+    if backend.measure_text(&truncated, fs) as i32 > max_w {
+        return Ok(());
+    }
+    backend.draw_text(&truncated, cx, y, fs, text_c)?;
 
     Ok(())
 }
@@ -519,7 +969,7 @@ fn paint_bios_screen(
 
 #[allow(clippy::too_many_arguments)]
 fn paint_splash_screen(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     elapsed: f32,
     screen_w: u32,
     screen_h: u32,
@@ -527,6 +977,7 @@ fn paint_splash_screen(
     sy: f32,
     scale: f32,
     textures: &SplashTextures,
+    progress_note: &str,
 ) -> Result<()> {
     let splash_t = elapsed - 3.5;
     let splash_opacity = (splash_t / 0.01).clamp(0.0, 1.0); // instant reveal
@@ -630,7 +1081,7 @@ fn paint_splash_screen(
         let load_t = (elapsed - 5.5) / 0.5;
         let load_opacity = load_t.clamp(0.0, 1.0) * splash_opacity * 0.8;
         let fs = (14.0 * scale).max(8.0) as u16;
-        let text = "SYSTEM MODULES INITIALIZED";
+        let text = progress_note;
         // Letter-spacing rendering (letter-spacing="2" in SVG).
         let ls = (2.0 * scale) as i32;
         // Measure total width with letter-spacing for centering.
@@ -676,7 +1127,7 @@ fn paint_splash_screen(
 /// `logo_scale`: 1.0 = normal, 1.05 = 5% larger from center.
 /// `brightness`: 1.0 = normal white, 2.0 = double brightness (clamped).
 fn paint_logo_scaled(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     sx: f32,
     sy: f32,
     opacity: f32,
@@ -792,7 +1243,7 @@ fn apply_alpha(c: Color, opacity: f32) -> Color {
 }
 
 fn paint_vertical_gradient(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     x: i32,
     y: i32,
     w: u32,
@@ -852,7 +1303,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 fn paint_scanlines(
-    backend: &mut dyn SdiBackend,
+    backend: &mut impl SdiBackend,
     screen_w: u32,
     screen_h: u32,
     sy: f32,
