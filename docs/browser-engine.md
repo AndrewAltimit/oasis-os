@@ -66,7 +66,20 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   CSS 2.1 §10.3.5 — floats keep their declared width, auto margins
   compute to 0, and float descendants shift with their parent
   post-placement so `float: right` sidebars land on the right edge
-  with their children in the right place.
+  with their children in the right place. `width: auto` floats use
+  one-pass shrink-to-fit (`min(max-content, available)`): children
+  lay out at the containing width, then `content.width` clamps down
+  to the rightmost child border-box edge. Float placement returns
+  BFC-local coordinates but the caller adds the containing block's
+  `content.x`, so a float inside a padded parent lands at the parent's
+  content edge instead of overhanging at x=0 (the old.reddit
+  `.midcol` vote-column bug).
+- **Inter-element whitespace.** A text node containing only whitespace
+  between two inline siblings (`<a>x</a>\n<a>y</a>`) now emits a
+  single `space_width` fragment into the line flow, per CSS 2.1 §16.6.
+  Previously the split-into-words pass returned an empty vec on the
+  `" "` collapsed result and swallowed the gap, producing `xy`
+  instead of `x y` on every inline-sibling chain.
 - **Table layout** honours explicit pixel widths on `<td>`/`<th>`
   (pinned — not rescaled when the table has slack) and percent
   widths (`<td width="25%">`) via a pre-pass in `distribute_widths`
@@ -185,6 +198,35 @@ to page scripts include:
   mouseup, mousemove. `addEventListener` options `{once, capture,
   passive}`, detail properties `clientX`/`clientY`/`key`/`code`,
   `stopPropagation`/`preventDefault`.
+- **DOM mutation → layout reinvalidation.** Every mutating binding
+  (`setAttribute`, `removeAttribute`, `settext`, `appendChild`,
+  `removeChild`, `insertBefore`, `innerHTML`, `classList.add/remove/
+  toggle`, `style.*` setters, `settitle`) flips a shared
+  `Rc<Cell<bool>>` dirty flag. After every JS click / key dispatch
+  the widget clones the JS-shared document back into its authoritative
+  slot, re-runs `css::cascade::style_tree` against cached sheets,
+  rebuilds the link map, and marks layout + repaint dirty. Without
+  this, a handler that flipped a class would update the DOM but paint
+  the pre-mutation layout until the next navigation.
+  `classList.add` of a token the element already has (and similar
+  no-ops) skip the flag so redundant reassignments don't force a
+  re-cascade.
+- **preventDefault-aware link follow-up.** The inline-handler wrapper
+  calls `event.preventDefault()` when the body returns `false` (the
+  HTML spec), and `__oasis_dispatch_with_bubbling` returns the event's
+  `_defaultPrevented`. The Rust click handler skips link navigation
+  and `<summary>` toggle when the JS handler preventDefault'd, so
+  `onclick="return togglecomment(this)"` collapses the comment
+  instead of following the `href="#"`.
+- **Site-compat JS shims.** `install_site_compat_shims` defines
+  `togglecomment` / `hidecomment` / `unhidecomment` / `morechildren` /
+  `togglevote` globals when the page's own script bundle doesn't
+  provide them (guarded by `typeof ... === 'undefined'`). The toggler
+  shims walk to the nearest `.comment` ancestor and flip a
+  `collapsed` class; `togglevote` switches `.up` ↔ `.upmod` (or
+  `.down` ↔ `.downmod`) on vote arrows. Lets old.reddit threads stay
+  interactive when `reddit.js` fails to load (or simply isn't
+  available, as in the engine's offline fixtures).
 
 ## Browser chrome (UI around the page)
 
