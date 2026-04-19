@@ -6,7 +6,7 @@
 //! insignificant whitespace elimination.
 
 use super::{TextMeasurer, layout_block_with_height, offset_descendant};
-use crate::css::values::{ComputedStyle, Dimension, Display, ListStyleType};
+use crate::css::values::{ComputedStyle, Dimension, Display, Float, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 use crate::layout::box_model::*;
 use crate::layout::positioning::apply_positioning;
@@ -609,8 +609,15 @@ pub(super) fn wrap_anonymous(
         return children;
     }
 
-    let has_block = children.iter().any(|c| c.is_block_level());
-    let has_inline = children.iter().any(|c| !c.is_block_level());
+    // Floats participate in the parent's block formatting context
+    // even when their computed `display` is inline (CSS 2.1 §9.7 —
+    // float computes-to-block for layout purposes). Treat them as
+    // block-level here so they don't get swept into an anonymous
+    // IFC wrapper and lose visibility to the parent's float context.
+    let is_block_level = |c: &LayoutBox| c.is_block_level() || c.style.float != Float::None;
+
+    let has_block = children.iter().any(is_block_level);
+    let has_inline = children.iter().any(|c| !is_block_level(c));
 
     // If all children are the same level, no wrapping needed.
     if !has_block || !has_inline {
@@ -622,7 +629,7 @@ pub(super) fn wrap_anonymous(
     let mut inline_run: Vec<LayoutBox> = Vec::new();
 
     for child in children {
-        if child.is_block_level() {
+        if is_block_level(&child) {
             if !inline_run.is_empty() {
                 let anon = make_anonymous_block(std::mem::take(&mut inline_run), parent_style);
                 result.push(anon);

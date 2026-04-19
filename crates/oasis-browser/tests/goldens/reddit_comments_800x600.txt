@@ -30,35 +30,35 @@ draw_text "▲", 32, 49, 18, Color { r: 255, g: 69, b: 0, a: 255 }
 draw_text "842", 32, 67, 12, Color { r: 255, g: 69, b: 0, a: 255 }
 draw_text "842", 33, 67, 12, Color { r: 255, g: 69, b: 0, a: 255 }
 draw_text "▼", 32, 85, 18, Color { r: 135, g: 138, b: 140, a: 255 }
-set_clip_rect 64, 49, 417, 77
-draw_text "Rust ", 64, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "1.91 ", 94, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "released ", 124, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "— ", 178, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "stabilized ", 202, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "str::floor_char_boundary ", 268, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "and ", 418, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "new", 442, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "MIR ", 64, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "optimizations", 88, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " ", 166, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "(", 172, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "blog.rust-lang.org", 182, 69, 10, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ")", 290, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "submitted ", 64, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "14 ", 124, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "hours ", 142, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "ago", 178, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text " by ", 196, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "withoutboats", 220, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
-draw_text "withoutboats", 221, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
-draw_text " to ", 292, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "r/rust", 316, 90, 10, Color { r: 0, g: 121, b: 211, a: 255 }
-draw_text "214 ", 68, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "comments", 92, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "share", 148, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "save", 186, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
-draw_text "hide", 218, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+set_clip_rect 100, 49, 380, 77
+draw_text "Rust ", 100, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "1.91 ", 130, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "released ", 160, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "— ", 214, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "stabilized ", 238, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "str::floor_char_boundary", 304, 49, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and ", 100, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "new ", 124, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "MIR ", 148, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "optimizations", 172, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text " ", 250, 69, 16, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "(", 256, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "blog.rust-lang.org", 266, 69, 10, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text ")", 374, 69, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "submitted ", 100, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "14 ", 160, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hours ", 178, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "ago", 214, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text " by ", 232, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "withoutboats", 256, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text "withoutboats", 257, 90, 10, Color { r: 51, g: 102, b: 153, a: 255 }
+draw_text " to ", 328, 90, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "r/rust", 352, 90, 10, Color { r: 0, g: 121, b: 211, a: 255 }
+draw_text "214 ", 104, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "comments", 128, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "share", 184, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "save", 222, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
+draw_text "hide", 254, 113, 10, Color { r: 136, g: 136, b: 136, a: 255 }
 reset_clip_rect
 set_clip_rect 24, 49, 457, 77
 reset_clip_rect

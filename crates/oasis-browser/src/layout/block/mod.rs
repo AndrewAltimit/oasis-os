@@ -480,25 +480,66 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     }
     let origin_x = layout_box.dimensions.content.x;
     let available = layout_box.dimensions.content.width;
-    // Measure max-content ≈ rightmost child border-box edge. We do NOT
-    // include margin-right because the normal-flow over-constrained
-    // rule (§10.3.3) absorbs leftover containing-block width into the
-    // child's margin-right — that slack is not real content extent.
-    // Inline children were laid out against the available width, so
-    // any line whose text happened to wrap reports the wrapped extent,
-    // giving `min(max-content, available)` in one pass.
-    let max_child_right = layout_box
-        .children
-        .iter()
-        .map(|c| {
+
+    // Replaced floats (e.g. `<button type="submit">` with `float:right`)
+    // carry no children, so the `max_child_right`-based paths below
+    // would fall back to the provisional containing width. Use the
+    // element's intrinsic dimension as its max-content instead so the
+    // float shrinks to its natural size (e.g. the ~52 px wide Search
+    // label, not the parent form's 378 px width).
+    if let BoxType::Replaced(ref replaced) = layout_box.box_type {
+        let (intrinsic_w, _) = super::inline::replaced_dimensions(replaced, &layout_box.style);
+        let shrunk = intrinsic_w.min(available).max(0.0);
+        layout_box.dimensions.content.width = shrunk;
+        return;
+    }
+
+    // When the float's children are inline fragments produced by
+    // `layout_inline` (all `BoxType::Inline`/`Replaced`), using the
+    // rightmost border-box edge as max-content is wrong: `text-align:
+    // right|center` positions fragments at the right/center of the
+    // content box, so `bb.x + bb.width == content.width` regardless of
+    // the actual text extent, and shrink-to-fit would never fire. The
+    // natural max-content for inline content is the widest line's
+    // summed fragment widths. Group children by y to reconstruct per-
+    // line totals; fragments on the same line share a y position after
+    // `lines_to_children`.
+    let inline_only = !layout_box.children.is_empty()
+        && layout_box
+            .children
+            .iter()
+            .all(|c| matches!(c.box_type, BoxType::Inline | BoxType::Replaced(_)));
+    let max_child_right = if inline_only {
+        let mut by_y: Vec<(f32, f32)> = Vec::new();
+        for c in &layout_box.children {
             let bb = c.dimensions.border_box();
-            bb.x + bb.width - origin_x
-        })
-        .fold(0.0_f32, f32::max);
-    // When the float has only inline content, the border-box walk
-    // above reports 0 (anonymous inline wrappers are tracked via
-    // `content.height`). Fall back to the float's own content.width
-    // set by the inline layout pass.
+            let y = c.dimensions.content.y;
+            if let Some(row) = by_y.iter_mut().find(|(ry, _)| (*ry - y).abs() < 0.5) {
+                row.1 += bb.width;
+            } else {
+                by_y.push((y, bb.width));
+            }
+        }
+        by_y.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)
+    } else {
+        // Block/mixed children: use the rightmost border-box edge. We
+        // do NOT include margin-right because the normal-flow over-
+        // constrained rule (§10.3.3) absorbs leftover containing-block
+        // width into the child's margin-right — that slack is not real
+        // content extent.
+        layout_box
+            .children
+            .iter()
+            .map(|c| {
+                let bb = c.dimensions.border_box();
+                bb.x + bb.width - origin_x
+            })
+            .fold(0.0_f32, f32::max)
+    };
+
+    // When the float has no children (empty element with just padding/
+    // border), fall back to the provisional content width so the float
+    // still has its declared intrinsic size.
     let measured = if max_child_right > 0.0 {
         max_child_right
     } else {
@@ -913,8 +954,44 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 };
                 is_first_in_flow = false;
 
+                // CSS 2.1 §9.5: the border box of a block that
+                // establishes a new BFC must not overlap the margin
+                // box of any floats in the same BFC. Shift the child
+                // right of active left floats and shrink the
+                // available width to fit between active floats.
+                // Standard blocks flow underneath floats (their
+                // inline content flows around), so this only applies
+                // when the child starts a new BFC.
+                //
+                // Approximations:
+                // - Height probe is `1.0` because the child's actual
+                //   height isn't known until after layout. A tall BFC
+                //   child whose float ends partway down may shift right
+                //   based on only the top edge's float coverage. Per
+                //   CSS 2.1 §9.5 the non-overlap rule applies to the
+                //   block's full extent — a second-pass correction
+                //   would be more accurate but is out of scope here.
+                // - `child_avail_width` is also passed to `layout_block`
+                //   as the containing-block width. Per CSS 2.1 §10.1,
+                //   percentage widths inside the BFC child should
+                //   resolve against the parent's content box, not the
+                //   float-narrowed available space. This diverges only
+                //   when a percentage-width descendant sits in a BFC
+                //   adjacent to a float.
+                let child_bfc = establishes_bfc(&child.style);
+                let child_y_for_float = cursor_y + collapsed;
+                let (float_left, child_avail_width) = if child_bfc && !float_ctx.is_empty() {
+                    let fl = float_ctx.left_offset(child_y_for_float, 1.0);
+                    let fr = float_ctx.right_offset(child_y_for_float, 1.0, content_width);
+                    let avail = (fr - fl).max(0.0);
+                    (fl, avail)
+                } else {
+                    (0.0, content_width)
+                };
+
                 // Position child's content area.
                 child.dimensions.content.x = content_x
+                    + float_left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;
@@ -932,9 +1009,10 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // paint at their parent's origin.
                 let pre_x = child.dimensions.content.x;
 
-                layout_block(child, content_width, measurer);
+                layout_block(child, child_avail_width, measurer);
 
                 let resolved_x = content_x
+                    + float_left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;

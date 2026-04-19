@@ -36,16 +36,10 @@ fill_rect 0, 0, 0, 0, Color { r: 232, g: 232, b: 232, a: 255 }
 draw_text "Visit the Sony Store", 0, 0, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Sony PSP-3000 PlayStation Portable (Piano Black)", 0, 0, 22, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "Sony PSP-3000 PlayStation Portable (Piano Black)", 1, 0, 22, Color { r: 17, g: 17, b: 17, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "★★★★★", 0, 0, 8, Color { r: 255, g: 164, b: 28, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "4.7 out of 5 · 3,284 ratings", 0, 0, 13, Color { r: 0, g: 102, b: 192, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "$139.99", 0, 0, 28, Color { r: 177, g: 39, b: 4, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "$179.99", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
-draw_text "\n", 0, 0, 8, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "•", -20, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Slimmer and lighter than the original PSP-1000 launch model.", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "•", -20, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -155,4 +149,4 @@ draw_text "minor ", 108, 267, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "minor ", 109, 267, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "scuffs", 144, 267, 15, Color { r: 17, g: 17, b: 17, a: 255 }
 draw_text "scuffs", 145, 267, 15, Color { r: 17, g: 17, b: 17, a: 255 }
-# totals fill_rect=34 draw_text=122 other=0
+# totals fill_rect=34 draw_text=116 other=0

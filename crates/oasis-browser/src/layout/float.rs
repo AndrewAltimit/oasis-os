@@ -143,9 +143,16 @@ impl FloatContext {
     ///
     /// This is the rightmost right-edge among all left floats that
     /// overlap the band, or 0.0 if no left floats are active there.
-    #[cfg(test)]
     pub fn left_offset(&self, y: f32, height: f32) -> f32 {
         self.left_edge_at(y, height)
+    }
+
+    /// Get the right edge beyond which floats would start clipping
+    /// inline/block content at the vertical band `[y, y + height)`.
+    ///
+    /// Returns `containing_width` when no right floats overlap.
+    pub fn right_offset(&self, y: f32, height: f32, containing_width: f32) -> f32 {
+        self.right_edge_at(y, height, containing_width)
     }
 
     /// Get the y position below all floats on the specified side(s).

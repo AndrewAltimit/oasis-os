@@ -1521,21 +1521,35 @@ impl CssParser {
     }
 
     fn skip_to_close_brace(&mut self) {
-        let mut depth = 0;
+        // Consume tokens until we've skipped past one balanced `{...}`
+        // block. If no opening brace is ever seen (caller advanced past
+        // the body already, or stream is malformed), stop at the next
+        // `}` at top level so we don't gobble the remainder of the
+        // stylesheet. Previously this only broke on a `}` at depth 0,
+        // which — starting at pre-`{` position — can only happen when
+        // two `}` tokens appear back-to-back, so a single bad rule at
+        // top level used to eat every subsequent rule.
+        let mut depth = 0i32;
+        let mut saw_open = false;
         loop {
             match self.peek() {
                 CssToken::Eof => break,
                 CssToken::OpenBrace => {
                     depth += 1;
+                    saw_open = true;
                     self.advance();
                 },
                 CssToken::CloseBrace => {
-                    if depth == 0 {
-                        self.advance();
+                    self.advance();
+                    if saw_open {
+                        depth -= 1;
+                        if depth <= 0 {
+                            break;
+                        }
+                    } else {
+                        // Unmatched closer — probably the outer block.
                         break;
                     }
-                    depth -= 1;
-                    self.advance();
                 },
                 _ => {
                     self.advance();

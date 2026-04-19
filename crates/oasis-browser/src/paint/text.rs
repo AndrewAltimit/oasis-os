@@ -75,7 +75,14 @@ pub(super) fn paint_text(
     // inter-element whitespace fragment that ended up at a line edge.
     // Emitting a `draw_text ""` is work-equivalent but clutters the
     // display list and would confuse visual-regression diffs.
-    if text.is_empty() {
+    //
+    // Also skip pure newline/carriage-return runs. Newlines normally
+    // act as line-break signals in `layout::inline` and are consumed
+    // before reaching paint, but whitespace-only DOM text nodes kept
+    // between inline siblings (tree_builder.rs) can carry a bare `\n`
+    // into the display list where it has no glyph and pollutes
+    // visual-regression goldens.
+    if text.is_empty() || text.chars().all(|c| c == '\n' || c == '\r') {
         return Ok(());
     }
     let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
