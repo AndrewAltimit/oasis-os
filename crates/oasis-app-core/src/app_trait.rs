@@ -192,12 +192,17 @@ impl ContentState {
 
     /// Update cached layout from theme.
     pub fn update_layout(&mut self, at: &ActiveTheme) {
-        let layout = AppLayout::compute(at, 14);
-        self.cached_max_visible = layout.max_visible;
-        self.cached_title_bar_height = at.app.title_bar_height;
         // Match the floor `draw_content_windowed` applies so click-to-line
         // mapping uses the same row height the renderer drew.
-        self.cached_line_h = at.terminal_line_height.max(12);
+        let line_h = at.terminal_line_height.max(12);
+        let layout = AppLayout::compute(at, 14);
+        // Re-derive `max_visible` using the clamped `line_h` so the scroll
+        // viewport bound and the click-to-row mapping agree. `AppLayout`
+        // internally uses `max(1)` which diverges from the windowed
+        // renderer's `max(12)` whenever the skin has a tiny line height.
+        self.cached_max_visible = (layout.usable_h / line_h).max(1) as usize;
+        self.cached_title_bar_height = at.app.title_bar_height;
+        self.cached_line_h = line_h;
     }
 
     /// Advance the smooth visual selection animation.

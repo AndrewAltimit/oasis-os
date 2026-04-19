@@ -295,11 +295,20 @@ pub fn apply_resolution_change(
             // Reloading the skin failed (shouldn't happen for a built-in),
             // but we still need to keep the theme dimensions consistent with
             // the resized window so rendering doesn't draw to stale coords.
+            // We also refresh the WM theme from the existing `state.skin` so
+            // `state.wm` stays consistent with the skin that's actually
+            // still active (rather than holding whatever theme it was
+            // constructed with before this fallback path ran).
             state
                 .terminal
                 .output_lines
                 .push(format!("Warning: skin reload failed: {e}"));
-            state.active_theme = state.active_theme.clone().with_screen_size(new_w, new_h);
+            state.active_theme = state
+                .active_theme
+                .clone()
+                .with_screen_size(new_w, new_h)
+                .with_features(&state.skin.features);
+            state.wm.set_theme(state.skin.theme.build_wm_theme());
         },
     }
 
