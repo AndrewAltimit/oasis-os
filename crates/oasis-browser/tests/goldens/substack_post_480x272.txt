@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 2050, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 2977, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 77, 480, 1, Color { r: 224, g: 224, b: 224, a: 255 }
 draw_text "Spare ", 204, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Spare ", 205, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
@@ -63,17 +63,4 @@ draw_text "working", 366, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "JavaScript. ", 24, 239, 18, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "Here's ", 96, 239, 18, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "how.", 138, 239, 18, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "Andrew Lee", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Andrew Lee", 1, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "April 15, 2026 · 12 min read", 0, 0, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "Andrew Lee", 0, 0, 16, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Andrew Lee", 1, 0, 16, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Systems programmer in Tokyo. Writes about Rust, retro hardware, and the art of fitting big ideas in small memory footprints.", 0, 0, 14, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 224, g: 108, b: 0, a: 255 }
-draw_text "Subscribe", 0, 0, 13, Color { r: 255, g: 255, b: 255, a: 255 }
-# totals fill_rect=8 draw_text=69 other=0
+# totals fill_rect=2 draw_text=62 other=0

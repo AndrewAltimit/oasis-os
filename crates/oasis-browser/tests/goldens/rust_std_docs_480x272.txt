@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 35, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 4428, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 35, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
@@ -22,123 +22,128 @@ draw_text " ", 178, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "proc_macro", 184, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 247, g: 247, b: 247, a: 255 }
-draw_text "Struct Vec", 0, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "Struct Vec", 1, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Fields", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Methods", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Trait Implementations", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Auto Trait Implementations", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "Methods", 0, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "Methods", 1, 0, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "new", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "with_capacity", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "push", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "pop", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "len", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "is_empty", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "iter", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -20, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "into_iter", 0, 0, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "pub struct", 0, 0, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text "pub struct", 1, 0, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text " ", 1, 0, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Vec", 0, 0, 20, Color { r: 24, g: 54, b: 145, a: 255 }
-draw_text "Vec", 1, 0, 20, Color { r: 24, g: 54, b: 145, a: 255 }
-draw_text "<T, A = Global> { /* private fields */ }", 0, 0, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "<T, A = Global> { /* private fields */ }", 1, 0, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "A contiguous growable array type, written as ", 0, 0, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "Vec<T>", 0, 0, 7, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text ", short for 'vector'.", 0, 0, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Vectors are a fundamental collection in Rust. They are stored on the heap and can grow or shrink at runtime. Indexing is O(1), pushing to the back is amortized O(1), and iteration is cache-friendly.", 0, 0, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 0, 0, 0, 0
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "let mut v = Vec::new();\nv.push(1);\nv.push(2);\nassert_eq!(v.len(), 2);\nassert_eq!(v[0], 1);", 0, 0, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+fill_rect 0, 35, 232, 380, Color { r: 247, g: 247, b: 247, a: 255 }
+fill_rect 232, 35, 1, 380, Color { r: 224, g: 224, b: 224, a: 255 }
+draw_text "Struct ", 16, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Struct ", 17, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Vec", 58, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Vec", 59, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "•", -4, 84, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Fields", 16, 86, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "•", -4, 108, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Methods", 16, 110, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "•", -4, 131, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Trait ", 16, 133, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "Implementations", 52, 133, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "•", -4, 155, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Auto ", 16, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "Trait ", 46, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "Implementations", 82, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "Methods", 16, 186, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "Methods", 17, 186, 14, Color { r: 51, g: 51, b: 51, a: 255 }
+draw_text "•", -4, 211, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "new", 16, 213, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "•", -4, 235, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "with_capacity", 16, 237, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "•", -4, 258, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "push", 16, 260, 13, Color { r: 56, g: 115, b: 185, a: 255 }
+draw_text "pub", 232, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "pub", 233, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "struct", 250, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "struct", 251, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "Vec", 286, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
+draw_text "Vec", 287, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
+draw_text "<T,", 304, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "<T,", 305, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A", 322, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A", 323, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "=", 328, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "=", 329, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Global>", 334, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Global>", 335, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "{", 376, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "{", 377, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "/*", 382, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "/*", 383, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "private", 394, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "private", 395, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fields", 232, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fields", 233, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "*/", 268, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "*/", 269, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "}", 280, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "}", 281, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A", 232, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "contiguous", 238, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "growable", 298, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "array", 346, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "type,", 376, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "written", 406, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "as", 232, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+fill_rect 244, 143, 36, 12, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 244, 143, 36, 12, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "Vec<T>", 244, 143, 7, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text ",", 280, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "short", 286, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "for", 316, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "'vector'.", 334, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Vectors", 232, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "are", 274, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a", 292, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fundamental", 298, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "collection", 364, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "in", 424, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Rust.", 232, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "They", 262, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "are", 286, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "stored", 304, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "on", 340, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the", 352, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "heap", 370, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "and", 394, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "can", 412, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "grow", 232, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "or", 256, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "shrink", 268, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "at", 304, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "runtime.", 316, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Indexing", 364, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is", 412, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "O(1),", 232, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "pushing", 262, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "to", 304, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the", 316, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "back", 334, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is", 358, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "amortized", 370, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "O(1),", 232, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "and", 262, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "iteration", 280, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is", 334, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "cache-friendly.", 346, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+fill_rect 233, 237, 214, 102, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 232, 236, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 447, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 232, 339, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 232, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
+set_clip_rect 245, 249, 190, 78
+fill_rect 245, 249, 138, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+set_clip_rect 245, 249, 138, 19
+fill_rect 245, 249, 138, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "let mut v = Vec::new();", 245, 249, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 reset_clip_rect
-draw_text "Implementations", 0, 0, 18, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Implementations", 1, 0, 18, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "pub const fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "new", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "() -> Vec<T>", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Constructs a new, empty ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "Vec<T>", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text ". The vector will not allocate until elements are pushed onto it.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text "pub fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "with_capacity", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "(capacity: usize) -> Vec<T>", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Constructs a new, empty ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "Vec<T>", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text " with the specified capacity. The vector will be able to hold exactly ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "capacity", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text " elements without reallocating.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text "pub fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "push", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "(&mut self, value: T)", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Appends an element to the back of a collection. Panics if the new capacity exceeds ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "isize::MAX", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text " bytes.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text "pub fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "pop", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "(&mut self) -> Option<T>", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Removes the last element from a vector and returns it, or ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "None", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text " if it is empty.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text "pub const fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "len", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "(&self) -> usize", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Returns the number of elements in the vector, also referred to as its 'length'.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text "pub const fn", 0, 0, 14, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text " ", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "is_empty", 0, 0, 14, Color { r: 115, g: 73, b: 182, a: 255 }
-draw_text "(&self) -> bool", 0, 0, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Returns ", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "true", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-draw_text " if the vector contains no elements.", 0, 0, 14, Color { r: 74, g: 74, b: 74, a: 255 }
-# totals fill_rect=46 draw_text=94 other=2
+set_clip_rect 245, 249, 190, 78
+fill_rect 245, 269, 60, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+set_clip_rect 245, 269, 60, 19
+fill_rect 245, 269, 60, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "v.push(1);", 245, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+reset_clip_rect
+set_clip_rect 245, 249, 190, 78
+fill_rect 305, 269, 60, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+set_clip_rect 305, 269, 60, 19
+fill_rect 305, 269, 60, 19, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "v.push(2);", 305, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+reset_clip_rect
+set_clip_rect 245, 249, 190, 78
+reset_clip_rect
+# totals fill_rect=29 draw_text=107 other=11

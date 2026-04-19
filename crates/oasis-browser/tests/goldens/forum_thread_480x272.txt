@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 157, Color { r: 240, g: 240, b: 240, a: 255 }
+fill_rect 0, 0, 480, 6401, Color { r: 240, g: 240, b: 240, a: 255 }
 fill_rect 0, 0, 480, 132, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 132, 480, 1, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "Anyone ", 32, 16, 22, Color { r: 26, g: 26, b: 26, a: 255 }
@@ -49,172 +49,69 @@ fill_rect 182, 98, 60, 18, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 188, 99, 48, 16, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 188, 99, 48, 16, Color { r: 232, g: 232, b: 232, a: 255 }
 draw_text "homebrew", 188, 99, 11, Color { r: 51, g: 51, b: 51, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "altimit", 0, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text "altimit", 1, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text " · original poster · 2 days ago", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "I've been hacking on a Rust homebrew project for the Sony PSP (the original 2004 handheld) and hit a wall linking QuickJS. The C code compiles fine with ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "psp-gcc", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ", but linking fails with ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "invalid binding: 0", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " from ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "rust-lld", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ".", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "Has anyone else tried mixing Rust code with a C library on this target? I'm using the ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "rust-psp", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " fork from AndrewAltimit with ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "cargo +nightly psp", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ".", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "reply", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "quote", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "flag", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 240, g: 255, b: 244, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "overdrive", 0, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text "overdrive", 1, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text " · regular · 2 days ago · ", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-draw_text "Solution", 0, 0, 11, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "Switch the linker to ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "psp-ld", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " instead. The binutils 2.43 that ships with modern pspdev emits a ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text ".symtab", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " layout that rust-lld strictly rejects. Add this to your ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text ".cargo/config.toml", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ":", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "[target.mipsel-sony-psp]\nlinker = \"/opt/pspdev/bin/psp-ld\"\nlinker-flavor = \"gnu\"", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "You'll also need to re-play the target-spec pre-link args and provide a supplementary link script that synthesises ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "_gp", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ", since the rust-psp target script omits it (rust-lld computes it internally).", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "reply", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "quote", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "flag", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "altimit", 0, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text "altimit", 1, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text " · original poster · 1 day ago", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "Switch the linker to ", 0, 0, 14, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "psp-ld", 0, 0, 14, Color { r: 85, g: 85, b: 85, a: 255 }
-draw_text " instead.", 0, 0, 14, Color { r: 85, g: 85, b: 85, a: 255 }
-draw_text "That fixed the link! But now I'm crashing inside ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "JS_Eval", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " on real hardware. Works fine in PPSSPP. Any ideas?", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "reply", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "quote", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "flag", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "mipsfan", 0, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text "mipsfan", 1, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text " · senior · 1 day ago", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "Classic FPU ABI mismatch. PSP Allegrex has a single-precision FPU only. ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "rust-psp", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "'s target spec declares ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "+single-float", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ", but ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "psp-gcc", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " defaults to ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "-mdouble-float", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text ". PPSSPP silently fixes it up; real hardware crashes in the ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "dtoa", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " double-precision helpers.", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "Set ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "CFLAGS_mipsel_sony_psp_std=-msingle-float", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " in your ", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text ".cargo/config.toml", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text " and rebuild from clean.", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "reply", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "quote", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "flag", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "altimit", 0, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text "altimit", 1, 0, 12, Color { r: 59, g: 141, b: 189, a: 255 }
-draw_text " · original poster · 12 hours ago", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "That was it. Thanks all — QuickJS-NG now runs on real PSP hardware, tested end-to-end with a page that mutates three DOM nodes from an inline script.", 0, 0, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "reply", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "quote", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "flag", 0, 0, 12, Color { r: 112, g: 112, b: 112, a: 255 }
-# totals fill_rect=106 draw_text=112 other=0
+fill_rect 1, 158, 478, 1672, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 157, 480, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 479, 157, 1, 1674, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 0, 1830, 480, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 0, 157, 1, 1674, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 33, 190, 48, 48, Color { r: 192, g: 192, b: 192, a: 255 }
+draw_text "altimit", 81, 190, 12, Color { r: 59, g: 141, b: 189, a: 255 }
+draw_text "altimit", 82, 190, 12, Color { r: 59, g: 141, b: 189, a: 255 }
+draw_text "·", 123, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "original", 135, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "poster", 183, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "·", 219, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "2", 231, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "days", 237, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "ago", 261, 190, 12, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "I've", 81, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "been", 105, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "hacking", 129, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "on", 171, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a", 183, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Rust", 189, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "homebrew", 213, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "project", 261, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "for", 303, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "the", 321, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "Sony", 339, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "PSP", 363, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "(the", 381, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "original", 405, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "2004", 453, 216, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "handheld)", 81, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "and", 135, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "hit", 153, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "a", 171, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "wall", 177, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "linking", 201, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "QuickJS.", 243, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "The", 291, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "C", 309, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "code", 315, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "compiles", 339, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "fine", 387, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "with", 411, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 435, 237, 42, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 435, 237, 42, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "psp-gcc", 435, 237, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text ",", 81, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "but", 87, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "linking", 105, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "fails", 147, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "with", 177, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 201, 258, 42, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 201, 258, 42, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "invalid", 201, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 243, 258, 48, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 243, 258, 48, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "binding:", 243, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 291, 258, 6, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 291, 258, 6, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "0", 291, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "from", 297, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+fill_rect 321, 258, 48, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 321, 258, 48, 21, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "rust-lld", 321, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text ".", 369, 258, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+# totals fill_rect=31 draw_text=84 other=0
