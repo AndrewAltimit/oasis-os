@@ -27,6 +27,8 @@ use super::{AppEntry, DashboardState, IconGeometry, IconNames};
 ///   derived from the app title.
 /// - "solid": app-semantic icons, filled shapes — picks by [`IconCategory`]
 ///   derived from the app title.
+/// - "pixel": Windows 2000 pixel-art tiles with baked-in window chrome (pair
+///   with `icon_container = "none"`).
 ///
 /// When `frame` > 0, animated variants are used for icons that support animation.
 pub(super) fn icon_for_app(
@@ -42,6 +44,7 @@ pub(super) fn icon_for_app(
         "hud" => hud_icon(app.color, index),
         "outline" => icon_set::outline_icon(IconCategory::from_app_title(&app.title), app.color),
         "solid" => icon_set::solid_icon(IconCategory::from_app_title(&app.title), app.color),
+        "pixel" => icon_set::pixel_icon(IconCategory::from_app_title(&app.title), app.color),
         _ => altimit_icon(app.color, index, frame, anim_cfg),
     }
 }
@@ -544,16 +547,21 @@ impl DashboardState {
             // Container backdrop (drawn before the glyph so it sits underneath).
             // Keeps vector icons legible on busy shader wallpapers.
             //
+            // The `pixel` preset bakes its own chrome into the glyph, so the
+            // external backdrop is always skipped for it — otherwise you'd get
+            // two stacked containers.
+            //
             // `glyph_offset_y` nudges the glyph down so it sits in the tile's
             // body area below the accent band, rather than floating over it.
-            let glyph_offset_y = if at.icon.container_style == "chip" {
+            let pixel_preset = preset == "pixel";
+            let glyph_offset_y = if at.icon.container_style == "chip" && !pixel_preset {
                 let bh = scene.height + (2 * at.icon.container_padding as u32);
                 let band_h = ((bh as f32 * 0.22) as i32).max(4).min(bh as i32 - 4);
                 band_h / 2
             } else {
                 0
             };
-            if at.icon.container_style != "none" {
+            if at.icon.container_style != "none" && !pixel_preset {
                 let backdrop = build_container_backdrop(at, app.color, ox, oy, &scene);
                 render_scene_at(backend, &backdrop, 0, 0, alpha)?;
             }
@@ -843,6 +851,31 @@ mod tests {
         assert_eq!(
             icon_for_app("solid", &radio, 1, 0, &cfg).name,
             "solid_radio"
+        );
+    }
+
+    #[test]
+    fn pixel_preset_picks_icon_by_app_title() {
+        let cfg = default_icon_theme();
+        let terminal = AppEntry {
+            title: "Terminal".to_string(),
+            path: "/terminal".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        let files = AppEntry {
+            title: "File Manager".to_string(),
+            path: "/files".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        assert_eq!(
+            icon_for_app("pixel", &terminal, 0, 0, &cfg).name,
+            "pixel_terminal"
+        );
+        assert_eq!(
+            icon_for_app("pixel", &files, 1, 0, &cfg).name,
+            "pixel_files"
         );
     }
 

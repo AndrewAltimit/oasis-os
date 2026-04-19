@@ -122,8 +122,8 @@ cursor_color = "#003399C0"
 icon_border_radius = 3
 cursor_border_radius = 4
 icon_style = "vector"
-vector_preset = "solid"
-icon_container = "chip"
+vector_preset = "pixel"
+icon_container = "none"
 cursor_style = "fill"
 
 [start_menu_overrides]

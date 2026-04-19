@@ -398,8 +398,8 @@ cursor_stroke_width = 2
 icon_border_radius = 3
 cursor_border_radius = 5
 icon_style = "vector"
-vector_preset = "solid"
-icon_container = "chip"
+vector_preset = "pixel"
+icon_container = "none"
 cursor_style = "stroke"
 
 [start_menu_overrides]

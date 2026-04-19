@@ -36,5 +36,5 @@ title_bar_text_shadow_color = "#00000060"
 
 [icon_overrides]
 icon_style = "vector"
-vector_preset = "outline"
-icon_container = "chip"
+vector_preset = "pixel"
+icon_container = "none"

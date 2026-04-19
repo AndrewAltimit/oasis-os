@@ -18,7 +18,7 @@ pub mod scene;
 
 pub use anim::AnimClock;
 pub use background::{BackgroundLayer, BackgroundScene};
-pub use icon_set::{IconCategory, outline_icon, solid_icon};
+pub use icon_set::{IconCategory, outline_icon, pixel_icon, solid_icon};
 pub use icons::IconDef;
 pub use oasis_types::shader::ShaderParams;
 pub use op::VectorOp;
