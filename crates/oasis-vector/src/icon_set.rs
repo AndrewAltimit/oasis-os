@@ -91,11 +91,7 @@ impl IconCategory {
         if t.contains("youtube") || t.contains("video") || t.contains("stream") {
             return Self::Video;
         }
-        if t.contains("photo")
-            || t.contains("gallery")
-            || t.contains("image")
-            || t.contains("paint")
-        {
+        if t.contains("photo") || t.contains("gallery") || t.contains("image") {
             return Self::Gallery;
         }
         if t.contains("weather") || t.contains("forecast") || t.contains("cloud") {
@@ -113,7 +109,7 @@ impl IconCategory {
         if t.contains("terminal") || t.contains("console") || t.contains("shell") {
             return Self::Terminal;
         }
-        // Audio last: matches "music", "audio", "player", "sound", "mp3".
+        // Audio last: matches "music", "audio", "sound", "mp3".
         if t.contains("music") || t.contains("audio") || t.contains("sound") || t.contains("mp3") {
             return Self::Audio;
         }

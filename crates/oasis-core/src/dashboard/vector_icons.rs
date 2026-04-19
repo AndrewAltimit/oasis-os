@@ -556,7 +556,9 @@ impl DashboardState {
             let pixel_preset = preset == "pixel";
             let glyph_offset_y = if at.icon.container_style == "chip" && !pixel_preset {
                 let bh = scene.height + (2 * at.icon.container_padding as u32);
-                let band_h = ((bh as f32 * 0.22) as i32).max(4).min(bh as i32 - 4);
+                let band_h = ((bh as f32 * 0.22) as i32)
+                    .max(4)
+                    .min((bh as i32 - 4).max(0));
                 band_h / 2
             } else {
                 0

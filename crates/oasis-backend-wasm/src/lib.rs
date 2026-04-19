@@ -730,7 +730,8 @@ impl OasisWasm {
             let active_theme = &self.active_theme;
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
-            let wants_vector_icons = active_theme.icon.style == "vector";
+            let wants_vector_icons =
+                self.skin.features.dashboard && active_theme.icon.style == "vector";
             let overlay =
                 |be: &mut dyn oasis_core::backend::SdiBackend| -> oasis_core::error::Result<()> {
                     if wants_vector_icons {
