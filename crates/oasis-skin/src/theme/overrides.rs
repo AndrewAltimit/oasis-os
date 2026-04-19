@@ -206,6 +206,14 @@ pub struct IconOverrides {
     /// LED blink interval in frames (default 45).
     #[serde(default)]
     pub vector_blink_interval: Option<u32>,
+    /// Vector icon container shape drawn behind the glyph: "none" (default),
+    /// "chip" (filled rounded square), "circle". Used to keep glyphs legible
+    /// over busy shader wallpapers.
+    #[serde(default)]
+    pub icon_container: Option<String>,
+    /// Pixels of padding between the container edge and the glyph (default 3).
+    #[serde(default)]
+    pub icon_container_padding: Option<u16>,
     /// Entrance animation style: "none", "fade_in", "scale_up", "slide_up".
     #[serde(default)]
     pub entrance_style: Option<String>,

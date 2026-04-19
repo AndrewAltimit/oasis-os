@@ -159,7 +159,9 @@ label_color = "#FFFFFF"
 cursor_color = "#FF55FF80"
 icon_border_radius = 0
 cursor_border_radius = 0
-icon_style = "document"
+icon_style = "vector"
+vector_preset = "solid"
+icon_container = "chip"
 cursor_style = "stroke"
 cursor_stroke_width = 2
 

@@ -18,9 +18,31 @@ impl WindowManager {
         &self,
         sdi: &mut SdiRegistry,
         backend: &mut dyn SdiBackend,
+        draw_content: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&str, i32, i32, u32, u32, &mut dyn SdiBackend) -> Result<()>,
+    {
+        self.draw_with_clips_overlay(sdi, backend, |_| Ok(()), draw_content)
+    }
+
+    /// Like [`Self::draw_with_clips`] but injects an extra rendering step
+    /// between the base SDI pass and the per-window pass.
+    ///
+    /// Callers that render outside of SDI (e.g. vector-icon dashboards that
+    /// draw glyphs directly to the backend) need to paint *after* the
+    /// wallpaper / dashboard backdrops have been laid down but *before* the
+    /// windows, so the glyphs sit underneath any floating app windows. The
+    /// standard `draw_with_clips` leaves no seam for that.
+    pub fn draw_with_clips_overlay<G, F>(
+        &self,
+        sdi: &mut SdiRegistry,
+        backend: &mut dyn SdiBackend,
+        mut overlay_after_base: G,
         mut draw_content: F,
     ) -> Result<()>
     where
+        G: FnMut(&mut dyn SdiBackend) -> Result<()>,
         F: FnMut(&str, i32, i32, u32, u32, &mut dyn SdiBackend) -> Result<()>,
     {
         // Collect window id prefixes so we can exclude them from the
@@ -30,6 +52,9 @@ impl WindowManager {
 
         // Draw non-window base SDI objects (wallpaper, dashboard, bars, etc.).
         sdi.draw_base_excluding_prefixes(backend, &prefix_refs)?;
+
+        // Overlay step: e.g. vector icons for dashboards that live behind windows.
+        overlay_after_base(backend)?;
 
         // Draw each window's SDI objects then content in z-order.
         // This ensures the active (topmost) window renders over all others.

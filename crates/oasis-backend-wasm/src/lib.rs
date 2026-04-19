@@ -728,9 +728,20 @@ impl OasisWasm {
             let iframe_ref = &mut self.iframe;
             let open_runners = &self.open_runners;
             let active_theme = &self.active_theme;
-            if let Err(e) = self.wm.draw_with_clips(
+            let dashboard = &self.dashboard;
+            let frame = self.frame_counter as u32;
+            let wants_vector_icons = active_theme.icon.style == "vector";
+            let overlay =
+                |be: &mut dyn oasis_core::backend::SdiBackend| -> oasis_core::error::Result<()> {
+                    if wants_vector_icons {
+                        dashboard.render_vector_icons(be, active_theme, frame)?;
+                    }
+                    Ok(())
+                };
+            if let Err(e) = self.wm.draw_with_clips_overlay(
                 &mut self.sdi,
                 &mut self.backend,
+                overlay,
                 |window_id, cx, cy, cw, ch, be| {
                     let result = if window_id == "browser" {
                         if let Some(ref mut bw) = *browser {

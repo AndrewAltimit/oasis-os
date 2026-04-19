@@ -683,9 +683,27 @@ fn main() -> Result<()> {
         }
 
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
-            state
-                .wm
-                .draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
+            // Vector-icon dashboards paint glyphs directly to the backend
+            // (outside SDI), so we need an extra step between base SDI and
+            // per-window rendering to avoid the dashboard icons disappearing
+            // whenever a window is open on top of them.
+            let wants_vector_icons =
+                state.skin.features.dashboard && state.active_theme.icon.style == "vector";
+            let dashboard = &state.ui.dashboard;
+            let active_theme = &state.active_theme;
+            let frame = state.frame_counter as u32;
+            let overlay =
+                |be: &mut dyn oasis_core::backend::SdiBackend| -> oasis_core::error::Result<()> {
+                    if wants_vector_icons {
+                        dashboard.render_vector_icons(be, active_theme, frame)?;
+                    }
+                    Ok(())
+                };
+            state.wm.draw_with_clips_overlay(
+                &mut sdi,
+                &mut backend,
+                overlay,
+                |window_id, cx, cy, cw, ch, be| {
                     if window_id == "browser" {
                         if let Some(ref mut bw) = state.content.browser {
                             bw.set_window(cx, cy, cw, ch);
@@ -703,7 +721,8 @@ fn main() -> Result<()> {
                     } else {
                         Ok(())
                     }
-                })?;
+                },
+            )?;
         } else if state.mode == Mode::Dashboard
             && (state.active_theme.icon.style == "vector"
                 || !state.active_theme.background_layers.is_empty())

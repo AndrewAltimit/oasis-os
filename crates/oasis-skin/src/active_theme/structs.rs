@@ -119,6 +119,12 @@ pub struct IconTheme {
     pub blink_enabled: bool,
     /// LED blink interval in frames.
     pub blink_interval: u32,
+    /// Container shape drawn behind vector glyphs: "none", "chip", "circle".
+    /// When non-"none", the glyph sits inside a filled backdrop for legibility
+    /// over shader wallpapers.
+    pub container_style: String,
+    /// Padding (px) between the container edge and the glyph bounding box.
+    pub container_padding: u16,
 }
 
 /// Start button and popup panel theme.

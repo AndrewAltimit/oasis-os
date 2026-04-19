@@ -223,6 +223,11 @@ frame_shadow_level = 2
 frame_border_radius = 4
 button_radius = 8
 
+[icon_overrides]
+icon_style = "vector"
+vector_preset = "outline"
+icon_container = "chip"
+
 [[background_layers]]
 kind = "glass_shard"
 color = "#FFFFFF20"
@@ -392,7 +397,9 @@ cursor_color = "#5B9BD5A0"
 cursor_stroke_width = 2
 icon_border_radius = 3
 cursor_border_radius = 5
-icon_style = "card"
+icon_style = "vector"
+vector_preset = "solid"
+icon_container = "chip"
 cursor_style = "stroke"
 
 [start_menu_overrides]
