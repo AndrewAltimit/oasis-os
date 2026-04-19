@@ -342,14 +342,12 @@ pub fn apply_resolution_change(
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 
     // Regenerate the wallpaper texture at the new size. The old wallpaper
-    // object survived `swap_scaled` (it isn't a skin-layout object), so we
-    // destroy the old texture and re-point the SDI wallpaper at the fresh
-    // one. If the texture destroy fails the old id simply leaks — not worth
-    // aborting the whole resize for.
+    // object survived `swap_scaled` (it isn't a skin-layout object). We load
+    // the new texture first, and only destroy the old one once the SDI
+    // wallpaper has been re-pointed at the fresh id — otherwise a
+    // `load_texture` failure would leave the wallpaper object holding an
+    // already-destroyed id and the next render would dereference it.
     let old_wallpaper_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
-    if let Some(tex) = old_wallpaper_tex {
-        let _ = backend.destroy_texture(tex);
-    }
     let wp_data = wallpaper::generate_from_config(new_w, new_h, &state.active_theme);
     match backend.load_texture(new_w, new_h, &wp_data) {
         Ok(new_tex) => {
@@ -363,6 +361,10 @@ pub fn apply_resolution_change(
                 && let Ok(obj) = sdi.get_mut("wallpaper")
             {
                 obj.visible = false;
+            }
+            // Now that the wallpaper points at `new_tex`, drop the old id.
+            if let Some(tex) = old_wallpaper_tex {
+                let _ = backend.destroy_texture(tex);
             }
         },
         Err(e) => {

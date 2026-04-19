@@ -278,10 +278,20 @@ impl SettingsApp {
             && skin != self.current_skin
         {
             self.current_skin = skin;
-            if self.category == Category::Display
-                && let Some(idx) = builtin_names().iter().position(|n| *n == self.current_skin)
-            {
-                self.item_cursor = idx;
+            if self.category == Category::Display {
+                let names = builtin_names();
+                if let Some(idx) = names.iter().position(|n| *n == self.current_skin) {
+                    self.item_cursor = idx;
+                } else {
+                    // Shell published a skin not in the builtin list (e.g.
+                    // external TOML). Keep the cursor in bounds so navigation
+                    // and `handle_confirm` stay safe even if the builtin list
+                    // shrinks between syncs.
+                    let max = names.len().saturating_sub(1);
+                    if self.item_cursor > max {
+                        self.item_cursor = max;
+                    }
+                }
             }
             changed = true;
         }
@@ -292,10 +302,15 @@ impl SettingsApp {
         {
             self.width = w;
             self.height = h;
-            if self.category == Category::Resolution
-                && let Some(idx) = self.current_resolution_index()
-            {
-                self.item_cursor = idx;
+            if self.category == Category::Resolution {
+                if let Some(idx) = self.current_resolution_index() {
+                    self.item_cursor = idx;
+                } else {
+                    let max = RESOLUTION_PRESETS.len().saturating_sub(1);
+                    if self.item_cursor > max {
+                        self.item_cursor = max;
+                    }
+                }
             }
             changed = true;
         }
