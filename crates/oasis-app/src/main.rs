@@ -554,6 +554,12 @@ fn main() -> Result<()> {
         }
     }
 
+    // Publish the live runtime state (skin / resolution / backend) to VFS
+    // so the Settings app and any other consumer can read the real values
+    // instead of compile-time defaults. Updated again after every live
+    // change in `poll_settings_ipc`.
+    commands::publish_runtime_state(&state, "SDL3", &mut vfs);
+
     // BIOS phase ended at 3.6s; clear the status line so nothing lingers
     // under the splash-phase logo.
     splash_status!("");
@@ -635,10 +641,24 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            if let Some((path, data)) = pending {
-                let _ = vfs.write(&path, data.as_bytes());
+            if let Some((path, data)) = pending
+                && let Err(e) = vfs.write(&path, data.as_bytes())
+            {
+                log::warn!("pending VFS request write failed ({path}): {e}");
             }
         }
+
+        // Dispatch any Settings-app IPC requests (skin swap, resolution
+        // change). Must run after the pending-VFS-request block above,
+        // which is what writes the IPC payload into the VFS.
+        commands::poll_settings_ipc(
+            &mut state,
+            &mut sdi,
+            &mut backend,
+            &mut shader_bridge,
+            &mut vfs,
+            "SDL3",
+        );
 
         // Tick radio and TV subsystems.
         radio_controller::tick(&mut state, &mut vfs);

@@ -18,9 +18,13 @@ pub(crate) const APP_REGISTRY: &[(&str, AppFactory)] = &[
     ("File Manager", |path, vfs| {
         Box::new(oasis_app_file_manager::FileManagerApp::new(path, vfs))
     }),
-    ("Settings", |path, _vfs| {
-        Box::new(oasis_app_settings::SettingsApp::new(
-            path, "classic", 480, 272, "SDL3",
+    ("Settings", |path, vfs| {
+        // Read the shell-published state (skin/resolution/backend) from VFS
+        // so the Settings UI reflects the actually-running configuration
+        // rather than compile-time defaults. Falls back to the PSP-native
+        // baseline if the shell hasn't populated the state yet.
+        Box::new(oasis_app_settings::SettingsApp::from_vfs(
+            path, vfs, "classic", 480, 272, "SDL3",
         ))
     }),
     ("Network", |path, _vfs| {
