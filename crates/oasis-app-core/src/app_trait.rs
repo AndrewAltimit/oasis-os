@@ -121,6 +121,13 @@ pub struct ContentState {
     pub visual_selected: f32,
     /// Cached max visible lines (updated each frame).
     pub cached_max_visible: usize,
+    /// Cached title bar height in pixels (updated each frame from the active
+    /// theme). Used by click handlers to map click Y back to a line index
+    /// without hardcoding renderer metrics.
+    pub cached_title_bar_height: u32,
+    /// Cached content line height in pixels (updated each frame from the
+    /// active theme). Mirrors the value used by `draw_content_windowed`.
+    pub cached_line_h: u32,
     /// Current browse directory.
     pub browse_dir: Option<String>,
     /// File currently being viewed.
@@ -131,6 +138,13 @@ pub struct ContentState {
 
 /// Maximum visible lines fallback for 480x272.
 const DEFAULT_MAX_VISIBLE: usize = 13;
+/// Default title bar height fallback used until the first `update_layout`
+/// call populates the real value from the active theme. Matches the common
+/// desktop skin metric.
+const DEFAULT_TITLE_BAR_HEIGHT: u32 = 20;
+/// Default content line height fallback used until the first `update_layout`
+/// call. Matches `AppLayout::compute` for the default desktop skin.
+const DEFAULT_LINE_H: u32 = 14;
 
 impl ContentState {
     /// Create new content state for an app.
@@ -143,6 +157,8 @@ impl ContentState {
             cursor: 0,
             visual_selected: 0.0,
             cached_max_visible: DEFAULT_MAX_VISIBLE,
+            cached_title_bar_height: DEFAULT_TITLE_BAR_HEIGHT,
+            cached_line_h: DEFAULT_LINE_H,
             browse_dir: None,
             viewing_file: None,
             pending_vfs_request: None,
@@ -176,7 +192,12 @@ impl ContentState {
 
     /// Update cached layout from theme.
     pub fn update_layout(&mut self, at: &ActiveTheme) {
-        self.cached_max_visible = AppLayout::compute(at, 14).max_visible;
+        let layout = AppLayout::compute(at, 14);
+        self.cached_max_visible = layout.max_visible;
+        self.cached_title_bar_height = at.app.title_bar_height;
+        // Match the floor `draw_content_windowed` applies so click-to-line
+        // mapping uses the same row height the renderer drew.
+        self.cached_line_h = at.terminal_line_height.max(12);
     }
 
     /// Advance the smooth visual selection animation.

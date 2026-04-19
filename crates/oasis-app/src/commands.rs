@@ -315,6 +315,20 @@ pub fn apply_resolution_change(
     );
 
     state.wm.set_screen_size(new_w, new_h);
+    // `set_screen_size` updates the viewport bounds but leaves open windows
+    // at their original coordinates. On a downward resize a window near the
+    // old right/bottom edge can end up fully off-screen and unreachable.
+    // `move_window(id, 0, 0, sdi)` is a no-op delta but runs the positions
+    // through `clamp_position`, which pulls each titlebar back on-screen.
+    let window_ids: Vec<String> = state
+        .wm
+        .windows()
+        .iter()
+        .map(|w| w.id.as_str().to_string())
+        .collect();
+    for id in window_ids {
+        let _ = state.wm.move_window(&id, 0, 0, sdi);
+    }
     state.ui.mouse_cursor = CursorState::new(new_w, new_h);
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 
@@ -395,9 +409,7 @@ pub fn poll_settings_ipc(
     backend_name: &str,
 ) {
     let mut skin_request: Option<String> = None;
-    if vfs.exists(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH)
-        && let Ok(data) = vfs.read(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH)
-    {
+    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
         // Always clear the request so we don't loop on malformed input.
         let _ = vfs.write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"");
@@ -407,12 +419,10 @@ pub fn poll_settings_ipc(
     }
 
     let mut resolution_request: Option<(u32, u32)> = None;
-    if vfs.exists(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH)
-        && let Ok(data) = vfs.read(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH)
-    {
+    if let Ok(data) = vfs.read(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
         let _ = vfs.write(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
-        if let Some((w, h)) = parse_resolution(&req) {
+        if let Some((w, h)) = oasis_app_settings::parse_resolution(&req) {
             resolution_request = Some((w, h));
         } else if !req.is_empty() {
             state
@@ -435,12 +445,6 @@ pub fn poll_settings_ipc(
     if changed {
         publish_runtime_state(state, backend_name, vfs);
     }
-}
-
-/// Parse a `"WIDTHxHEIGHT"` IPC payload.
-fn parse_resolution(s: &str) -> Option<(u32, u32)> {
-    let (w, h) = s.split_once('x')?;
-    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
 /// Format a remote command result as a response string, applying side effects

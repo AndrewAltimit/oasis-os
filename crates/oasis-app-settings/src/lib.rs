@@ -516,19 +516,18 @@ impl App for SettingsApp {
         _fullscreen: bool,
     ) -> AppAction {
         // Map the click Y coordinate back to a content-line index using the
-        // same constants the renderer uses for `draw_content_windowed`:
-        // `title_bar_height + line_idx * line_h`. We don't have the theme
-        // here, so fall back to the common desktop values (20px titlebar,
-        // 14px line height). Off-by-one clicks still land on the correct
-        // row because row heights are uniform.
-        const TITLE_BAR_HEIGHT: i32 = 20;
-        const LINE_H: i32 = 14;
+        // same metrics the renderer uses for `draw_content_windowed`:
+        // `title_bar_height + line_idx * line_h`. Both values are cached on
+        // `ContentState` by `update_layout` each frame so they stay in sync
+        // with the active skin's theme rather than being hardcoded here.
+        let title_bar_height = self.content.cached_title_bar_height as i32;
+        let line_h = self.content.cached_line_h.max(1) as i32;
 
-        let y_in_content = ly - TITLE_BAR_HEIGHT;
+        let y_in_content = ly - title_bar_height;
         if y_in_content < 0 {
             return AppAction::None;
         }
-        let visible_idx = (y_in_content / LINE_H) as usize;
+        let visible_idx = (y_in_content / line_h) as usize;
         let line_idx = self.content.scroll + visible_idx;
 
         if line_idx < Self::ITEMS_START {
@@ -574,7 +573,11 @@ fn read_utf8(vfs: &dyn Vfs, path: &str) -> Option<String> {
 }
 
 /// Parse a `"WIDTHxHEIGHT"` string into its components.
-fn parse_resolution(s: &str) -> Option<(u32, u32)> {
+///
+/// Shared between the Settings app (for reading state payloads) and the
+/// shell runner in `oasis-app` (for dispatching IPC resolution-change
+/// requests). Keeping a single copy prevents the two sides from drifting.
+pub fn parse_resolution(s: &str) -> Option<(u32, u32)> {
     let (w, h) = s.trim().split_once('x')?;
     Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
