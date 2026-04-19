@@ -526,6 +526,10 @@ impl ActiveTheme {
             pulse_speed: ico.and_then(|i| i.vector_pulse_speed).unwrap_or(0.06),
             blink_enabled: ico.and_then(|i| i.vector_blink_enabled).unwrap_or(false),
             blink_interval: ico.and_then(|i| i.vector_blink_interval).unwrap_or(45),
+            container_style: ico
+                .and_then(|i| i.icon_container.clone())
+                .unwrap_or_else(|| "none".to_string()),
+            container_padding: ico.and_then(|i| i.icon_container_padding).unwrap_or(3),
         }
     }
 
@@ -987,6 +991,8 @@ impl ActiveTheme {
             pulse_speed: 0.06,
             blink_enabled: false,
             blink_interval: 45,
+            container_style: "none".to_string(),
+            container_padding: 3,
         };
 
         // -- Start menu theme --

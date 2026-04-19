@@ -116,7 +116,9 @@ label_color = "#1D1D1F"
 cursor_color = "#007AFF40"
 icon_border_radius = 10
 cursor_border_radius = 10
-icon_style = "card"
+icon_style = "vector"
+vector_preset = "outline"
+icon_container = "chip"
 cursor_style = "fill"
 
 [start_menu_overrides]

@@ -39,7 +39,9 @@ gradient_bottom = "#1A1A1A"
 
 [icon_overrides]
 body_color = "#1A1A1A"
-icon_style = "card"
+icon_style = "vector"
+vector_preset = "pixel"
+icon_container = "none"
 cursor_style = "fill"
 
 [wallpaper]

@@ -150,7 +150,9 @@ cursor_color = "#00F0FF30"
 icon_border_radius = 2
 cursor_border_radius = 2
 cursor_stroke_width = 1
-icon_style = "card"
+icon_style = "vector"
+vector_preset = "solid"
+icon_container = "chip"
 cursor_style = "stroke"
 
 [start_menu_overrides]

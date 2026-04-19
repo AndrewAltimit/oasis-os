@@ -8,6 +8,7 @@
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vector::anim;
+use oasis_vector::icon_set::{self, IconCategory};
 use oasis_vector::icons::{self, IconDef};
 use oasis_vector::op::VectorOp;
 use oasis_vector::render::render_scene_at;
@@ -19,9 +20,16 @@ use super::{AppEntry, DashboardState, IconGeometry, IconNames};
 
 /// Get a vector icon for an app based on the preset, app index, and animation state.
 ///
-/// The "altimit" preset cycles through the 6 Altimit-inspired icons.
-/// The "geometric" preset uses circles, hexagons, and abstract shapes.
-/// The "hud" preset uses military/tactical diamond/chevron icons.
+/// - "altimit": cycles through the 6 Altimit-inspired icons by position.
+/// - "geometric": circles, hexagons, and abstract shapes by position.
+/// - "hud": military/tactical diamond/chevron icons by position.
+/// - "outline": app-semantic icons, 2px strokes — picks by [`IconCategory`]
+///   derived from the app title.
+/// - "solid": app-semantic icons, filled shapes — picks by [`IconCategory`]
+///   derived from the app title.
+/// - "pixel": Windows 2000 pixel-art tiles with baked-in window chrome (pair
+///   with `icon_container = "none"`).
+///
 /// When `frame` > 0, animated variants are used for icons that support animation.
 pub(super) fn icon_for_app(
     preset: &str,
@@ -34,6 +42,9 @@ pub(super) fn icon_for_app(
         "altimit" => altimit_icon(app.color, index, frame, anim_cfg),
         "geometric" => geometric_icon(app.color, index),
         "hud" => hud_icon(app.color, index),
+        "outline" => icon_set::outline_icon(IconCategory::from_app_title(&app.title), app.color),
+        "solid" => icon_set::solid_icon(IconCategory::from_app_title(&app.title), app.color),
+        "pixel" => icon_set::pixel_icon(IconCategory::from_app_title(&app.title), app.color),
         _ => altimit_icon(app.color, index, frame, anim_cfg),
     }
 }
@@ -533,6 +544,30 @@ impl DashboardState {
                 }
             }
 
+            // Container backdrop (drawn before the glyph so it sits underneath).
+            // Keeps vector icons legible on busy shader wallpapers.
+            //
+            // The `pixel` preset bakes its own chrome into the glyph, so the
+            // external backdrop is always skipped for it — otherwise you'd get
+            // two stacked containers.
+            //
+            // `glyph_offset_y` nudges the glyph down so it sits in the tile's
+            // body area below the accent band, rather than floating over it.
+            let pixel_preset = preset == "pixel";
+            let glyph_offset_y = if at.icon.container_style == "chip" && !pixel_preset {
+                let bh = scene.height + (2 * at.icon.container_padding as u32);
+                let band_h = ((bh as f32 * 0.22) as i32)
+                    .max(4)
+                    .min((bh as i32 - 4).max(0));
+                band_h / 2
+            } else {
+                0
+            };
+            if at.icon.container_style != "none" && !pixel_preset {
+                let backdrop = build_container_backdrop(at, app.color, ox, oy, &scene);
+                render_scene_at(backend, &backdrop, 0, 0, alpha)?;
+            }
+
             // Focus glow ring.
             if at.focus_glow && i == self.selected_index {
                 let glow_alpha = anim::pulse_alpha(frame_counter, 0.08, 100);
@@ -555,10 +590,149 @@ impl DashboardState {
                 render_scene_at(backend, &glow_scene, 0, 0, alpha)?;
             }
 
-            render_scene_at(backend, &scene, ox, oy, alpha)?;
+            render_scene_at(backend, &scene, ox, oy + glyph_offset_y, alpha)?;
         }
 
         Ok(())
+    }
+}
+
+/// Build the container backdrop scene for a single icon.
+///
+/// "chip" paints a Windows 2000 / XP Luna-style tile:
+///   1. Light body filled with `icon.body_color`.
+///   2. Accent band across the top in a vertical gradient derived from
+///      `app_color` (app-specific, giving each tile its identity colour).
+///   3. A 1px separator line under the band.
+///   4. Thin outline in `icon.outline_color`.
+///
+/// "circle" paints a plain disc in `body_color` with a 1px stroke.
+///
+/// Any other style falls through to the flat filled rect + outline.
+///
+/// NOTE: The returned scene bakes absolute screen coordinates derived from
+/// `ox` / `oy` into every op (unlike glyph scenes which use origin-relative
+/// ops). Callers MUST render it at `(0, 0)` via `render_scene_at`; passing a
+/// non-zero offset will double-offset the backdrop.
+fn build_container_backdrop(
+    at: &ActiveTheme,
+    app_color: Color,
+    ox: i32,
+    oy: i32,
+    scene: &VectorScene,
+) -> VectorScene {
+    let pad = at.icon.container_padding as i32;
+    let bx = ox - pad;
+    let by = oy - pad;
+    let bw = scene.width + (2 * pad) as u32;
+    let bh = scene.height + (2 * pad) as u32;
+    let radius = at.icon.border_radius;
+
+    match at.icon.container_style.as_str() {
+        "circle" => {
+            let r = (bw.min(bh) / 2) as u16;
+            let cx = bx + bw as i32 / 2;
+            let cy = by + bh as i32 / 2;
+            VectorScene {
+                width: bw,
+                height: bh,
+                ops: vec![
+                    VectorOp::FillCircle {
+                        cx,
+                        cy,
+                        radius: r,
+                        color: at.icon.body_color,
+                    },
+                    VectorOp::StrokeCircle {
+                        cx,
+                        cy,
+                        radius: r,
+                        width: 1,
+                        color: at.icon.outline_color,
+                    },
+                ],
+            }
+        },
+        "chip" => {
+            // Band height: ~22% of chip height, minimum 4px so it stays
+            // readable even on PSP-sized dashboards.
+            let band_h = ((bh as f32 * 0.22) as u32).max(4).min(bh.saturating_sub(4));
+            let band_top = oasis_types::color::lighten(app_color, 0.25);
+            let band_bottom = app_color;
+            let separator = oasis_types::color::darken(app_color, 0.35);
+
+            let ops = vec![
+                // Body (full rounded rect — sits underneath everything).
+                VectorOp::FillRoundedRect {
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    radius,
+                    color: at.icon.body_color,
+                },
+                // Accent band: vertical gradient, inset 1px from the sides
+                // so it doesn't poke past the rounded corners at the top.
+                VectorOp::RectGradient {
+                    x: bx + 1,
+                    y: by + 1,
+                    w: bw.saturating_sub(2),
+                    h: band_h,
+                    gradient: oasis_types::backend::GradientStyle::Vertical {
+                        top: band_top,
+                        bottom: band_bottom,
+                    },
+                },
+                // 1px separator line under the band — picks up the Win2K
+                // "title bar shadow" feel.
+                VectorOp::Line {
+                    x1: bx + 1,
+                    y1: by + 1 + band_h as i32,
+                    x2: bx + bw as i32 - 1,
+                    y2: by + 1 + band_h as i32,
+                    width: 1,
+                    color: separator,
+                },
+                // Outline on top of everything.
+                VectorOp::StrokeRoundedRect {
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    radius,
+                    width: 1,
+                    color: at.icon.outline_color,
+                },
+            ];
+            VectorScene {
+                width: bw,
+                height: bh,
+                ops,
+            }
+        },
+        _ => VectorScene {
+            width: bw,
+            height: bh,
+            ops: vec![
+                VectorOp::FillRoundedRect {
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    radius,
+                    color: at.icon.body_color,
+                },
+                VectorOp::StrokeRoundedRect {
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    radius,
+                    width: 1,
+                    color: at.icon.outline_color,
+                },
+            ],
+        },
     }
 }
 
@@ -628,6 +802,106 @@ mod tests {
         };
         let icon = icon_for_app("nonexistent", &app, 0, 0, &cfg);
         assert_eq!(icon.name, "the_world");
+    }
+
+    #[test]
+    fn outline_preset_picks_icon_by_app_title() {
+        let cfg = default_icon_theme();
+        let browser = AppEntry {
+            title: "Browser".to_string(),
+            path: "/browser".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        let files = AppEntry {
+            title: "File Manager".to_string(),
+            path: "/files".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        let audio = AppEntry {
+            title: "Music Player".to_string(),
+            path: "/music".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        assert_eq!(
+            icon_for_app("outline", &browser, 0, 0, &cfg).name,
+            "outline_browser"
+        );
+        assert_eq!(
+            icon_for_app("outline", &files, 1, 0, &cfg).name,
+            "outline_files"
+        );
+        assert_eq!(
+            icon_for_app("outline", &audio, 2, 0, &cfg).name,
+            "outline_audio"
+        );
+    }
+
+    #[test]
+    fn solid_preset_picks_icon_by_app_title() {
+        let cfg = default_icon_theme();
+        let tv = AppEntry {
+            title: "TV Guide".to_string(),
+            path: "/tv".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        let radio = AppEntry {
+            title: "Internet Radio".to_string(),
+            path: "/radio".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        assert_eq!(icon_for_app("solid", &tv, 0, 0, &cfg).name, "solid_tv");
+        assert_eq!(
+            icon_for_app("solid", &radio, 1, 0, &cfg).name,
+            "solid_radio"
+        );
+    }
+
+    #[test]
+    fn pixel_preset_picks_icon_by_app_title() {
+        let cfg = default_icon_theme();
+        let terminal = AppEntry {
+            title: "Terminal".to_string(),
+            path: "/terminal".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        let files = AppEntry {
+            title: "File Manager".to_string(),
+            path: "/files".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        assert_eq!(
+            icon_for_app("pixel", &terminal, 0, 0, &cfg).name,
+            "pixel_terminal"
+        );
+        assert_eq!(
+            icon_for_app("pixel", &files, 1, 0, &cfg).name,
+            "pixel_files"
+        );
+    }
+
+    #[test]
+    fn outline_preset_independent_of_index() {
+        // Semantic presets must not depend on `index`, only the title.
+        let cfg = default_icon_theme();
+        let app = AppEntry {
+            title: "Settings".to_string(),
+            path: "/settings".to_string(),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        };
+        for i in 0..12 {
+            assert_eq!(
+                icon_for_app("outline", &app, i, 0, &cfg).name,
+                "outline_settings"
+            );
+        }
     }
 
     #[test]

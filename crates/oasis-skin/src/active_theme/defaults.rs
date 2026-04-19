@@ -69,6 +69,8 @@ impl Default for ActiveTheme {
                 pulse_speed: 0.06,
                 blink_enabled: false,
                 blink_interval: 45,
+                container_style: "none".to_string(),
+                container_padding: 3,
             },
             menu: StartMenuTheme {
                 panel_bg: Color::rgba(20, 20, 35, 220),

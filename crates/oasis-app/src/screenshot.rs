@@ -240,13 +240,23 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         }
     }
     mouse_cursor.update_sdi(&mut sdi);
-    render_and_save(
+    // Vector-icon skins render glyphs outside SDI, so the dashboard view
+    // needs VectorCtx here just like screenshot 1.
+    render_and_save_inner(
         &mut backend,
         &mut sdi,
         w,
         h,
         out_dir.join("03_mods_tab.png"),
         active_theme.clear_color,
+        if has_dashboard {
+            Some(VectorCtx {
+                dashboard: &dashboard,
+                theme: &active_theme,
+            })
+        } else {
+            None
+        },
     )?;
     log::info!("Saved {skin_name}/03_mods_tab.png");
 
