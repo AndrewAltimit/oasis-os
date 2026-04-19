@@ -72,14 +72,17 @@ impl IconCategory {
     pub fn from_app_title(title: &str) -> Self {
         let t = title.to_ascii_lowercase();
 
-        // More specific patterns first.
-        if t.contains("file") || t.contains("explorer") || t.contains("finder") {
-            return Self::Files;
-        }
+        // Browser before Files so "Internet Explorer" doesn't get captured by
+        // the bare `explorer` substring in the Files branch.
         if t.contains("browser") || t.contains("web") || t.contains("internet explorer") {
             return Self::Browser;
         }
-        if t.contains("tv") || t.contains("guide") || t.contains("television") {
+        if t.contains("file") || t.contains("explorer") || t.contains("finder") {
+            return Self::Files;
+        }
+        // `tv` alone catches "TV Guide"; a bare `guide` substring would also
+        // over-fire for "User Guide" / "Help Guide" style titles.
+        if t.contains("tv") || t.contains("television") {
             return Self::Tv;
         }
         if t.contains("radio") {
@@ -88,7 +91,9 @@ impl IconCategory {
         if t.contains("setting") || t.contains("preference") || t.contains("control panel") {
             return Self::Settings;
         }
-        if t.contains("youtube") || t.contains("video") || t.contains("stream") {
+        // `stream` is deliberately absent: "Audio Streamer" should route to
+        // Audio (matched later via "audio"), not Video.
+        if t.contains("youtube") || t.contains("video") {
             return Self::Video;
         }
         if t.contains("photo") || t.contains("gallery") || t.contains("image") {
@@ -1753,6 +1758,52 @@ mod tests {
             assert_eq!(icon.width, SIZE);
             assert_eq!(icon.height, SIZE);
         }
+    }
+
+    #[test]
+    fn internet_explorer_routes_to_browser_not_files() {
+        // Regression: bare `explorer` substring in Files would swallow
+        // "Internet Explorer" before the Browser branch runs.
+        assert_eq!(
+            IconCategory::from_app_title("Internet Explorer"),
+            IconCategory::Browser
+        );
+        // Plain "Explorer" still falls through to Files (Windows Explorer).
+        assert_eq!(
+            IconCategory::from_app_title("Explorer"),
+            IconCategory::Files
+        );
+    }
+
+    #[test]
+    fn guide_suffix_does_not_force_tv_category() {
+        // Regression: bare `guide` was matching "User Guide" / "Help Guide".
+        assert_eq!(
+            IconCategory::from_app_title("User Guide"),
+            IconCategory::Generic
+        );
+        assert_eq!(
+            IconCategory::from_app_title("Help Guide"),
+            IconCategory::Generic
+        );
+        // "TV Guide" still resolves to Tv via the "tv" substring.
+        assert_eq!(IconCategory::from_app_title("TV Guide"), IconCategory::Tv);
+    }
+
+    #[test]
+    fn audio_streamer_routes_to_audio_not_video() {
+        // Regression: `stream` in the Video branch was capturing "Audio
+        // Streamer" before the Audio branch could match it.
+        assert_eq!(
+            IconCategory::from_app_title("Audio Streamer"),
+            IconCategory::Audio
+        );
+        // "YouTube" / "Video" titles still resolve to Video.
+        assert_eq!(IconCategory::from_app_title("YouTube"), IconCategory::Video);
+        assert_eq!(
+            IconCategory::from_app_title("Video Player"),
+            IconCategory::Video
+        );
     }
 
     #[test]

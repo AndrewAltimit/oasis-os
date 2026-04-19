@@ -609,6 +609,11 @@ impl DashboardState {
 /// "circle" paints a plain disc in `body_color` with a 1px stroke.
 ///
 /// Any other style falls through to the flat filled rect + outline.
+///
+/// NOTE: The returned scene bakes absolute screen coordinates derived from
+/// `ox` / `oy` into every op (unlike glyph scenes which use origin-relative
+/// ops). Callers MUST render it at `(0, 0)` via `render_scene_at`; passing a
+/// non-zero offset will double-offset the backdrop.
 fn build_container_backdrop(
     at: &ActiveTheme,
     app_color: Color,
