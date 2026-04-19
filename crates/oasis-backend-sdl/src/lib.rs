@@ -178,6 +178,27 @@ impl SdlBackend {
         &mut self.canvas
     }
 
+    /// Resize the SDL window and internal viewport/clip state.
+    ///
+    /// The caller is responsible for updating any other subsystems that
+    /// were initialized with the old dimensions (shader bridge, window
+    /// manager screen size, dashboard layout, etc.).
+    pub fn set_window_size(&mut self, width: u32, height: u32) -> Result<()> {
+        self.canvas
+            .window_mut()
+            .set_size(width, height)
+            .map_err(|e| {
+                OasisError::Backend(oasis_types::error::BackendError::Other(format!(
+                    "SDL set_size failed: {e:?}"
+                )))
+            })?;
+        self.viewport_w = width;
+        self.viewport_h = height;
+        self.clip_stack = ClipStack::new(width, height);
+        self.translate_stack = TranslateStack::new();
+        Ok(())
+    }
+
     /// Apply cumulative translation to coordinates.
     pub(crate) fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         self.translate_stack.translate(x, y)

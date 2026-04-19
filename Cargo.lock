@@ -974,6 +974,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
+ "oasis-app-settings",
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",

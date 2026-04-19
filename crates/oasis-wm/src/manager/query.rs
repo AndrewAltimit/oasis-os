@@ -1,6 +1,6 @@
 //! Query and lookup methods for the window manager.
 
-use super::WindowManager;
+use super::{CASCADE_OFFSET, WindowManager};
 use crate::window::{Window, WmTheme};
 
 impl WindowManager {
@@ -74,5 +74,18 @@ impl WindowManager {
     /// Replace the visual theme at runtime.
     pub fn set_theme(&mut self, theme: WmTheme) {
         self.theme = theme;
+    }
+
+    /// Update the screen dimensions (e.g. after a live resolution change).
+    ///
+    /// Existing windows keep their positions; callers can walk
+    /// [`WindowManager::windows`] and invoke `move_window(id, 0, 0, sdi)`
+    /// to clamp any window whose titlebar now falls off-screen. Cascade
+    /// position is reset so new windows open near the new viewport origin.
+    pub fn set_screen_size(&mut self, screen_w: u32, screen_h: u32) {
+        self.screen_w = screen_w;
+        self.screen_h = screen_h;
+        self.next_cascade_x = CASCADE_OFFSET;
+        self.next_cascade_y = CASCADE_OFFSET;
     }
 }

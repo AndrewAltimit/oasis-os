@@ -1058,6 +1058,67 @@ mod tests {
     }
 
     #[test]
+    fn desktop_confirm_routes_to_settings_runner() {
+        // Regression test for the "Enter does nothing in Settings" symptom.
+        // Simulates: launch Settings window, press Down to move cursor off
+        // the currently-active skin, press Confirm. Verifies that the IPC
+        // request reaches the runner's pending slot.
+        use crate::launch;
+        use oasis_core::dashboard::AppEntry;
+
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+
+        let app = AppEntry {
+            title: "Settings".to_string(),
+            path: "/apps/settings".to_string(),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let result = launch::launch_app_window(
+            &app,
+            &mut state.wm,
+            &mut sdi,
+            &mut state.content.open_runners,
+            &mut state.content.browser,
+            &state.browser_config,
+            &vfs,
+            &state.net.tls_provider,
+            state.skin.features.window_manager,
+            &state.plugin_manager,
+        );
+        launch::apply_launch(result, &mut state.mode);
+        assert_eq!(state.mode, Mode::Desktop);
+        assert_eq!(state.wm.active_window(), Some("settings"));
+
+        // Press Down so the cursor lands on a skin other than the active one.
+        handle_desktop_input(
+            &InputEvent::ButtonPress(Button::Down),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        // Press Enter.
+        handle_desktop_input(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+
+        let (_, runner) = state
+            .content
+            .open_runners
+            .iter_mut()
+            .find(|(id, _)| id == "settings")
+            .expect("settings runner should exist");
+        let req = runner.take_pending_request();
+        let (path, data) = req.expect("Confirm should post an IPC request");
+        assert_eq!(path, "/system/ipc/skin-change");
+        assert!(!data.is_empty());
+    }
+
+    #[test]
     fn desktop_cancel_no_windows_returns_to_dashboard() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;

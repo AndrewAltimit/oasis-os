@@ -1,18 +1,23 @@
+use oasis_backend_sdl::SdlBackend;
+use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::backend::SdiCore;
 use oasis_core::browser::BrowserConfig;
+use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, resolve_skin};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
+use oasis_core::terminal_sdi;
 use oasis_core::transfer::FtpServer;
-use oasis_core::vfs::MemoryVfs;
+use oasis_core::vfs::{MemoryVfs, Vfs};
+use oasis_core::wallpaper;
 
 #[cfg(test)]
 use crate::app_state::UiLayer;
 use crate::app_state::{AppState, ContentLayer, NetworkLayer, TerminalLayer};
-use oasis_core::terminal_sdi;
 
 /// Process a local terminal command result. Returns a pending skin swap name
 /// if the command was `SkinSwap`.
@@ -212,6 +217,230 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             state.terminal.output_lines.push(format!("Skin error: {e}"));
         },
     }
+}
+
+/// Minimum virtual resolution accepted from a live resize request. Anything
+/// smaller makes the dashboard/window-manager layout unusable.
+const MIN_RESOLUTION_W: u32 = 320;
+const MIN_RESOLUTION_H: u32 = 240;
+/// Maximum virtual resolution — primarily a sanity bound. Requests beyond
+/// this are rejected rather than clamped so the caller notices.
+const MAX_RESOLUTION_W: u32 = 3840;
+const MAX_RESOLUTION_H: u32 = 2160;
+
+/// Apply a live resolution change. Rebuilds skin layout at the new size,
+/// resizes the SDL window + shader bridge, and re-derives the dashboard,
+/// window manager, and cursor state. No-op if `(new_w, new_h)` already
+/// matches the active resolution.
+pub fn apply_resolution_change(
+    new_w: u32,
+    new_h: u32,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut SdlBackend,
+    shader_bridge: &mut Option<SdlShaderBridge>,
+    vfs: &MemoryVfs,
+) {
+    if new_w < MIN_RESOLUTION_W
+        || new_h < MIN_RESOLUTION_H
+        || new_w > MAX_RESOLUTION_W
+        || new_h > MAX_RESOLUTION_H
+    {
+        state.terminal.output_lines.push(format!(
+            "Resolution {new_w}x{new_h} out of range ({MIN_RESOLUTION_W}x{MIN_RESOLUTION_H} \
+             to {MAX_RESOLUTION_W}x{MAX_RESOLUTION_H})"
+        ));
+        return;
+    }
+
+    if state.active_theme.screen_w == new_w && state.active_theme.screen_h == new_h {
+        return;
+    }
+
+    // Resize the host window first so any subsequent render call sees the
+    // new viewport.
+    if let Err(e) = backend.set_window_size(new_w, new_h) {
+        state
+            .terminal
+            .output_lines
+            .push(format!("Resolution change failed: {e}"));
+        return;
+    }
+
+    // Resize the shader compositor if present.
+    if let Some(bridge) = shader_bridge.as_mut() {
+        bridge.resize(new_w, new_h);
+    }
+
+    state.config.screen_width = new_w;
+    state.config.screen_height = new_h;
+
+    // Re-apply the current skin's layout at the new target size. This rebuilds
+    // every skin-owned SDI object (taskbar, dashboard tiles, etc.) for the new
+    // canvas. We clone the current skin name because `Skin::swap_scaled`
+    // consumes the new skin, and we want to reuse the already-resolved skin
+    // rather than re-reading it from disk.
+    let current_skin_name = state.skin.manifest.name.clone();
+    match resolve_skin(&current_skin_name) {
+        Ok(fresh_skin) => {
+            let swapped = Skin::swap_scaled(&state.skin, fresh_skin, sdi, new_w, new_h);
+            state.active_theme = ActiveTheme::from_skin(&swapped.theme)
+                .with_screen_size(new_w, new_h)
+                .with_features(&swapped.features);
+            state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+            state.wm.set_theme(swapped.theme.build_wm_theme());
+            state.skin = swapped;
+        },
+        Err(e) => {
+            // Reloading the skin failed (shouldn't happen for a built-in),
+            // but we still need to keep the theme dimensions consistent with
+            // the resized window so rendering doesn't draw to stale coords.
+            state
+                .terminal
+                .output_lines
+                .push(format!("Warning: skin reload failed: {e}"));
+            state.active_theme = state.active_theme.clone().with_screen_size(new_w, new_h);
+        },
+    }
+
+    // Rebuild dashboard + bars for the new layout grid.
+    let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
+    let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
+    state.ui.dashboard = DashboardState::new(dash_config, apps);
+    state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
+    state.ui.bottom_bar.current_page = 0;
+    state.ui.start_menu = StartMenuState::new_with_theme(
+        StartMenuState::default_items(&state.active_theme),
+        &state.active_theme,
+    );
+
+    state.wm.set_screen_size(new_w, new_h);
+    state.ui.mouse_cursor = CursorState::new(new_w, new_h);
+    state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
+
+    // Regenerate the wallpaper texture at the new size. The old wallpaper
+    // object survived `swap_scaled` (it isn't a skin-layout object), so we
+    // destroy the old texture and re-point the SDI wallpaper at the fresh
+    // one. If the texture destroy fails the old id simply leaks — not worth
+    // aborting the whole resize for.
+    let old_wallpaper_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
+    if let Some(tex) = old_wallpaper_tex {
+        let _ = backend.destroy_texture(tex);
+    }
+    let wp_data = wallpaper::generate_from_config(new_w, new_h, &state.active_theme);
+    match backend.load_texture(new_w, new_h, &wp_data) {
+        Ok(new_tex) => {
+            // Recreate the SDI object so size + texture are consistent. The
+            // `wallpaper.style == "none"` branch is handled downstream by
+            // the render pipeline toggling visibility.
+            terminal_sdi::setup_wallpaper(sdi, new_tex, new_w, new_h);
+            // Preserve the "hidden under shader wallpaper" behaviour from
+            // boot so shader-driven skins don't double-paint the background.
+            if oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_some()
+                && let Ok(obj) = sdi.get_mut("wallpaper")
+            {
+                obj.visible = false;
+            }
+        },
+        Err(e) => {
+            state
+                .terminal
+                .output_lines
+                .push(format!("Warning: wallpaper reload failed: {e}"));
+        },
+    }
+
+    state
+        .terminal
+        .output_lines
+        .push(format!("Resolution: {new_w}x{new_h}"));
+}
+
+/// Publish the current runtime state (skin, resolution, backend) to VFS so
+/// the Settings app and any other UI can read it on demand. Called on
+/// startup and after every apply.
+pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut MemoryVfs) {
+    // `MemoryVfs::write` requires the parent directory to exist, so we
+    // proactively create every directory both the state publisher and the
+    // IPC request poller will touch. Without `/system/ipc`, the shell's
+    // pending-VFS-request block silently fails to write skin / resolution
+    // change requests, and `poll_settings_ipc` never sees them.
+    let _ = vfs.mkdir("/system");
+    let _ = vfs.mkdir("/system/state");
+    let _ = vfs.mkdir("/system/ipc");
+    let _ = vfs.write(
+        oasis_app_settings::SKIN_STATE_PATH,
+        state.skin.manifest.name.as_bytes(),
+    );
+    let res = format!(
+        "{}x{}",
+        state.active_theme.screen_w, state.active_theme.screen_h
+    );
+    let _ = vfs.write(oasis_app_settings::RESOLUTION_STATE_PATH, res.as_bytes());
+    let _ = vfs.write(
+        oasis_app_settings::BACKEND_STATE_PATH,
+        backend_name.as_bytes(),
+    );
+}
+
+/// Poll the Settings IPC paths once per frame and dispatch any pending
+/// change. Clears each request immediately after reading so the shell
+/// doesn't reapply on every subsequent frame.
+pub fn poll_settings_ipc(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut SdlBackend,
+    shader_bridge: &mut Option<SdlShaderBridge>,
+    vfs: &mut MemoryVfs,
+    backend_name: &str,
+) {
+    let mut skin_request: Option<String> = None;
+    if vfs.exists(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH)
+        && let Ok(data) = vfs.read(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH)
+    {
+        let req = String::from_utf8_lossy(&data).trim().to_string();
+        // Always clear the request so we don't loop on malformed input.
+        let _ = vfs.write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"");
+        if !req.is_empty() && req != state.skin.manifest.name {
+            skin_request = Some(req);
+        }
+    }
+
+    let mut resolution_request: Option<(u32, u32)> = None;
+    if vfs.exists(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH)
+        && let Ok(data) = vfs.read(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH)
+    {
+        let req = String::from_utf8_lossy(&data).trim().to_string();
+        let _ = vfs.write(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
+        if let Some((w, h)) = parse_resolution(&req) {
+            resolution_request = Some((w, h));
+        } else if !req.is_empty() {
+            state
+                .terminal
+                .output_lines
+                .push(format!("Ignoring malformed resolution request: {req}"));
+        }
+    }
+
+    let mut changed = false;
+    if let Some(name) = skin_request {
+        apply_skin_swap(&name, state, sdi, vfs);
+        changed = true;
+    }
+    if let Some((w, h)) = resolution_request {
+        apply_resolution_change(w, h, state, sdi, backend, shader_bridge, vfs);
+        changed = true;
+    }
+
+    if changed {
+        publish_runtime_state(state, backend_name, vfs);
+    }
+}
+
+/// Parse a `"WIDTHxHEIGHT"` IPC payload.
+fn parse_resolution(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once('x')?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
 /// Format a remote command result as a response string, applying side effects
