@@ -291,7 +291,7 @@ impl BrowserWidget {
     }
 
     /// Maximum decoded image memory budget (bytes of RGBA data).
-    const IMAGE_MEMORY_BUDGET: usize = 8 * 1024 * 1024; // 8MB
+    pub(crate) const IMAGE_MEMORY_BUDGET: usize = 8 * 1024 * 1024; // 8MB
 
     /// Process pending image requests within a time budget.
     ///

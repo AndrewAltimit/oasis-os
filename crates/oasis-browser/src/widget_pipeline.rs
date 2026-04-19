@@ -635,6 +635,21 @@ impl BrowserWidget {
                 // path that the page-load fetch already cleared).
                 if let Some(decoded) = crate::image::decode_image(&response.body) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                    // Evict oldest decoded images if over budget so the
+                    // byte counter tracks actual resident memory.
+                    while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                        if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                            if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                let evicted_bytes =
+                                    evicted.width as usize * evicted.height as usize * 4;
+                                self.decoded_image_bytes -= evicted_bytes;
+                                self.mask_image_arcs.remove(&evict_url);
+                                self.image_info_dirty = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
                     self.decoded_image_bytes += img_bytes;
                     self.decoded_image_lru.push_front(url.clone());
                     self.decoded_images.insert(url.clone(), decoded);
