@@ -265,6 +265,12 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
                     + child.dimensions.border.top
                     + child.dimensions.padding.top;
                 child.dimensions.content.height = new_h;
+                // Re-layout descendants relative to the resolved position.
+                // Phase 1 laid out the subtree with the child at (0, 0) to
+                // measure its intrinsic main size; without a second pass at
+                // the resolved (x, y) every descendant would paint stacked
+                // at the top of the container.
+                layout_block(child, content_width, measurer);
             }
 
             main_offset += item_main + auto_end;

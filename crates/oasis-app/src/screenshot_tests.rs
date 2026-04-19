@@ -186,6 +186,7 @@ fn all_scenarios() -> Vec<Scenario> {
         "reddit_comments_inlinecss",
         "reddit_listing_basecss",
         "bfc_float_test",
+        "direct_image_url",
     ];
     for page in &pages {
         scenarios.push(Scenario {
@@ -884,6 +885,17 @@ fn run_browser_scenario(
             let vfs = make_image_test_vfs();
             browser.navigate_vfs("vfs://test/images.html", &vfs);
             String::new() // Already loaded.
+        },
+        "direct_image_url" => {
+            // Direct navigation to an image URL: the engine wraps the
+            // bytes in `<html><body><img>` chrome. Validates the
+            // `process_response` image branch end-to-end.
+            let vfs = make_image_test_vfs();
+            browser.navigate_vfs("vfs://test/red_16x16.bmp", &vfs);
+            for _ in 0..5 {
+                browser.tick(&vfs);
+            }
+            String::new()
         },
         "web_fonts" => {
             // Use navigate_vfs so the TTF font file resolves from VFS.

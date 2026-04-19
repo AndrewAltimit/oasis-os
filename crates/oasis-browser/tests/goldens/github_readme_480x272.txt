@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 87, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 2307, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 46, Color { r: 36, g: 41, b: 47, a: 255 }
 fill_rect 24, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
 fill_rect 24, 12, 0, 22, Color { r: 36, g: 41, b: 47, a: 255 }
@@ -58,103 +58,71 @@ draw_text " ", 88, 66, 8, Color { r: 36, g: 41, b: 47, a: 255 }
 draw_text "Insights", 94, 66, 8, Color { r: 36, g: 41, b: 47, a: 255 }
 fill_rect 158, 66, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
 fill_rect 158, 66, 0, 12, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "OASIS_OS", 0, 0, 16, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "OASIS_OS", 1, 0, 16, Color { r: 36, g: 41, b: 47, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-draw_text "build passing", 0, 0, 12, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 210, g: 153, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 210, g: 153, b: 34, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 210, g: 153, b: 34, a: 255 }
-draw_text "coverage 78%", 0, 0, 12, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 63, g: 185, b: 80, a: 255 }
-draw_text "license MIT", 0, 0, 12, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "An embeddable operating system framework written in Rust (edition 2024). Provides a skinnable shell, scene-graph UI, virtual file system, and a from-scratch browser engine that renders HTML / CSS / Gemini to any pixel buffer.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Features", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Features", 1, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Runs on desktop (SDL3), WebAssembly, Unreal Engine 5, and Sony PSP hardware.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "18 skins including PSP XMB, Windows XP, NeXTSTEP, and BeOS.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "90+ terminal commands across 17 modules with shell expansion and pipes.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Full HTML5 tree construction with adoption agency and foster parenting.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Getting started", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Getting started", 1, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Clone the repository and run ", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-draw_text "cargo build --release -p oasis-app", 0, 0, 6, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text ". You will need Rust 1.91.0 or newer.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-set_clip_rect 0, 0, 0, 0
-draw_text "git clone https://github.com/altimit/oasis-os.git\ncd oasis-os\ncargo build --release\n./target/release/oasis-app", 0, 0, 6, Color { r: 36, g: 41, b: 47, a: 255 }
-reset_clip_rect
-draw_text "Supported backends", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Supported backends", 1, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "The same core compiles to every backend. Each backend implements the ", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-draw_text "SdiCore", 0, 0, 6, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text " trait and optionally extends it with ", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-fill_rect 0, 0, 0, 0, Color { r: 246, g: 248, b: 250, a: 255 }
-draw_text "SdiBackend", 0, 0, 6, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text " for accelerated primitives.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "License", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "License", 1, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Dual-licensed under the Unlicense and MIT. See ", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "LICENSE-MIT", 0, 0, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 6, 79, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text " and ", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "LICENSE-UNLICENSE", 0, 0, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 6, 122, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text " for details.", 0, 0, 8, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "About", 0, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "About", 1, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Embeddable OS framework in Rust with a from-scratch browser engine.", 0, 0, 13, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Topics", 0, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Topics", 1, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "rust", 0, 0, 13, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 11, 44, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text " ", 0, 0, 13, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "psp", 0, 0, 13, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 11, 33, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text " ", 0, 0, 13, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "browser-engine", 0, 0, 13, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 11, 153, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text " ", 0, 0, 13, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "embedded", 0, 0, 13, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 0, 11, 90, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Releases", 0, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Releases", 1, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "•", -20, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "v0.9.2 — 3 days ago", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "v0.9.1 — 2 weeks ago", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "•", -20, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "v0.9.0 — 1 month ago", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Languages", 0, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Languages", 1, 0, 14, Color { r: 87, g: 96, b: 106, a: 255 }
-draw_text "Rust", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "92.4%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "C", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "4.1%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Shell", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "1.8%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "HTML", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "1.2%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "Other", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-draw_text "0.5%", 0, 0, 12, Color { r: 36, g: 41, b: 47, a: 255 }
-# totals fill_rect=62 draw_text=94 other=2
+fill_rect 49, 120, 320, 726, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 48, 119, 322, 1, Color { r: 208, g: 215, b: 222, a: 255 }
+fill_rect 369, 119, 1, 728, Color { r: 208, g: 215, b: 222, a: 255 }
+fill_rect 48, 846, 322, 1, Color { r: 208, g: 215, b: 222, a: 255 }
+fill_rect 48, 119, 1, 728, Color { r: 208, g: 215, b: 222, a: 255 }
+fill_rect 81, 194, 256, 1, Color { r: 216, g: 222, b: 228, a: 255 }
+draw_text "OASIS_OS", 81, 162, 16, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "OASIS_OS", 82, 162, 16, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 81, 204, 84, 22, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 87, 206, 30, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 87, 206, 30, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+draw_text "build", 87, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 117, 206, 42, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 117, 206, 42, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+draw_text "passing", 117, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 169, 204, 78, 22, Color { r: 210, g: 153, b: 34, a: 255 }
+fill_rect 175, 206, 48, 18, Color { r: 210, g: 153, b: 34, a: 255 }
+fill_rect 175, 206, 48, 18, Color { r: 210, g: 153, b: 34, a: 255 }
+draw_text "coverage", 175, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 223, 206, 18, 18, Color { r: 210, g: 153, b: 34, a: 255 }
+fill_rect 223, 206, 18, 18, Color { r: 210, g: 153, b: 34, a: 255 }
+draw_text "78%", 223, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 251, 204, 72, 22, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 257, 206, 42, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 257, 206, 42, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+draw_text "license", 257, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 299, 206, 18, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+fill_rect 299, 206, 18, 18, Color { r: 63, g: 185, b: 80, a: 255 }
+draw_text "MIT", 299, 206, 12, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "An", 81, 234, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "embeddable", 93, 234, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "operating", 153, 234, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "system", 207, 234, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "framework", 243, 234, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "written", 81, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "in", 123, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Rust", 135, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "(edition", 159, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "2024).", 207, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "Provides", 243, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "a", 291, 246, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "skinnable", 81, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "shell,", 135, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "scene-graph", 171, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "UI,", 237, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "virtual", 255, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "file", 297, 258, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "system,", 81, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "and", 123, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "a", 141, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "from-scratch", 147, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "browser", 219, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "engine", 261, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+draw_text "that", 297, 270, 8, Color { r: 36, g: 41, b: 47, a: 255 }
+fill_rect 394, 158, 85, 1, Color { r: 216, g: 222, b: 228, a: 255 }
+draw_text "About", 394, 133, 14, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "About", 395, 133, 14, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "Embeddable", 394, 173, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "OS", 454, 173, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "framework", 394, 192, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "in", 448, 192, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "Rust", 394, 212, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "with", 418, 212, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "a", 442, 212, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "from-scratch", 394, 231, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "browser", 394, 251, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+draw_text "engine.", 436, 251, 13, Color { r: 87, g: 96, b: 106, a: 255 }
+# totals fill_rect=55 draw_text=71 other=0

@@ -263,7 +263,11 @@ fn layout_children_incremental(
 
     for child in &mut parent.children {
         match child.box_type {
-            BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper => {
+            BoxType::Block
+            | BoxType::ListItem { .. }
+            | BoxType::TableWrapper
+            | BoxType::Flex
+            | BoxType::Grid => {
                 resolve_edge_sizes_cached(child, content_width, cache);
 
                 let child_margin_top = child.dimensions.margin.top;
@@ -929,7 +933,11 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }
 
         match child.box_type {
-            BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper => {
+            BoxType::Block
+            | BoxType::ListItem { .. }
+            | BoxType::TableWrapper
+            | BoxType::Flex
+            | BoxType::Grid => {
                 // Resolve child's edge sizes first so we can read
                 // margins for positioning.
                 resolve_edge_sizes(child, content_width);

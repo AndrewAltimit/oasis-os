@@ -629,10 +629,45 @@ impl BrowserWidget {
                 self.load_html(&wrapped, &url);
             },
             _ if content_type.is_image() => {
+                // Decode the bytes we already have so the wrapping
+                // `<img>` doesn't trigger a second network round-trip
+                // (and inherit any cookie / redirect / cache failure
+                // path that the page-load fetch already cleared).
+                if let Some(decoded) = crate::image::decode_image(&response.body) {
+                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                    // Evict oldest decoded images if over budget so the
+                    // byte counter tracks actual resident memory.
+                    while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                        if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                            if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                let evicted_bytes =
+                                    evicted.width as usize * evicted.height as usize * 4;
+                                self.decoded_image_bytes -= evicted_bytes;
+                                self.mask_image_arcs.remove(&evict_url);
+                                self.image_info_dirty = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(url.clone());
+                    self.decoded_images.insert(url.clone(), decoded);
+                    self.image_info_dirty = true;
+                } else {
+                    self.broken_image_urls.insert(url.clone());
+                }
+                let mut escaped = String::with_capacity(url.len());
+                push_escaped(&mut escaped, &url);
                 let wrapped = format!(
-                    "<html><body>\
-                     <img src=\"{}\"></body></html>",
-                    url
+                    "<!DOCTYPE html><html><head><title>{escaped}</title><style>\
+                     html,body{{margin:0;padding:0;background:#1f1f1f;}}\
+                     .image-frame{{text-align:center;padding:8px 0;}}\
+                     img{{max-width:100%;display:inline-block;}}\
+                     </style></head><body>\
+                     <div class=\"image-frame\">\
+                     <img src=\"{escaped}\" alt=\"{escaped}\">\
+                     </div></body></html>",
                 );
                 self.load_html(&wrapped, &url);
             },
