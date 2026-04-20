@@ -34,6 +34,12 @@ fn decode_whole(data: &[u8]) -> Vec<Sample> {
     let mut offset = 0;
     while offset < data.len() {
         let remaining = data.len() - offset;
+        // Reference baseline: the full file is already in scope, so
+        // minimp3's look-ahead never truncates a valid frame — `< 16`
+        // just skips the trailing bytes too small to be any MP3 frame
+        // header. Intentionally diverges from `decode_chunked`'s
+        // `MIN_DECODE_BYTES = 2048` threshold, which mirrors
+        // streaming back-pressure.
         if remaining < 16 {
             break;
         }
