@@ -18,5 +18,8 @@ sdl3 = { workspace = true }
 rmp3 = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+env_logger = { workspace = true }
+
 [lints]
 workspace = true
