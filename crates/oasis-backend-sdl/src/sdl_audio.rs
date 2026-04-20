@@ -17,10 +17,124 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
-/// Maximum PCM bytes to keep in the SDL3 audio stream before we stop accepting
-/// more samples.  At 44 100 Hz stereo i16 this is roughly 9 seconds — enough
-/// runway to absorb decode jitter and video frame blocking without audio gaps.
+/// High-water mark: stop accepting PCM once the SDL3 stream holds this much.
+/// ~9 seconds at 44.1 kHz stereo i16.
 const MAX_QUEUE_BYTES: u32 = 1_600_000;
+
+/// Low-water mark: resume accepting PCM only after the queue drains below
+/// this level. The wide hysteresis (5 seconds of playback between refills)
+/// avoids the old "pull a chunk, back-pressure, pull a chunk, back-pressure"
+/// oscillation at ~4 Hz — that tight cycle interacted badly with SDL3 /
+/// PulseAudio's timing and produced an audible pause-and-catch-up artifact.
+const REFILL_QUEUE_BYTES: u32 = 700_000;
+
+/// Fixed output sample rate we resample every MP3 to before handing it
+/// to SDL. 48 kHz is the native rate on essentially all modern Linux
+/// audio hardware (USB/HDMI/onboard), so opening the device here means
+/// the ALSA/PipeWire chain performs no rate conversion at all —
+/// removing the last periodic stutter source that surfaced once we
+/// fixed the mono-upmix one.
+const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+
+/// Stateful linear resampler for stereo i16 audio. Internal state
+/// (the last input frame and fractional read position) survives
+/// across `process` calls so chunk boundaries don't introduce
+/// audible artifacts. Intended use: one instance per streaming
+/// session, reset when the source rate changes.
+struct LinearResampler {
+    out_rate: u32,
+    in_rate: u32,
+    prev_l: i16,
+    prev_r: i16,
+    /// Position of the next output sample, in input-frame units,
+    /// measured from the start of the current input chunk. Can be
+    /// negative to indicate interpolation with `prev_*` from the
+    /// previous chunk.
+    phase: f64,
+    has_prev: bool,
+}
+
+impl LinearResampler {
+    fn new(out_rate: u32) -> Self {
+        Self {
+            out_rate,
+            in_rate: 0,
+            prev_l: 0,
+            prev_r: 0,
+            phase: 0.0,
+            has_prev: false,
+        }
+    }
+
+    /// Re-seat the resampler for a new source rate. Always clears
+    /// `has_prev` so we don't interpolate between unrelated streams.
+    fn set_input_rate(&mut self, in_rate: u32) {
+        self.in_rate = in_rate;
+        self.prev_l = 0;
+        self.prev_r = 0;
+        self.phase = 0.0;
+        self.has_prev = false;
+    }
+
+    /// Resample `input` (stereo i16 interleaved) and append the
+    /// stereo i16 result at `out_rate` to `dst`.
+    fn process(&mut self, input: &[i16], dst: &mut Vec<i16>) {
+        let in_frames = input.len() / 2;
+        if in_frames == 0 || self.in_rate == 0 {
+            return;
+        }
+        // Pass-through when rates match.
+        if self.in_rate == self.out_rate {
+            dst.extend_from_slice(input);
+            self.prev_l = input[input.len() - 2];
+            self.prev_r = input[input.len() - 1];
+            self.has_prev = true;
+            return;
+        }
+
+        let step = self.in_rate as f64 / self.out_rate as f64;
+        let mut p = self.phase;
+        // Emit outputs while we have TWO input samples straddling p.
+        // That means we need floor(p)+1 to be a valid in-chunk index,
+        // i.e. p < in_frames - 1.
+        let limit = in_frames as f64 - 1.0;
+        while p < limit {
+            let idx0 = p.floor() as i32;
+            let frac = p - idx0 as f64;
+            let (l0, r0) = if idx0 == -1 && self.has_prev {
+                (self.prev_l, self.prev_r)
+            } else if idx0 >= 0 {
+                let i = idx0 as usize;
+                (input[2 * i], input[2 * i + 1])
+            } else {
+                // Phase walked past what we have context for — stop
+                // and wait for more input.
+                break;
+            };
+            let idx1 = idx0 + 1;
+            let (l1, r1) = if idx1 == -1 && self.has_prev {
+                (self.prev_l, self.prev_r)
+            } else if idx1 >= 0 && (idx1 as usize) < in_frames {
+                let i = idx1 as usize;
+                (input[2 * i], input[2 * i + 1])
+            } else {
+                break;
+            };
+            let l = l0 as f64 + frac * (l1 as f64 - l0 as f64);
+            let r = r0 as f64 + frac * (r1 as f64 - r0 as f64);
+            dst.push(l.clamp(-32768.0, 32767.0) as i16);
+            dst.push(r.clamp(-32768.0, 32767.0) as i16);
+            p += step;
+        }
+
+        // Normalize phase so it's relative to the START of the next
+        // chunk. The last frame of this chunk becomes index -1 there.
+        self.phase = p - in_frames as f64;
+        self.prev_l = input[input.len() - 2];
+        self.prev_r = input[input.len() - 1];
+        self.has_prev = true;
+    }
+}
 
 /// SDL3-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
@@ -36,6 +150,12 @@ pub struct SdlAudioBackend {
     mp3_buffer: Vec<u8>,
     /// Reusable staging buffer for decoded PCM (avoids per-call allocation).
     pcm_staging: Vec<i16>,
+    /// Reusable output buffer for resampled PCM at OUTPUT_SAMPLE_RATE.
+    pcm_resampled: Vec<i16>,
+    /// Keeps the streaming session's resampler state across feed
+    /// boundaries, so the device always sees a single 48 kHz stream
+    /// even when the source rate (22.05/44.1/48 kHz …) varies.
+    resampler: LinearResampler,
     /// Loaded non-streaming tracks (raw MP3 data).
     tracks: HashMap<u64, Vec<u8>>,
     /// Next track ID to assign.
@@ -56,6 +176,11 @@ pub struct SdlAudioBackend {
     channels: usize,
     /// Total PCM samples queued (for position_ms calculation).
     samples_queued: u64,
+    /// Back-pressure hysteresis. `true` while we want more PCM (queue is
+    /// being filled toward MAX_QUEUE_BYTES); flips to `false` at the high
+    /// mark and back to `true` at REFILL_QUEUE_BYTES. Interior mutability
+    /// so `streaming_can_accept` can update it through `&self`.
+    accepting: std::cell::Cell<bool>,
 }
 
 impl SdlAudioBackend {
@@ -68,6 +193,8 @@ impl SdlAudioBackend {
             decoder: rmp3::RawDecoder::new(),
             mp3_buffer: Vec::new(),
             pcm_staging: Vec::new(),
+            pcm_resampled: Vec::new(),
+            resampler: LinearResampler::new(OUTPUT_SAMPLE_RATE),
             tracks: HashMap::new(),
             next_id: 0,
             current_track: None,
@@ -78,6 +205,7 @@ impl SdlAudioBackend {
             sample_rate: 0,
             channels: 0,
             samples_queued: 0,
+            accepting: std::cell::Cell::new(true),
         }
     }
 
@@ -141,37 +269,52 @@ impl SdlAudioBackend {
     /// avoiding the old bug where decoded PCM was silently dropped.
     fn decode_buffered(&mut self) -> Result<()> {
         // If the SDL3 stream already has plenty of audio, skip decoding and
-        // keep the MP3 bytes for later.  This bounds latency without losing
+        // keep the MP3 bytes for later. This bounds latency without losing
         // any decoded audio.
-        //
-        // Exception: when the mp3_buffer is small (< 16 KB), always decode.
-        // This ensures the last frames of a finite track get decoded even if
-        // the queue is momentarily full — otherwise those bytes would be
-        // stranded when the source reaches EOF and feed_data is never called
-        // again.
         if self.queued_bytes() > MAX_QUEUE_BYTES && self.mp3_buffer.len() >= 16 * 1024 {
             return Ok(());
         }
+        // Max MP3 Layer 3 frame is 1440 bytes, and minimp3 also peeks at
+        // the next frame's sync header before committing to decoding the
+        // current one. We need BOTH in the buffer simultaneously;
+        // otherwise `decoder.next` silently returns None even when there
+        // IS a decodable frame right at offset, because the look-ahead
+        // check fails. 2 KB leaves headroom for any bitrate/rate. This
+        // leaves up to ~2 KB of trailing MP3 undecoded at end of source;
+        // `finalize_streaming` drains the tail with the smaller
+        // `MIN_DECODE_BYTES_TAIL` threshold so the last ~1 s of audio
+        // isn't lost.
+        const MIN_DECODE_BYTES: usize = 2048;
+        self.decode_mp3_buffer(MIN_DECODE_BYTES)
+    }
 
+    /// Shared decode-and-queue path used by both `decode_buffered` (big
+    /// threshold, mid-stream) and `finalize_streaming` (small threshold,
+    /// end-of-stream tail drain).
+    fn decode_mp3_buffer(&mut self, min_decode_bytes: usize) -> Result<()> {
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
         self.pcm_staging.clear();
+        // Lock detected format to the *first* audio frame in this batch.
+        // Later frames should report the same rate/channels; using the
+        // first avoids being misled by a spurious resync frame near the
+        // end of the batch.
         let mut detected_rate = 0u32;
         let mut detected_channels = 0u16;
 
         loop {
             let remaining = self.mp3_buffer.len() - offset;
-            // Need at least 16 bytes for rmp3 to safely scan for a frame
-            // header (works around an unchecked slice bounds bug in rmp3).
-            if remaining < 16 {
+            if remaining < min_decode_bytes {
                 break;
             }
             match self.decoder.next(&self.mp3_buffer[offset..], &mut pcm_out) {
                 Some((frame, consumed)) => {
                     offset += consumed;
                     if let rmp3::Frame::Audio(audio) = frame {
-                        detected_rate = audio.sample_rate();
-                        detected_channels = audio.channels();
+                        if detected_rate == 0 {
+                            detected_rate = audio.sample_rate();
+                            detected_channels = audio.channels();
+                        }
                         self.pcm_staging.extend_from_slice(audio.samples());
                     }
                 },
@@ -181,28 +324,60 @@ impl SdlAudioBackend {
 
         self.mp3_buffer.drain(..offset);
 
-        // Open device on first decoded frame (need sample rate).
+        // The SDL device is always opened at OUTPUT_SAMPLE_RATE /
+        // stereo — we do both upmixing and rate conversion in
+        // userspace. A rate change in the source therefore just
+        // re-seats the resampler; the device stays open and
+        // PipeWire/PulseAudio never sees a reconfigure.
+        if detected_rate > 0 && self.resampler.in_rate != detected_rate {
+            log::debug!("SDL audio: source MP3 format = {detected_rate}Hz {detected_channels}ch");
+            self.resampler.set_input_rate(detected_rate);
+        }
+
+        // Open device once, at the fixed output format.
         if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
-            self.open_device(detected_rate as i32, detected_channels as u8)?;
+            self.open_device(OUTPUT_SAMPLE_RATE as i32, 2)?;
         }
 
         if !self.pcm_staging.is_empty() {
+            // Record the output format for `position_ms` / status.
             if detected_rate > 0 {
-                self.sample_rate = detected_rate as i32;
-                self.channels = detected_channels as usize;
+                self.sample_rate = OUTPUT_SAMPLE_RATE as i32;
+                self.channels = 2;
             }
 
-            // Apply volume scaling.
+            // Upmix mono → stereo in-place via a quick rewrite so we
+            // feed the resampler a stereo-interleaved buffer.
+            if detected_channels == 1 {
+                let mono_len = self.pcm_staging.len();
+                self.pcm_staging.resize(mono_len * 2, 0);
+                // Walk from the end inward so we don't overwrite
+                // samples we haven't duplicated yet.
+                for i in (0..mono_len).rev() {
+                    let s = self.pcm_staging[i];
+                    self.pcm_staging[2 * i] = s;
+                    self.pcm_staging[2 * i + 1] = s;
+                }
+            }
+
+            // Apply volume scaling before resampling so the interpolator
+            // sees the already-scaled signal (avoids tiny quantisation
+            // differences versus scaling after).
             let vol = self.volume as i32;
             for s in &mut self.pcm_staging {
                 *s = ((*s as i32 * vol) / 100) as i16;
             }
 
-            // Always queue decoded PCM — never drop it.
-            // Clone the staging buffer since queue_pcm borrows self mutably.
-            let staging = std::mem::take(&mut self.pcm_staging);
-            self.queue_pcm(&staging)?;
-            self.pcm_staging = staging;
+            // Resample to OUTPUT_SAMPLE_RATE stereo and queue.
+            self.pcm_resampled.clear();
+            self.resampler
+                .process(&self.pcm_staging, &mut self.pcm_resampled);
+            if !self.pcm_resampled.is_empty() {
+                let out = std::mem::take(&mut self.pcm_resampled);
+                self.queue_pcm(&out)?;
+                self.pcm_resampled = out;
+                self.pcm_resampled.clear();
+            }
         }
 
         Ok(())
@@ -264,10 +439,15 @@ impl SdlAudioBackend {
     }
 
     fn decode_mp3_and_queue(&mut self, mp3_data: &[u8]) -> Result<()> {
+        // Static MP3 playback (load_track) goes through the *same*
+        // pipeline as streaming: decode → upmix mono to stereo →
+        // resample to OUTPUT_SAMPLE_RATE → queue. That way the
+        // `play_mp3` example binary exercises exactly what the radio
+        // app does, which keeps it useful as a diagnostic tool.
         let mut decoder = rmp3::RawDecoder::new();
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
-        let mut pending_pcm: Vec<i16> = Vec::new();
+        let mut decoded: Vec<i16> = Vec::new();
         let mut detected_rate = 0u32;
         let mut detected_channels = 0u16;
 
@@ -280,33 +460,60 @@ impl SdlAudioBackend {
                 Some((frame, consumed)) => {
                     offset += consumed;
                     if let rmp3::Frame::Audio(audio) = frame {
-                        detected_rate = audio.sample_rate();
-                        detected_channels = audio.channels();
-                        pending_pcm.extend_from_slice(audio.samples());
+                        if detected_rate == 0 {
+                            detected_rate = audio.sample_rate();
+                            detected_channels = audio.channels();
+                        }
+                        decoded.extend_from_slice(audio.samples());
                     }
                 },
                 None => break,
             }
         }
 
-        // Open device if needed.
-        if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
-            self.open_device(detected_rate as i32, detected_channels as u8)?;
+        if decoded.is_empty() || detected_rate == 0 {
+            return Ok(());
         }
 
-        if !pending_pcm.is_empty() {
-            if detected_rate > 0 {
-                self.sample_rate = detected_rate as i32;
-                self.channels = detected_channels as usize;
+        // Upmix mono → stereo.
+        if detected_channels == 1 {
+            let mono_len = decoded.len();
+            decoded.resize(mono_len * 2, 0);
+            for i in (0..mono_len).rev() {
+                let s = decoded[i];
+                decoded[2 * i] = s;
+                decoded[2 * i + 1] = s;
             }
-
-            let vol = self.volume as i32;
-            for s in &mut pending_pcm {
-                *s = ((*s as i32 * vol) / 100) as i16;
-            }
-
-            self.queue_pcm(&pending_pcm)?;
         }
+
+        // Apply volume scaling.
+        let vol = self.volume as i32;
+        for s in &mut decoded {
+            *s = ((*s as i32 * vol) / 100) as i16;
+        }
+
+        // Open device at the fixed output format if it isn't already.
+        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
+            self.open_device(OUTPUT_SAMPLE_RATE as i32, 2)?;
+        }
+        self.sample_rate = OUTPUT_SAMPLE_RATE as i32;
+        self.channels = 2;
+
+        // Route through the streaming resampler so the static path and
+        // streaming path produce bit-identical output for the same
+        // input.
+        let mut local_resampler = LinearResampler::new(OUTPUT_SAMPLE_RATE);
+        local_resampler.set_input_rate(detected_rate);
+        // Size the output buffer for the expected sample count: when
+        // upsampling (e.g. 22.05 kHz → 48 kHz, ~2.17×) a raw
+        // `Vec::with_capacity(decoded.len())` would immediately
+        // reallocate.
+        let expected_out = (decoded.len() as u64).saturating_mul(OUTPUT_SAMPLE_RATE as u64)
+            / detected_rate.max(1) as u64;
+        let mut resampled = Vec::with_capacity(expected_out as usize + 16);
+        local_resampler.process(&decoded, &mut resampled);
+
+        self.queue_pcm(&resampled)?;
 
         Ok(())
     }
@@ -320,6 +527,20 @@ impl Default for SdlAudioBackend {
 
 impl AudioBackend for SdlAudioBackend {
     fn init(&mut self) -> Result<()> {
+        // Ask SDL3 for a generously large audio device buffer. The
+        // default on Linux (PulseAudio / PipeWire) is typically
+        // ~1024 frames (~23 ms at 44.1 kHz), which is tight — a brief
+        // scheduling hitch in our feed path can starve the device and
+        // produce ~10 ms "skip"-like stutters a few times a second.
+        // 16384 frames (~370 ms at 44.1 kHz) gives the driver enough
+        // runway that even a very preempted main thread won't
+        // underrun. Radio is a buffered, non-interactive playback
+        // context so the extra latency is imperceptible.
+        //
+        // Must be set *before* the audio device is opened — SDL
+        // reads hints at device-open time.
+        sdl3::hint::set("SDL_AUDIO_DEVICE_SAMPLE_FRAMES", "16384");
+
         // Try to initialize SDL3 audio subsystem.
         // In CI/headless environments this may fail — we log a warning
         // but still mark as initialized so non-audio functionality works.
@@ -498,6 +719,22 @@ impl AudioBackend for SdlAudioBackend {
         self.decoder = rmp3::RawDecoder::new();
         self.stream_track = Some(id);
         self.samples_queued = 0;
+        // Drop the SDL stream so the next decoded frame opens a fresh
+        // one. Tried the lighter `stream.clear()` first, but a stream
+        // reused across station switches consistently produced
+        // periodic stutters on the *second* station while the first
+        // (cold-opened) one was clean — something in the reused
+        // stream's internal state carried forward. The device spec
+        // itself doesn't change (always 48 kHz stereo) so PipeWire
+        // only sees a quick re-bind, not a full reconfigure.
+        self.stream_owner = None;
+        // Reset resampler state — the new track might not share the
+        // previous one's sample rate, and any interpolation across
+        // that boundary would be meaningless.
+        self.resampler.set_input_rate(0);
+        // Start a new track in the "accept PCM" phase of the hysteresis
+        // cycle so we fill the queue quickly from empty.
+        self.accepting.set(true);
         log::debug!("Created streaming audio track {id}");
         Ok(AudioTrackId(id))
     }
@@ -509,16 +746,60 @@ impl AudioBackend for SdlAudioBackend {
             ));
         }
 
+        // Accept the new bytes unconditionally. Callers should use
+        // `streaming_can_accept()` to apply back-pressure — dropping bytes
+        // from the middle of the MP3 stream here (which the old 256 KB cap
+        // did) breaks frame sync and produces periodic stutter. A very
+        // large safety cap catches pathological cases without affecting
+        // normal playback.
         self.mp3_buffer.extend_from_slice(data);
-
-        // Cap MP3 buffer at 256KB to prevent unbounded growth.
-        const MAX_MP3_BUF: usize = 256 * 1024;
-        if self.mp3_buffer.len() > MAX_MP3_BUF {
-            let drain = self.mp3_buffer.len() - MAX_MP3_BUF;
-            self.mp3_buffer.drain(..drain);
+        const MP3_BUF_SAFETY_CAP: usize = 32 * 1024 * 1024;
+        if self.mp3_buffer.len() > MP3_BUF_SAFETY_CAP {
+            log::warn!(
+                "SDL audio: MP3 side-buffer exceeded {MP3_BUF_SAFETY_CAP} bytes, \
+                 clearing (network faster than playback + back-pressure broken?)"
+            );
+            self.mp3_buffer.clear();
+            self.decoder = rmp3::RawDecoder::new();
         }
 
         self.decode_buffered()
+    }
+
+    fn finalize_streaming(&mut self, track: AudioTrackId) -> Result<()> {
+        if self.stream_track != Some(track.0) {
+            return Ok(());
+        }
+        // Drain the last bit of `mp3_buffer` with a relaxed threshold.
+        // Normal `decode_buffered` needs ~2 KB of look-ahead for
+        // minimp3, so up to 2 KB trails undecoded at end-of-source.
+        // Sixteen bytes is the minimum rmp3 needs to avoid a
+        // bounds-check panic.
+        self.decode_mp3_buffer(16)
+    }
+
+    fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
+        if self.stream_track != Some(track.0) {
+            return false;
+        }
+        // Hysteresis: fill the queue to MAX_QUEUE_BYTES, then don't accept
+        // more PCM until it has drained below REFILL_QUEUE_BYTES. This
+        // replaces the old "threshold just below the cap" check which
+        // caused tight back-pressure cycles of ~250 ms — one poll every
+        // ~1/4 s produced an audible pause-and-catch-up artifact on
+        // Linux/PulseAudio. With the wide band we now pull in longer
+        // bursts separated by multiple seconds of steady playout.
+        let queued = self.queued_bytes();
+        let accepting = self.accepting.get();
+        let next = if accepting {
+            queued < MAX_QUEUE_BYTES
+        } else {
+            queued < REFILL_QUEUE_BYTES
+        };
+        if next != accepting {
+            self.accepting.set(next);
+        }
+        next
     }
 
     fn feed_pcm_f32(

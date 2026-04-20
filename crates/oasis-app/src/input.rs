@@ -1,3 +1,4 @@
+use oasis_audio::RADIO_APP_TITLE;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Trigger};
@@ -13,6 +14,35 @@ use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
 use crate::{commands, launch};
+
+/// Tear down active radio playback and any pending network work.
+///
+/// Safe to call unconditionally: all fields are cleared idempotently.
+fn stop_radio(state: &mut AppState) {
+    let _ = state
+        .radio_manager
+        .process_request("stop", &mut state.audio_backend);
+    state.archive_catalog = None;
+    state.pending_catalog_fetch = None;
+    state.pending_source_fetch = None;
+    if let Some(mut src) = state.radio_source.take() {
+        src.disconnect();
+    }
+}
+
+/// Stop the radio if the closing runner is the Internet Radio app.
+/// Closing the app window should also stop playback — otherwise audio
+/// keeps playing with no UI to control it.
+fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
+    let is_radio = state
+        .content
+        .open_runners
+        .iter()
+        .any(|(rid, runner)| rid == id && runner.title == RADIO_APP_TITLE);
+    if is_radio {
+        stop_radio(state);
+    }
+}
 
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +140,7 @@ pub fn handle_desktop_input(
                     if state.content.fullscreen_app.as_deref() == Some(id.as_str()) {
                         state.content.fullscreen_app = None;
                     }
+                    stop_radio_if_radio_runner(state, &id);
                     state.content.open_runners.retain(|(rid, _)| *rid != id);
                     if id == "browser" {
                         state.content.browser = None;
@@ -214,6 +245,7 @@ pub fn handle_desktop_input(
                     state.content.fullscreen_app = None;
                 }
                 let _ = state.wm.close_window(&active_id, sdi);
+                stop_radio_if_radio_runner(state, &active_id);
                 state
                     .content
                     .open_runners
@@ -348,6 +380,7 @@ pub fn handle_desktop_input(
                                 state.content.fullscreen_app = None;
                             }
                             let _ = state.wm.close_window(&active_id, sdi);
+                            stop_radio_if_radio_runner(state, &active_id);
                             state
                                 .content
                                 .open_runners
@@ -392,18 +425,24 @@ pub fn handle_app_input(
     if let Some(ref mut runner) = state.content.app_runner {
         match event {
             InputEvent::Quit => return InputResult::Quit,
-            InputEvent::ButtonPress(btn) => match runner.handle_input(btn, vfs) {
-                AppAction::Exit => {
-                    AppRunner::hide_sdi(sdi);
-                    state.content.app_runner = None;
-                    state.mode = Mode::Dashboard;
-                },
-                AppAction::SwitchToTerminal => {
-                    AppRunner::hide_sdi(sdi);
-                    state.content.app_runner = None;
-                    state.mode = Mode::Terminal;
-                },
-                AppAction::RequestFullscreen | AppAction::None => {},
+            InputEvent::ButtonPress(btn) => {
+                let is_radio = runner.title == RADIO_APP_TITLE;
+                match runner.handle_input(btn, vfs) {
+                    AppAction::Exit => {
+                        AppRunner::hide_sdi(sdi);
+                        state.content.app_runner = None;
+                        state.mode = Mode::Dashboard;
+                        if is_radio {
+                            stop_radio(state);
+                        }
+                    },
+                    AppAction::SwitchToTerminal => {
+                        AppRunner::hide_sdi(sdi);
+                        state.content.app_runner = None;
+                        state.mode = Mode::Terminal;
+                    },
+                    AppAction::RequestFullscreen | AppAction::None => {},
+                }
             },
             _ => {},
         }

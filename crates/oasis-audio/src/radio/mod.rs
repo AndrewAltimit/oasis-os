@@ -22,6 +22,12 @@ pub use station::{Station, StationRegistry};
 pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
 /// VFS path where terminal commands write radio requests.
 pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
+/// Display title of the Internet Radio app, shared between the app
+/// itself and every place that needs to identify a radio runner (e.g.
+/// the close-handler that stops playback when the window closes). Keep
+/// this as the single source of truth so renaming the app in one place
+/// doesn't silently break behaviour in another.
+pub const RADIO_APP_TITLE: &str = "Internet Radio";
 
 /// Buffering threshold: start playback after accumulating this many bytes.
 const BUFFER_THRESHOLD: usize = 32 * 1024;
@@ -302,29 +308,41 @@ impl RadioManager {
                     },
                 }
             },
-            RadioState::Buffering | RadioState::Playing => match src.poll() {
-                Ok(Some(chunk)) => {
-                    let should_start = self.feed_audio(&chunk, backend)?;
-                    if should_start && self.state == RadioState::Buffering {
-                        self.start_playback(backend)?;
+            RadioState::Buffering | RadioState::Playing => {
+                // One poll per tick. Drain loops (earlier attempts at
+                // "pull many chunks per frame") produced sawtooth queue
+                // patterns that audibly interacted with SDL3 /
+                // PulseAudio's output pacing. A single 4 KB poll at
+                // 60 Hz = 240 KB/s of MP3, which is ~15× typical radio
+                // bitrate — more than enough headroom while keeping the
+                // delivery steady. Back-pressure via
+                // `streaming_can_accept` still throttles the network
+                // when the backend's queue is full.
+                let mut ended = false;
+                let mut err: Option<OasisError> = None;
+                let can_pull = self
+                    .stream_track
+                    .map(|t| backend.streaming_can_accept(t))
+                    .unwrap_or(true);
+                if can_pull {
+                    match src.poll() {
+                        Ok(Some(chunk)) => {
+                            let should_start = self.feed_audio(&chunk, backend)?;
+                            if should_start && self.state == RadioState::Buffering {
+                                self.start_playback(backend)?;
+                            }
+                        },
+                        Ok(None) => {
+                            if src.state() == SourceState::Ended {
+                                ended = true;
+                            }
+                        },
+                        Err(e) => {
+                            err = Some(e);
+                        },
                     }
-                },
-                Ok(None) => {
-                    if src.state() == SourceState::Ended {
-                        // Release the stream track handle but do NOT stop the
-                        // backend — the SDL audio queue may still have seconds
-                        // of decoded PCM waiting to play.  Calling stop() would
-                        // discard that audio, clipping the end of the track.
-                        // The next track's tune() or start_playback() will
-                        // reset the backend when it begins.
-                        self.stream_track = None;
-                        self.audio_buf.clear();
-                        // Signal TrackEnded so caller can auto-advance.
-                        self.state = RadioState::TrackEnded;
-                        *source = None;
-                    }
-                },
-                Err(e) => {
+                }
+                if let Some(e) = err {
                     // Clean up the streaming track before entering error state.
                     if let Some(track) = self.stream_track.take() {
                         let _ = backend.stop();
@@ -333,7 +351,30 @@ impl RadioManager {
                     self.audio_buf.clear();
                     self.set_error(&format!("{e}"));
                     *source = None;
-                },
+                } else if ended {
+                    // Tell the backend no more data is coming so it can
+                    // drain its decode-lookahead side buffer with a
+                    // smaller threshold — otherwise the mid-stream
+                    // threshold leaves up to ~1 s of audio orphaned at
+                    // the end of each track (especially audible with
+                    // archive auto-advance between short OTR / LibriVox
+                    // segments).
+                    if let Some(track) = self.stream_track.take()
+                        && let Err(e) = backend.finalize_streaming(track)
+                    {
+                        log::warn!("finalize_streaming failed draining tail: {e}");
+                    }
+                    // Release the stream track handle but do NOT stop the
+                    // backend — the SDL audio queue may still have seconds
+                    // of decoded PCM waiting to play.  Calling stop() would
+                    // discard that audio, clipping the end of the track.
+                    // The next track's tune() or start_playback() will
+                    // reset the backend when it begins.
+                    self.audio_buf.clear();
+                    // Signal TrackEnded so caller can auto-advance.
+                    self.state = RadioState::TrackEnded;
+                    *source = None;
+                }
             },
             RadioState::Stopped | RadioState::TrackEnded | RadioState::Error => {
                 // Clean up the source if radio was stopped or errored.
@@ -495,18 +536,37 @@ mod tests {
     use oasis_vfs::MemoryVfs;
 
     /// Stub audio backend for testing radio.
+    ///
+    /// Simulates the back-pressure the real SDL3 backend applies: `feed_data`
+    /// tracks buffered bytes and `streaming_can_accept` reports false once a
+    /// threshold is crossed, draining a small amount per query to model
+    /// playback progress. Without this the drain loop in
+    /// `RadioManager::tick` would empty any finite `VfsSource` in a single
+    /// tick and skip past the state transitions the tests are checking.
     struct StubAudioBackend {
         volume: u8,
         playing: bool,
         loaded_count: u64,
+        buffered: std::cell::Cell<usize>,
     }
 
     impl StubAudioBackend {
+        /// Bytes "buffered" before `streaming_can_accept` returns false.
+        /// Sized so a normal tick pulls ~7 × 4 KB = 28 KB before blocking.
+        const BACK_PRESSURE_LIMIT: usize = 16 * 1024;
+        /// Simulated playback drain per `streaming_can_accept` call. Half the
+        /// 4 KB poll chunk, so back-pressured ticks still make steady
+        /// forward progress — otherwise tests like
+        /// `error_during_playing_cleans_up` spend dozens of ticks stuck just
+        /// below the cap.
+        const DRAIN_PER_QUERY: usize = 2048;
+
         fn new() -> Self {
             Self {
                 volume: 80,
                 playing: false,
                 loaded_count: 0,
+                buffered: std::cell::Cell::new(0),
             }
         }
     }
@@ -561,10 +621,18 @@ mod tests {
         fn load_streaming(&mut self) -> Result<AudioTrackId> {
             let id = self.loaded_count;
             self.loaded_count += 1;
+            self.buffered.set(0);
             Ok(AudioTrackId(id))
         }
-        fn feed_data(&mut self, _track: AudioTrackId, _data: &[u8]) -> Result<()> {
+        fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
+            self.buffered.set(self.buffered.get() + data.len());
             Ok(())
+        }
+        fn streaming_can_accept(&self, _track: AudioTrackId) -> bool {
+            let before = self.buffered.get();
+            self.buffered
+                .set(before.saturating_sub(Self::DRAIN_PER_QUERY));
+            before < Self::BACK_PRESSURE_LIMIT
         }
     }
 

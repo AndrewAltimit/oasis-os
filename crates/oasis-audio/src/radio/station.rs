@@ -102,6 +102,16 @@ impl StationRegistry {
                     source_type: "archive".into(),
                     collection: "78rpm".into(),
                 },
+                Station {
+                    name: "This Is Your FBI".into(),
+                    url: String::new(),
+                    genre: "true crime".into(),
+                    format: "mp3".into(),
+                    bitrate: 0,
+                    favorite: false,
+                    source_type: "archive".into(),
+                    collection: "OTRR_This_Is_Your_FBI_Singles".into(),
+                },
             ],
         }
     }

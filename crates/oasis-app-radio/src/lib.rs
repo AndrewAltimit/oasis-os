@@ -5,7 +5,7 @@
 
 use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
 use oasis_audio::radio::station::StationRegistry;
-use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
+use oasis_audio::{RADIO_APP_TITLE, RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -21,7 +21,7 @@ pub struct RadioApp {
 impl RadioApp {
     /// Create a new Internet Radio app, loading initial content from VFS.
     pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
-        let mut content = ContentState::new("Internet Radio", path);
+        let mut content = ContentState::new(RADIO_APP_TITLE, path);
         content.lines = radio_content(vfs);
         Self { content }
     }

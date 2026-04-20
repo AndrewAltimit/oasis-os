@@ -1131,6 +1131,7 @@ dependencies = [
 name = "oasis-backend-sdl"
 version = "1.3.0"
 dependencies = [
+ "env_logger",
  "log",
  "oasis-audio",
  "oasis-core",
