@@ -76,6 +76,15 @@ pub trait AudioBackend {
         true
     }
 
+    /// Signal that no more data will be fed for this streaming track
+    /// (i.e. the source reached its end). Backends that keep a
+    /// decode-lookahead side buffer should drain whatever's left now,
+    /// with a relaxed threshold, so the last ~1 s of a track is not
+    /// orphaned. Default is a no-op for backends that don't buffer.
+    fn finalize_streaming(&mut self, _track: AudioTrackId) -> Result<()> {
+        Ok(())
+    }
+
     /// Feed decoded PCM f32 samples directly to a streaming track.
     ///
     /// Used by the software video decoder path where audio is already decoded

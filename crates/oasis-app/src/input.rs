@@ -1,3 +1,4 @@
+use oasis_audio::RADIO_APP_TITLE;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Trigger};
@@ -13,10 +14,6 @@ use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
 use crate::{commands, launch};
-
-/// Display title of the Internet Radio app — used to identify radio
-/// runners so their audio is stopped when the window closes.
-const RADIO_APP_TITLE: &str = "Internet Radio";
 
 /// Tear down active radio playback and any pending network work.
 ///

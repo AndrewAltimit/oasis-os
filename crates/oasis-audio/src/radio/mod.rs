@@ -22,6 +22,12 @@ pub use station::{Station, StationRegistry};
 pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
 /// VFS path where terminal commands write radio requests.
 pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
+/// Display title of the Internet Radio app, shared between the app
+/// itself and every place that needs to identify a radio runner (e.g.
+/// the close-handler that stops playback when the window closes). Keep
+/// this as the single source of truth so renaming the app in one place
+/// doesn't silently break behaviour in another.
+pub const RADIO_APP_TITLE: &str = "Internet Radio";
 
 /// Buffering threshold: start playback after accumulating this many bytes.
 const BUFFER_THRESHOLD: usize = 32 * 1024;
@@ -346,13 +352,22 @@ impl RadioManager {
                     self.set_error(&format!("{e}"));
                     *source = None;
                 } else if ended {
+                    // Tell the backend no more data is coming so it can
+                    // drain its decode-lookahead side buffer with a
+                    // smaller threshold — otherwise the mid-stream
+                    // threshold leaves up to ~1 s of audio orphaned at
+                    // the end of each track (especially audible with
+                    // archive auto-advance between short OTR / LibriVox
+                    // segments).
+                    if let Some(track) = self.stream_track.take() {
+                        let _ = backend.finalize_streaming(track);
+                    }
                     // Release the stream track handle but do NOT stop the
                     // backend — the SDL audio queue may still have seconds
                     // of decoded PCM waiting to play.  Calling stop() would
                     // discard that audio, clipping the end of the track.
                     // The next track's tune() or start_playback() will
                     // reset the backend when it begins.
-                    self.stream_track = None;
                     self.audio_buf.clear();
                     // Signal TrackEnded so caller can auto-advance.
                     self.state = RadioState::TrackEnded;

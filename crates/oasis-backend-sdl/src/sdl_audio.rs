@@ -269,18 +269,29 @@ impl SdlAudioBackend {
     /// avoiding the old bug where decoded PCM was silently dropped.
     fn decode_buffered(&mut self) -> Result<()> {
         // If the SDL3 stream already has plenty of audio, skip decoding and
-        // keep the MP3 bytes for later.  This bounds latency without losing
+        // keep the MP3 bytes for later. This bounds latency without losing
         // any decoded audio.
-        //
-        // Exception: when the mp3_buffer is small (< 16 KB), always decode.
-        // This ensures the last frames of a finite track get decoded even if
-        // the queue is momentarily full — otherwise those bytes would be
-        // stranded when the source reaches EOF and feed_data is never called
-        // again.
         if self.queued_bytes() > MAX_QUEUE_BYTES && self.mp3_buffer.len() >= 16 * 1024 {
             return Ok(());
         }
+        // Max MP3 Layer 3 frame is 1440 bytes, and minimp3 also peeks at
+        // the next frame's sync header before committing to decoding the
+        // current one. We need BOTH in the buffer simultaneously;
+        // otherwise `decoder.next` silently returns None even when there
+        // IS a decodable frame right at offset, because the look-ahead
+        // check fails. 2 KB leaves headroom for any bitrate/rate. This
+        // leaves up to ~2 KB of trailing MP3 undecoded at end of source;
+        // `finalize_streaming` drains the tail with the smaller
+        // `MIN_DECODE_BYTES_TAIL` threshold so the last ~1 s of audio
+        // isn't lost.
+        const MIN_DECODE_BYTES: usize = 2048;
+        self.decode_mp3_buffer(MIN_DECODE_BYTES)
+    }
 
+    /// Shared decode-and-queue path used by both `decode_buffered` (big
+    /// threshold, mid-stream) and `finalize_streaming` (small threshold,
+    /// end-of-stream tail drain).
+    fn decode_mp3_buffer(&mut self, min_decode_bytes: usize) -> Result<()> {
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
         self.pcm_staging.clear();
@@ -291,20 +302,9 @@ impl SdlAudioBackend {
         let mut detected_rate = 0u32;
         let mut detected_channels = 0u16;
 
-        // Max MP3 Layer 3 frame is 1440 bytes, and minimp3 also peeks
-        // at the next frame's sync header before committing to
-        // decoding the current one. We need BOTH in the buffer
-        // simultaneously; otherwise `decoder.next` silently returns
-        // None even when there IS a decodable frame right at offset,
-        // because the look-ahead check fails. The old `remaining < 16`
-        // guard was enough to avoid a rmp3 bounds-check panic but not
-        // enough to keep decoding reliable — at 4 KB source chunks it
-        // dropped ~23 % of frames, which was the root cause of the
-        // radio stutter. 2 KB leaves headroom for any bitrate/rate.
-        const MIN_DECODE_BYTES: usize = 2048;
         loop {
             let remaining = self.mp3_buffer.len() - offset;
-            if remaining < MIN_DECODE_BYTES {
+            if remaining < min_decode_bytes {
                 break;
             }
             match self.decoder.next(&self.mp3_buffer[offset..], &mut pcm_out) {
@@ -764,6 +764,18 @@ impl AudioBackend for SdlAudioBackend {
         }
 
         self.decode_buffered()
+    }
+
+    fn finalize_streaming(&mut self, track: AudioTrackId) -> Result<()> {
+        if self.stream_track != Some(track.0) {
+            return Ok(());
+        }
+        // Drain the last bit of `mp3_buffer` with a relaxed threshold.
+        // Normal `decode_buffered` needs ~2 KB of look-ahead for
+        // minimp3, so up to 2 KB trails undecoded at end-of-source.
+        // Sixteen bytes is the minimum rmp3 needs to avoid a
+        // bounds-check panic.
+        self.decode_mp3_buffer(16)
     }
 
     fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
