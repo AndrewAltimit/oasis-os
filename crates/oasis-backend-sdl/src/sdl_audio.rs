@@ -504,7 +504,13 @@ impl SdlAudioBackend {
         // input.
         let mut local_resampler = LinearResampler::new(OUTPUT_SAMPLE_RATE);
         local_resampler.set_input_rate(detected_rate);
-        let mut resampled = Vec::with_capacity(decoded.len());
+        // Size the output buffer for the expected sample count: when
+        // upsampling (e.g. 22.05 kHz → 48 kHz, ~2.17×) a raw
+        // `Vec::with_capacity(decoded.len())` would immediately
+        // reallocate.
+        let expected_out = (decoded.len() as u64).saturating_mul(OUTPUT_SAMPLE_RATE as u64)
+            / detected_rate.max(1) as u64;
+        let mut resampled = Vec::with_capacity(expected_out as usize + 16);
         local_resampler.process(&decoded, &mut resampled);
 
         self.queue_pcm(&resampled)?;
