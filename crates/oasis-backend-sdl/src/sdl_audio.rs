@@ -181,62 +181,6 @@ pub struct SdlAudioBackend {
     /// mark and back to `true` at REFILL_QUEUE_BYTES. Interior mutability
     /// so `streaming_can_accept` can update it through `&self`.
     accepting: std::cell::Cell<bool>,
-    /// Streaming-path diagnostics — enabled with OASIS_AUDIO_DEBUG=1.
-    /// Samples the SDL3 queue depth every `feed_data` call so we can see
-    /// the actual fill/drain pattern from the backend's perspective,
-    /// plus per-tick timing for decode + put_data, plus underrun
-    /// warnings when the queue drops near empty mid-playback.
-    debug: Option<Box<AudioDebugState>>,
-}
-
-/// Diagnostic state, allocated only when OASIS_AUDIO_DEBUG=1.
-struct AudioDebugState {
-    /// Wall-clock when the backend started collecting stats, for
-    /// relative timestamps in logs.
-    start_instant: std::time::Instant,
-    /// Samples of (wall-clock seconds since start, queued_bytes)
-    /// captured once per `feed_data` call. Dumped in the periodic
-    /// summary so we can see the queue's actual depth curve.
-    recent_samples: std::collections::VecDeque<(f64, u32)>,
-    /// When we last printed a periodic summary.
-    last_summary: std::time::Instant,
-    /// Accumulated stats for the current summary window.
-    window: DebugWindow,
-    /// Wall-clock when the last underrun warning was logged — used to
-    /// bound log spam (don't re-log within 200 ms of a cluster).
-    last_underrun_at: std::time::Instant,
-    /// Count of near-empty-queue observations while `playing` — a
-    /// strong signal that our feeder is lagging the device drain rate.
-    underrun_events: u32,
-    /// Nanoseconds spent in the most recent `queue_pcm` call (the
-    /// `put_data_i16` hop). Captured there and read by
-    /// `debug_feed_sample` so the summary can include it.
-    last_put_data_ns: u64,
-}
-
-/// Per-window accumulator, reset each time the periodic summary fires.
-#[derive(Default)]
-struct DebugWindow {
-    feed_calls: u32,
-    feed_bytes_in: u64,
-    decode_samples_out: u64,
-    decode_total_ns: u64,
-    decode_max_ns: u64,
-    put_data_total_ns: u64,
-    put_data_max_ns: u64,
-    /// Min / max queued_bytes observed this window — frames the
-    /// fill/drain range without needing all the samples.
-    queued_min: u32,
-    queued_max: u32,
-}
-
-impl DebugWindow {
-    fn new() -> Self {
-        Self {
-            queued_min: u32::MAX,
-            ..Self::default()
-        }
-    }
 }
 
 impl SdlAudioBackend {
@@ -262,7 +206,6 @@ impl SdlAudioBackend {
             channels: 0,
             samples_queued: 0,
             accepting: std::cell::Cell::new(true),
-            debug: None,
         }
     }
 
@@ -302,16 +245,10 @@ impl SdlAudioBackend {
     /// Queue PCM i16 samples to the SDL3 audio stream.
     fn queue_pcm(&mut self, pcm: &[i16]) -> Result<()> {
         if let Some(ref stream) = self.stream_owner {
-            let t0 = self.debug.as_ref().map(|_| std::time::Instant::now());
             stream
                 .put_data_i16(pcm)
                 .map_err(|e| OasisError::Backend(e.to_string().into()))?;
             self.samples_queued += pcm.len() as u64;
-            if let (Some(t), Some(d)) = (t0, self.debug.as_mut()) {
-                // Keep only the most recent put_data time — the feed-data
-                // wrapper will accumulate it into the window.
-                d.last_put_data_ns = t.elapsed().as_nanos() as u64;
-            }
         }
         Ok(())
     }
@@ -322,118 +259,6 @@ impl SdlAudioBackend {
             .as_ref()
             .and_then(|s| s.queued_bytes().ok())
             .unwrap_or(0) as u32
-    }
-
-    /// Record one `feed_data` observation in the debug window and, every
-    /// second, dump a summary + check for underruns. Cheap when debug is
-    /// disabled (returns immediately on `None`). See `AudioDebugState`
-    /// for the meaning of each field.
-    fn debug_feed_sample(&mut self, bytes_in: usize, decode_ns: u64, samples_produced: usize) {
-        if self.debug.is_none() {
-            return;
-        }
-        let queued = self
-            .stream_owner
-            .as_ref()
-            .and_then(|s| s.queued_bytes().ok())
-            .unwrap_or(0) as u32;
-        let now = std::time::Instant::now();
-        let playing = self.playing;
-        let sample_rate = self.sample_rate;
-        let channels = self.channels;
-        let mp3_buf_len = self.mp3_buffer.len();
-        let accepting = self.accepting.get();
-
-        // Pull out `debug` mutably just for the bookkeeping work.
-        let d = self.debug.as_mut().expect("checked above");
-        let put_data_ns = std::mem::take(&mut d.last_put_data_ns);
-        let t = now.duration_since(d.start_instant).as_secs_f64();
-        d.recent_samples.push_back((t, queued));
-        if d.recent_samples.len() > 240 {
-            d.recent_samples.pop_front();
-        }
-
-        d.window.feed_calls += 1;
-        d.window.feed_bytes_in += bytes_in as u64;
-        d.window.decode_samples_out += samples_produced as u64;
-        d.window.decode_total_ns += decode_ns;
-        d.window.decode_max_ns = d.window.decode_max_ns.max(decode_ns);
-        d.window.put_data_total_ns += put_data_ns;
-        d.window.put_data_max_ns = d.window.put_data_max_ns.max(put_data_ns);
-        d.window.queued_min = d.window.queued_min.min(queued);
-        d.window.queued_max = d.window.queued_max.max(queued);
-
-        // Underrun detection: while playback is active and the device
-        // is open, a queue within 16 KB of empty is a red flag — that's
-        // ~46 ms of audio at 44.1 kHz stereo i16. Log at most once per
-        // 200 ms cluster.
-        if playing
-            && queued < 16 * 1024
-            && sample_rate > 0
-            && now.duration_since(d.last_underrun_at).as_millis() > 200
-        {
-            d.underrun_events += 1;
-            d.last_underrun_at = now;
-            let bytes_per_sec = (sample_rate as u64) * (channels.max(1) as u64) * 2;
-            let ms_left = if bytes_per_sec > 0 {
-                (queued as u64 * 1000) / bytes_per_sec
-            } else {
-                0
-            };
-            log::warn!(
-                "AUDIO UNDERRUN at t={t:.2}s: queue={queued}B (~{ms_left}ms left), \
-                 mp3_buf={mp3_buf_len}B, accepting={accepting}, total_underruns={}",
-                d.underrun_events,
-            );
-        }
-
-        // Periodic summary, once per second.
-        if now.duration_since(d.last_summary).as_secs_f64() >= 1.0 {
-            let win = std::mem::replace(&mut d.window, DebugWindow::new());
-            let elapsed = now.duration_since(d.last_summary).as_secs_f64();
-            d.last_summary = now;
-            let underrun_total = d.underrun_events;
-
-            // Expected PCM drain rate for current device format, so we
-            // can compare what SDL is consuming vs what it should.
-            let expected_drain_bytes_per_sec = if sample_rate > 0 {
-                (sample_rate as u64) * (channels.max(1) as u64) * 2
-            } else {
-                0
-            };
-            let expected_drain_this_win = (expected_drain_bytes_per_sec as f64 * elapsed) as i64;
-            let actual_pcm_produced = win.decode_samples_out as i64 * 2;
-
-            log::info!(
-                "AUDIO STATS t={t:.1}s win={elapsed:.2}s | \
-                 feeds={} in={}KB | pcm_out={}KB (expected_drain={}KB) | \
-                 queue={}..{}KB | decode avg={}µs max={}µs | \
-                 put_data avg={}µs max={}µs | underruns_total={underrun_total} | \
-                 sr={sample_rate}Hz ch={channels} accepting={accepting}",
-                win.feed_calls,
-                win.feed_bytes_in / 1024,
-                actual_pcm_produced / 1024,
-                expected_drain_this_win / 1024,
-                if win.queued_min == u32::MAX {
-                    0
-                } else {
-                    win.queued_min / 1024
-                },
-                win.queued_max / 1024,
-                if win.feed_calls > 0 {
-                    (win.decode_total_ns / win.feed_calls as u64) / 1000
-                } else {
-                    0
-                },
-                win.decode_max_ns / 1000,
-                if win.feed_calls > 0 {
-                    (win.put_data_total_ns / win.feed_calls as u64) / 1000
-                } else {
-                    0
-                },
-                win.put_data_max_ns / 1000,
-            );
-        }
     }
 
     /// Decode available MP3 frames from `mp3_buffer` and queue PCM to the
@@ -505,16 +330,7 @@ impl SdlAudioBackend {
         // re-seats the resampler; the device stays open and
         // PipeWire/PulseAudio never sees a reconfigure.
         if detected_rate > 0 && self.resampler.in_rate != detected_rate {
-            log::info!(
-                "SDL audio: source MP3 format = {}Hz {}ch{}",
-                detected_rate,
-                detected_channels,
-                if self.resampler.in_rate == 0 {
-                    " (first detect)"
-                } else {
-                    " (change)"
-                },
-            );
+            log::debug!("SDL audio: source MP3 format = {detected_rate}Hz {detected_channels}ch");
             self.resampler.set_input_rate(detected_rate);
         }
 
@@ -524,7 +340,7 @@ impl SdlAudioBackend {
         }
 
         if !self.pcm_staging.is_empty() {
-            // Record the source format for status / debug output.
+            // Record the output format for `position_ms` / status.
             if detected_rate > 0 {
                 self.sample_rate = OUTPUT_SAMPLE_RATE as i32;
                 self.channels = 2;
@@ -718,25 +534,6 @@ impl AudioBackend for SdlAudioBackend {
         // Must be set *before* the audio device is opened — SDL
         // reads hints at device-open time.
         sdl3::hint::set("SDL_AUDIO_DEVICE_SAMPLE_FRAMES", "16384");
-
-        // Enable verbose streaming diagnostics when OASIS_AUDIO_DEBUG=1.
-        // Keeps allocation + per-call timing overhead off in the
-        // default production path.
-        if std::env::var("OASIS_AUDIO_DEBUG").as_deref() == Ok("1") {
-            let now = std::time::Instant::now();
-            self.debug = Some(Box::new(AudioDebugState {
-                start_instant: now,
-                recent_samples: std::collections::VecDeque::with_capacity(256),
-                last_summary: now,
-                window: DebugWindow::new(),
-                last_underrun_at: now,
-                underrun_events: 0,
-                last_put_data_ns: 0,
-            }));
-            log::info!(
-                "Audio debug enabled (OASIS_AUDIO_DEBUG=1) — logging streaming stats once/sec"
-            );
-        }
 
         // Try to initialize SDL3 audio subsystem.
         // In CI/headless environments this may fail — we log a warning
@@ -960,17 +757,7 @@ impl AudioBackend for SdlAudioBackend {
             self.decoder = rmp3::RawDecoder::new();
         }
 
-        // With debug enabled, measure how long decode takes and record
-        // a sample so the periodic summary can characterise our feed.
-        let samples_before = self.samples_queued;
-        let t0 = self.debug.as_ref().map(|_| std::time::Instant::now());
-        let res = self.decode_buffered();
-        if let Some(t) = t0 {
-            let decode_ns = t.elapsed().as_nanos() as u64;
-            let samples_produced = (self.samples_queued - samples_before) as usize;
-            self.debug_feed_sample(data.len(), decode_ns, samples_produced);
-        }
-        res
+        self.decode_buffered()
     }
 
     fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
