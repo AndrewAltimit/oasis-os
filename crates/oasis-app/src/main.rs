@@ -1044,8 +1044,12 @@ fn decode_chunked(input: &[u8]) -> Vec<u8> {
 
 /// Connect to archive.org over TLS and create an ArchiveSource for the given track.
 ///
-/// Follows up to 3 HTTP redirects (archive.org CDN returns 302s).
-/// Polls the source until response headers are parsed before returning.
+/// Follows up to 3 HTTP redirects per attempt (archive.org returns a 302 to
+/// a CDN node like `dn720703.ca.archive.org`). If the CDN responds with a
+/// transient 5xx (common — archive.org's CDN intermittently returns 500 on
+/// valid files), we retry from archive.org itself: a fresh 302 is typically
+/// routed to a different CDN node, which usually succeeds. Polls the source
+/// until response headers are parsed before returning.
 fn connect_archive_source(
     tls_provider: &oasis_core::net::RustlsTlsProvider,
     track: &oasis_audio::radio::ArchiveTrack,
@@ -1055,83 +1059,113 @@ fn connect_archive_source(
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
-    let mut host = "archive.org".to_string();
-    let mut path = oasis_audio::radio::ArchiveCatalog::download_path(track);
+    let orig_host = "archive.org".to_string();
+    let orig_path = oasis_audio::radio::ArchiveCatalog::download_path(track);
     let title = track.title.clone();
     let creator = track.creator.clone();
 
-    log::info!("Connecting to archive source: {host}{path}");
+    log::info!("Connecting to archive source: {orig_host}{orig_path}");
 
-    'redirect: for _redirect_num in 0..3 {
-        let mut net_backend = StdNetworkBackend::new();
-        let tcp = net_backend
-            .connect(&host, 443)
-            .map_err(|e| format!("connect: {e}"))?;
-        // Force HTTP/1.1 ALPN: ArchiveSource speaks HTTP/1.1 and the shared
-        // TLS config also offers `h2` for the browser, so without this the
-        // server may hand us an h2 stream that the source can't parse.
-        let stream = tls_provider
-            .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
-            .map_err(|e| format!("TLS: {e}"))?
-            .stream;
+    const CDN_RETRIES: usize = 3;
+    let mut last_err = String::new();
 
-        let mut source =
-            oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
+    'attempt: for attempt in 0..CDN_RETRIES {
+        let mut host = orig_host.clone();
+        let mut path = orig_path.clone();
+        if attempt > 0 {
+            log::warn!(
+                "Retrying archive source (attempt {}/{CDN_RETRIES}) after: {last_err}",
+                attempt + 1,
+            );
+            // Brief pause before retry so we don't hammer a struggling CDN.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
 
-        // Poll until headers are fully parsed (data arrives, or error/redirect).
-        // First poll sends the HTTP request (Connecting → Active).
-        // Subsequent polls read the response and parse headers.
-        // Uses a time-based deadline since the socket is non-blocking.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            if std::time::Instant::now() > deadline {
-                return Err("timeout waiting for response headers".into());
-            }
-            match source.poll() {
-                Ok(Some(chunk)) => {
-                    // Headers parsed, audio data flowing.  Push back the
-                    // first chunk so it is not lost — it contains the initial
-                    // audio bytes and the one-shot metadata update.
-                    source.push_back_chunk(chunk);
-                    log::info!("Archive source connected, audio data flowing");
-                    return Ok(Box::new(source));
-                },
-                Ok(None) => match source.state() {
-                    SourceState::Ended => {
-                        return Err("connection closed before headers".into());
+        'redirect: for _redirect_num in 0..3 {
+            let mut net_backend = StdNetworkBackend::new();
+            let tcp = net_backend
+                .connect(&host, 443)
+                .map_err(|e| format!("connect: {e}"))?;
+            // Force HTTP/1.1 ALPN: ArchiveSource speaks HTTP/1.1 and the shared
+            // TLS config also offers `h2` for the browser, so without this the
+            // server may hand us an h2 stream that the source can't parse.
+            let stream = tls_provider
+                .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
+                .map_err(|e| format!("TLS: {e}"))?
+                .stream;
+
+            let mut source =
+                oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
+
+            // Poll until headers are fully parsed (data arrives, or error/redirect).
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                if std::time::Instant::now() > deadline {
+                    last_err = "timeout waiting for response headers".into();
+                    continue 'attempt;
+                }
+                match source.poll() {
+                    Ok(Some(chunk)) => {
+                        source.push_back_chunk(chunk);
+                        log::info!("Archive source connected, audio data flowing");
+                        return Ok(Box::new(source));
                     },
-                    SourceState::Error => {
-                        return Err("source error during header parsing".into());
+                    Ok(None) => match source.state() {
+                        SourceState::Ended => {
+                            last_err = "connection closed before headers".into();
+                            continue 'attempt;
+                        },
+                        SourceState::Error => {
+                            last_err = "source error during header parsing".into();
+                            continue 'attempt;
+                        },
+                        _ => {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        },
                     },
-                    _ => {
-                        // No data yet (non-blocking); brief sleep to avoid
-                        // busy-waiting on the background thread.
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    },
-                },
-                Err(e) => {
-                    let msg = format!("{e}");
-                    // OasisError::Backend("redirect:...") formats as
-                    // "backend error: redirect:..." — strip the prefix.
-                    let inner = msg.strip_prefix("backend error: ").unwrap_or(&msg);
-                    if let Some(url) = inner.strip_prefix("redirect:") {
-                        if let Some((new_host, _, new_path, _)) = parse_stream_url(url) {
-                            host = new_host;
-                            path = new_path;
-                            continue 'redirect;
+                    Err(e) => {
+                        let msg = format!("{e}");
+                        // OasisError::Backend("redirect:...") formats as
+                        // "backend error: redirect:..." — strip the prefix.
+                        let inner = msg.strip_prefix("backend error: ").unwrap_or(&msg);
+                        if let Some(url) = inner.strip_prefix("redirect:") {
+                            if let Some((new_host, _, new_path, _)) = parse_stream_url(url) {
+                                host = new_host;
+                                path = new_path;
+                                continue 'redirect;
+                            }
+                            last_err = format!("bad redirect URL: {url}");
+                            continue 'attempt;
                         }
-                        return Err(format!("bad redirect URL: {url}"));
-                    }
-                    return Err(msg);
-                },
+                        // HTTP 5xx from a CDN node is often transient —
+                        // restart from archive.org to pick up a different
+                        // CDN assignment. 4xx errors are the caller's
+                        // problem; don't retry those.
+                        if inner.starts_with("HTTP 5") {
+                            last_err = msg;
+                            continue 'attempt;
+                        }
+                        return Err(msg);
+                    },
+                }
             }
         }
+
+        last_err = "too many redirects".into();
     }
 
-    Err("too many redirects".to_string())
+    Err(format!(
+        "archive CDN unreachable after {CDN_RETRIES} attempts: {last_err}"
+    ))
 }
 
 /// Fetch catalog and connect to first track on a background thread.
+///
+/// The identifier may be either an Internet Archive collection (in which case
+/// we run an `advancedsearch.php` query for audio items under it) or a single
+/// item holding many MP3 files (e.g. `OTRR_This_Is_Your_FBI_Singles`). If the
+/// collection search returns no items we fall back to treating the identifier
+/// as an item id and pull files from `/metadata/<id>/files` directly.
 ///
 /// Creates its own `StdNetworkBackend` (cheap) so no shared state is needed.
 fn fetch_catalog_blocking(
@@ -1141,7 +1175,7 @@ fn fetch_catalog_blocking(
 ) -> std::result::Result<app_state::CatalogFetchResult, String> {
     let mut net = StdNetworkBackend::new();
 
-    log::info!("Fetching catalog for collection '{collection}'");
+    log::info!("Fetching catalog for '{collection}'");
 
     let search_path = format!(
         "/advancedsearch.php?\
@@ -1154,13 +1188,10 @@ fn fetch_catalog_blocking(
 
     let items = oasis_audio::radio::ArchiveCatalog::parse_search_response(&body);
     log::info!("Search returned {} items", items.len());
-    if items.is_empty() {
-        return Err("no items found in collection".to_string());
-    }
 
     let mut catalog = oasis_audio::radio::ArchiveCatalog::new(collection);
 
-    // Fetch files for up to 5 items.
+    // Collection path: fetch files for up to 5 items returned by search.
     for (item_id, _title, creator) in items.iter().take(5) {
         let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(item_id);
         match https_get_body(&mut net, tls, "archive.org", &fp) {
@@ -1176,19 +1207,52 @@ fn fetch_catalog_blocking(
         }
     }
 
+    // Single-item fallback: treat `collection` itself as an IA item id. This
+    // is what makes stations like "This Is Your FBI" (an item, not a
+    // collection) work.
+    if catalog.tracks.is_empty() {
+        log::info!("Collection search empty — trying '{collection}' as a single item");
+        let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(collection);
+        match https_get_body(&mut net, tls, "archive.org", &fp) {
+            Ok(fb) => {
+                let tracks = oasis_audio::radio::ArchiveCatalog::parse_files_response(
+                    &fb, collection, "Unknown",
+                );
+                log::info!("Item '{collection}': {} MP3 tracks", tracks.len());
+                catalog.tracks.extend(tracks);
+            },
+            Err(e) => {
+                log::warn!("Files API for '{collection}': {e}");
+            },
+        }
+    }
+
     if catalog.tracks.is_empty() {
         return Err("no MP3 files found".to_string());
     }
 
     catalog.shuffle(seed);
 
-    let track = catalog
-        .current_track()
-        .cloned()
-        .ok_or_else(|| "empty catalog".to_string())?;
-
-    let source = connect_archive_source(tls, &track)?;
-    Ok(app_state::CatalogFetchResult { catalog, source })
+    // Try up to CATALOG_TRACK_RETRIES tracks in the shuffled catalog — if
+    // one item's files are on a flaky CDN node, the next item is likely on
+    // a different one. Without this, a single bad shuffle (or a file that
+    // was de-listed) fails the whole station.
+    const CATALOG_TRACK_RETRIES: usize = 5;
+    let mut last_err = String::new();
+    for _ in 0..CATALOG_TRACK_RETRIES.min(catalog.tracks.len()) {
+        let Some(track) = catalog.current_track().cloned() else {
+            break;
+        };
+        match connect_archive_source(tls, &track) {
+            Ok(source) => return Ok(app_state::CatalogFetchResult { catalog, source }),
+            Err(e) => {
+                log::warn!("Track '{}' unreachable: {e}; trying next", track.filename);
+                last_err = e;
+                catalog.next_track();
+            },
+        }
+    }
+    Err(format!("no playable tracks in catalog: {last_err}"))
 }
 
 /// Fetch video catalogs for all TV channels on a background thread.

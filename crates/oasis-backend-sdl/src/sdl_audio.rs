@@ -17,10 +17,16 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
-/// Maximum PCM bytes to keep in the SDL3 audio stream before we stop accepting
-/// more samples.  At 44 100 Hz stereo i16 this is roughly 9 seconds — enough
-/// runway to absorb decode jitter and video frame blocking without audio gaps.
+/// High-water mark: stop accepting PCM once the SDL3 stream holds this much.
+/// ~9 seconds at 44.1 kHz stereo i16.
 const MAX_QUEUE_BYTES: u32 = 1_600_000;
+
+/// Low-water mark: resume accepting PCM only after the queue drains below
+/// this level. The wide hysteresis (5 seconds of playback between refills)
+/// avoids the old "pull a chunk, back-pressure, pull a chunk, back-pressure"
+/// oscillation at ~4 Hz — that tight cycle interacted badly with SDL3 /
+/// PulseAudio's timing and produced an audible pause-and-catch-up artifact.
+const REFILL_QUEUE_BYTES: u32 = 700_000;
 
 /// SDL3-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
@@ -56,6 +62,11 @@ pub struct SdlAudioBackend {
     channels: usize,
     /// Total PCM samples queued (for position_ms calculation).
     samples_queued: u64,
+    /// Back-pressure hysteresis. `true` while we want more PCM (queue is
+    /// being filled toward MAX_QUEUE_BYTES); flips to `false` at the high
+    /// mark and back to `true` at REFILL_QUEUE_BYTES. Interior mutability
+    /// so `streaming_can_accept` can update it through `&self`.
+    accepting: std::cell::Cell<bool>,
 }
 
 impl SdlAudioBackend {
@@ -78,6 +89,7 @@ impl SdlAudioBackend {
             sample_rate: 0,
             channels: 0,
             samples_queued: 0,
+            accepting: std::cell::Cell::new(true),
         }
     }
 
@@ -156,6 +168,10 @@ impl SdlAudioBackend {
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
         self.pcm_staging.clear();
+        // Lock detected format to the *first* audio frame in this batch.
+        // Later frames should report the same rate/channels; using the
+        // first avoids being misled by a spurious resync frame near the
+        // end of the batch.
         let mut detected_rate = 0u32;
         let mut detected_channels = 0u16;
 
@@ -170,8 +186,10 @@ impl SdlAudioBackend {
                 Some((frame, consumed)) => {
                     offset += consumed;
                     if let rmp3::Frame::Audio(audio) = frame {
-                        detected_rate = audio.sample_rate();
-                        detected_channels = audio.channels();
+                        if detected_rate == 0 {
+                            detected_rate = audio.sample_rate();
+                            detected_channels = audio.channels();
+                        }
                         self.pcm_staging.extend_from_slice(audio.samples());
                     }
                 },
@@ -180,6 +198,28 @@ impl SdlAudioBackend {
         }
 
         self.mp3_buffer.drain(..offset);
+
+        // Reopen the SDL device only if the detected format actually
+        // differs from what's currently open — this lets us keep the
+        // same PipeWire/PulseAudio stream across track switches at the
+        // same rate (most common case) and avoids per-track
+        // reconfiguration noise. `load_streaming` leaves
+        // stream_owner=Some, so this is the single place that decides
+        // whether to tear it down.
+        if detected_rate > 0
+            && self.stream_owner.is_some()
+            && (self.sample_rate != detected_rate as i32
+                || self.channels != detected_channels as usize)
+        {
+            log::info!(
+                "SDL audio: format change {}Hz/{}ch -> {}Hz/{}ch, reopening device",
+                self.sample_rate,
+                self.channels,
+                detected_rate,
+                detected_channels,
+            );
+            self.stream_owner = None;
+        }
 
         // Open device on first decoded frame (need sample rate).
         if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
@@ -320,6 +360,20 @@ impl Default for SdlAudioBackend {
 
 impl AudioBackend for SdlAudioBackend {
     fn init(&mut self) -> Result<()> {
+        // Ask SDL3 for a generously large audio device buffer. The
+        // default on Linux (PulseAudio / PipeWire) is typically
+        // ~1024 frames (~23 ms at 44.1 kHz), which is tight — a brief
+        // scheduling hitch in our feed path can starve the device and
+        // produce ~10 ms "skip"-like stutters a few times a second.
+        // 16384 frames (~370 ms at 44.1 kHz) gives the driver enough
+        // runway that even a very preempted main thread won't
+        // underrun. Radio is a buffered, non-interactive playback
+        // context so the extra latency is imperceptible.
+        //
+        // Must be set *before* the audio device is opened — SDL
+        // reads hints at device-open time.
+        sdl3::hint::set("SDL_AUDIO_DEVICE_SAMPLE_FRAMES", "16384");
+
         // Try to initialize SDL3 audio subsystem.
         // In CI/headless environments this may fail — we log a warning
         // but still mark as initialized so non-audio functionality works.
@@ -498,6 +552,20 @@ impl AudioBackend for SdlAudioBackend {
         self.decoder = rmp3::RawDecoder::new();
         self.stream_track = Some(id);
         self.samples_queued = 0;
+        // Discard any residual PCM from the previous track so we don't
+        // hear its tail bleed into the new track. Keep the SDL device
+        // itself open — the format-change check in `decode_buffered`
+        // will tear it down and reopen only if the new track's sample
+        // rate / channel count actually differ. Repeatedly opening and
+        // closing the device on every track switch caused
+        // PipeWire/PulseAudio to accumulate transient noise, which is
+        // likely what made the stutters come back after jumping around.
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.clear();
+        }
+        // Start a new track in the "accept PCM" phase of the hysteresis
+        // cycle so we fill the queue quickly from empty.
+        self.accepting.set(true);
         log::debug!("Created streaming audio track {id}");
         Ok(AudioTrackId(id))
     }
@@ -509,16 +577,48 @@ impl AudioBackend for SdlAudioBackend {
             ));
         }
 
+        // Accept the new bytes unconditionally. Callers should use
+        // `streaming_can_accept()` to apply back-pressure — dropping bytes
+        // from the middle of the MP3 stream here (which the old 256 KB cap
+        // did) breaks frame sync and produces periodic stutter. A very
+        // large safety cap catches pathological cases without affecting
+        // normal playback.
         self.mp3_buffer.extend_from_slice(data);
-
-        // Cap MP3 buffer at 256KB to prevent unbounded growth.
-        const MAX_MP3_BUF: usize = 256 * 1024;
-        if self.mp3_buffer.len() > MAX_MP3_BUF {
-            let drain = self.mp3_buffer.len() - MAX_MP3_BUF;
-            self.mp3_buffer.drain(..drain);
+        const MP3_BUF_SAFETY_CAP: usize = 32 * 1024 * 1024;
+        if self.mp3_buffer.len() > MP3_BUF_SAFETY_CAP {
+            log::warn!(
+                "SDL audio: MP3 side-buffer exceeded {MP3_BUF_SAFETY_CAP} bytes, \
+                 clearing (network faster than playback + back-pressure broken?)"
+            );
+            self.mp3_buffer.clear();
+            self.decoder = rmp3::RawDecoder::new();
         }
 
         self.decode_buffered()
+    }
+
+    fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
+        if self.stream_track != Some(track.0) {
+            return false;
+        }
+        // Hysteresis: fill the queue to MAX_QUEUE_BYTES, then don't accept
+        // more PCM until it has drained below REFILL_QUEUE_BYTES. This
+        // replaces the old "threshold just below the cap" check which
+        // caused tight back-pressure cycles of ~250 ms — one poll every
+        // ~1/4 s produced an audible pause-and-catch-up artifact on
+        // Linux/PulseAudio. With the wide band we now pull in longer
+        // bursts separated by multiple seconds of steady playout.
+        let queued = self.queued_bytes();
+        let accepting = self.accepting.get();
+        let next = if accepting {
+            queued < MAX_QUEUE_BYTES
+        } else {
+            queued < REFILL_QUEUE_BYTES
+        };
+        if next != accepting {
+            self.accepting.set(next);
+        }
+        next
     }
 
     fn feed_pcm_f32(
