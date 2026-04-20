@@ -97,17 +97,21 @@ fn decode_chunked(data: &[u8], chunk_size: usize) -> Vec<Sample> {
         buffer.drain(..offset);
     }
 
-    // Final drain: production's `decode_buffered` does NOT lower its
-    // threshold at end-of-source — it leaves any residual
-    // `< MIN_DECODE_BYTES` tail in `mp3_buffer`. Mirror that here so
-    // this diagnostic actually reflects production behavior (a
-    // sub-2 KB tail that prod drops should also be dropped here;
-    // otherwise the example would report IDENTICAL for an input that
-    // prod would clip).
+    // Final drain: production now ends each stream with a
+    // `finalize_streaming` call that re-runs the decode loop with a
+    // 16-byte minimum (the smallest chunk rmp3 will accept without
+    // panicking on its bounds check), recovering the sub-2 KB tail
+    // that the mid-stream `MIN_DECODE_BYTES` threshold left behind.
+    // Mirror that here in a second pass so this diagnostic actually
+    // reflects production behaviour — otherwise the example would
+    // report IDENTICAL for an input whose tail prod successfully
+    // decodes. (The inner chunk loop above already drained fully
+    // consumed bytes via `buffer.drain(..offset)`, so `buffer` now
+    // holds only the undecoded tail.)
     let mut offset = 0;
     loop {
         let remaining = buffer.len() - offset;
-        if remaining < MIN_DECODE_BYTES {
+        if remaining < 16 {
             break;
         }
         match decoder.next(&buffer[offset..], &mut pcm_out) {

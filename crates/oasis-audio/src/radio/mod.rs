@@ -359,8 +359,10 @@ impl RadioManager {
                     // the end of each track (especially audible with
                     // archive auto-advance between short OTR / LibriVox
                     // segments).
-                    if let Some(track) = self.stream_track.take() {
-                        let _ = backend.finalize_streaming(track);
+                    if let Some(track) = self.stream_track.take()
+                        && let Err(e) = backend.finalize_streaming(track)
+                    {
+                        log::warn!("finalize_streaming failed draining tail: {e}");
                     }
                     // Release the stream track handle but do NOT stop the
                     // backend — the SDL audio queue may still have seconds

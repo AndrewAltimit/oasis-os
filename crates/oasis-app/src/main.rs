@@ -1167,15 +1167,18 @@ fn connect_archive_source(
                             last_err = format!("bad redirect URL: {url}");
                             continue 'attempt;
                         }
-                        // HTTP 5xx from a CDN node is often transient —
-                        // restart from archive.org to pick up a different
-                        // CDN assignment. 4xx errors are the caller's
-                        // problem; don't retry those.
-                        if inner.starts_with("HTTP 5") {
-                            last_err = msg;
-                            continue 'attempt;
+                        // HTTP 4xx is the caller's problem (bad URL, auth,
+                        // etc.) — don't retry those. Everything else is
+                        // potentially transient: HTTP 5xx from a flaky
+                        // CDN node, TLS alerts, TCP RSTs, or connection
+                        // resets mid-header-parse all deserve a re-roll
+                        // through archive.org to pick up a different CDN
+                        // assignment.
+                        if inner.starts_with("HTTP 4") {
+                            return Err(msg);
                         }
-                        return Err(msg);
+                        last_err = msg;
+                        continue 'attempt;
                     },
                 }
             }
