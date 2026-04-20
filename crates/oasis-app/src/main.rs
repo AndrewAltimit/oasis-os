@@ -865,6 +865,18 @@ fn prewarm_glyph_cache(
     }
 }
 
+/// Check that a host belongs to the archive.org family.
+///
+/// Redirect following in `connect_archive_source` honors arbitrary
+/// `Location:` hosts from the server — without this guard a malicious
+/// or misconfigured response could steer us at an internal address
+/// (SSRF). TLS cert validation does not help here: the attacker could
+/// own a perfectly valid cert for their host.
+fn is_archive_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h == "archive.org" || h.ends_with(".archive.org")
+}
+
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
 fn parse_stream_url(url: &str) -> Option<(String, u16, String, bool)> {
     let (remainder, tls) = if let Some(r) = url.strip_prefix("https://") {
@@ -1082,17 +1094,35 @@ fn connect_archive_source(
         }
 
         'redirect: for _redirect_num in 0..3 {
+            // SSRF guard: only follow redirects that stay within the
+            // archive.org domain. The initial `orig_host` is hard-coded,
+            // but CDN redirects are honoured verbatim, so a compromised
+            // or misbehaving response must not be able to steer us at
+            // an internal address.
+            if !is_archive_host(&host) {
+                last_err = format!("redirect to non-archive host rejected: {host}");
+                continue 'attempt;
+            }
             let mut net_backend = StdNetworkBackend::new();
-            let tcp = net_backend
-                .connect(&host, 443)
-                .map_err(|e| format!("connect: {e}"))?;
+            let tcp = match net_backend.connect(&host, 443) {
+                Ok(t) => t,
+                Err(e) => {
+                    // TCP failure on a CDN node is transient — fall back
+                    // to `'attempt` so archive.org can re-route us.
+                    last_err = format!("connect: {e}");
+                    continue 'attempt;
+                },
+            };
             // Force HTTP/1.1 ALPN: ArchiveSource speaks HTTP/1.1 and the shared
             // TLS config also offers `h2` for the browser, so without this the
             // server may hand us an h2 stream that the source can't parse.
-            let stream = tls_provider
-                .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
-                .map_err(|e| format!("TLS: {e}"))?
-                .stream;
+            let stream = match tls_provider.connect_tls_with_alpn(tcp, &host, &[b"http/1.1"]) {
+                Ok(s) => s.stream,
+                Err(e) => {
+                    last_err = format!("TLS: {e}");
+                    continue 'attempt;
+                },
+            };
 
             let mut source =
                 oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);

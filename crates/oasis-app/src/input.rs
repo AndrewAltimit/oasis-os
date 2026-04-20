@@ -14,6 +14,25 @@ use oasis_core::terminal_sdi;
 
 use crate::{commands, launch};
 
+/// Display title of the Internet Radio app — used to identify radio
+/// runners so their audio is stopped when the window closes.
+const RADIO_APP_TITLE: &str = "Internet Radio";
+
+/// Tear down active radio playback and any pending network work.
+///
+/// Safe to call unconditionally: all fields are cleared idempotently.
+fn stop_radio(state: &mut AppState) {
+    let _ = state
+        .radio_manager
+        .process_request("stop", &mut state.audio_backend);
+    state.archive_catalog = None;
+    state.pending_catalog_fetch = None;
+    state.pending_source_fetch = None;
+    if let Some(mut src) = state.radio_source.take() {
+        src.disconnect();
+    }
+}
+
 /// Stop the radio if the closing runner is the Internet Radio app.
 /// Closing the app window should also stop playback — otherwise audio
 /// keeps playing with no UI to control it.
@@ -22,17 +41,9 @@ fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
         .content
         .open_runners
         .iter()
-        .any(|(rid, runner)| rid == id && runner.title == "Internet Radio");
+        .any(|(rid, runner)| rid == id && runner.title == RADIO_APP_TITLE);
     if is_radio {
-        let _ = state
-            .radio_manager
-            .process_request("stop", &mut state.audio_backend);
-        state.archive_catalog = None;
-        state.pending_catalog_fetch = None;
-        state.pending_source_fetch = None;
-        if let Some(mut src) = state.radio_source.take() {
-            src.disconnect();
-        }
+        stop_radio(state);
     }
 }
 
@@ -418,22 +429,14 @@ pub fn handle_app_input(
         match event {
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => {
-                let is_radio = runner.title == "Internet Radio";
+                let is_radio = runner.title == RADIO_APP_TITLE;
                 match runner.handle_input(btn, vfs) {
                     AppAction::Exit => {
                         AppRunner::hide_sdi(sdi);
                         state.content.app_runner = None;
                         state.mode = Mode::Dashboard;
                         if is_radio {
-                            let _ = state
-                                .radio_manager
-                                .process_request("stop", &mut state.audio_backend);
-                            state.archive_catalog = None;
-                            state.pending_catalog_fetch = None;
-                            state.pending_source_fetch = None;
-                            if let Some(mut src) = state.radio_source.take() {
-                                src.disconnect();
-                            }
+                            stop_radio(state);
                         }
                     },
                     AppAction::SwitchToTerminal => {
