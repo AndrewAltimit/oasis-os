@@ -225,6 +225,12 @@ pub fn handle_desktop_input(
                                             state.skin.features.window_manager,
                                             &state.plugin_manager,
                                         );
+                                        // No fullscreen fade here: in desktop
+                                        // mode other windows are already on
+                                        // screen, and a fade overlay would
+                                        // briefly cover them. Dashboard-mode
+                                        // launches keep the transition because
+                                        // the screen is otherwise idle.
                                         launch::apply_launch(result, &mut state.mode);
                                     }
                                 }
