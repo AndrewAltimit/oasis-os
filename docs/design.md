@@ -20,17 +20,16 @@ Classification: Personal Project -- Open Source
 7. [Unreal Engine 5 Integration](#7-unreal-engine-5-integration)
 8. [PSP Platform Implementation](#8-psp-platform-implementation)
 9. [Linux / Raspberry Pi Platform](#9-linux--raspberry-pi-platform)
-10. [Briefcase Agent Terminal](#10-briefcase-agent-terminal-planned)
-11. [PSP Remote Agent Control](#11-psp-remote-agent-control-planned)
-12. [Virtual File System](#12-virtual-file-system)
-13. [Development Workflow](#13-development-workflow)
-14. [Plugin System](#14-plugin-system)
-15. [Security Considerations](#15-security-considerations)
-16. [Build System and CI/CD](#16-build-system-and-cicd)
-17. [Migration Strategy from Original C Codebase](#17-migration-strategy-from-original-c-codebase)
-18. [Risk Assessment](#18-risk-assessment)
-19. [Success Criteria](#19-success-criteria)
-20. [References and Resources](#20-references-and-resources)
+10. [PSP Remote Agent Control](#10-psp-remote-agent-control-planned)
+11. [Virtual File System](#11-virtual-file-system)
+12. [Development Workflow](#12-development-workflow)
+13. [Plugin System](#13-plugin-system)
+14. [Security Considerations](#14-security-considerations)
+15. [Build System and CI/CD](#15-build-system-and-cicd)
+16. [Migration Strategy from Original C Codebase](#16-migration-strategy-from-original-c-codebase)
+17. [Risk Assessment](#17-risk-assessment)
+18. [Success Criteria](#18-success-criteria)
+19. [References and Resources](#19-references-and-resources)
 
 ---
 
@@ -40,9 +39,9 @@ OASIS_OS is an embeddable operating system framework written in Rust. It provide
 
 The project was built from scratch in Rust starting in early 2026, inspired by PSP homebrew shells like PSIX. The architecture -- a themed dashboard driven by a custom scene-graph engine called SDI (Simple Display Interface), with platform abstraction via trait-based backends -- turned out to be a natural foundation for something more general. The trait-based backend system designed for cross-platform PSP/SDL/framebuffer portability extends cleanly to a fourth target: rendering onto a texture inside Unreal Engine 5, where in-game computer props become fully interactive systems rather than scripted UI sequences.
 
-The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Eighteen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Balatro (neon balatro aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Win95 (Windows 95/98 classic 3D borders), Solarized (Solarized Dark developer palette), Vaporwave (aesthetic purple/pink/cyan), High Contrast (accessibility: black/white/yellow), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
+The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Fifteen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Balatro (neon balatro aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Win95 (Windows 95/98 classic 3D borders), Solarized (Solarized Dark developer palette), Vaporwave (aesthetic purple/pink/cyan), High Contrast (accessibility: black/white/yellow), Altimit (Altimit OS inspired), Corrupted (glitched visual effects), Desktop (windowed environment), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
 
-Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable agent terminal OS. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
+Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable shell. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
 
 ---
 
@@ -59,7 +58,7 @@ Primary deployment targets are: in-game computers in UE5 projects (rendered as i
 - Add remote terminal access for headless device management over TCP/IP, doubling as the primary interface for controlling remote AI agents from portable devices
 - Implement a scriptable command layer for automation and gameplay scripting
 - Establish a plugin/module system for runtime-extensible functionality
-- Serve as the user-facing OS for the tamper-responsive briefcase agent terminal (`packages/tamper_briefcase/`), replacing bare TTY login with a themed, interactive shell
+- Serve as the user-facing OS for the tamper-responsive briefcase system (`packages/tamper_briefcase/`), replacing bare TTY login with a themed, interactive shell
 - Leverage the existing AI agent pipelines (Claude, Gemini, Codex, OpenCode, Crush) and MCP server ecosystem for code translation, build orchestration, and automated testing
 
 ### 2.2 Non-Goals
@@ -154,11 +153,8 @@ oasis-os/
 
 **Built-in skins (embedded in `oasis-skin/src/builtin.rs`):**
 
-- `terminal` -- Full-screen CRT command line, monospace layout
-- `tactical` -- Military/tactical: stripped-down command interface
 - `corrupted` -- Glitched OS: randomized layouts, visual artifacts
 - `desktop` -- Window-like panels, taskbar, start menu analog
-- `agent-terminal` -- Briefcase-specific: agent status, MCP tool access
 - `modern` -- Purple accent, rounded corners, gradient fills
 - `xp` -- Windows XP Luna theme (also available as external skin in `skins/xp/`)
 
@@ -372,7 +368,7 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 
 ### 4.2 Command Interpreter
 
-The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate. Commands implement a `Command` trait with an `execute()` method returning structured output. The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), glob expansion, aliases, history (`!!`, `!n`), piping, and command chaining. Skins control which commands are registered -- a terminal skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The agent-terminal skin adds commands for remote agent interaction (see Section 11).
+The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate. Commands implement a `Command` trait with an `execute()` method returning structured output. The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), glob expansion, aliases, history (`!!`, `!n`), piping, and command chaining. Skins control which commands are registered -- a terminal-focused skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The shell ships with agent-management commands for remote agent interaction (see Section 10).
 
 90+ commands across 17 modules:
 
@@ -421,7 +417,7 @@ The window manager (WM) enables skins that present multiple movable, resizable, 
 
 SDI has no concept of grouping, containment, or parent-child relationships. Every object is independent. The WM introduces the illusion of hierarchy by adopting a naming convention: a window named `"editor_01"` owns SDI objects `"editor_01.frame"`, `"editor_01.titlebar"`, `"editor_01.title_text"`, `"editor_01.btn_close"`, `"editor_01.btn_minimize"`, and `"editor_01.content"`. When the WM moves a window, it updates the position of every object sharing that prefix by the same delta. When it brings a window to front, it calls `sdi.move_to_top()` for every object in the group.
 
-This design preserves SDI's simplicity and portability. The PSP target (which has no use for overlapping windows on a 480x272 screen) never instantiates a WM. Skins that don't need windows (Terminal, Tactical, Classic) skip it entirely. The WM only exists when a skin's `features.toml` enables it.
+This design preserves SDI's simplicity and portability. The PSP target (which has no use for overlapping windows on a 480x272 screen) never instantiates a WM. Skins that don't need windows (Classic, Corrupted) skip it entirely. The WM only exists when a skin's `features.toml` enables it.
 
 #### 4.5.2 Window Anatomy
 
@@ -495,7 +491,7 @@ Not every platform needs or benefits from the window manager. The skin's feature
 | Platform | WM Enabled | Rationale |
 |----------|-----------|-----------|
 | PSP | No | 480x272 at 30-60fps. Screen too small for overlapping windows. Classic skin uses fixed-position SDI objects for its icon grid. |
-| Raspberry Pi (briefcase) | Optional | Depends on display. Pi 5 with HDMI to a monitor inside or attached to the briefcase lid can run the Desktop or Agent Terminal skin with windowing. Headless operation uses Terminal skin via remote terminal. |
+| Raspberry Pi (briefcase) | Optional | Depends on display. Pi 5 with HDMI to a monitor inside or attached to the briefcase lid can run the Desktop or Modern skin with windowing. Headless operation uses the Classic skin via remote terminal. |
 | Desktop (dev) | Yes | Full resolution display. Desktop skin uses windowed interface. Also useful for debugging -- inspect multiple OS subsystems simultaneously. |
 | UE5 (in-game) | Yes | In-game computers with Desktop skin present windowed interfaces on the virtual monitor. The WM resolution matches the virtual screen texture (e.g., 1024x768 for a high-res in-game monitor, 480x272 for a handheld prop). |
 
@@ -581,16 +577,13 @@ A skin is a data-driven configuration that defines the visual and behavioral per
 |------|-------------|---------------|----------|--------|
 | Classic | PSIX-style icon grid dashboard with document icons, tabbed status/bottom bars, chrome bezels, wave arc wallpaper | PSP / Pi / Desktop | Homebrew shell OS, the original C codebase experience modernized with PSIX styling | External (`skins/classic/`) |
 | XP | Windows XP Luna-inspired blue theme with gradient titlebars, taskbar, and start menu | Desktop / UE5 | Nostalgic desktop experience, in-game civilian computer props | External (`skins/xp/`) + Built-in |
-| Terminal | Full-screen command line with CRT visual metadata (scanlines, phosphor glow, screen curvature -- applied by host shader) | UE5 / Desktop | In-game hacking terminals, retro computer props, SSH-style remote access | Built-in |
-| Tactical | Stripped-down command interface with status displays, no visual chrome, monospace grid layout | UE5 | Military command consoles, security systems, restricted-access terminals | Built-in |
 | Corrupted | Randomized SDI object positions/alpha, garbled command output, visual glitch artifacts, "repair" puzzle hooks | UE5 | Damaged terminals the player must fix, environmental storytelling | Built-in |
 | Desktop | Window-like panels, taskbar, start menu analog, multiple "apps" visible simultaneously | UE5 / Pi | Civilian in-game computers, player home terminals | Built-in |
-| Agent Terminal | Agent-focused dashboard: agent status panel, MCP tool browser, remote session manager, system health, tamper status indicator | Pi (briefcase) | Briefcase field terminal for AI agent management (see Section 10) | Built-in |
 | Modern | Purple accent theme with rounded corners, gradient fills, shadows, and full feature set | Desktop / UE5 | Contemporary aesthetic, feature showcase | Built-in |
 
 ### 6.3 Skin Loading and Switching
 
-Each OS instance is initialized with a skin. Skins can be hot-swapped at runtime (e.g., a "corrupted" terminal that the player "repairs" transitions to the "tactical" skin). The core framework loads the new skin manifest, tears down the current SDI object tree, rebuilds it from the new layout, reloads theme assets, and reconfigures feature gates. The VFS overlay is preserved across skin swaps -- file state persists.
+Each OS instance is initialized with a skin. Skins can be hot-swapped at runtime (e.g., a "corrupted" terminal that the player "repairs" transitions to a clean variant). The core framework loads the new skin manifest, tears down the current SDI object tree, rebuilds it from the new layout, reloads theme assets, and reconfigures feature gates. The VFS overlay is preserved across skin swaps -- file state persists.
 
 ---
 
@@ -827,95 +820,23 @@ On the Raspberry Pi, OASIS_OS operates as a kiosk-mode application booting direc
 
 ---
 
-## 10. Briefcase Agent Terminal [PLANNED]
-
-> **Status:** The agent-terminal skin and its integration with tamper services described in this section are planned but not yet implemented. The core framework supports the necessary abstractions (skin system, command interpreter, remote terminal), and the tamper_briefcase package exists, but the agent-terminal skin configuration and briefcase-specific commands have not been created.
-
-### 10.1 Context
-
-The repository includes a tamper-responsive briefcase system (`packages/tamper_briefcase/`) -- a Raspberry Pi 5 inside a hardened Pelican 1490 case with dual-sensor tamper detection, LUKS2 full-disk encryption, cryptographic wipe on unauthorized access, and hybrid classical+post-quantum recovery USB. The detailed hardware design is documented in `docs/hardware/secure-terminal-briefcase.md`.
-
-Currently, the briefcase Pi boots to a bare Linux TTY. OASIS_OS replaces this with a themed, interactive shell OS that serves as the operator-facing interface for the field-deployable agent terminal.
-
-### 10.2 Agent Terminal Skin
-
-The `agent-terminal` skin is purpose-built for the briefcase use case. It presents a dashboard tailored to AI agent management rather than homebrew launching or game interaction.
-
-| Dashboard Element | Description |
-|-------------------|-------------|
-| Agent Status Panel | Shows connected agents (Claude, Gemini, Codex, OpenCode, Crush) with availability indicators. Reads from `.agents.yaml` configuration. |
-| Remote Session Manager | List of saved remote hosts. Select one to open an outbound terminal session (SSH-like) to a machine running agent infrastructure. |
-| MCP Tool Browser | Lists available MCP tools from configured servers. Invoke tools directly from the command line: `mcp code-quality lint /path/to/file`. |
-| System Health | CPU temp, memory, battery (via `/sys/class/power_supply/`), disk usage, network status. |
-| Tamper Status | Current state of the tamper system (DISARMED / ARMING / ARMED). Reads the tamper-gate state file. Visual indicator changes color. |
-| Quick Actions | One-key shortcuts: lock screen, arm system, open remote session, run CI check, pull latest code. |
-
-### 10.3 Integration Points
-
-| Component | Interaction |
-|-----------|-------------|
-| `tamper-sensor.service` | OASIS_OS reads the state file to display tamper status. No write access -- display only. |
-| `tamper-gate.service` | OASIS_OS can send a disarm request via FIFO when the user authenticates through the OASIS_OS login screen (equivalent to the challenge prompt). |
-| `automation-cli` | The `agent-terminal` skin registers CI commands: `ci run full`, `ci run rust-full`, etc. These invoke `automation-cli` installed on the Pi or accessible via Docker. |
-| MCP servers | On the local network, MCP servers (code-quality, gemini, etc.) are reachable via their configured transports. The `mcp` command category in the interpreter dispatches tool calls. |
-| Board manager | `board-manager query` shows ready work from the GitHub Projects board. Claim and release issues from the terminal. |
-
-### 10.4 Boot Sequence
-
-```
-1. Pi 5 powers on (USB-C bank)
-2. LUKS passphrase prompt (initramfs) -- user unlocks root partition
-3. systemd starts tamper-sensor.service + tamper-gate.service
-4. systemd starts oasis-os.service (After=tamper-gate.service)
-5. OASIS_OS initializes with agent-terminal skin
-6. Framebuffer or SDL3 backend renders dashboard to display
-7. Remote terminal listener binds to configured port
-8. Operator interacts via local keyboard/display or remote terminal
-```
-
-### 10.5 Headless Operation
-
-When no display is attached (e.g., briefcase closed, operating purely via network), OASIS_OS still runs with the framebuffer backend writing to `/dev/fb0` (which is simply not visible). The remote terminal is the sole interaction path. An operator on the same network can:
-
-```bash
-# From a laptop or another device on the network
-telnet 192.168.x.x 9000
-
-# Full OASIS_OS command session
-> agent status
-Claude: available (CLI)
-Gemini: available (MCP)
-Codex: available (MCP)
-
-> board query
-#142 [Todo] Fix authentication edge case
-#147 [Todo] Add rate limiting to API
-
-> remote dev-server
-Connecting to dev-server (192.168.0.100:22)...
-Connected. Type 'exit' to return to OASIS_OS.
-$
-```
-
----
-
-## 11. PSP Remote Agent Control [PLANNED]
+## 10. PSP Remote Agent Control [PLANNED]
 
 > **Status:** The outbound TCP remote session capability described here is planned. The core framework's remote terminal module supports inbound TCP listening, but the outbound `remote` command, VT100 emulation, saved hosts configuration, and PSP-specific input shortcuts are not yet implemented.
 
-### 11.1 Concept
+### 10.1 Concept
 
 A PSP running OASIS_OS on infrastructure WiFi can establish outbound TCP connections to machines running AI agent infrastructure. The remote terminal works bidirectionally -- the PSP is both a server (accepting inbound sessions for its own OS) and a client (initiating outbound sessions to remote hosts). This makes a PSP with modern custom firmware (and its reliable WPA2 WiFi stack) a viable portable controller for the agent ecosystem.
 
 This is not a theoretical capability. PPSSPP runs locally on the development machine and version 1.19+ maps `sceNetInet` to real host sockets, meaning the entire remote session stack can be developed and tested in the emulator against real network services before deploying to hardware.
 
-### 11.2 Architecture
+### 10.2 Architecture
 
 ```
 +----------------------------+          +----------------------------+
 |  PSP (OASIS_OS)             |  WiFi    |  Agent Host Machine        |
 |                            | -------> |                            |
-|  remote dev-server         |  TCP     |  SSH / agent-terminal port |
+|  remote dev-server         |  TCP     |  SSH / remote terminal port |
 |    +-- outbound TCP        |          |    +-- Claude Code CLI     |
 |    +-- VT100 emulation     |          |    +-- automation-cli      |
 |    +-- command passthrough  |          |    +-- board-manager       |
@@ -925,7 +846,7 @@ This is not a theoretical capability. PPSSPP runs locally on the development mac
 
 The `remote` command in the OASIS_OS interpreter opens an outbound TCP session to a saved host. The session runs inside the OASIS_OS terminal UI -- keystrokes from the PSP's on-screen keyboard or USB keyboard (on PSP-2000+) are sent over the wire, and received text is rendered in the terminal view. A minimal VT100 escape sequence parser handles cursor positioning, color, and clearing.
 
-### 11.3 Use Cases
+### 10.3 Use Cases
 
 | Scenario | How It Works |
 |----------|-------------|
@@ -935,7 +856,7 @@ The `remote` command in the OASIS_OS interpreter opens an outbound TCP session t
 | Monitor PR feedback | `remote dev-server` -> `pr-monitor 48` -- watch for review comments |
 | Emergency wipe trigger | `remote briefcase` -> `tamper arm` -- re-arm the briefcase tamper system remotely |
 
-### 11.4 Saved Hosts Configuration
+### 10.4 Saved Hosts Configuration
 
 Hosts are stored in the OASIS_OS config file on the Memory Stick:
 
@@ -961,7 +882,7 @@ port = 9000
 protocol = "oasis-terminal"
 ```
 
-### 11.5 PSP Input Considerations
+### 10.5 PSP Input Considerations
 
 The PSP's input limitations shape the remote terminal experience:
 
@@ -972,13 +893,13 @@ The PSP's input limitations shape the remote terminal experience:
 | D-pad shortcuts | All models | Instant | Mapped to common commands (L+Up = `agent status`, R+Triangle = `board query`) |
 | Analog stick cursor | All models | Moderate | Scrolling terminal output, selecting from menus |
 
-The `agent-terminal` skin on PSP adapts by offering a command palette accessible via the Triangle button -- a scrollable list of frequently used agent commands that can be executed with a single button press rather than typed out character by character.
+PSP adapts to these limitations by offering a command palette accessible via the Triangle button -- a scrollable list of frequently used agent commands that can be executed with a single button press rather than typed out character by character.
 
 ---
 
-## 12. Virtual File System
+## 11. Virtual File System
 
-### 12.1 VFS Architecture
+### 11.1 VFS Architecture
 
 The virtual file system is the abstraction that makes the same command interpreter work across all platforms. On PSP, `ls` lists Memory Stick contents. On Pi, it lists real Linux directories. In UE5, it lists game-authored content. The VFS trait provides a uniform interface over fundamentally different storage backends.
 
@@ -993,7 +914,7 @@ The virtual file system is the abstraction that makes the same command interpret
 | Rename | `rename(from, to)` | Rename/move file or directory |
 | Exists | `exists(path) -> bool` | Check existence |
 
-### 12.2 VFS Backends
+### 11.2 VFS Backends
 
 | Backend | Backing Store | Use Case |
 |---------|--------------|----------|
@@ -1002,7 +923,7 @@ The virtual file system is the abstraction that makes the same command interpret
 | OverlayVFS | Layered: read-only base (skin defaults) + writable layer (user changes) | All platforms -- skin-provided files with user modifications |
 | MemoryVFS | In-memory tree, no persistence | Unit tests, ephemeral terminals |
 
-### 12.3 Game Asset VFS
+### 11.3 Game Asset VFS
 
 The GameAssetVFS is the most novel backend. It presents game-authored content as a filesystem that players navigate with standard commands. Each in-game terminal has its own VFS root configured by level designers.
 
@@ -1018,9 +939,9 @@ The VFS root, pre-populated content, and write permissions are all defined per-t
 
 ---
 
-## 13. Development Workflow
+## 12. Development Workflow
 
-### 13.1 Three-Tier Testing Strategy
+### 12.1 Three-Tier Testing Strategy
 
 | Tier | Environment | Tests | Cycle Time |
 |------|------------|-------|------------|
@@ -1028,13 +949,13 @@ The VFS root, pre-populated content, and write permissions are all defined per-t
 | 2 -- PPSSPP (container) | PSP build running in MCP-patched PPSSPP container | GU rendering, PSP input, networking (infra mode), memory constraints, thread behavior, agent-assisted debugging via MCP | ~5 seconds (cross-compile + launch) |
 | 3 -- Hardware/UE5 | Real PSP + Raspberry Pi + UE5 editor | WiFi, USB, Media Engine, GPIO, boot-to-shell, in-game render target, interaction flow | ~30 seconds (deploy + reboot/PIE) |
 
-### 13.2 Containerized PPSSPP with MCP Integration [PLANNED]
+### 12.2 Containerized PPSSPP with MCP Integration [PLANNED]
 
 > **Status:** This section describes planned infrastructure that has not yet been built. Currently, PPSSPP is used for testing via the project's existing `ppsspp` Docker Compose service (a stock PPSSPP build with X11 forwarding). The MCP-patched container, patch files, and MCP schema directory described below are future work.
 
 PPSSPP runs inside a Docker container built from source with a set of patches that embed an MCP server directly into the emulator. This gives AI agents deep introspection into the running PSP environment -- memory state, GPU pipeline, thread scheduling, network sockets -- through the same MCP tool interface used by every other tool in the repository. The container follows the project's container-first philosophy: no local PPSSPP installation required, reproducible builds, and CI-ready headless mode.
 
-#### 13.2.1 Container Architecture
+#### 12.2.1 Container Architecture
 
 ```
 +----------------------------------------------------------+
@@ -1063,7 +984,7 @@ PPSSPP runs inside a Docker container built from source with a set of patches th
   automation-cli, etc.)     remote terminal
 ```
 
-#### 13.2.2 MCP Tool Surface
+#### 12.2.2 MCP Tool Surface
 
 The patches add an MCP server to PPSSPP that exposes the emulator's internal state as tools. The tool schemas live in `packages/oasis_os/ppsspp/mcp-schema/` and follow the same conventions as the project's other MCP servers.
 
@@ -1092,7 +1013,7 @@ The patches add an MCP server to PPSSPP that exposes the emulator's internal sta
 | `psp.emu.frame_advance` | Advance exactly N frames | Frame-precise testing of animations and transitions |
 | `psp.emu.set_speed` | Set emulation speed (0.1x to unlimited) | Fast-forward through boot sequence in CI; slow down for debugging |
 
-#### 13.2.3 Docker Compose Service
+#### 12.2.3 Docker Compose Service
 
 ```yaml
 # In project root docker-compose.yml
@@ -1114,7 +1035,7 @@ ppsspp-mcp:
     - PPSSPP_EBOOT=/eboot/EBOOT.PBP
 ```
 
-#### 13.2.4 Dockerfile Build Strategy
+#### 12.2.4 Dockerfile Build Strategy
 
 The Dockerfile clones PPSSPP from source at a pinned commit, applies the patch series in order, and builds. PPSSPP is GPL-2.0+, so the patches (which are derivative works distributed as part of the container build, not as a modified PPSSPP binary in the repository) comply with the license -- the patches themselves and the Dockerfile are the source.
 
@@ -1142,7 +1063,7 @@ COPY --from=builder /ppsspp/build/assets /usr/local/share/ppsspp/assets
 ENTRYPOINT ["ppsspp"]
 ```
 
-#### 13.2.5 Patch Architecture
+#### 12.2.5 Patch Architecture
 
 The patches are minimal, focused modifications to PPSSPP's C++ source. Each patch is self-contained and applies cleanly to the pinned commit.
 
@@ -1155,7 +1076,7 @@ The patches are minimal, focused modifications to PPSSPP's C++ source. Each patc
 | `0005-network-tools.patch` | `Core/MCP/NetTools.cpp`, hooks in `Core/HLE/sceNetInet.cpp` | Intercepts socket operations at the HLE layer. Packet capture records data flowing through `sceNetInetSend`/`Recv`. Latency injection adds `usleep()` before forwarding to host sockets. |
 | `0006-headless-mode.patch` | `headless/Headless.cpp` | Extends PPSSPP's existing headless mode to support the MCP server and long-running execution (original headless mode is designed for screenshot comparison tests that exit immediately). |
 
-#### 13.2.6 Agent Debugging Workflow
+#### 12.2.6 Agent Debugging Workflow
 
 With the MCP-patched PPSSPP container running, AI agents can debug OASIS_OS on the PSP target the same way they debug desktop code -- but with hardware-accurate emulation:
 
@@ -1212,7 +1133,7 @@ Agent -> psp.debug.stack_trace { thread: 0 }
 # render waiting on sema 2 -- classic lock ordering inversion
 ```
 
-#### 13.2.7 PPSSPP Networking (Passthrough)
+#### 12.2.7 PPSSPP Networking (Passthrough)
 
 PPSSPP 1.19+ maps `sceNetInet` socket calls to real host sockets. With the container's port forwarding, the OASIS_OS remote terminal running inside the emulated PSP is accessible from the host:
 
@@ -1224,7 +1145,7 @@ PPSSPP 1.19+ maps `sceNetInet` socket calls to real host sockets. With the conta
 
 This also works for outbound connections -- the `remote` command from the containerized PPSSPP instance connects to real services on the Docker network or host network, enabling full testing of the PSP agent control flow without physical hardware.
 
-### 13.3 UE5 Development Workflow
+### 12.3 UE5 Development Workflow
 
 1. Build OASIS_OS as a cdylib (`cargo build --features ue5 --release`)
 2. Copy `.dll`/`.so` to UE5 project's `Binaries/ThirdParty/` directory
@@ -1233,7 +1154,7 @@ This also works for outbound connections -- the `remote` command from the contai
 5. Press Play-in-Editor; interact with in-game terminal
 6. Optional: `telnet localhost 9000` for direct terminal access while PIE is running
 
-### 13.4 AI Agent Integration
+### 12.4 AI Agent Integration
 
 The project benefits from the existing agent ecosystem documented in `docs/agents/README.md`:
 
@@ -1249,11 +1170,11 @@ The original C source (`psixpsp.7z` at repo root) serves as the reference for AI
 
 ---
 
-## 14. Plugin System
+## 13. Plugin System
 
 OASIS_OS supports runtime-extensible functionality through a platform-appropriate plugin system. On PSP, plugins are PRX modules loaded via `sceKernelLoadModule`. On Linux, shared libraries (`.so`) loaded via `libloading`. In UE5, plugins can also be authored as UE5 Blueprint-callable FFI extensions.
 
-### 14.1 Plugin Lifecycle
+### 13.1 Plugin Lifecycle
 
 | Phase | Description | PSP | Linux | UE5 |
 |-------|------------|-----|-------|-----|
@@ -1264,15 +1185,15 @@ OASIS_OS supports runtime-extensible functionality through a platform-appropriat
 | Update | Per-frame tick | Main loop call | Main loop call | Main loop call |
 | Unload | Shutdown, free memory | `sceKernelUnloadModule` | Drop Library | Drop Library |
 
-### 14.2 Host API Surface
+### 13.2 Host API Surface
 
 Plugins interact with OASIS_OS through a stable, versioned API providing access to: SDI scene graph (create/modify UI elements), command registry (register new commands), VFS (read/write files), network sockets, configuration storage, and event bus (subscribe to OS events).
 
-### 14.3 Event Bus IPC
+### 13.3 Event Bus IPC
 
 The plugin event bus (`crates/oasis-core/src/plugin/event_bus.rs`) provides a publish/subscribe communication channel between plugins and core components. Plugins subscribe to topics and publish `PluginEvent` messages containing a topic string, source identifier, and data payload. This supplements VFS-based IPC with a more immediate, event-driven pattern suitable for real-time notifications. Events are string-based for cross-language compatibility.
 
-### 14.4 Plugin Configuration
+### 13.4 Plugin Configuration
 
 Plugin manifests support a `config` field containing typed key-value pairs via `PluginConfigValue`:
 
@@ -1324,7 +1245,7 @@ These bring the total widget count from ~20 to 30+.
 
 ---
 
-## 15. Security Considerations
+## 14. Security Considerations
 
 | Threat | Mitigation |
 |--------|-----------|
@@ -1341,9 +1262,9 @@ These bring the total widget count from ~20 to 30+.
 
 ---
 
-## 16. Build System and CI/CD
+## 15. Build System and CI/CD
 
-### 16.1 Build Targets
+### 15.1 Build Targets
 
 | Target Triple | Toolchain | Output | Deploy Target |
 |--------------|-----------|--------|--------------|
@@ -1352,7 +1273,7 @@ These bring the total widget count from ~20 to 30+.
 | x86_64-unknown-linux-gnu | Native Rust toolchain | ELF binary / .so | Desktop dev / UE5 Linux |
 | x86_64-pc-windows-msvc | Native Rust toolchain | .dll / .lib | UE5 Windows |
 
-### 16.2 CI Pipeline Integration
+### 15.2 CI Pipeline Integration
 
 OASIS_OS uses Docker-based CI execution (container-first philosophy). All CI stages run automatically on push to `main` and on pull requests via GitHub Actions:
 
@@ -1379,7 +1300,7 @@ The CI pipeline also includes PSP EBOOT build, PPSSPP headless testing, AI code 
 | PSP build | cargo +nightly psp --release | Verify EBOOT.PBP builds |
 | PSP integration (PPSSPP) [PLANNED] | docker compose up ppsspp-mcp + MCP test sequence | Boot EBOOT in container, verify screenshot |
 
-### 16.3 Context Protection
+### 15.3 Context Protection
 
 Following repo convention, verbose CI output is redirected to prevent context window pollution:
 
@@ -1391,7 +1312,7 @@ automation-cli ci run oasis-full > /tmp/ci-output.log 2>&1 \
 
 ---
 
-## 17. Migration Strategy from Original C Codebase
+## 16. Migration Strategy from Original C Codebase
 
 The original C source (`psixpsp.7z` at repository root) contains ~15,000 lines of C. The port follows a phased approach. Each phase produces a working, testable binary. The framework refactoring (core/backend/skin separation) happens in Phase 1-2, with original codebase features migrating in Phase 3-4 as the Classic skin.
 
@@ -1404,20 +1325,19 @@ The original C source (`psixpsp.7z` at repository root) contains ~15,000 lines o
 | 5 -- Remote terminal | TCP listener + outbound client, authentication, full command suite, remote access on all platforms | `net.c` (partial), new code | **Complete** |
 | 6 -- UE5 integration | FFI boundary, UE5 render target backend, interaction input, GameAssetVFS | All new code | **Complete** |
 | 7 -- Window manager | WM core: window lifecycle, grouping, drag/resize/focus, hit testing, clipping, window types | All new code | **Complete** |
-| 8 -- Skin system | Skin loading, hot-swap (Classic skin implemented; Terminal/Tactical/Corrupted/Desktop skins planned) | All new code + skin configs | **Partial** |
-| 9 -- Agent terminal skin | Agent status dashboard, MCP tool integration, remote session manager, tamper status display | All new code | Planned |
-| 10 -- Plugins | Plugin system, host API, 2-3 example plugins | All new code | **Complete** (framework; example plugins planned) |
-| 11 -- Audio | MP3 playback with ME offloading (PSP) or rodio (Linux) | `audio.c`, `me.S`, `modules/audio/*` | **Complete** (framework) |
-| 12 -- Polish | Transitions, update checker, scripting, FTP server | `transition.c`, `update.c` + new | **Complete** |
-| 13 -- PSP GU backend | Hardware-accelerated sceGu rendering, PSIX-style UI matching desktop layout | New code | **Complete** |
+| 8 -- Skin system | Skin loading, hot-swap (15 skins implemented across TOML + built-in) | All new code + skin configs | **Complete** |
+| 9 -- Plugins | Plugin system, host API, 2-3 example plugins | All new code | **Complete** (framework; example plugins planned) |
+| 10 -- Audio | MP3 playback with ME offloading (PSP) or rodio (Linux) | `audio.c`, `me.S`, `modules/audio/*` | **Complete** (framework) |
+| 11 -- Polish | Transitions, update checker, scripting, FTP server | `transition.c`, `update.c` + new | **Complete** |
+| 12 -- PSP GU backend | Hardware-accelerated sceGu rendering, PSIX-style UI matching desktop layout | New code | **Complete** |
 
-Phase 13 was added after the original plan. The PSP backend was initially software-rendered, then switched to sceGu hardware acceleration with `Sprites` primitives for all 2D drawing. The PSP UI now renders the full PSIX-style layout: document icons with 6 layers, tabbed status/bottom bars, chrome bezels, procedural wave arc wallpaper, and paginated grid navigation.
+Phase 12 was added after the original plan. The PSP backend was initially software-rendered, then switched to sceGu hardware acceleration with `Sprites` primitives for all 2D drawing. The PSP UI now renders the full PSIX-style layout: document icons with 6 layers, tabbed status/bottom bars, chrome bezels, procedural wave arc wallpaper, and paginated grid navigation.
 
 Total Rust codebase: approximately 125,000 lines across 37 crates, substantially exceeding the original C codebase (~15,000 lines) due to the framework abstraction, 11 extracted app crates, browser engine with JS bindings, video decode pipeline, vector graphics, shader wallpapers, window manager, VFS, UE5 integration, and multiple skins. The vendored ffmpeg (~176,000 lines) is eliminated entirely.
 
 ---
 
-## 18. Risk Assessment
+## 17. Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
@@ -1441,20 +1361,19 @@ Total Rust codebase: approximately 125,000 lines across 37 crates, substantially
 
 ---
 
-## 19. Success Criteria
+## 18. Success Criteria
 
 | Criterion | Verification Method |
 |----------|-------------------|
 | OASIS_OS boots to a themed dashboard on real PSP hardware | Visual verification on PSP-2000 with custom firmware |
 | OASIS_OS boots to the same dashboard on Raspberry Pi | Visual verification on Pi 5 with SDL3 or framebuffer backend |
 | In-game computer in UE5 renders a functional OS with player interaction | Play-in-Editor: interact with terminal, execute commands, browse files |
-| At least 4 distinct skins render correctly from the same core framework | Load Classic, Terminal, Tactical, and Agent Terminal skins; verify layout, features, and visuals differ |
+| At least 4 distinct skins render correctly from the same core framework | Load Classic, Modern, XP, and Desktop skins; verify layout, features, and visuals differ |
 | Dashboard discovers and launches homebrew (PSP) / executables (Pi) / game UI (UE5) | Launch 3+ apps from dashboard on each platform |
 | Remote terminal accessible via TCP from another machine | Telnet/netcat session with successful command execution |
 | PSP establishes outbound remote session to agent host | From OASIS_OS on PSP (or PPSSPP), `remote dev-server` connects and allows command execution |
-| Agent terminal skin displays live agent status and tamper state on briefcase Pi | Boot Pi with agent-terminal skin, verify agent and tamper panels populate |
 | VFS abstraction works across RealFS, GameAssetVFS, and MemoryVFS | Automated test: same command sequence produces correct results on all VFS backends |
-| Command interpreter correctly gates features per skin | Terminal skin exposes all commands; Tactical skin restricts to approved set; verify gating |
+| Command interpreter correctly gates features per skin | Dashboard skins expose dashboard + launcher commands; terminal-focused skins restrict to approved set; verify gating |
 | UE5 callback system fires on file access and command execution | Automated test: access file -> verify ON_FILE_ACCESS callback fires in UE5 |
 | Full development cycle runs in PPSSPP container without real hardware | End-to-end: build EBOOT, launch container, terminal connect, command test, MCP memory read -- all in Docker |
 | PPSSPP MCP tools accessible by AI agents | Agent connects to container MCP port, reads PSP memory, takes screenshot, lists threads -- verified in CI |
@@ -1468,7 +1387,7 @@ Total Rust codebase: approximately 125,000 lines across 37 crates, substantially
 
 ---
 
-## 20. References and Resources
+## 19. References and Resources
 
 | Resource | URL / Location |
 |----------|---------------|

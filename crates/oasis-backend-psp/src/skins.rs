@@ -27,9 +27,7 @@ pub(crate) enum PspSkinPreset {
     RetroCga,
     Solarized,
     HighContrast,
-    Terminal,
     Altimit,
-    Tactical,
 }
 
 impl PspSkinPreset {
@@ -41,9 +39,7 @@ impl PspSkinPreset {
         Self::RetroCga,
         Self::Solarized,
         Self::HighContrast,
-        Self::Terminal,
         Self::Altimit,
-        Self::Tactical,
     ];
 
     /// Human-readable display name.
@@ -55,9 +51,7 @@ impl PspSkinPreset {
             Self::RetroCga => "Retro CGA",
             Self::Solarized => "Solarized",
             Self::HighContrast => "High Contrast",
-            Self::Terminal => "Terminal",
             Self::Altimit => "Altimit",
-            Self::Tactical => "Tactical",
         }
     }
 
@@ -70,9 +64,7 @@ impl PspSkinPreset {
             Self::RetroCga => "retro-cga",
             Self::Solarized => "solarized",
             Self::HighContrast => "highcontrast",
-            Self::Terminal => "terminal",
             Self::Altimit => "altimit",
-            Self::Tactical => "tactical",
         }
     }
 
@@ -156,17 +148,6 @@ impl PspSkinPreset {
                 Color::rgb(0xFF, 0xFF, 0xFF), // output
                 Color::rgb(0xFF, 0x44, 0x44), // error
             ],
-            Self::Terminal => [
-                Color::rgb(0x00, 0x00, 0x00), // background
-                Color::rgb(0x00, 0xFF, 0x00), // primary
-                Color::rgb(0x00, 0x33, 0x00), // secondary
-                Color::rgb(0x00, 0xCC, 0x00), // text
-                Color::rgb(0x00, 0x66, 0x00), // dim_text
-                Color::rgb(0x00, 0x1A, 0x00), // status_bar
-                Color::rgb(0x00, 0xFF, 0x00), // prompt
-                Color::rgb(0x00, 0xCC, 0x00), // output
-                Color::rgb(0xFF, 0x33, 0x33), // error
-            ],
             Self::Altimit => [
                 Color::rgb(0x08, 0x08, 0x16),        // background
                 Color::rgb(0x00, 0xCC, 0x88),        // primary
@@ -177,17 +158,6 @@ impl PspSkinPreset {
                 Color::rgb(0x00, 0xCC, 0x88),        // prompt
                 Color::rgb(0xB0, 0xD8, 0xC8),        // output
                 Color::rgb(0xFF, 0x44, 0x66),        // error
-            ],
-            Self::Tactical => [
-                Color::rgb(0x0A, 0x0A, 0x0A), // background
-                Color::rgb(0xCC, 0x88, 0x00), // primary
-                Color::rgb(0x33, 0x33, 0x33), // secondary
-                Color::rgb(0xAA, 0xAA, 0xAA), // text
-                Color::rgb(0x66, 0x66, 0x66), // dim_text
-                Color::rgb(0x1A, 0x1A, 0x1A), // status_bar
-                Color::rgb(0xCC, 0x88, 0x00), // prompt
-                Color::rgb(0xAA, 0xAA, 0xAA), // output
-                Color::rgb(0xCC, 0x33, 0x33), // error
             ],
         }
     }
@@ -243,16 +213,6 @@ impl PspSkinPreset {
                     floats: HashMap::from([("speed".into(), 0.6)]),
                 },
             )),
-            Self::Terminal => Some((
-                "matrix_rain",
-                ShaderParams {
-                    colors: vec![
-                        hex_to_f4(0x00, 0xFF, 0x00),
-                        hex_to_f4(0x00, 0x02, 0x00),
-                    ],
-                    floats: HashMap::from([("speed".into(), 0.8)]),
-                },
-            )),
             Self::Altimit => Some((
                 "starfield",
                 ShaderParams {
@@ -261,17 +221,6 @@ impl PspSkinPreset {
                         hex_to_f4(0x08, 0x08, 0x16),
                     ],
                     floats: HashMap::from([("speed".into(), 0.6)]),
-                },
-            )),
-            Self::Tactical => Some((
-                "plasma",
-                ShaderParams {
-                    colors: vec![
-                        hex_to_f4(0xCC, 0x88, 0x00),
-                        hex_to_f4(0x66, 0x33, 0x00),
-                        hex_to_f4(0x33, 0x1A, 0x00),
-                    ],
-                    floats: HashMap::from([("speed".into(), 0.4)]),
                 },
             )),
             _ => None,
@@ -323,9 +272,9 @@ impl PspSkinPreset {
     /// Build the matching [`SkinFeatures`] (grid layout for PSP).
     pub(crate) fn skin_features() -> SkinFeatures {
         let mut f = SkinFeatures::default();
-        f.grid_cols = 4;
+        f.grid_cols = 5;
         f.grid_rows = 3;
-        f.icons_per_page = 12;
+        f.icons_per_page = 15;
         // Unified desktop: bottom bar shows taskbar buttons, not media tabs.
         f.show_media_tabs = false;
         f.show_page_dots = false;
@@ -446,14 +395,9 @@ mod tests {
             "ocean_waves"
         );
         assert_eq!(
-            PspSkinPreset::Terminal.shader_config().unwrap().0,
-            "matrix_rain"
-        );
-        assert_eq!(
             PspSkinPreset::Altimit.shader_config().unwrap().0,
             "starfield"
         );
-        assert_eq!(PspSkinPreset::Tactical.shader_config().unwrap().0, "plasma");
     }
 
     #[test]

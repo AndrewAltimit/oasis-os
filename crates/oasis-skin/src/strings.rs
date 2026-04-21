@@ -293,15 +293,15 @@ mod tests {
     fn deserialize_from_toml() {
         let toml = r#"
 boot_text = ["Initializing...", "Loading modules...", "Ready."]
-prompt_format = "root@tactical:{cwd}# "
-title = "TACTICAL COMMAND"
-welcome_message = "TACTICAL SYSTEM ONLINE"
+prompt_format = "root@oasis:{cwd}# "
+title = "OASIS_OS"
+welcome_message = "SYSTEM ONLINE"
 "#;
         let s: SkinStrings = toml::from_str(toml).unwrap();
         assert_eq!(s.boot_text.len(), 3);
-        assert_eq!(s.prompt_format, "root@tactical:{cwd}# ");
-        assert_eq!(s.title, "TACTICAL COMMAND");
-        assert_eq!(s.welcome_message, "TACTICAL SYSTEM ONLINE");
+        assert_eq!(s.prompt_format, "root@oasis:{cwd}# ");
+        assert_eq!(s.title, "OASIS_OS");
+        assert_eq!(s.welcome_message, "SYSTEM ONLINE");
         // Defaults for unspecified fields.
         assert_eq!(s.error_prefix, "error: ");
         assert_eq!(s.back, "Back");

@@ -108,6 +108,10 @@ pub struct AppState {
     pub bg_color: Color,
     pub active_transition: Option<transition::TransitionState>,
     pub frame_counter: u64,
+    /// Set by `apply_skin_swap` when the wallpaper texture needs to be
+    /// regenerated against the new skin's theme. Consumed by the main loop
+    /// (which holds the backend needed to upload textures) and cleared.
+    pub pending_wallpaper_refresh: bool,
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub archive_catalog: Option<ArchiveCatalog>,

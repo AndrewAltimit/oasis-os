@@ -1,6 +1,6 @@
 //! Modern and desktop built-in skins.
 //!
-//! Skins: desktop, modern, xp, macos, gnome, agent-terminal.
+//! Skins: desktop, modern, xp, macos, gnome.
 
 use oasis_types::error::Result;
 
@@ -159,8 +159,8 @@ file_browser = true
 browser = true
 window_manager = true
 dashboard_pages = 2
-icons_per_page = 9
-grid_cols = 3
+icons_per_page = 15
+grid_cols = 5
 grid_rows = 3
 show_tabs = false
 "#;
@@ -498,203 +498,6 @@ error_prefix = "error: "
 shutdown_message = "Session ended."
 "#;
 
-// ---------------------------------------------------------------------------
-// Agent Terminal skin: briefcase field terminal for AI agent management.
-// ---------------------------------------------------------------------------
-
-const AGENT_TERMINAL_MANIFEST: &str = r#"
-name = "agent-terminal"
-version = "1.0"
-author = "OASIS_OS"
-description = "Briefcase field terminal for AI agent management"
-screen_width = 480
-screen_height = 272
-"#;
-
-const AGENT_TERMINAL_LAYOUT: &str = r##"
-[status_bar]
-x = 0
-y = 0
-w = 480
-h = 18
-color = "#0A1A2A"
-text = "AGENT TERMINAL"
-font_size = 8
-text_color = "#00CCCC"
-
-[tamper_indicator]
-x = 380
-y = 1
-w = 96
-h = 16
-color = "#00000000"
-text = "[?]"
-font_size = 8
-text_color = "#808080"
-
-[separator_top]
-x = 0
-y = 18
-w = 480
-h = 1
-color = "#006666"
-stroke_width = 1
-stroke_color = "#00666640"
-
-[agent_panel]
-x = 0
-y = 19
-w = 240
-h = 80
-color = "#0D1F2D"
-text = "Agents: (loading...)"
-font_size = 8
-text_color = "#00AAAA"
-border_radius = 4
-
-[session_panel]
-x = 240
-y = 19
-w = 240
-h = 80
-color = "#0D1F2D"
-text = "Sessions: (none)"
-font_size = 8
-text_color = "#00AAAA"
-border_radius = 4
-
-[panel_divider]
-x = 239
-y = 19
-w = 1
-h = 80
-color = "#006666"
-stroke_width = 1
-stroke_color = "#00666640"
-
-[separator_mid]
-x = 0
-y = 99
-w = 480
-h = 1
-color = "#006666"
-stroke_width = 1
-stroke_color = "#00666640"
-
-[health_bar]
-x = 0
-y = 100
-w = 480
-h = 16
-color = "#0A1520"
-text = "CPU: -- | MEM: -- | NET: --"
-font_size = 8
-text_color = "#668888"
-border_radius = 4
-
-[separator_term]
-x = 0
-y = 116
-w = 480
-h = 1
-color = "#006666"
-stroke_width = 1
-stroke_color = "#00666640"
-
-[terminal_bg]
-x = 0
-y = 117
-w = 480
-h = 155
-z = -1
-color = "#060D15"
-border_radius = 4
-
-[terminal_output]
-x = 4
-y = 120
-w = 472
-h = 132
-color = "#00000000"
-text = ""
-font_size = 8
-text_color = "#00BBBB"
-
-[terminal_prompt]
-x = 4
-y = 256
-w = 472
-h = 14
-color = "#00000000"
-text = "agent> "
-font_size = 8
-text_color = "#00FFCC"
-"##;
-
-const AGENT_TERMINAL_FEATURES: &str = r#"
-dashboard = false
-terminal = true
-file_browser = true
-window_manager = false
-show_tabs = false
-command_categories = ["agent", "mcp", "system", "file", "network"]
-"#;
-
-const AGENT_TERMINAL_THEME: &str = r##"
-background = "#060D15"
-primary = "#00CCCC"
-secondary = "#006666"
-text = "#00BBBB"
-dim_text = "#336666"
-status_bar = "#0A1A2A"
-prompt = "#00FFCC"
-output = "#00BBBB"
-error = "#FF4444"
-
-[wallpaper]
-style = "grid"
-grid_color = "#0D2233"
-grid_spacing = 16
-
-[[background_layers]]
-kind = "scanlines"
-spacing = 2
-color = "#00FFFF28"
-
-[[background_layers]]
-kind = "grid"
-spacing = 30
-color = "#00FFFF28"
-
-[[background_layers]]
-kind = "pulsing_core"
-radius = 10
-color = "#00FFFF40"
-[background_layers.position]
-anchor = "center"
-[background_layers.animation]
-pulse_speed = 0.3
-pulse_min_alpha = 0.4
-"##;
-
-const AGENT_TERMINAL_STRINGS: &str = r#"
-boot_text = [
-    "OASIS_OS v2.2 [agent-terminal]",
-    "Briefcase secure terminal initializing...",
-    "Loading agent registry...",
-    "MCP servers: scanning...",
-    "Tamper system: reading state...",
-    "Remote terminal: standby",
-    "Ready.",
-]
-prompt_format = "agent> "
-title = "Agent Terminal"
-home_label = "AGENTS"
-welcome_message = "Briefcase agent terminal online. Type 'help' for commands."
-error_prefix = "ERR: "
-shutdown_message = "Agent terminal session ended."
-"#;
-
 /// Load the Desktop skin.
 pub fn desktop_skin() -> Result<Skin> {
     Skin::from_toml_full(
@@ -741,16 +544,5 @@ pub fn gnome_skin() -> Result<Skin> {
         include_str!("../../../../skins/gnome/features.toml"),
         include_str!("../../../../skins/gnome/theme.toml"),
         GNOME_STRINGS,
-    )
-}
-
-/// Load the Agent Terminal skin.
-pub fn agent_terminal_skin() -> Result<Skin> {
-    Skin::from_toml_full(
-        AGENT_TERMINAL_MANIFEST,
-        AGENT_TERMINAL_LAYOUT,
-        AGENT_TERMINAL_FEATURES,
-        AGENT_TERMINAL_THEME,
-        AGENT_TERMINAL_STRINGS,
     )
 }

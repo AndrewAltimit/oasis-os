@@ -540,9 +540,12 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Network",
         "Terminal",
         "Music Player",
+        "Internet Radio",
         "Photo Viewer",
         "Package Manager",
         "System Monitor",
+        "Browser",
+        "TV Guide",
     ] {
         vfs.mkdir(&format!("/apps/{name}")).unwrap();
     }

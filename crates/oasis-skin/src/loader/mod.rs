@@ -147,9 +147,9 @@ impl Default for SkinFeatures {
             file_browser: true,
             browser: true,
             window_manager: false,
-            dashboard_pages: 3,
-            icons_per_page: 9,
-            grid_cols: 3,
+            dashboard_pages: 2,
+            icons_per_page: 15,
+            grid_cols: 5,
             grid_rows: 3,
             command_categories: Vec::new(),
             start_menu: true,
@@ -535,8 +535,10 @@ grid_rows = 2
         let f = SkinFeatures::default();
         assert!(f.dashboard);
         assert!(f.terminal);
-        assert_eq!(f.dashboard_pages, 3);
-        assert_eq!(f.icons_per_page, 9);
+        assert_eq!(f.dashboard_pages, 2);
+        assert_eq!(f.icons_per_page, 15);
+        assert_eq!(f.grid_cols, 5);
+        assert_eq!(f.grid_rows, 3);
     }
 
     #[test]
@@ -1104,10 +1106,10 @@ window_manager = true
     fn manifest_inherits_field() {
         let manifest = r#"
 name = "child"
-inherits = "terminal"
+inherits = "classic"
 "#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
-        assert_eq!(skin.manifest.inherits.as_deref(), Some("terminal"));
+        assert_eq!(skin.manifest.inherits.as_deref(), Some("classic"));
     }
 
     #[test]

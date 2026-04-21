@@ -278,7 +278,7 @@ mod tests {
 
         // List skins.
         let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "skin list").unwrap());
-        assert!(s.contains("terminal"));
+        assert!(s.contains("classic"));
         assert!(s.contains("modern"));
 
         // Switch to a skin.
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(name, "modern");
 
         // Switch to another skin.
-        let __out = exec(&reg, &mut vfs, &mut cwd, "skin terminal").unwrap();
+        let __out = exec(&reg, &mut vfs, &mut cwd, "skin classic").unwrap();
         assert!(
             matches!(&__out, CommandOutput::Signal(_)),
             "expected SkinSwap, got {__out:?}"
@@ -301,7 +301,7 @@ mod tests {
         let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = __out else {
             unreachable!()
         };
-        assert_eq!(name, "terminal");
+        assert_eq!(name, "classic");
     }
 
     #[test]

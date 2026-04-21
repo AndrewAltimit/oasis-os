@@ -315,7 +315,12 @@ impl BottomBar {
         };
 
         // Page dots (rounded for circular appearance, with lerp transition).
-        if features.show_page_dots {
+        // Only render when there's actual pagination to indicate — a single
+        // lone "active" dot otherwise shows up next to the START button as
+        // an unexplained white speck on skins that inherit the default
+        // `page_dot_active` color.
+        let show_dots = features.show_page_dots && self.total_pages > 1;
+        if show_dots {
             let dots_x = usb_end + 12;
             let max_dots = theme::MAX_PAGE_DOTS;
             for i in 0..self.total_pages.min(max_dots) {

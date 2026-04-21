@@ -197,6 +197,20 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 .with_features(&swapped.features);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
             state.wm.set_theme(swapped.theme.build_wm_theme());
+
+            // Component SDI objects (dashboard icons, status/bottom bar,
+            // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
+            // `Skin::swap_scaled` didn't destroy them. Their decorative
+            // attributes (gradient_top/bottom, text_shadow_*, stroke_*,
+            // shadow_level, border_radius, …) persist from the previous
+            // skin because each component's `update_sdi` only writes the
+            // attributes the *current* skin needs. That bleed-through is
+            // what caused icon labels to render invisibly (e.g. stale
+            // gradient fill on the label object from a prior skin). Drop
+            // those objects here so every component rebuilds them cleanly
+            // on the next frame.
+            clear_component_sdi_objects(sdi);
+
             let dash_config =
                 DashboardConfig::from_features(&swapped.features, &state.active_theme);
             let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
@@ -207,14 +221,101 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 StartMenuState::default_items(&state.active_theme),
                 &state.active_theme,
             );
+            state.ui.status_bar = oasis_core::statusbar::StatusBar::new();
+            state.ui.taskbar = oasis_core::taskbar::Taskbar::new();
+
+            // Mirror the parts of startup (`main()`) that depend on the
+            // theme rather than on the window surface: clear color and
+            // cursor scale are derived from the active theme, so they
+            // have to be re-read whenever the theme changes.
+            state.bg_color = state.active_theme.clear_color;
+            state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
+
             state
                 .terminal
                 .output_lines
                 .push(format!("Switched to skin: {}", swapped.manifest.name));
             state.skin = swapped;
+            // The wallpaper texture was generated against the previous theme
+            // (grid color, gradient stops, shader-layer visibility). The main
+            // loop holds the backend needed to upload a fresh texture, so
+            // flag it here and let `refresh_wallpaper_if_pending` do the work.
+            state.pending_wallpaper_refresh = true;
         },
         Err(e) => {
             state.terminal.output_lines.push(format!("Skin error: {e}"));
+        },
+    }
+}
+
+/// Destroy every SDI object owned by a UI component (dashboard icons,
+/// status/bottom bar, taskbar, start menu, toasts) so the next frame
+/// recreates them with fresh default attributes. This avoids decorative
+/// attribute bleed-through across skin swaps — the classic symptom is
+/// an icon label object keeping a gradient/shadow from the previous
+/// skin, which can render the label invisible under the new skin.
+///
+/// Layout objects owned by `skin.layout` are left alone; `Skin::swap_scaled`
+/// already destroyed them.
+fn clear_component_sdi_objects(sdi: &mut SdiRegistry) {
+    const COMPONENT_PREFIXES: &[&str] = &[
+        "icon_",            // dashboard icons (icon_label_*, icon_shadow_*, …)
+        "cursor_highlight", // dashboard selector (now invisible, but still rebuilt)
+        "bar_",             // status bar + bottom bar
+        "taskbar_",         // taskbar buttons + desktop indicator
+        "start_btn_",       // start menu button on the taskbar
+        "sm_",              // start menu panel, items, footer
+        "toast_",           // toast notifications
+    ];
+    let to_destroy: Vec<String> = sdi
+        .names()
+        .filter(|n| COMPONENT_PREFIXES.iter().any(|p| n.starts_with(p)))
+        .map(|n| n.to_string())
+        .collect();
+    for name in to_destroy {
+        let _ = sdi.destroy(&name);
+    }
+}
+
+/// If `state.pending_wallpaper_refresh` is set, regenerate the wallpaper
+/// texture against the current theme and toggle its SDI visibility based on
+/// whether the new skin uses a shader layer. The flag is cleared after
+/// processing. No-op when not set.
+pub fn refresh_wallpaper_if_pending(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut SdlBackend,
+) {
+    if !state.pending_wallpaper_refresh {
+        return;
+    }
+
+    let w = state.active_theme.screen_w;
+    let h = state.active_theme.screen_h;
+    let old_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
+    let wp_data = wallpaper::generate_from_config(w, h, &state.active_theme);
+    match backend.load_texture(w, h, &wp_data) {
+        Ok(new_tex) => {
+            // Only clear the flag on a successful upload so transient backend
+            // failures (GPU OOM, driver hiccups) retry on the next frame
+            // instead of leaving the wallpaper stale until the next skin swap.
+            state.pending_wallpaper_refresh = false;
+            terminal_sdi::setup_wallpaper(sdi, new_tex, w, h);
+            // Hide the raster wallpaper under shader-driven skins so the
+            // shader's output isn't overdrawn by the SDI wallpaper object.
+            if let Ok(obj) = sdi.get_mut("wallpaper") {
+                obj.visible =
+                    oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_none();
+            }
+            if let Some(tex) = old_tex {
+                let _ = backend.destroy_texture(tex);
+            }
+        },
+        Err(e) => {
+            state
+                .terminal
+                .output_lines
+                .push(format!("Warning: wallpaper refresh failed: {e}"));
         },
     }
 }
@@ -342,38 +443,9 @@ pub fn apply_resolution_change(
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 
     // Regenerate the wallpaper texture at the new size. The old wallpaper
-    // object survived `swap_scaled` (it isn't a skin-layout object). We load
-    // the new texture first, and only destroy the old one once the SDI
-    // wallpaper has been re-pointed at the fresh id — otherwise a
-    // `load_texture` failure would leave the wallpaper object holding an
-    // already-destroyed id and the next render would dereference it.
-    let old_wallpaper_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
-    let wp_data = wallpaper::generate_from_config(new_w, new_h, &state.active_theme);
-    match backend.load_texture(new_w, new_h, &wp_data) {
-        Ok(new_tex) => {
-            // Recreate the SDI object so size + texture are consistent. The
-            // `wallpaper.style == "none"` branch is handled downstream by
-            // the render pipeline toggling visibility.
-            terminal_sdi::setup_wallpaper(sdi, new_tex, new_w, new_h);
-            // Preserve the "hidden under shader wallpaper" behaviour from
-            // boot so shader-driven skins don't double-paint the background.
-            if oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_some()
-                && let Ok(obj) = sdi.get_mut("wallpaper")
-            {
-                obj.visible = false;
-            }
-            // Now that the wallpaper points at `new_tex`, drop the old id.
-            if let Some(tex) = old_wallpaper_tex {
-                let _ = backend.destroy_texture(tex);
-            }
-        },
-        Err(e) => {
-            state
-                .terminal
-                .output_lines
-                .push(format!("Warning: wallpaper reload failed: {e}"));
-        },
-    }
+    // object survived `swap_scaled` (it isn't a skin-layout object).
+    state.pending_wallpaper_refresh = true;
+    refresh_wallpaper_if_pending(state, sdi, backend);
 
     state
         .terminal
@@ -695,7 +767,7 @@ mod tests {
         use oasis_core::terminal::CommandRegistry;
         use oasis_core::wm::manager::WindowManager;
 
-        let skin = load_builtin("terminal").unwrap();
+        let skin = load_builtin("classic").unwrap();
         let active_theme = ActiveTheme::from_skin(&skin.theme);
         let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
 
@@ -742,6 +814,7 @@ mod tests {
             bg_color: Color::rgb(0, 0, 0),
             active_transition: None,
             frame_counter: 0,
+            pending_wallpaper_refresh: false,
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,
@@ -821,11 +894,11 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(
             Ok(CommandOutput::Signal(CommandSignal::SkinSwap {
-                name: "tactical".to_string(),
+                name: "modern".to_string(),
             })),
             &mut state,
         );
-        assert_eq!(result, Some("tactical".to_string()));
+        assert_eq!(result, Some("modern".to_string()));
     }
 
     #[test]

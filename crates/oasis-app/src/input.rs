@@ -101,6 +101,26 @@ pub fn handle_desktop_input(
     match event {
         InputEvent::Quit => return InputResult::Quit,
         InputEvent::PointerClick { x, y } => {
+            // Start menu takes priority over everything else so it stays
+            // reachable while app windows are open. Skipping this block in
+            // desktop mode used to silently drop start-button clicks any
+            // time `state.wm.window_count() > 0`.
+            if state.skin.features.start_menu && state.ui.start_menu.hit_test_button(*x, *y) {
+                state.ui.start_menu.toggle();
+                return InputResult::Continue;
+            }
+            if state.ui.start_menu.open {
+                if let Some(action) = state.ui.start_menu.hit_test_item(*x, *y) {
+                    state.ui.start_menu.close();
+                    if action == StartMenuAction::Exit {
+                        return InputResult::Quit;
+                    }
+                    handle_start_menu_action(&action, state, sdi, vfs);
+                } else {
+                    state.ui.start_menu.close();
+                }
+                return InputResult::Continue;
+            }
             // Check desktop indicator hit (prev/next arrows).
             if let Some(hit) = state.ui.taskbar.desktop_hit_test(*x, *y) {
                 match hit {
@@ -177,7 +197,9 @@ pub fn handle_desktop_input(
                     if state.wm.window_count() == 0 {
                         state.mode = Mode::Dashboard;
                     } else if state.ui.bottom_bar.active_tab == MediaTab::None {
-                        // Forward desktop clicks to dashboard icons.
+                        // Forward desktop clicks to dashboard icons. With the
+                        // selector box removed, clicks launch on the first
+                        // press — no prior selection required.
                         let cfg = &state.ui.dashboard.config;
                         let gx = dx - cfg.grid_x;
                         let gy = dy - cfg.grid_y;
@@ -188,25 +210,28 @@ pub fn handle_desktop_input(
                                 let idx = row * cfg.grid_cols as usize + col;
                                 let page_apps = state.ui.dashboard.current_page_apps().len();
                                 if idx < page_apps {
-                                    if state.ui.dashboard.selected == idx {
-                                        if let Some(app) = state.ui.dashboard.selected_app() {
-                                            let app = app.clone();
-                                            let result = launch::launch_app_window(
-                                                &app,
-                                                &mut state.wm,
-                                                sdi,
-                                                &mut state.content.open_runners,
-                                                &mut state.content.browser,
-                                                &state.browser_config,
-                                                vfs,
-                                                &state.net.tls_provider,
-                                                state.skin.features.window_manager,
-                                                &state.plugin_manager,
-                                            );
-                                            launch::apply_launch(result, &mut state.mode);
-                                        }
-                                    } else {
-                                        state.ui.dashboard.selected = idx;
+                                    state.ui.dashboard.selected = idx;
+                                    if let Some(app) = state.ui.dashboard.selected_app() {
+                                        let app = app.clone();
+                                        let result = launch::launch_app_window(
+                                            &app,
+                                            &mut state.wm,
+                                            sdi,
+                                            &mut state.content.open_runners,
+                                            &mut state.content.browser,
+                                            &state.browser_config,
+                                            vfs,
+                                            &state.net.tls_provider,
+                                            state.skin.features.window_manager,
+                                            &state.plugin_manager,
+                                        );
+                                        // No fullscreen fade here: in desktop
+                                        // mode other windows are already on
+                                        // screen, and a fade overlay would
+                                        // briefly cover them. Dashboard-mode
+                                        // launches keep the transition because
+                                        // the screen is otherwise idle.
+                                        launch::apply_launch(result, &mut state.mode);
                                     }
                                 }
                             }
@@ -521,31 +546,28 @@ pub fn handle_default_input(
                         let idx = row * cfg.grid_cols as usize + col;
                         let page_apps = state.ui.dashboard.current_page_apps().len();
                         if idx < page_apps {
-                            if state.ui.dashboard.selected == idx {
-                                if let Some(app) = state.ui.dashboard.selected_app() {
-                                    log::info!("Click-launching app: {}", app.title);
-                                    let app = app.clone();
-                                    let result = launch::launch_app_window(
-                                        &app,
-                                        &mut state.wm,
-                                        sdi,
-                                        &mut state.content.open_runners,
-                                        &mut state.content.browser,
-                                        &state.browser_config,
-                                        vfs,
-                                        &state.net.tls_provider,
-                                        state.skin.features.window_manager,
-                                        &state.plugin_manager,
-                                    );
-                                    launch::apply_launch(result, &mut state.mode);
-                                    state.active_transition = Some(launch::make_transition(
-                                        state.config.screen_width,
-                                        state.config.screen_height,
-                                        state.skin.features.transition_fade_frames.unwrap_or(15),
-                                    ));
-                                }
-                            } else {
-                                state.ui.dashboard.selected = idx;
+                            state.ui.dashboard.selected = idx;
+                            if let Some(app) = state.ui.dashboard.selected_app() {
+                                log::info!("Click-launching app: {}", app.title);
+                                let app = app.clone();
+                                let result = launch::launch_app_window(
+                                    &app,
+                                    &mut state.wm,
+                                    sdi,
+                                    &mut state.content.open_runners,
+                                    &mut state.content.browser,
+                                    &state.browser_config,
+                                    vfs,
+                                    &state.net.tls_provider,
+                                    state.skin.features.window_manager,
+                                    &state.plugin_manager,
+                                );
+                                launch::apply_launch(result, &mut state.mode);
+                                state.active_transition = Some(launch::make_transition(
+                                    state.config.screen_width,
+                                    state.config.screen_height,
+                                    state.skin.features.transition_fade_frames.unwrap_or(15),
+                                ));
                             }
                         }
                     }
@@ -799,7 +821,7 @@ mod tests {
 
         use crate::app_state::{ContentLayer, NetworkLayer, TerminalLayer, UiLayer};
 
-        let skin = load_builtin("terminal").unwrap();
+        let skin = load_builtin("classic").unwrap();
         let active_theme = ActiveTheme::from_skin(&skin.theme);
         let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
 
@@ -846,6 +868,7 @@ mod tests {
             bg_color: oasis_core::backend::Color::rgb(0, 0, 0),
             active_transition: None,
             frame_counter: 0,
+            pending_wallpaper_refresh: false,
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,
@@ -1087,6 +1110,10 @@ mod tests {
     fn desktop_start_switches_to_terminal() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
+        // The Start-button-to-Terminal transition is gated on
+        // `!skin.features.window_manager`, so disable WM for this test —
+        // the `classic` skin used by the harness enables it by default.
+        state.skin.features.window_manager = false;
         handle_desktop_input(
             &InputEvent::ButtonPress(Button::Start),
             &mut state,

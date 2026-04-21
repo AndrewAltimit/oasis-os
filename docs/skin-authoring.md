@@ -339,11 +339,8 @@ ls screenshots/
 | Name | Style | Features |
 |------|-------|----------|
 | classic | PSP icon grid | Dashboard + terminal |
-| terminal | Green-on-black CRT | Terminal only |
-| tactical | Military console | Terminal + restricted commands |
 | corrupted | Glitched terminal | Terminal + corruption effects |
 | desktop | Windowed desktop | WM + terminal |
-| agent-terminal | AI agent console | Terminal + agent/MCP commands |
 | modern | Purple accent, rounded | Dashboard + WM + browser |
 
 ## Worked Example: "Neon" Skin

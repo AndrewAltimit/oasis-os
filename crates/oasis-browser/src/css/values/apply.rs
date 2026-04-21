@@ -2780,16 +2780,14 @@ fn parse_transform(
                 let ay = parse_angle(args.first().copied().unwrap_or("0"));
                 result.push(TransformFunction::Skew(0.0, ay));
             },
-            "matrix" => {
-                if args.len() >= 6 {
-                    let a = args[0].parse::<f32>().unwrap_or(1.0);
-                    let b = args[1].parse::<f32>().unwrap_or(0.0);
-                    let c = args[2].parse::<f32>().unwrap_or(0.0);
-                    let d = args[3].parse::<f32>().unwrap_or(1.0);
-                    let e = args[4].parse::<f32>().unwrap_or(0.0);
-                    let f = args[5].parse::<f32>().unwrap_or(0.0);
-                    result.push(TransformFunction::Matrix(a, b, c, d, e, f));
-                }
+            "matrix" if args.len() >= 6 => {
+                let a = args[0].parse::<f32>().unwrap_or(1.0);
+                let b = args[1].parse::<f32>().unwrap_or(0.0);
+                let c = args[2].parse::<f32>().unwrap_or(0.0);
+                let d = args[3].parse::<f32>().unwrap_or(1.0);
+                let e = args[4].parse::<f32>().unwrap_or(0.0);
+                let f = args[5].parse::<f32>().unwrap_or(0.0);
+                result.push(TransformFunction::Matrix(a, b, c, d, e, f));
             },
             "translate3d" => {
                 let x =
@@ -2839,23 +2837,19 @@ fn parse_transform(
                 let angle = parse_angle(args.first().copied().unwrap_or("0"));
                 result.push(TransformFunction::RotateZ(angle));
             },
-            "rotate3d" => {
-                if args.len() >= 4 {
-                    let x = args[0].parse::<f32>().unwrap_or(0.0);
-                    let y = args[1].parse::<f32>().unwrap_or(0.0);
-                    let z = args[2].parse::<f32>().unwrap_or(0.0);
-                    let angle = parse_angle(args[3]);
-                    result.push(TransformFunction::Rotate3d(x, y, z, angle));
-                }
+            "rotate3d" if args.len() >= 4 => {
+                let x = args[0].parse::<f32>().unwrap_or(0.0);
+                let y = args[1].parse::<f32>().unwrap_or(0.0);
+                let z = args[2].parse::<f32>().unwrap_or(0.0);
+                let angle = parse_angle(args[3]);
+                result.push(TransformFunction::Rotate3d(x, y, z, angle));
             },
-            "matrix3d" => {
-                if args.len() >= 16 {
-                    let mut m = [0.0f32; 16];
-                    for (i, slot) in m.iter_mut().enumerate() {
-                        *slot = args[i].parse::<f32>().unwrap_or(0.0);
-                    }
-                    result.push(TransformFunction::Matrix3d(m));
+            "matrix3d" if args.len() >= 16 => {
+                let mut m = [0.0f32; 16];
+                for (i, slot) in m.iter_mut().enumerate() {
+                    *slot = args[i].parse::<f32>().unwrap_or(0.0);
                 }
+                result.push(TransformFunction::Matrix3d(m));
             },
             "perspective" => {
                 let d =

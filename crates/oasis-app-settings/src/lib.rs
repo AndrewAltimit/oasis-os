@@ -429,15 +429,13 @@ impl SettingsApp {
                     }
                 }
             },
-            Category::Resolution => {
-                if self.item_cursor < RESOLUTION_PRESETS.len() {
-                    let (w, h) = RESOLUTION_PRESETS[self.item_cursor];
-                    if w != self.width || h != self.height {
-                        self.content.pending_vfs_request = Some((
-                            RESOLUTION_CHANGE_REQUEST_PATH.to_string(),
-                            format!("{w}x{h}"),
-                        ));
-                    }
+            Category::Resolution if self.item_cursor < RESOLUTION_PRESETS.len() => {
+                let (w, h) = RESOLUTION_PRESETS[self.item_cursor];
+                if w != self.width || h != self.height {
+                    self.content.pending_vfs_request = Some((
+                        RESOLUTION_CHANGE_REQUEST_PATH.to_string(),
+                        format!("{w}x{h}"),
+                    ));
                 }
             },
             _ => {},
@@ -560,13 +558,11 @@ impl App for SettingsApp {
                     self.sync_content_cursor();
                 }
             },
-            Category::Resolution => {
-                if item_idx < RESOLUTION_PRESETS.len() {
-                    self.item_cursor = item_idx;
-                    self.handle_confirm();
-                    self.refresh_lines();
-                    self.sync_content_cursor();
-                }
+            Category::Resolution if item_idx < RESOLUTION_PRESETS.len() => {
+                self.item_cursor = item_idx;
+                self.handle_confirm();
+                self.refresh_lines();
+                self.sync_content_cursor();
             },
             _ => {},
         }

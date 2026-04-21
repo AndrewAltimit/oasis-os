@@ -34,7 +34,7 @@ use oasis_types::error::Result;
 /// Resolve a skin by name or path.
 ///
 /// Resolution order:
-/// 1. Built-in name match (e.g. "terminal", "modern")
+/// 1. Built-in name match (e.g. "classic", "modern")
 /// 2. Path containing `skin.toml` (e.g. "skins/classic")
 /// 3. Subdirectory under `./skins/{name}/`
 /// 4. Fallback to "classic" built-in skin with a warning
