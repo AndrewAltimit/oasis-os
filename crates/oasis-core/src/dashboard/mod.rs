@@ -11,7 +11,6 @@ mod vector_icons;
 pub use discovery::{AppEntry, discover_apps};
 
 use crate::active_theme::ActiveTheme;
-use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::skin::SkinFeatures;
@@ -172,11 +171,6 @@ pub struct DashboardState {
     pub selected: usize,
     /// Active page-slide animation (None = not animating).
     page_anim: Option<PageSlideAnim>,
-    /// Smooth cursor visual position (lerp target).
-    cursor_visual_x: f32,
-    cursor_visual_y: f32,
-    /// Whether cursor visual position has been initialized.
-    cursor_initialized: bool,
     /// Icon press flash countdown (0 = inactive).
     press_flash_frame: u32,
     /// Which icon index is flashing.
@@ -200,9 +194,6 @@ impl DashboardState {
             page: 0,
             selected: 0,
             page_anim: None,
-            cursor_visual_x: 0.0,
-            cursor_visual_y: 0.0,
-            cursor_initialized: false,
             press_flash_frame: 0,
             press_flash_index: 0,
             icon_names,
@@ -342,7 +333,6 @@ impl DashboardState {
     /// Accepts an `ActiveTheme` for skin-driven colors. Pass
     /// `&ActiveTheme::default()` for legacy behaviour.
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        let cols = self.config.grid_cols as usize;
         let page_apps = self.current_page_apps();
 
         let icon_w = at.icon_width;
@@ -408,79 +398,15 @@ impl DashboardState {
             }
         }
 
-        // Cursor highlight with smooth movement.
+        // Dashboard icons respond directly to clicks, matching desktop-icon
+        // conventions; no selection box is drawn. The `cursor_highlight`
+        // SDI object still exists (older code paths may touch it), but it
+        // is forced invisible regardless of skin cursor_style.
         let cursor_name = "cursor_highlight";
         if !sdi.contains(cursor_name) {
             sdi.create(cursor_name);
         }
-        if !page_apps.is_empty() {
-            let sel_col = (self.selected % cols) as i32;
-            let sel_row = (self.selected / cols) as i32;
-            let pad = self.config.cursor_pad;
-            let cell_x = self.config.grid_x + sel_col * self.config.cell_w as i32;
-            let cell_y = self.config.grid_y + sel_row * self.config.cell_h as i32;
-            let target_ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-            let target_iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
-
-            // Smooth cursor lerp.
-            let target_x = (target_ix - pad) as f32;
-            let target_y = (target_iy - pad) as f32;
-            if !self.cursor_initialized {
-                self.cursor_visual_x = target_x;
-                self.cursor_visual_y = target_y;
-                self.cursor_initialized = true;
-            } else {
-                let lerp_factor = self.config.cursor_lerp_speed;
-                self.cursor_visual_x += (target_x - self.cursor_visual_x) * lerp_factor;
-                self.cursor_visual_y += (target_y - self.cursor_visual_y) * lerp_factor;
-            }
-            let cx = self.cursor_visual_x as i32;
-            let cy = self.cursor_visual_y as i32;
-
-            if let Ok(cursor) = sdi.get_mut(cursor_name) {
-                cursor.visible = true;
-                cursor.overlay = false;
-
-                // Include label area (icon + gap + 1 line of text).
-                let glyph_h = at.font_small.max(8) as u32;
-                let label_h = text_pad as u32 + glyph_h + 2;
-                let total_h = icon_h + label_h;
-
-                match at.icon.cursor_style.as_str() {
-                    "fill" => {
-                        cursor.x = cx;
-                        cursor.y = cy;
-                        cursor.w = icon_w + (pad * 2) as u32;
-                        cursor.h = total_h + (pad * 2) as u32;
-                        cursor.color = at.icon.cursor_color;
-                        cursor.border_radius = Some(at.icon.cursor_border_radius);
-                        cursor.stroke_width = None;
-                        cursor.stroke_color = None;
-                    },
-                    "underline" => {
-                        cursor.x = cx;
-                        cursor.y = cy + pad + icon_h as i32 + text_pad + glyph_h as i32 + 2;
-                        cursor.w = self.config.cell_w;
-                        cursor.h = 3;
-                        cursor.color = at.icon.cursor_color;
-                        cursor.border_radius = Some(at.icon.cursor_border_radius.min(2));
-                        cursor.stroke_width = None;
-                        cursor.stroke_color = None;
-                    },
-                    _ => {
-                        // "stroke" (default)
-                        cursor.x = cx;
-                        cursor.y = cy;
-                        cursor.w = icon_w + (pad * 2) as u32;
-                        cursor.h = total_h + (pad * 2) as u32;
-                        cursor.color = Color::rgba(0, 0, 0, 0);
-                        cursor.border_radius = Some(at.icon.cursor_border_radius);
-                        cursor.stroke_width = Some(at.icon.cursor_stroke_width);
-                        cursor.stroke_color = Some(at.icon.cursor_color);
-                    },
-                }
-            }
-        } else if let Ok(cursor) = sdi.get_mut(cursor_name) {
+        if let Ok(cursor) = sdi.get_mut(cursor_name) {
             cursor.visible = false;
         }
     }
@@ -503,6 +429,7 @@ impl DashboardState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Color;
 
     fn test_config() -> DashboardConfig {
         DashboardConfig {

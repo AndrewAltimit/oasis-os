@@ -395,6 +395,7 @@ fn main() -> Result<()> {
         bg_color: clear_color,
         active_transition,
         frame_counter: 0,
+        pending_wallpaper_refresh: false,
         radio_manager: RadioManager::new(),
         radio_source: None,
         archive_catalog: None,
@@ -659,6 +660,11 @@ fn main() -> Result<()> {
             &mut vfs,
             "SDL3",
         );
+
+        // Any skin swap — whether from the Settings app above or a terminal
+        // `skin` command processed in the input loop — sets the pending flag
+        // so the wallpaper texture is regenerated against the new theme.
+        commands::refresh_wallpaper_if_pending(&mut state, &mut sdi, &mut backend);
 
         // Tick radio and TV subsystems.
         radio_controller::tick(&mut state, &mut vfs);

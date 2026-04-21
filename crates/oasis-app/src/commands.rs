@@ -212,9 +212,54 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 .output_lines
                 .push(format!("Switched to skin: {}", swapped.manifest.name));
             state.skin = swapped;
+            // The wallpaper texture was generated against the previous theme
+            // (grid color, gradient stops, shader-layer visibility). The main
+            // loop holds the backend needed to upload a fresh texture, so
+            // flag it here and let `refresh_wallpaper_if_pending` do the work.
+            state.pending_wallpaper_refresh = true;
         },
         Err(e) => {
             state.terminal.output_lines.push(format!("Skin error: {e}"));
+        },
+    }
+}
+
+/// If `state.pending_wallpaper_refresh` is set, regenerate the wallpaper
+/// texture against the current theme and toggle its SDI visibility based on
+/// whether the new skin uses a shader layer. The flag is cleared after
+/// processing. No-op when not set.
+pub fn refresh_wallpaper_if_pending(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut SdlBackend,
+) {
+    if !state.pending_wallpaper_refresh {
+        return;
+    }
+    state.pending_wallpaper_refresh = false;
+
+    let w = state.active_theme.screen_w;
+    let h = state.active_theme.screen_h;
+    let old_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
+    let wp_data = wallpaper::generate_from_config(w, h, &state.active_theme);
+    match backend.load_texture(w, h, &wp_data) {
+        Ok(new_tex) => {
+            terminal_sdi::setup_wallpaper(sdi, new_tex, w, h);
+            // Hide the raster wallpaper under shader-driven skins so the
+            // shader's output isn't overdrawn by the SDI wallpaper object.
+            if let Ok(obj) = sdi.get_mut("wallpaper") {
+                obj.visible =
+                    oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_none();
+            }
+            if let Some(tex) = old_tex {
+                let _ = backend.destroy_texture(tex);
+            }
+        },
+        Err(e) => {
+            state
+                .terminal
+                .output_lines
+                .push(format!("Warning: wallpaper refresh failed: {e}"));
         },
     }
 }
@@ -342,38 +387,9 @@ pub fn apply_resolution_change(
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 
     // Regenerate the wallpaper texture at the new size. The old wallpaper
-    // object survived `swap_scaled` (it isn't a skin-layout object). We load
-    // the new texture first, and only destroy the old one once the SDI
-    // wallpaper has been re-pointed at the fresh id — otherwise a
-    // `load_texture` failure would leave the wallpaper object holding an
-    // already-destroyed id and the next render would dereference it.
-    let old_wallpaper_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
-    let wp_data = wallpaper::generate_from_config(new_w, new_h, &state.active_theme);
-    match backend.load_texture(new_w, new_h, &wp_data) {
-        Ok(new_tex) => {
-            // Recreate the SDI object so size + texture are consistent. The
-            // `wallpaper.style == "none"` branch is handled downstream by
-            // the render pipeline toggling visibility.
-            terminal_sdi::setup_wallpaper(sdi, new_tex, new_w, new_h);
-            // Preserve the "hidden under shader wallpaper" behaviour from
-            // boot so shader-driven skins don't double-paint the background.
-            if oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_some()
-                && let Ok(obj) = sdi.get_mut("wallpaper")
-            {
-                obj.visible = false;
-            }
-            // Now that the wallpaper points at `new_tex`, drop the old id.
-            if let Some(tex) = old_wallpaper_tex {
-                let _ = backend.destroy_texture(tex);
-            }
-        },
-        Err(e) => {
-            state
-                .terminal
-                .output_lines
-                .push(format!("Warning: wallpaper reload failed: {e}"));
-        },
-    }
+    // object survived `swap_scaled` (it isn't a skin-layout object).
+    state.pending_wallpaper_refresh = true;
+    refresh_wallpaper_if_pending(state, sdi, backend);
 
     state
         .terminal
@@ -742,6 +758,7 @@ mod tests {
             bg_color: Color::rgb(0, 0, 0),
             active_transition: None,
             frame_counter: 0,
+            pending_wallpaper_refresh: false,
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,
