@@ -116,14 +116,14 @@ graph TD
 
 ## Skins
 
-All 18 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
+All 15 skins are defined in TOML configuration with theme derivation from 9 base colors. No code changes required. See the [Skin Authoring Guide](docs/skin-authoring.md).
 
 | Category | Skins |
 |----------|-------|
 | **Desktop** | xp, macos, gnome, win95, desktop, modern |
 | **Dashboard** | classic, altimit |
 | **Aesthetic** | balatro, vaporwave, solarized, paper |
-| **Terminal** | terminal, tactical, corrupted, agent-terminal |
+| **Terminal** | corrupted |
 | **Accessibility** | highcontrast, retro-cga |
 
 Skins support animated shader wallpapers (Shadertoy-style fragment shaders: Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro) that render in real-time behind the UI.

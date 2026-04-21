@@ -424,7 +424,7 @@ fn handle_client(cfd: i32) {
     } else if cmd == b"skins" {
         send_response(
             cfd,
-            b"psix classic balatro retro-cga solarized highcontrast terminal altimit tactical\n",
+            b"psix classic balatro retro-cga solarized highcontrast altimit\n",
         );
     } else if cmd.starts_with(b"browse ") {
         // Protocol: "browse <url>\n" — queue a browser navigation for
@@ -443,7 +443,7 @@ fn handle_client(cfd: i32) {
         let key = core::str::from_utf8(&cmd[5..]).unwrap_or("").trim();
         let known = [
             "psix", "classic", "balatro", "retro-cga", "solarized",
-            "highcontrast", "terminal", "altimit", "tactical",
+            "highcontrast", "altimit",
         ];
         if known.contains(&key) {
             request_skin_change(key);

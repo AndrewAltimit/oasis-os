@@ -22,17 +22,13 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![Classic](screenshots/classic/04_terminal.png) | ![XP](screenshots/xp/04_terminal.png) | ![Modern](screenshots/modern/04_terminal.png) | ![Desktop](screenshots/desktop/04_terminal.png) | ![macOS](screenshots/macos/04_terminal.png) |
 
-| Terminal | Tactical | Corrupted | Agent Terminal | Balatro |
+| Corrupted | Balatro | Win95 | Solarized | Vaporwave |
 |:---:|:---:|:---:|:---:|:---:|
-| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) | ![Balatro](screenshots/balatro/04_terminal.png) |
+| ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Balatro](screenshots/balatro/04_terminal.png) | ![Win95](screenshots/win95/04_terminal.png) | ![Solarized](screenshots/solarized/04_terminal.png) | ![Vaporwave](screenshots/vaporwave/04_terminal.png) |
 
-| Win95 | Solarized | Vaporwave | High Contrast | GNOME |
+| High Contrast | GNOME | Retro CGA | Paper | Altimit |
 |:---:|:---:|:---:|:---:|:---:|
-| ![Win95](screenshots/win95/04_terminal.png) | ![Solarized](screenshots/solarized/04_terminal.png) | ![Vaporwave](screenshots/vaporwave/04_terminal.png) | ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) |
-
-| Retro CGA | Paper | Altimit |
-|:---:|:---:|:---:|
-| ![CGA](screenshots/retro-cga/04_terminal.png) | ![Paper](screenshots/paper/04_terminal.png) | ![Altimit](screenshots/altimit/04_terminal.png) |
+| ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) | ![CGA](screenshots/retro-cga/04_terminal.png) | ![Paper](screenshots/paper/04_terminal.png) | ![Altimit](screenshots/altimit/04_terminal.png) |
 
 ## Media Tabs
 
@@ -50,7 +46,7 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 
 ```bash
 # All skins
-for skin in classic xp modern desktop terminal tactical corrupted agent-terminal macos gnome balatro retro-cga paper win95 solarized vaporwave highcontrast altimit; do
+for skin in classic xp modern desktop corrupted macos gnome balatro retro-cga paper win95 solarized vaporwave highcontrast altimit; do
   cargo run -p oasis-app --bin oasis-screenshot "$skin"
 done
 ```

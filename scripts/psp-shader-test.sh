@@ -30,9 +30,7 @@ SHADER_SKINS=(
     [balatro]="balatro"
     [retro-cga]="voronoi"
     [solarized]="ocean_waves"
-    [terminal]="matrix_rain"
     [altimit]="starfield"
-    [tactical]="plasma"
 )
 
 # Non-shader skins for transition testing.

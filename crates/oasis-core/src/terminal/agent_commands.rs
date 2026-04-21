@@ -1,9 +1,8 @@
-//! Commands for the agent-terminal skin.
+//! Agent management terminal commands.
 //!
-//! These commands are registered in addition to the standard builtins when
-//! the `agent-terminal` skin is active. They provide agent management,
-//! MCP tool browsing, tamper monitoring, board interaction, CI triggering,
-//! and system health display.
+//! These commands are registered alongside the standard builtins. They
+//! provide agent management, MCP tool browsing, tamper monitoring, board
+//! interaction, CI triggering, and system health display.
 
 use crate::agent::health::SystemHealth;
 use crate::agent::mcp::McpRegistry;
@@ -401,10 +400,9 @@ impl Command for HealthCmd {
     }
 }
 
-/// Register all agent-terminal commands into a registry.
+/// Register all agent-management commands into a registry.
 ///
-/// Call this in addition to `register_builtins()` when the agent-terminal
-/// skin is active.
+/// Call this in addition to `register_builtins()`.
 pub fn register_agent_commands(reg: &mut crate::terminal::CommandRegistry) {
     reg.register(Box::new(AgentCmd));
     reg.register(Box::new(McpCmd));

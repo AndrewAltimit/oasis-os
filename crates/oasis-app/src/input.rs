@@ -815,7 +815,7 @@ mod tests {
 
         use crate::app_state::{ContentLayer, NetworkLayer, TerminalLayer, UiLayer};
 
-        let skin = load_builtin("terminal").unwrap();
+        let skin = load_builtin("classic").unwrap();
         let active_theme = ActiveTheme::from_skin(&skin.theme);
         let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
 
@@ -1104,6 +1104,10 @@ mod tests {
     fn desktop_start_switches_to_terminal() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
+        // The Start-button-to-Terminal transition is gated on
+        // `!skin.features.window_manager`, so disable WM for this test —
+        // the `classic` skin used by the harness enables it by default.
+        state.skin.features.window_manager = false;
         handle_desktop_input(
             &InputEvent::ButtonPress(Button::Start),
             &mut state,

@@ -764,7 +764,7 @@ mod tests {
         use oasis_core::terminal::CommandRegistry;
         use oasis_core::wm::manager::WindowManager;
 
-        let skin = load_builtin("terminal").unwrap();
+        let skin = load_builtin("classic").unwrap();
         let active_theme = ActiveTheme::from_skin(&skin.theme);
         let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
 
@@ -891,11 +891,11 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(
             Ok(CommandOutput::Signal(CommandSignal::SkinSwap {
-                name: "tactical".to_string(),
+                name: "modern".to_string(),
             })),
             &mut state,
         );
-        assert_eq!(result, Some("tactical".to_string()));
+        assert_eq!(result, Some("modern".to_string()));
     }
 
     #[test]

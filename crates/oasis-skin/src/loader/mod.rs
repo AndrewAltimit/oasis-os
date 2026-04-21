@@ -1104,10 +1104,10 @@ window_manager = true
     fn manifest_inherits_field() {
         let manifest = r#"
 name = "child"
-inherits = "terminal"
+inherits = "classic"
 "#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
-        assert_eq!(skin.manifest.inherits.as_deref(), Some("terminal"));
+        assert_eq!(skin.manifest.inherits.as_deref(), Some("classic"));
     }
 
     #[test]

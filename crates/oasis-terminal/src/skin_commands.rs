@@ -71,7 +71,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut env = make_env(&mut vfs);
         let s = assert_text!(cmd.execute(&["list"], &mut env).unwrap());
-        assert!(s.contains("terminal"));
+        assert!(s.contains("classic"));
         assert!(s.contains("modern"));
     }
 

@@ -4,8 +4,8 @@
 //! skins out of the box without requiring external skin directories.
 //!
 //! Skins are organized into three category modules:
-//! - `classic` -- classic/retro skins (terminal, tactical, classic, retro-cga, win95)
-//! - `modern` -- modern/desktop skins (desktop, modern, xp, macos, gnome, agent-terminal)
+//! - `classic` -- classic/retro skins (classic, retro-cga, win95)
+//! - `modern` -- modern/desktop skins (desktop, modern, xp, macos, gnome)
 //! - `special` -- special/stylized skins (corrupted, balatro, paper, solarized,
 //!   vaporwave, highcontrast, altimit)
 //!
@@ -22,8 +22,8 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/builtin_generated.rs"));
 }
 
-pub use classic::{classic_skin, retro_cga_skin, tactical_skin, terminal_skin, win95_skin};
-pub use modern::{agent_terminal_skin, desktop_skin, gnome_skin, macos_skin, modern_skin, xp_skin};
+pub use classic::{classic_skin, retro_cga_skin, win95_skin};
+pub use modern::{desktop_skin, gnome_skin, macos_skin, modern_skin, xp_skin};
 pub use special::{
     altimit_skin, balatro_skin, corrupted_skin, highcontrast_skin, paper_skin, solarized_skin,
     vaporwave_skin,
@@ -45,11 +45,8 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
 fn load_builtin_raw(name: &str) -> Result<Skin> {
     match name {
         "classic" => classic_skin(),
-        "terminal" => terminal_skin(),
-        "tactical" => tactical_skin(),
         "corrupted" => corrupted_skin(),
         "desktop" => desktop_skin(),
-        "agent-terminal" => agent_terminal_skin(),
         "modern" => modern_skin(),
         "xp" => xp_skin(),
         "macos" => macos_skin(),
@@ -90,11 +87,8 @@ fn load_builtin_recursive(name: &str, depth: u32) -> Result<Skin> {
 pub fn builtin_names() -> &'static [&'static str] {
     &[
         "classic",
-        "terminal",
-        "tactical",
         "corrupted",
         "desktop",
-        "agent-terminal",
         "modern",
         "xp",
         "macos",
@@ -114,48 +108,6 @@ pub fn builtin_names() -> &'static [&'static str] {
 mod tests {
     use super::*;
     use oasis_sdi::SdiRegistry;
-
-    #[test]
-    fn terminal_skin_loads() {
-        let skin = terminal_skin().unwrap();
-        assert_eq!(skin.manifest.name, "terminal");
-        assert!(!skin.features.dashboard);
-        assert!(skin.features.terminal);
-        assert!(!skin.features.window_manager);
-        assert!(skin.corrupted_modifiers.is_none());
-        assert_eq!(skin.strings.prompt_format, "$> ");
-    }
-
-    #[test]
-    fn terminal_skin_applies_layout() {
-        let skin = terminal_skin().unwrap();
-        let mut sdi = SdiRegistry::new();
-        skin.apply_layout(&mut sdi);
-        assert!(sdi.contains("terminal_bg"));
-        assert!(sdi.contains("terminal_output"));
-        assert!(sdi.contains("terminal_prompt"));
-    }
-
-    #[test]
-    fn tactical_skin_loads() {
-        let skin = tactical_skin().unwrap();
-        assert_eq!(skin.manifest.name, "tactical");
-        assert!(!skin.features.dashboard);
-        assert!(skin.features.terminal);
-        assert!(!skin.features.window_manager);
-        assert!(!skin.features.command_categories.is_empty());
-        assert_eq!(skin.strings.prompt_format, "cmd> ");
-    }
-
-    #[test]
-    fn tactical_skin_has_status_elements() {
-        let skin = tactical_skin().unwrap();
-        let mut sdi = SdiRegistry::new();
-        skin.apply_layout(&mut sdi);
-        assert!(sdi.contains("status_bar"));
-        assert!(sdi.contains("status_left"));
-        assert!(sdi.contains("status_right"));
-    }
 
     #[test]
     fn corrupted_skin_loads() {
@@ -218,18 +170,16 @@ mod tests {
 
     #[test]
     fn swap_between_builtin_skins() {
-        let terminal = terminal_skin().unwrap();
+        let modern = modern_skin().unwrap();
         let desktop = desktop_skin().unwrap();
 
         let mut sdi = SdiRegistry::new();
-        terminal.apply_layout(&mut sdi);
-        assert!(sdi.contains("terminal_bg"));
-        assert!(sdi.contains("terminal_prompt"));
+        modern.apply_layout(&mut sdi);
+        assert!(sdi.contains("content_bg"));
 
-        let _new = Skin::swap(&terminal, desktop, &mut sdi);
-        // Terminal-only objects removed, desktop objects created.
-        assert!(!sdi.contains("terminal_bg"));
-        assert!(!sdi.contains("terminal_prompt"));
+        let _new = Skin::swap(&modern, desktop, &mut sdi);
+        // Modern-only objects removed, desktop objects created.
+        assert!(!sdi.contains("content_bg"));
         assert!(sdi.contains("desktop_bg"));
         assert!(sdi.contains("taskbar_bg"));
     }
@@ -254,67 +204,6 @@ mod tests {
                 "{name} skin should have prompt format"
             );
         }
-    }
-
-    #[test]
-    fn agent_terminal_skin_loads() {
-        let skin = agent_terminal_skin().unwrap();
-        assert_eq!(skin.manifest.name, "agent-terminal");
-        assert!(!skin.features.dashboard);
-        assert!(skin.features.terminal);
-        assert!(skin.features.file_browser);
-        assert!(!skin.features.window_manager);
-        assert!(!skin.features.command_categories.is_empty());
-        assert!(
-            skin.features
-                .command_categories
-                .contains(&"agent".to_string())
-        );
-        assert!(
-            skin.features
-                .command_categories
-                .contains(&"mcp".to_string())
-        );
-        assert_eq!(skin.strings.prompt_format, "agent> ");
-    }
-
-    #[test]
-    fn agent_terminal_skin_has_panels() {
-        let skin = agent_terminal_skin().unwrap();
-        let mut sdi = SdiRegistry::new();
-        skin.apply_layout(&mut sdi);
-        assert!(sdi.contains("status_bar"));
-        assert!(sdi.contains("agent_panel"));
-        assert!(sdi.contains("session_panel"));
-        assert!(sdi.contains("tamper_indicator"));
-        assert!(sdi.contains("health_bar"));
-        assert!(sdi.contains("terminal_output"));
-        assert!(sdi.contains("terminal_prompt"));
-    }
-
-    #[test]
-    fn agent_terminal_theme_colors() {
-        let skin = agent_terminal_skin().unwrap();
-        let bg = skin.theme.background_color();
-        // Teal-ish dark background.
-        assert_eq!(bg.r, 6);
-        assert_eq!(bg.g, 13);
-    }
-
-    #[test]
-    fn swap_terminal_to_agent_terminal() {
-        let terminal = terminal_skin().unwrap();
-        let agent = agent_terminal_skin().unwrap();
-
-        let mut sdi = SdiRegistry::new();
-        terminal.apply_layout(&mut sdi);
-        assert!(sdi.contains("terminal_bg"));
-
-        let _new = Skin::swap(&terminal, agent, &mut sdi);
-        // Agent terminal has its own terminal_bg plus dashboard panels.
-        assert!(sdi.contains("agent_panel"));
-        assert!(sdi.contains("tamper_indicator"));
-        assert!(sdi.contains("health_bar"));
     }
 
     #[test]
@@ -386,17 +275,6 @@ mod tests {
         let obj = sdi.get("taskbar_bg").unwrap();
         assert!(obj.gradient_top.is_some());
         assert!(obj.gradient_bottom.is_some());
-    }
-
-    #[test]
-    fn agent_terminal_panels_have_border_radius() {
-        let skin = agent_terminal_skin().unwrap();
-        let mut sdi = SdiRegistry::new();
-        skin.apply_layout(&mut sdi);
-        let panel = sdi.get("agent_panel").unwrap();
-        assert_eq!(panel.border_radius, Some(4));
-        let session = sdi.get("session_panel").unwrap();
-        assert_eq!(session.border_radius, Some(4));
     }
 
     // -- Skin inheritance tests --
