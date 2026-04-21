@@ -289,7 +289,6 @@ pub fn refresh_wallpaper_if_pending(
     if !state.pending_wallpaper_refresh {
         return;
     }
-    state.pending_wallpaper_refresh = false;
 
     let w = state.active_theme.screen_w;
     let h = state.active_theme.screen_h;
@@ -297,6 +296,10 @@ pub fn refresh_wallpaper_if_pending(
     let wp_data = wallpaper::generate_from_config(w, h, &state.active_theme);
     match backend.load_texture(w, h, &wp_data) {
         Ok(new_tex) => {
+            // Only clear the flag on a successful upload so transient backend
+            // failures (GPU OOM, driver hiccups) retry on the next frame
+            // instead of leaving the wallpaper stale until the next skin swap.
+            state.pending_wallpaper_refresh = false;
             terminal_sdi::setup_wallpaper(sdi, new_tex, w, h);
             // Hide the raster wallpaper under shader-driven skins so the
             // shader's output isn't overdrawn by the SDI wallpaper object.
