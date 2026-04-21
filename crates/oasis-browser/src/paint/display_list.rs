@@ -920,17 +920,17 @@ impl DisplayList {
             match item {
                 DisplayItem::FillRect { color, node_id, .. }
                 | DisplayItem::FillRoundedRect { color, node_id, .. }
-                | DisplayItem::FillPolygon { color, node_id, .. } => {
-                    if *node_id == Some(target_node_id) {
-                        *color = bg;
-                        count += 1;
-                    }
+                | DisplayItem::FillPolygon { color, node_id, .. }
+                    if *node_id == Some(target_node_id) =>
+                {
+                    *color = bg;
+                    count += 1;
                 },
-                DisplayItem::DrawText { color, node_id, .. } => {
-                    if *node_id == Some(target_node_id) {
-                        *color = fg;
-                        count += 1;
-                    }
+                DisplayItem::DrawText { color, node_id, .. }
+                    if *node_id == Some(target_node_id) =>
+                {
+                    *color = fg;
+                    count += 1;
                 },
                 _ => {},
             }

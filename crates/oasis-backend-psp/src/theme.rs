@@ -30,8 +30,8 @@ pub(crate) const ICON_GFX_H: u32 = 14;
 pub(crate) const ICON_GFX_PAD: u32 = 2;
 pub(crate) const ICON_LABEL_PAD: i32 = 1;
 
-// Dashboard grid (4 columns, 3 rows = 12 icons per page).
-pub(crate) const GRID_COLS: usize = 4;
+// Dashboard grid (5 columns, 3 rows = 15 icons per page).
+pub(crate) const GRID_COLS: usize = 5;
 pub(crate) const GRID_ROWS: usize = 3;
 pub(crate) const GRID_PAD_X: i32 = 8;
 pub(crate) const GRID_PAD_Y: i32 = 2;

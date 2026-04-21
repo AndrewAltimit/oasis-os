@@ -494,29 +494,23 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         ]);
                         i += 6;
                         match id {
-                            SETTINGS_INITIAL_WINDOW_SIZE => {
-                                if val > 0x7fff_ffff {
-                                    let _ = send_goaway(stream, 0, ERROR_CODE_FLOW_CONTROL_ERROR);
-                                    return Err(OasisError::Backend(
-                                        "HTTP/2: FLOW_CONTROL_ERROR on INITIAL_WINDOW_SIZE".into(),
-                                    ));
-                                }
+                            SETTINGS_INITIAL_WINDOW_SIZE if val > 0x7fff_ffff => {
+                                let _ = send_goaway(stream, 0, ERROR_CODE_FLOW_CONTROL_ERROR);
+                                return Err(OasisError::Backend(
+                                    "HTTP/2: FLOW_CONTROL_ERROR on INITIAL_WINDOW_SIZE".into(),
+                                ));
                             },
-                            SETTINGS_MAX_FRAME_SIZE => {
-                                if !(16_384..=16_777_215).contains(&val) {
-                                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
-                                    return Err(OasisError::Backend(
-                                        "HTTP/2: PROTOCOL_ERROR on MAX_FRAME_SIZE".into(),
-                                    ));
-                                }
+                            SETTINGS_MAX_FRAME_SIZE if !(16_384..=16_777_215).contains(&val) => {
+                                let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                                return Err(OasisError::Backend(
+                                    "HTTP/2: PROTOCOL_ERROR on MAX_FRAME_SIZE".into(),
+                                ));
                             },
-                            SETTINGS_ENABLE_PUSH => {
-                                if val > 1 {
-                                    let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
-                                    return Err(OasisError::Backend(
-                                        "HTTP/2: PROTOCOL_ERROR on ENABLE_PUSH".into(),
-                                    ));
-                                }
+                            SETTINGS_ENABLE_PUSH if val > 1 => {
+                                let _ = send_goaway(stream, 0, ERROR_CODE_PROTOCOL_ERROR);
+                                return Err(OasisError::Backend(
+                                    "HTTP/2: PROTOCOL_ERROR on ENABLE_PUSH".into(),
+                                ));
                             },
                             _ => {},
                         }
@@ -601,13 +595,13 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     stream_closed = true;
                 }
             },
+            FRAME_WINDOW_UPDATE if payload.len() != 4 => {
+                let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+                return Err(OasisError::Backend(
+                    "HTTP/2: WINDOW_UPDATE payload not 4 bytes".into(),
+                ));
+            },
             FRAME_WINDOW_UPDATE => {
-                if payload.len() != 4 {
-                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
-                    return Err(OasisError::Backend(
-                        "HTTP/2: WINDOW_UPDATE payload not 4 bytes".into(),
-                    ));
-                }
                 // We don't track our send window precisely — request
                 // bodies are capped at 65k above, so updates are moot.
             },
@@ -652,19 +646,17 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     ));
                 }
             },
-            FRAME_GOAWAY => {
-                // If the request stream was already fully received we're
-                // fine; otherwise bail out.
-                if !stream_closed {
-                    let code = if payload.len() >= 8 {
-                        u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]])
-                    } else {
-                        0
-                    };
-                    return Err(OasisError::Backend(
-                        format!("HTTP/2 GOAWAY from peer, code={code}").into(),
-                    ));
-                }
+            // If the request stream was already fully received we're
+            // fine; otherwise bail out.
+            FRAME_GOAWAY if !stream_closed => {
+                let code = if payload.len() >= 8 {
+                    u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]])
+                } else {
+                    0
+                };
+                return Err(OasisError::Backend(
+                    format!("HTTP/2 GOAWAY from peer, code={code}").into(),
+                ));
             },
             FRAME_PUSH_PROMISE => {
                 // RFC 9113 §6.6 — we sent ENABLE_PUSH=0, so this is a

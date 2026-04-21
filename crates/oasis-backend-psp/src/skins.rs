@@ -272,9 +272,9 @@ impl PspSkinPreset {
     /// Build the matching [`SkinFeatures`] (grid layout for PSP).
     pub(crate) fn skin_features() -> SkinFeatures {
         let mut f = SkinFeatures::default();
-        f.grid_cols = 4;
+        f.grid_cols = 5;
         f.grid_rows = 3;
-        f.icons_per_page = 12;
+        f.icons_per_page = 15;
         // Unified desktop: bottom bar shows taskbar buttons, not media tabs.
         f.show_media_tabs = false;
         f.show_page_dots = false;
