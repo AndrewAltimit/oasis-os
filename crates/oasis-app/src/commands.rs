@@ -197,6 +197,20 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 .with_features(&swapped.features);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
             state.wm.set_theme(swapped.theme.build_wm_theme());
+
+            // Component SDI objects (dashboard icons, status/bottom bar,
+            // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
+            // `Skin::swap_scaled` didn't destroy them. Their decorative
+            // attributes (gradient_top/bottom, text_shadow_*, stroke_*,
+            // shadow_level, border_radius, …) persist from the previous
+            // skin because each component's `update_sdi` only writes the
+            // attributes the *current* skin needs. That bleed-through is
+            // what caused icon labels to render invisibly (e.g. stale
+            // gradient fill on the label object from a prior skin). Drop
+            // those objects here so every component rebuilds them cleanly
+            // on the next frame.
+            clear_component_sdi_objects(sdi);
+
             let dash_config =
                 DashboardConfig::from_features(&swapped.features, &state.active_theme);
             let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
@@ -207,6 +221,16 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 StartMenuState::default_items(&state.active_theme),
                 &state.active_theme,
             );
+            state.ui.status_bar = oasis_core::statusbar::StatusBar::new();
+            state.ui.taskbar = oasis_core::taskbar::Taskbar::new();
+
+            // Mirror the parts of startup (`main()`) that depend on the
+            // theme rather than on the window surface: clear color and
+            // cursor scale are derived from the active theme, so they
+            // have to be re-read whenever the theme changes.
+            state.bg_color = state.active_theme.clear_color;
+            state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
+
             state
                 .terminal
                 .output_lines
@@ -221,6 +245,35 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
         Err(e) => {
             state.terminal.output_lines.push(format!("Skin error: {e}"));
         },
+    }
+}
+
+/// Destroy every SDI object owned by a UI component (dashboard icons,
+/// status/bottom bar, taskbar, start menu, toasts) so the next frame
+/// recreates them with fresh default attributes. This avoids decorative
+/// attribute bleed-through across skin swaps — the classic symptom is
+/// an icon label object keeping a gradient/shadow from the previous
+/// skin, which can render the label invisible under the new skin.
+///
+/// Layout objects owned by `skin.layout` are left alone; `Skin::swap_scaled`
+/// already destroyed them.
+fn clear_component_sdi_objects(sdi: &mut SdiRegistry) {
+    const COMPONENT_PREFIXES: &[&str] = &[
+        "icon_",            // dashboard icons (icon_label_*, icon_shadow_*, …)
+        "cursor_highlight", // dashboard selector (now invisible, but still rebuilt)
+        "bar_",             // status bar + bottom bar
+        "taskbar_",         // taskbar buttons + desktop indicator
+        "start_btn_",       // start menu button on the taskbar
+        "sm_",              // start menu panel, items, footer
+        "toast_",           // toast notifications
+    ];
+    let to_destroy: Vec<String> = sdi
+        .names()
+        .filter(|n| COMPONENT_PREFIXES.iter().any(|p| n.starts_with(p)))
+        .map(|n| n.to_string())
+        .collect();
+    for name in to_destroy {
+        let _ = sdi.destroy(&name);
     }
 }
 
