@@ -7,7 +7,6 @@
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
 
-use super::app_bridge::{AppCategory, PluginAppRegistration};
 use super::traits::{Plugin, PluginHost, PluginInfo};
 
 // ---------------------------------------------------------------------------
@@ -190,28 +189,11 @@ impl Plugin for NotepadPlugin {
         }
         host.commands.register(Box::new(NoteCmd));
 
-        // Register as a launchable dashboard app.
-        host.register_app(
-            PluginAppRegistration::new("Notepad", AppCategory::Utility, |path, _vfs| {
-                Box::new(crate::apps::simple_app::SimpleApp::new(
-                    "Notepad",
-                    path,
-                    vec![
-                        "Notepad (Plugin App)".to_string(),
-                        String::new(),
-                        "Use 'note write <name> <text>' to create notes.".to_string(),
-                        "Use 'note read <name>' to read them.".to_string(),
-                        "Use 'note list' to see all notes.".to_string(),
-                    ],
-                ))
-            })
-            .with_color(oasis_types::backend::Color {
-                r: 255,
-                g: 200,
-                b: 50,
-                a: 255,
-            }),
-        )?;
+        // The `note` terminal command is the user-facing surface for
+        // this plugin. We deliberately do not register a dashboard
+        // app — the GUI Text Editor is the primary note-taking UI
+        // and a second CLI-placeholder "Notepad" tile just duplicates
+        // the slot.
         Ok(())
     }
 
@@ -584,21 +566,18 @@ mod tests {
     }
 
     #[test]
-    fn notepad_registers_app() {
+    fn notepad_does_not_register_dashboard_app() {
+        // The Notepad plugin intentionally does NOT register a
+        // dashboard app — its `note` terminal command is the CLI
+        // surface, while the GUI Text Editor covers the dashboard
+        // slot. Keep this test to prevent accidental re-introduction
+        // of a second CLI-placeholder "Notepad" tile.
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-
-        // Notepad should have registered a dashboard app.
         let apps = mgr.plugin_apps();
-        let notepad_app = apps.iter().find(|a| a.title == "Notepad");
         assert!(
-            notepad_app.is_some(),
-            "Notepad plugin should register a dashboard app"
+            apps.iter().all(|a| a.title != "Notepad"),
+            "Notepad plugin must not register a dashboard app (duplicates Text Editor)",
         );
-
-        // The app factory should produce a working app.
-        let app = mgr.create_plugin_app("Notepad", &vfs);
-        assert!(app.is_some());
-        assert_eq!(app.unwrap().title(), "Notepad");
     }
 }

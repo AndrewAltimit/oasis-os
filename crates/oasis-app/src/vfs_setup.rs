@@ -32,10 +32,15 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     .expect("vfs write /etc/hosts.toml");
 
     vfs.mkdir("/apps").expect("vfs mkdir /apps");
+    // Dashboard apps: GUI-first. CLI-style placeholders (Network,
+    // Package Manager, System Monitor) are still registered in the
+    // app registry so the terminal / scripts can open them by name
+    // but they deliberately don't take up a dashboard slot — their
+    // output is static text and duplicates what `netstat`, `pkg`,
+    // and `sysmon` commands provide.
     for name in &[
         "File Manager",
         "Settings",
-        "Network",
         "Terminal",
         "Music Player",
         "Internet Radio",
@@ -45,8 +50,6 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Clock",
         "Paint",
         "Games",
-        "Package Manager",
-        "System Monitor",
         "Browser",
         "TV Guide",
     ] {
@@ -411,7 +414,6 @@ mod tests {
         let expected = [
             "File Manager",
             "Settings",
-            "Network",
             "Terminal",
             "Music Player",
             "Internet Radio",
@@ -421,14 +423,23 @@ mod tests {
             "Clock",
             "Paint",
             "Games",
-            "Package Manager",
-            "System Monitor",
             "Browser",
             "TV Guide",
         ];
         for name in &expected {
             let path = format!("/apps/{name}");
             assert!(vfs.readdir(&path).is_ok(), "app dir should exist: {path}",);
+        }
+        // CLI-style placeholders must NOT be seeded on the dashboard —
+        // they're kept in the registry so scripts can spawn them by
+        // name but they don't deserve a dashboard tile.
+        let cli_placeholders = ["Network", "Package Manager", "System Monitor"];
+        for name in &cli_placeholders {
+            let path = format!("/apps/{name}");
+            assert!(
+                vfs.readdir(&path).is_err(),
+                "CLI placeholder {name} should not have a dashboard dir",
+            );
         }
     }
 
