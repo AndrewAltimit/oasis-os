@@ -455,12 +455,11 @@ impl OasisWasm {
                                     self.fullscreen_app = Some(active_id);
                                 }
                             },
-                            AppAction::LaunchAppWithFile { .. } => {
-                                // Not yet wired for the WASM backend — the
-                                // WASM input loop doesn't plumb file-open
-                                // dispatch through open_runners. File
-                                // Manager stays in its generic viewer on
-                                // this backend for now.
+                            AppAction::LaunchAppWithFile {
+                                app_title,
+                                file_path,
+                            } => {
+                                self.launch_app_window_for_file(&app_title, &file_path);
                             },
                             AppAction::None => {},
                         }

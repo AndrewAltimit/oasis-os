@@ -703,7 +703,7 @@ impl TextEditorApp {
 
         let dd_x = label_x;
         let dd_y = menu_y + menu_h as i32;
-        let (dd_w, dd_h) = dropdown_size(menu);
+        let (dd_w, dd_h) = self.menu.dropdown_dimensions(menu);
 
         let bg = Color::rgb(236, 236, 236);
         let light = Color::rgb(255, 255, 255);
@@ -811,82 +811,61 @@ impl TextEditorApp {
     /// Hide every SDI object the notepad renderer creates so a
     /// subsequent app launch doesn't leak stale chrome onto the screen.
     pub(crate) fn hide_notepad_sdi(&self, sdi: &mut SdiRegistry) {
-        let fixed = [
-            "np_menu_bg",
-            "np_menu_border",
-            "np_area_bg",
-            "np_sel_bg",
-            "np_caret",
-            "np_status_bg",
-            "np_status_border",
-            "np_status_left",
-            "np_status_right",
-            "np_dd_bg",
-            "np_dd_border_l",
-            "np_dd_border_d",
-        ];
-        for name in fixed {
-            if let Ok(obj) = sdi.get_mut(name) {
-                obj.visible = false;
-            }
+        hide_notepad_sdi_objects(sdi);
+    }
+}
+
+/// Hide every SDI object the notepad renderer creates. Exposed as a
+/// standalone function so host code (e.g. the AppRunner cleanup path)
+/// can call it without holding a `TextEditorApp` reference.
+pub fn hide_notepad_sdi_objects(sdi: &mut SdiRegistry) {
+    let fixed = [
+        "np_menu_bg",
+        "np_menu_border",
+        "np_area_bg",
+        "np_sel_bg",
+        "np_caret",
+        "np_status_bg",
+        "np_status_border",
+        "np_status_left",
+        "np_status_right",
+        "np_dd_bg",
+        "np_dd_border_l",
+        "np_dd_border_d",
+    ];
+    for name in fixed {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
         }
-        for i in 0..menu_label_count() {
-            for name in [format!("np_menu_{i}"), format!("np_menu_hot_{i}")] {
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
-        }
-        for i in 0..NP_MAX_DROPDOWN_ENTRIES {
-            for kind in ["hot", "text", "shortcut", "sep"] {
-                let name = format!("np_dd_{kind}_{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
-        }
-        for i in 0..NP_MAX_VISIBLE_LINES {
-            let name = format!("np_line_{i}");
-            if !sdi.contains(&name) {
-                break;
-            }
+    }
+    for i in 0..menu_label_count() {
+        for name in [format!("np_menu_{i}"), format!("np_menu_hot_{i}")] {
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
+        }
+    }
+    for i in 0..NP_MAX_DROPDOWN_ENTRIES {
+        for kind in ["hot", "text", "shortcut", "sep"] {
+            let name = format!("np_dd_{kind}_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+    }
+    for i in 0..NP_MAX_VISIBLE_LINES {
+        let name = format!("np_line_{i}");
+        if !sdi.contains(&name) {
+            break;
+        }
+        if let Ok(obj) = sdi.get_mut(&name) {
+            obj.visible = false;
         }
     }
 }
 
 /// Maximum drop-down items the SDI renderer preallocates slots for.
 const NP_MAX_DROPDOWN_ENTRIES: usize = 16;
-
-/// Compute (width, height) of a drop-down based on its entries.
-/// Kept in sync with `oasis_ui::menu_bar` layout constants.
-fn dropdown_size(menu: &super::Menu) -> (u32, u32) {
-    let mut max_label = 0i32;
-    let mut has_shortcut = false;
-    let mut max_shortcut = 0i32;
-    let mut h = 4i32;
-    for e in &menu.entries {
-        match e {
-            super::MenuEntry::Action {
-                label, shortcut, ..
-            } => {
-                max_label = max_label.max(label.chars().count() as i32 * 7);
-                if let Some(sc) = shortcut {
-                    has_shortcut = true;
-                    max_shortcut = max_shortcut.max(sc.chars().count() as i32 * 7);
-                }
-                h += 20;
-            },
-            super::MenuEntry::Separator => {
-                h += 6;
-            },
-        }
-    }
-    let w = 22 + max_label + if has_shortcut { 16 + max_shortcut } else { 0 } + 22;
-    ((w as u32).max(120), (h + 4) as u32)
-}
 
 const fn menu_label_count() -> usize {
     4

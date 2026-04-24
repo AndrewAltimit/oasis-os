@@ -40,6 +40,21 @@ pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
 fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
     // Unload any previous track so memory doesn't grow across songs.
     stop_track(state);
+    // The `AudioBackend::stop` below is process-global; if the Internet
+    // Radio is currently streaming, starting a music track would silence
+    // it without updating the radio state machine. Tear the radio down
+    // explicitly so its UI reflects reality.
+    if state.radio_manager.state() != oasis_audio::radio::RadioState::Stopped {
+        let _ = state
+            .radio_manager
+            .process_request("stop", &mut state.audio_backend);
+        state.archive_catalog = None;
+        state.pending_catalog_fetch = None;
+        state.pending_source_fetch = None;
+        if let Some(mut src) = state.radio_source.take() {
+            src.disconnect();
+        }
+    }
 
     let data = match vfs.read(path) {
         Ok(d) => d,

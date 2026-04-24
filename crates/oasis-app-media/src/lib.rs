@@ -4,6 +4,8 @@
 //! into subdirectories, and open files for viewing. `BrowsingApp` implements
 //! the `App` trait with this shared logic.
 
+use std::cell::Cell;
+
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
@@ -11,6 +13,7 @@ use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
 use oasis_app_core::{App, AppAction, ContentState};
+use oasis_types::backend::TextureId;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -45,6 +48,15 @@ pub struct BrowsingApp {
     /// Populated by `open_file`; the backend owns the GPU texture, keyed
     /// by the viewed file path.
     decoded_image: Option<image::DecodedImage>,
+    /// Cached backend texture handle for the currently viewed image.
+    /// Uploaded lazily in `photo_ui::draw` on first frame after `open_file`
+    /// and reused across subsequent frames so we don't churn a GPU upload
+    /// per redraw.
+    pub(crate) cached_photo_texture: Cell<Option<TextureId>>,
+    /// Texture from a previous image that needs to be destroyed on the
+    /// next `photo_ui::draw` call (we don't have a backend reference on
+    /// the `open_file` path, so we defer the destroy to the render path).
+    pub(crate) stale_photo_texture: Cell<Option<TextureId>>,
     /// Raw audio bytes for the currently viewed track (music mode).
     /// The app loads the bytes during `open_file` so the host audio
     /// controller can feed them to the backend without re-reading VFS.
@@ -96,6 +108,8 @@ impl BrowsingApp {
             slideshow: false,
             slideshow_timer: 0,
             decoded_image: None,
+            cached_photo_texture: Cell::new(None),
+            stale_photo_texture: Cell::new(None),
             track_title: None,
             track_duration_str: None,
             track_size_bytes: None,
@@ -340,6 +354,12 @@ impl BrowsingApp {
         self.content.cursor = 0;
         // Clear any previous view-specific state.
         self.decoded_image = None;
+        // Hand the previous texture to the render path so it can be
+        // destroyed on the next frame; clear the active slot so the new
+        // image is re-uploaded.
+        if let Some(prev) = self.cached_photo_texture.take() {
+            self.stale_photo_texture.set(Some(prev));
+        }
         self.track_title = None;
         self.track_duration_str = None;
         self.track_size_bytes = None;

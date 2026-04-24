@@ -22,6 +22,7 @@ mod render;
 
 pub use buffer::{EditOperation, EditorBuffer};
 pub use highlight::{FileType, detect_file_type};
+pub use render::hide_notepad_sdi_objects;
 
 // ---------------------------------------------------------------
 // EditorMode
@@ -287,8 +288,11 @@ impl App for TextEditorApp {
     }
 
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
-        // Layout constants — must mirror `draw_notepad`.
-        let title_h = 20i32;
+        // Layout constants — must mirror `draw_notepad`. The title bar
+        // height is pulled from the active theme (cached during the last
+        // `update_layout`) and floored at 18 so it agrees with the renderer
+        // for skins that specify a very small bar.
+        let title_h = self.content.cached_title_bar_height.max(18) as i32;
         let menu_h = 18i32;
         let menu_y = title_h;
         let area_top = title_h + menu_h;

@@ -1,9 +1,11 @@
 //! Photo Viewer window rendering: actual image pixels + overlay chrome.
 //!
-//! Uploads the decoded RGBA buffer to the backend as a texture on every
-//! frame (backends already dedupe redundant uploads internally), then
-//! blits it centered with aspect-preserving fit-or-zoom, and draws a
-//! small filename/dimensions footer on top.
+//! Uploads the decoded RGBA buffer to the backend as a texture once per
+//! opened image (cached in `BrowsingApp::cached_photo_texture`), then
+//! blits it centered with aspect-preserving fit-or-zoom each frame, and
+//! draws a small filename/dimensions footer on top. `open_file` parks
+//! the previous texture in `stale_photo_texture` so we can destroy it
+//! here on the first render of the new image.
 
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
@@ -27,13 +29,25 @@ pub fn draw(
     let footer_h: u32 = 18;
     let img_h = ch.saturating_sub(footer_h);
 
+    // Destroy any texture left over from a previous image. `open_file`
+    // stashes the old handle here because it doesn't have backend access.
+    if let Some(stale) = app.stale_photo_texture.take() {
+        let _ = backend.destroy_texture(stale);
+    }
+
     if let Some(img) = app.decoded_image() {
-        let tex = match backend.load_texture(img.width, img.height, &img.rgba) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("photo viewer: load_texture failed: {e}");
-                draw_footer(app, cx, cy, cw, ch, footer_h, backend, at)?;
-                return Ok(());
+        let tex = match app.cached_photo_texture.get() {
+            Some(t) => t,
+            None => match backend.load_texture(img.width, img.height, &img.rgba) {
+                Ok(t) => {
+                    app.cached_photo_texture.set(Some(t));
+                    t
+                },
+                Err(e) => {
+                    log::warn!("photo viewer: load_texture failed: {e}");
+                    draw_footer(app, cx, cy, cw, ch, footer_h, backend, at)?;
+                    return Ok(());
+                },
             },
         };
 
@@ -52,7 +66,6 @@ pub fn draw(
         let draw_y = cy + ((img_h as i32 - draw_h as i32) / 2);
 
         let _ = backend.blit(tex, draw_x, draw_y, draw_w, draw_h);
-        let _ = backend.destroy_texture(tex);
     } else {
         // Couldn't decode — show a centered placeholder with the
         // metadata we do have.
