@@ -39,9 +39,10 @@ pub fn decode(data: &[u8]) -> Option<DecodedImage> {
 
 fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let mut decoder = png::Decoder::new(data);
-    // Expand palettes and sub-byte grayscale to full RGB/RGBA so we
-    // always get a known-sized output.
-    decoder.set_transformations(png::Transformations::EXPAND);
+    // EXPAND: promote palettes and sub-byte grayscale to 8-bit channels.
+    // STRIP_16: downsample 16-bit channels to 8-bit so the match arms
+    // below can assume 1 byte per channel.
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
     let info = reader.info();
     let (w, h) = (info.width, info.height);
