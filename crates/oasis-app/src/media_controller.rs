@@ -81,7 +81,17 @@ fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
 
 fn stop_track(state: &mut AppState) {
     if let Some(track) = state.media_track.take() {
-        let _ = state.audio_backend.stop();
+        // `AudioBackend::stop()` is process-global: it clears the shared
+        // audio stream buffer. If TV Guide is concurrently streaming
+        // (windowed multi-window mode), calling it here would silence
+        // the video's audio mid-playback while leaving its state machine
+        // thinking it's still live. `unload_track` already issues an
+        // internal `stop()` when the music track is the current one, so
+        // we only need the explicit call when no other audio consumer
+        // is active.
+        if state.tv_audio_track.is_none() {
+            let _ = state.audio_backend.stop();
+        }
         let _ = state.audio_backend.unload_track(track);
     }
 }
