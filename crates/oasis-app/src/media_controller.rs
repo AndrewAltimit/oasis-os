@@ -40,11 +40,20 @@ pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
 fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
     // Unload any previous track so memory doesn't grow across songs.
     stop_track(state);
-    // The `AudioBackend::stop` below is process-global; if the Internet
-    // Radio is currently streaming, starting a music track would silence
-    // it without updating the radio state machine. Tear the radio down
-    // explicitly so its UI reflects reality.
-    if state.radio_manager.state() != oasis_audio::radio::RadioState::Stopped {
+    // If Internet Radio is currently streaming, tear it down so its UI
+    // reflects reality after music takes over. `RadioManager::stop`
+    // internally calls `AudioBackend::stop()` which is process-global
+    // (it clears the shared SDL audio stream), so guard it with
+    // `state.tv_audio_track.is_none()` — otherwise TV Guide video
+    // audio would be silenced mid-playback in windowed multi-window
+    // mode while its state machine stays oblivious. If TV Guide is the
+    // active audio consumer, we skip the radio teardown entirely;
+    // radio's RadioState stays `Playing` until the user explicitly
+    // stops it, but the subsequent `play(music_track)` swaps
+    // `current_track` away from radio so no audio interleaves.
+    if state.radio_manager.state() != oasis_audio::radio::RadioState::Stopped
+        && state.tv_audio_track.is_none()
+    {
         let _ = state
             .radio_manager
             .process_request("stop", &mut state.audio_backend);
