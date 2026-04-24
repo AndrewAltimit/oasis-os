@@ -14,7 +14,14 @@ use oasis_core::vfs::{MemoryVfs, Vfs};
 
 use crate::app_state::AppState;
 
-/// Poll the Music Player IPC path and action any request.
+/// Poll the Music Player IPC path and action every pending request.
+///
+/// The IPC file is newline-delimited: each request occupies one line,
+/// and the controller drains them all per tick, then rewrites the
+/// buffer with any lines it did not recognise (so a future controller
+/// sharing the path — e.g. a radio consumer — still sees its own
+/// payload). This prevents the "rapidly click two tracks in one tick
+/// and one of them gets silently dropped" race.
 pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
     let Ok(data) = vfs.read(MEDIA_REQUEST_PATH) else {
         return;
@@ -22,18 +29,39 @@ pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
     if data.is_empty() {
         return;
     }
-    let request = String::from_utf8_lossy(&data).trim().to_string();
-    // Only consume lines we recognize; leave unknown payloads for other
-    // controllers that share the path.
-    if !(request.starts_with("play_file ") || request == "stop") {
+    let text = String::from_utf8_lossy(&data).into_owned();
+
+    let mut unhandled: Vec<&str> = Vec::new();
+    let mut touched = false;
+    // Collect owned copies of consumed lines first so the borrow on
+    // `text` (from the `split` iterator) ends before we call
+    // `play_file`, which needs `vfs` mutably.
+    let mut to_process: Vec<String> = Vec::new();
+    for line in text.split('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("play_file ") || trimmed == "stop" {
+            to_process.push(trimmed.to_string());
+            touched = true;
+        } else {
+            unhandled.push(line);
+        }
+    }
+
+    if !touched {
         return;
     }
-    let _ = vfs.write(MEDIA_REQUEST_PATH, b"");
+    let remainder = unhandled.join("\n");
+    let _ = vfs.write(MEDIA_REQUEST_PATH, remainder.as_bytes());
 
-    if let Some(path) = request.strip_prefix("play_file ") {
-        play_file(state, vfs, path);
-    } else if request == "stop" {
-        stop_track(state);
+    for req in to_process {
+        if let Some(path) = req.strip_prefix("play_file ") {
+            play_file(state, vfs, path);
+        } else if req == "stop" {
+            stop_track(state);
+        }
     }
 }
 

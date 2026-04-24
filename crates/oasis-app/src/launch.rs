@@ -121,7 +121,18 @@ pub fn launch_app_window_for_file(
         // Replace the existing runner so the file is pre-loaded.
         let _ = wm.focus_window(&win_id, sdi);
         if let Some(entry_mut) = open_runners.iter_mut().find(|(id, _)| *id == win_id) {
-            entry_mut.1 = AppRunner::launch_with_file(&entry, file_path, vfs);
+            let new_runner = AppRunner::launch_with_file(&entry, file_path, vfs);
+            // Hand any pending GPU textures from the outgoing runner's
+            // BrowsingApp (Photo Viewer) over to the new one so they
+            // get destroyed on its next render frame — otherwise the
+            // old textures would leak as the runner is dropped.
+            if let (Some(old_app), Some(new_app)) = (
+                entry_mut.1.delegate_as::<oasis_app_media::BrowsingApp>(),
+                new_runner.delegate_as::<oasis_app_media::BrowsingApp>(),
+            ) {
+                new_app.inherit_textures_from(old_app);
+            }
+            entry_mut.1 = new_runner;
         } else {
             open_runners.push((win_id, AppRunner::launch_with_file(&entry, file_path, vfs)));
         }

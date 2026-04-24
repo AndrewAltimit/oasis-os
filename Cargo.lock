@@ -1157,6 +1157,7 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "log",
+ "oasis-app-media",
  "oasis-audio",
  "oasis-core",
  "oasis-platform",

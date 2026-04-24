@@ -29,9 +29,11 @@ pub fn draw(
     let footer_h: u32 = 18;
     let img_h = ch.saturating_sub(footer_h);
 
-    // Destroy any texture left over from a previous image. `open_file`
-    // stashes the old handle here because it doesn't have backend access.
-    if let Some(stale) = app.stale_photo_texture.take() {
+    // Destroy any textures left over from previous images. `open_file`
+    // and `inherit_textures_from` stash old handles here because they
+    // don't have backend access; a runner that cycles through several
+    // photos in a tick can accumulate multiple entries.
+    for stale in app.stale_photo_textures.borrow_mut().drain(..) {
         let _ = backend.destroy_texture(stale);
     }
 

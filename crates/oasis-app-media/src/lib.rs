@@ -4,7 +4,7 @@
 //! into subdirectories, and open files for viewing. `BrowsingApp` implements
 //! the `App` trait with this shared logic.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
@@ -53,10 +53,12 @@ pub struct BrowsingApp {
     /// and reused across subsequent frames so we don't churn a GPU upload
     /// per redraw.
     pub(crate) cached_photo_texture: Cell<Option<TextureId>>,
-    /// Texture from a previous image that needs to be destroyed on the
-    /// next `photo_ui::draw` call (we don't have a backend reference on
-    /// the `open_file` path, so we defer the destroy to the render path).
-    pub(crate) stale_photo_texture: Cell<Option<TextureId>>,
+    /// Textures from previous images that need to be destroyed on the
+    /// next `photo_ui::draw` call. A queue — not a single slot — so
+    /// that `BrowsingApp::inherit_textures_from` can hand off multiple
+    /// pending textures when a runner is swapped out by
+    /// `launch_app_window_for_file`.
+    pub(crate) stale_photo_textures: RefCell<Vec<TextureId>>,
     /// Raw audio bytes for the currently viewed track (music mode).
     /// The app loads the bytes during `open_file` so the host audio
     /// controller can feed them to the backend without re-reading VFS.
@@ -109,7 +111,7 @@ impl BrowsingApp {
             slideshow_timer: 0,
             decoded_image: None,
             cached_photo_texture: Cell::new(None),
-            stale_photo_texture: Cell::new(None),
+            stale_photo_textures: RefCell::new(Vec::new()),
             track_title: None,
             track_duration_str: None,
             track_size_bytes: None,
@@ -119,6 +121,20 @@ impl BrowsingApp {
     /// Decoded image for the currently viewed photo, if any.
     pub fn decoded_image(&self) -> Option<&image::DecodedImage> {
         self.decoded_image.as_ref()
+    }
+
+    /// Move any pending GPU textures from `other` into this app's
+    /// stale queue so they get destroyed on the next render frame.
+    /// Used by `launch_app_window_for_file` when it swaps in a new
+    /// `BrowsingApp` for the same window slot — without this the old
+    /// app's cached texture would leak in the backend's texture map.
+    pub fn inherit_textures_from(&self, other: &BrowsingApp) {
+        if let Some(t) = other.cached_photo_texture.take() {
+            self.stale_photo_textures.borrow_mut().push(t);
+        }
+        let mut drained: Vec<TextureId> =
+            other.stale_photo_textures.borrow_mut().drain(..).collect();
+        self.stale_photo_textures.borrow_mut().append(&mut drained);
     }
 
     /// Track display info for the currently open music track.
@@ -358,7 +374,7 @@ impl BrowsingApp {
         // destroyed on the next frame; clear the active slot so the new
         // image is re-uploaded.
         if let Some(prev) = self.cached_photo_texture.take() {
-            self.stale_photo_texture.set(Some(prev));
+            self.stale_photo_textures.borrow_mut().push(prev);
         }
         self.track_title = None;
         self.track_duration_str = None;
@@ -419,10 +435,22 @@ fn parse_audio_metadata(path: &str, data: &[u8]) -> (String, Option<String>) {
     (title, duration)
 }
 
-/// Small ID3v2 TIT2 (title) reader. Returns `None` if not present —
-/// just enough to show a nice track title when one is available.
+/// Small ID3v2 TIT2 (title) reader. Handles the two tag-size encodings
+/// that real-world MP3s use:
+///
+/// * v2.3 (`data[3] == 3`): frame sizes are plain big-endian `u32`.
+/// * v2.4 (`data[3] == 4`): frame sizes are 28-bit syncsafe integers
+///   (same shape as the tag header size).
+///
+/// Returns `None` for older v2.2, unknown versions, or malformed data.
 fn id3v2_title(data: &[u8]) -> Option<String> {
     if data.len() < 10 || &data[..3] != b"ID3" {
+        return None;
+    }
+    let major = data[3];
+    // We know how to parse v2.3 and v2.4 frames. v2.2 uses 3-byte
+    // frame IDs with 3-byte sizes — different layout; skip it.
+    if major != 3 && major != 4 {
         return None;
     }
     let size = ((data[6] as usize) << 21)
@@ -440,8 +468,12 @@ fn id3v2_title(data: &[u8]) -> Option<String> {
         if frame_id[0] == 0 {
             break;
         }
-        let frame_size =
-            u32::from_be_bytes([tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]]) as usize;
+        let size_bytes = [tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]];
+        let frame_size = if major == 4 {
+            syncsafe_to_usize(size_bytes)
+        } else {
+            u32::from_be_bytes(size_bytes) as usize
+        };
         let body_start = i + 10;
         let body_end = body_start + frame_size;
         if body_end > tag.len() {
@@ -461,6 +493,14 @@ fn id3v2_title(data: &[u8]) -> Option<String> {
         i = body_end;
     }
     None
+}
+
+/// Decode a 4-byte ID3 syncsafe integer (7 bits per byte).
+fn syncsafe_to_usize(bytes: [u8; 4]) -> usize {
+    ((bytes[0] as usize) << 21)
+        | ((bytes[1] as usize) << 14)
+        | ((bytes[2] as usize) << 7)
+        | (bytes[3] as usize)
 }
 
 /// Estimate MP3 duration from first-frame bitrate + file size. Close
@@ -675,6 +715,94 @@ impl App for BrowsingApp {
 mod tests {
     use super::*;
     use oasis_vfs::MemoryVfs;
+
+    /// Build a minimal ID3v2 tag containing one TIT2 frame.
+    /// `major` is the version byte (3 for v2.3, 4 for v2.4).
+    fn make_id3_tag(title: &str, major: u8) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.push(0u8); // encoding = ISO-8859-1
+        payload.extend_from_slice(title.as_bytes());
+        let frame_size = payload.len() as u32;
+
+        let size_bytes: [u8; 4] = if major == 4 {
+            [
+                ((frame_size >> 21) & 0x7F) as u8,
+                ((frame_size >> 14) & 0x7F) as u8,
+                ((frame_size >> 7) & 0x7F) as u8,
+                (frame_size & 0x7F) as u8,
+            ]
+        } else {
+            frame_size.to_be_bytes()
+        };
+
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"TIT2");
+        frame.extend_from_slice(&size_bytes);
+        frame.extend_from_slice(&[0u8, 0u8]); // flags
+        frame.extend_from_slice(&payload);
+
+        let tag_size = frame.len() as u32;
+        // Tag size is always syncsafe (both v2.3 and v2.4).
+        let tag_size_bytes = [
+            ((tag_size >> 21) & 0x7F) as u8,
+            ((tag_size >> 14) & 0x7F) as u8,
+            ((tag_size >> 7) & 0x7F) as u8,
+            (tag_size & 0x7F) as u8,
+        ];
+
+        let mut tag = Vec::new();
+        tag.extend_from_slice(b"ID3");
+        tag.push(major);
+        tag.push(0); // minor
+        tag.push(0); // flags
+        tag.extend_from_slice(&tag_size_bytes);
+        tag.extend_from_slice(&frame);
+        tag
+    }
+
+    #[test]
+    fn id3v2_3_title_parses() {
+        let tag = make_id3_tag("Hello World", 3);
+        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Hello World"));
+    }
+
+    #[test]
+    fn id3v2_4_title_parses_syncsafe_frame_size() {
+        // v2.4 uses syncsafe for frame sizes too — the old code read
+        // them as plain big-endian and tripped `body_end > tag.len()`.
+        let tag = make_id3_tag("Modern MP3", 4);
+        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Modern MP3"));
+    }
+
+    #[test]
+    fn id3v2_returns_none_for_unknown_version() {
+        // v2.2 has a different frame layout we don't support.
+        let mut tag = make_id3_tag("Old", 3);
+        tag[3] = 2; // pretend v2.2
+        assert!(super::id3v2_title(&tag).is_none());
+    }
+
+    #[test]
+    fn inherit_textures_from_drains_old_app() {
+        // Two BrowsingApps, old one has a cached texture + one in its
+        // stale queue. After inherit the new app owns both.
+        let vfs = setup_vfs();
+        let old = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        let new = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        old.cached_photo_texture
+            .set(Some(oasis_types::backend::TextureId(11)));
+        old.stale_photo_textures
+            .borrow_mut()
+            .push(oasis_types::backend::TextureId(22));
+        new.inherit_textures_from(&old);
+        assert!(old.cached_photo_texture.get().is_none());
+        assert!(old.stale_photo_textures.borrow().is_empty());
+        let new_stale = new.stale_photo_textures.borrow();
+        assert_eq!(new_stale.len(), 2);
+        let ids: Vec<u64> = new_stale.iter().map(|t| t.0).collect();
+        assert!(ids.contains(&11));
+        assert!(ids.contains(&22));
+    }
 
     fn setup_vfs() -> MemoryVfs {
         let mut vfs = MemoryVfs::new();

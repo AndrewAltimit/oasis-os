@@ -134,11 +134,15 @@ fn fit_within(img: DecodedImage, max: u32) -> DecodedImage {
     let nw = ((w as f32 * scale) as u32).max(1);
     let nh = ((h as f32 * scale) as u32).max(1);
     let mut out = Vec::with_capacity((nw * nh * 4) as usize);
+    // Use u64 for the intermediate product: `y * h` wraps u32 for
+    // inputs above ~4 megapixels in a single dimension, which is well
+    // inside the `MAX_DIMENSION` cap but still worth being correct.
+    let (w64, h64, nw64, nh64) = (w as u64, h as u64, nw as u64, nh as u64);
     for y in 0..nh {
-        let src_y = ((y * h) / nh).min(h - 1);
+        let src_y = (((y as u64) * h64) / nh64).min(h64 - 1) as u32;
         for x in 0..nw {
-            let src_x = ((x * w) / nw).min(w - 1);
-            let idx = ((src_y * w + src_x) * 4) as usize;
+            let src_x = (((x as u64) * w64) / nw64).min(w64 - 1) as u32;
+            let idx = ((src_y as u64 * w64 + src_x as u64) * 4) as usize;
             out.extend_from_slice(&img.rgba[idx..idx + 4]);
         }
     }

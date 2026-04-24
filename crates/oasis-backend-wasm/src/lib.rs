@@ -1195,7 +1195,16 @@ impl OasisWasm {
         if self.wm.get_window(&win_id).is_some() {
             let _ = self.wm.focus_window(&win_id, &mut self.sdi);
             if let Some(slot) = self.open_runners.iter_mut().find(|(id, _)| *id == win_id) {
-                slot.1 = AppRunner::launch_with_file(&entry, file_path, &self.vfs);
+                let new_runner = AppRunner::launch_with_file(&entry, file_path, &self.vfs);
+                // Transfer pending Photo Viewer GPU textures so they
+                // don't leak when the outgoing runner is dropped.
+                if let (Some(old_app), Some(new_app)) = (
+                    slot.1.delegate_as::<oasis_app_media::BrowsingApp>(),
+                    new_runner.delegate_as::<oasis_app_media::BrowsingApp>(),
+                ) {
+                    new_app.inherit_textures_from(old_app);
+                }
+                slot.1 = new_runner;
             } else {
                 self.open_runners.push((
                     win_id,

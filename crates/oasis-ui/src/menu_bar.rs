@@ -82,6 +82,15 @@ impl Menu {
 }
 
 /// Top-level menu bar state + renderer.
+///
+/// `hovered_item` is exposed (and read by the renderer) so hosts
+/// that *do* have mouse-move input can light up the highlighted
+/// row before the user clicks. The current desktop input dispatcher
+/// only plumbs click + text + wheel to app windows — no
+/// pointer-move — so most hosts will leave `hovered_item = None`
+/// and the drop-down simply renders without a hover row. The
+/// [`MenuBar::pointer_move`] helper is provided for any future
+/// dispatcher that wants to wire it in.
 #[derive(Debug, Clone)]
 pub struct MenuBar {
     pub menus: Vec<Menu>,
@@ -291,7 +300,13 @@ impl MenuBar {
     /// Update the hover state for the currently-open drop-down so the
     /// next `draw` highlights the correct item. Safe to call with any
     /// (x, y); a point outside the drop-down clears the hover.
-    pub fn update_hover(&mut self, x: i32, y: i32, bar_x: i32, bar_y: i32, bar_h: u32) {
+    ///
+    /// This is a hook for hosts that have mouse-move input available.
+    /// OASIS's desktop dispatcher currently forwards only clicks, text,
+    /// and mouse-wheel to app windows; when/if a pointer-move event
+    /// variant is added, call this from the dispatcher to enable live
+    /// hover highlights.
+    pub fn pointer_move(&mut self, x: i32, y: i32, bar_x: i32, bar_y: i32, bar_h: u32) {
         self.hovered_item = None;
         let Some(idx) = self.open else {
             return;
@@ -547,9 +562,9 @@ mod tests {
     fn hover_tracks_item() {
         let mut bar = demo_bar();
         bar.open = Some(0);
-        bar.update_hover(20, 50, 0, 20, 18);
+        bar.pointer_move(20, 50, 0, 20, 18);
         assert_eq!(bar.hovered_item, Some(0)); // "New" is item 0
-        bar.update_hover(20, 500, 0, 20, 18);
+        bar.pointer_move(20, 500, 0, 20, 18);
         assert_eq!(bar.hovered_item, None);
     }
 
