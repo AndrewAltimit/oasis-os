@@ -6,7 +6,7 @@
 
 use std::any::Any;
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
+use oasis_app_core::render::{hide_app_sdi, render_app_chrome};
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
@@ -156,7 +156,16 @@ impl App for TextEditorApp {
         self.content.update_layout(at);
         self.content.animate_selection(0.3);
         render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
+        // Render Notepad-style chrome (menu bar, text area, status bar)
+        // and our own per-line SDI objects. We deliberately do NOT call
+        // `render_content_sdi` — its listing-style output is wrong for
+        // an editor and would leave a stale "> 1 | text" row visible.
+        self.render_notepad_sdi(sdi, at);
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+        self.hide_notepad_sdi(sdi);
     }
 
     fn draw_windowed(
@@ -173,10 +182,6 @@ impl App for TextEditorApp {
         // pipeline is used for known file types; plain files render
         // with a single foreground colour.
         self.draw_notepad(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn take_pending_request(&mut self) -> Option<(String, String)> {
