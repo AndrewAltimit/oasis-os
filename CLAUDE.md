@@ -99,7 +99,6 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-core   (shared app framework: AppTrait, common utilities)
 ├── oasis-app-games  (Games app)
 ├── oasis-app-paint  (Paint app)
-├── oasis-app-clock  (Clock app)
 ├── oasis-app-text-editor (Text Editor app)
 ├── oasis-app-calculator  (Calculator app)
 ├── oasis-app-media       (Music Player + Photo Viewer apps)
@@ -177,7 +176,7 @@ The framework is split into 37 crates (35 workspace members + 2 excluded PSP cra
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
-- **oasis-app-*** -- 11 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-clock`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
+- **oasis-app-*** -- 10 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
 - **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
 
 ### Font Rendering

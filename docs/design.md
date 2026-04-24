@@ -118,7 +118,6 @@ oasis-os/
 |   +-- oasis-app-radio/             # Internet Radio app
 |   +-- oasis-app-games/             # Games app
 |   +-- oasis-app-paint/             # Paint app
-|   +-- oasis-app-clock/             # Clock app
 |   +-- oasis-app-text-editor/       # Text Editor app
 |   +-- oasis-app-calculator/        # Calculator app
 |   +-- oasis-core/                  # Coordination: dashboard, agent, plugin, script (apps extracted to oasis-app-* crates)
@@ -203,7 +202,6 @@ members = [
     "crates/oasis-app-core",
     "crates/oasis-app-games",
     "crates/oasis-app-paint",
-    "crates/oasis-app-clock",
     "crates/oasis-app-text-editor",
     "crates/oasis-app-calculator",
     "crates/oasis-app-media",
@@ -281,7 +279,6 @@ oasis-js = { path = "crates/oasis-js" }
 oasis-app-core = { path = "crates/oasis-app-core" }
 oasis-app-games = { path = "crates/oasis-app-games" }
 oasis-app-paint = { path = "crates/oasis-app-paint" }
-oasis-app-clock = { path = "crates/oasis-app-clock" }
 oasis-app-text-editor = { path = "crates/oasis-app-text-editor" }
 oasis-app-calculator = { path = "crates/oasis-app-calculator" }
 oasis-app-media = { path = "crates/oasis-app-media" }

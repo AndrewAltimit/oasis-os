@@ -61,9 +61,6 @@ pub(crate) const APP_REGISTRY: &[(&str, AppFactory)] = &[
     ("Calculator", |path, _vfs| {
         Box::new(oasis_app_calculator::CalculatorApp::new(path))
     }),
-    ("Clock", |path, _vfs| {
-        Box::new(oasis_app_clock::ClockApp::new(path))
-    }),
     ("Paint", |path, _vfs| {
         Box::new(oasis_app_paint::PaintApp::new(path))
     }),

@@ -23,7 +23,6 @@ test-data = []
 oasis-app-core = { workspace = true }
 oasis-app-games = { workspace = true }
 oasis-app-paint = { workspace = true }
-oasis-app-clock = { workspace = true }
 oasis-app-text-editor = { workspace = true }
 oasis-app-calculator = { workspace = true }
 oasis-app-media = { workspace = true }
