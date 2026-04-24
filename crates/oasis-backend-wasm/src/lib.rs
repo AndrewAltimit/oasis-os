@@ -1177,6 +1177,61 @@ impl OasisWasm {
         self.active_transition = Some(self.make_transition());
     }
 
+    /// Launch an app window pre-loaded with a file. Mirrors
+    /// [`launch_app_window`] but calls `AppRunner::launch_with_file` so
+    /// File Manager's Confirm-on-typed-file flow can hand off to
+    /// Photo Viewer / Music Player / Text Editor under the WASM backend.
+    fn launch_app_window_for_file(&mut self, app_title: &str, file_path: &str) {
+        let win_w = (self.width * 380 + 240) / 480;
+        let win_h = (self.height * 220 + 136) / 272;
+        let win_id = app_title.to_lowercase().replace(' ', "_");
+        let entry = AppEntry {
+            title: app_title.to_string(),
+            path: format!("/apps/{app_title}"),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+
+        if self.wm.get_window(&win_id).is_some() {
+            let _ = self.wm.focus_window(&win_id, &mut self.sdi);
+            if let Some(slot) = self.open_runners.iter_mut().find(|(id, _)| *id == win_id) {
+                let new_runner = AppRunner::launch_with_file(&entry, file_path, &self.vfs);
+                // Transfer pending Photo Viewer GPU textures so they
+                // don't leak when the outgoing runner is dropped.
+                if let (Some(old_app), Some(new_app)) = (
+                    slot.1.delegate_as::<oasis_app_media::BrowsingApp>(),
+                    new_runner.delegate_as::<oasis_app_media::BrowsingApp>(),
+                ) {
+                    new_app.inherit_textures_from(old_app);
+                }
+                slot.1 = new_runner;
+            } else {
+                self.open_runners.push((
+                    win_id,
+                    AppRunner::launch_with_file(&entry, file_path, &self.vfs),
+                ));
+            }
+            return;
+        }
+
+        let wc = WindowConfig {
+            id: win_id.clone(),
+            title: app_title.to_string(),
+            x: None,
+            y: None,
+            width: win_w,
+            height: win_h,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        let _ = self.wm.create_window(&wc, &mut self.sdi);
+        self.open_runners.push((
+            win_id,
+            AppRunner::launch_with_file(&entry, file_path, &self.vfs),
+        ));
+    }
+
     fn make_transition(&self) -> TransitionState {
         transition::fade_in_custom(
             self.width,

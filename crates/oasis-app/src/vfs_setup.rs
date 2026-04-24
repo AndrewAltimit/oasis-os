@@ -1,5 +1,16 @@
 use oasis_core::vfs::MemoryVfs;
 
+// Bundled sample media — shipped in the binary so every fresh VFS has real
+// content in My Music / My Pictures / My Documents without needing to run
+// `samples/fetch-samples.sh`. Keep these small (we embed them into the
+// binary); larger samples can still be dropped into the on-disk `samples/`
+// tree and loaded via `spawn_disk_sample_loader`.
+const SAMPLE_WELCOME_TXT: &[u8] = include_bytes!("../assets/samples/welcome.txt");
+const SAMPLE_NOTES_TXT: &[u8] = include_bytes!("../assets/samples/notes.txt");
+const SAMPLE_HELLO_SH: &[u8] = include_bytes!("../assets/samples/hello.sh");
+const SAMPLE_AMBIENT_MP3: &[u8] = include_bytes!("../assets/samples/ambient_dawn.mp3");
+const SAMPLE_SUNSET_PNG: &[u8] = include_bytes!("../assets/samples/oasis_sample.png");
+
 /// Create demo VFS content including fake apps.
 pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     use oasis_core::vfs::Vfs;
@@ -8,11 +19,8 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     vfs.mkdir("/home/user").expect("vfs mkdir /home/user");
     vfs.mkdir("/etc").expect("vfs mkdir /etc");
     vfs.mkdir("/tmp").expect("vfs mkdir /tmp");
-    vfs.write(
-        "/home/user/readme.txt",
-        b"Welcome to OASIS_OS!\nType 'help' for available commands.",
-    )
-    .expect("vfs write /home/user/readme.txt");
+    vfs.write("/home/user/readme.txt", SAMPLE_WELCOME_TXT)
+        .expect("vfs write /home/user/readme.txt");
     vfs.write("/etc/hostname", b"oasis")
         .expect("vfs write /etc/hostname");
     vfs.write("/etc/version", b"0.1.0")
@@ -24,16 +32,23 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     .expect("vfs write /etc/hosts.toml");
 
     vfs.mkdir("/apps").expect("vfs mkdir /apps");
+    // Dashboard apps: GUI-first. CLI-style placeholders (Network,
+    // Package Manager, System Monitor) are still registered in the
+    // app registry so the terminal / scripts can open them by name
+    // but they deliberately don't take up a dashboard slot — their
+    // output is static text and duplicates what `netstat`, `pkg`,
+    // and `sysmon` commands provide.
     for name in &[
         "File Manager",
         "Settings",
-        "Network",
         "Terminal",
         "Music Player",
         "Internet Radio",
         "Photo Viewer",
-        "Package Manager",
-        "System Monitor",
+        "Text Editor",
+        "Calculator",
+        "Paint",
+        "Games",
         "Browser",
         "TV Guide",
     ] {
@@ -259,46 +274,34 @@ out.textContent = html;
         .expect("vfs mkdir /home/user/music");
     vfs.mkdir("/home/user/photos")
         .expect("vfs mkdir /home/user/photos");
+    vfs.mkdir("/home/user/documents")
+        .expect("vfs mkdir /home/user/documents");
 
-    write_sample_placeholders(vfs);
+    write_bundled_samples(vfs);
 
     vfs.mkdir("/home/user/scripts")
         .expect("vfs mkdir /home/user/scripts");
-    vfs.write(
-        "/home/user/scripts/hello.sh",
-        b"# Demo script\necho Hello from OASIS_OS!\nstatus\npwd\n",
-    )
-    .expect("vfs write /home/user/scripts/hello.sh");
+    vfs.write("/home/user/scripts/hello.sh", SAMPLE_HELLO_SH)
+        .expect("vfs write /home/user/scripts/hello.sh");
 
     vfs.mkdir("/var").expect("vfs mkdir /var");
     vfs.mkdir("/var/audio").expect("vfs mkdir /var/audio");
+    vfs.mkdir("/var/app").expect("vfs mkdir /var/app");
 }
 
-/// Write placeholder files for samples (instant, no disk I/O).
-fn write_sample_placeholders(vfs: &mut MemoryVfs) {
+/// Install the bundled-in-binary sample files so a fresh VFS has
+/// working media for Photo Viewer, Music Player, and Text Editor.
+fn write_bundled_samples(vfs: &mut MemoryVfs) {
     use oasis_core::vfs::Vfs;
 
-    let music_files = ["ambient_dawn.mp3", "nightfall_theme.mp3"];
-    for name in &music_files {
-        let vfs_path = format!("/home/user/music/{name}");
-        vfs.write(
-            &vfs_path,
-            format!("(placeholder: run samples/fetch-samples.sh for real audio)\nFile: {name}\n")
-                .as_bytes(),
-        )
-        .expect("vfs write music placeholder");
-    }
-
-    let photo_files = ["sample_landscape.png"];
-    for name in &photo_files {
-        let vfs_path = format!("/home/user/photos/{name}");
-        vfs.write(
-            &vfs_path,
-            format!("(placeholder: run samples/fetch-samples.sh for real image)\nFile: {name}\n")
-                .as_bytes(),
-        )
-        .expect("vfs write photo placeholder");
-    }
+    vfs.write("/home/user/music/ambient_dawn.mp3", SAMPLE_AMBIENT_MP3)
+        .expect("vfs write /home/user/music/ambient_dawn.mp3");
+    vfs.write("/home/user/photos/oasis_sample.png", SAMPLE_SUNSET_PNG)
+        .expect("vfs write /home/user/photos/oasis_sample.png");
+    vfs.write("/home/user/documents/notes.txt", SAMPLE_NOTES_TXT)
+        .expect("vfs write /home/user/documents/notes.txt");
+    vfs.write("/home/user/documents/welcome.txt", SAMPLE_WELCOME_TXT)
+        .expect("vfs write /home/user/documents/welcome.txt");
 }
 
 /// Spawn a background thread that reads real sample files from disk.
@@ -311,6 +314,10 @@ pub fn spawn_disk_sample_loader() -> std::sync::mpsc::Receiver<(String, Vec<u8>)
     std::thread::spawn(move || {
         use std::path::Path;
 
+        // Optional on-disk samples (not shipped in the binary): fetched by
+        // `samples/fetch-samples.sh`. The bundled samples in
+        // `populate_demo_vfs` are already in the VFS; anything found here
+        // will replace or augment them.
         let samples_dir = Path::new("samples");
 
         let music_files = ["ambient_dawn.mp3", "nightfall_theme.mp3"];
@@ -406,19 +413,31 @@ mod tests {
         let expected = [
             "File Manager",
             "Settings",
-            "Network",
             "Terminal",
             "Music Player",
             "Internet Radio",
             "Photo Viewer",
-            "Package Manager",
-            "System Monitor",
+            "Text Editor",
+            "Calculator",
+            "Paint",
+            "Games",
             "Browser",
             "TV Guide",
         ];
         for name in &expected {
             let path = format!("/apps/{name}");
             assert!(vfs.readdir(&path).is_ok(), "app dir should exist: {path}",);
+        }
+        // CLI-style placeholders must NOT be seeded on the dashboard —
+        // they're kept in the registry so scripts can spawn them by
+        // name but they don't deserve a dashboard tile.
+        let cli_placeholders = ["Network", "Package Manager", "System Monitor"];
+        for name in &cli_placeholders {
+            let path = format!("/apps/{name}");
+            assert!(
+                vfs.readdir(&path).is_err(),
+                "CLI placeholder {name} should not have a dashboard dir",
+            );
         }
     }
 
@@ -509,6 +528,132 @@ mod tests {
         assert!(
             text.contains("briefcase"),
             "hosts.toml should contain 'briefcase', got: {text}",
+        );
+    }
+
+    #[test]
+    fn bundled_music_is_real_audio() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let mp3 = vfs
+            .read("/home/user/music/ambient_dawn.mp3")
+            .expect("bundled mp3 should exist");
+        // ID3v2 tag or MPEG frame sync — rules out the old placeholder
+        // text content we used to write here.
+        assert!(
+            mp3.starts_with(b"ID3") || (mp3.len() >= 2 && mp3[0] == 0xFF && mp3[1] & 0xE0 == 0xE0),
+            "ambient_dawn.mp3 should be real audio, got first bytes: {:?}",
+            &mp3[..mp3.len().min(4)]
+        );
+    }
+
+    #[test]
+    fn bundled_photo_is_real_image() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let png = vfs
+            .read("/home/user/photos/oasis_sample.png")
+            .expect("bundled png should exist");
+        assert!(
+            png.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "oasis_sample.png should be real PNG",
+        );
+    }
+
+    #[test]
+    fn bundled_documents_are_readable_text() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let welcome = vfs
+            .read("/home/user/documents/welcome.txt")
+            .expect("welcome.txt should exist");
+        let text = std::str::from_utf8(&welcome).unwrap();
+        assert!(text.contains("Welcome to OASIS_OS"));
+
+        let notes = vfs
+            .read("/home/user/documents/notes.txt")
+            .expect("notes.txt should exist");
+        let notes_text = std::str::from_utf8(&notes).unwrap();
+        assert!(notes_text.contains("scratchpad"));
+    }
+
+    // ---------------------------------------------------------------
+    // End-to-end dispatch tests against the real bundled VFS
+    // ---------------------------------------------------------------
+
+    /// Photo Viewer launches with the bundled sample pre-opened, and the
+    /// metadata text names the actual PNG dimensions.
+    #[test]
+    fn bundled_png_opens_in_photo_viewer() {
+        use oasis_app_media::BrowsingApp;
+        use oasis_core::apps::App;
+
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let app = BrowsingApp::photo_viewer_at(
+            "/apps/Photo Viewer",
+            "/home/user/photos/oasis_sample.png",
+            &vfs,
+        );
+        assert_eq!(
+            App::viewing_file(&app),
+            Some("/home/user/photos/oasis_sample.png")
+        );
+        assert!(app.lines().iter().any(|l| l.contains("PNG")));
+    }
+
+    /// Music Player opens the bundled MP3 and emits a `play_file` IPC so
+    /// `media_controller::tick` can kick off actual playback.
+    #[test]
+    fn bundled_mp3_opens_in_music_player_with_ipc() {
+        use oasis_app_media::{BrowsingApp, MEDIA_REQUEST_PATH};
+
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let mut app = BrowsingApp::music_player_at(
+            "/apps/Music Player",
+            "/home/user/music/ambient_dawn.mp3",
+            &vfs,
+        );
+        let req = app
+            .content
+            .pending_vfs_request
+            .take()
+            .expect("music player should emit play_file IPC");
+        assert_eq!(req.0, MEDIA_REQUEST_PATH);
+        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+    }
+
+    /// Text Editor opens a bundled document — routed through the
+    /// `AppRunner::launch_with_file` path to mirror what the real
+    /// application does when File Manager dispatches the file.
+    #[test]
+    fn bundled_text_file_opens_in_text_editor() {
+        use oasis_core::apps::AppRunner;
+        use oasis_core::dashboard::AppEntry;
+
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let entry = AppEntry {
+            title: "Text Editor".to_string(),
+            path: "/apps/Text Editor".to_string(),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let runner = AppRunner::launch_with_file(&entry, "/home/user/documents/welcome.txt", &vfs);
+        assert_eq!(
+            runner.viewing_file.as_deref(),
+            Some("/home/user/documents/welcome.txt")
+        );
+        // The text editor renders the file as display lines with line
+        // numbers — the welcome content shows up in the rendered output.
+        assert!(
+            runner
+                .lines
+                .iter()
+                .any(|l| l.contains("Welcome to OASIS_OS")),
+            "editor should render welcome text, got: {:?}",
+            runner.lines,
         );
     }
 }

@@ -12,6 +12,7 @@ oasis-app-core = { workspace = true }
 oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
+oasis-ui = { workspace = true }
 oasis-vfs = { workspace = true }
 
 [lints]

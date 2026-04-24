@@ -4,12 +4,22 @@
 //! into subdirectories, and open files for viewing. `BrowsingApp` implements
 //! the `App` trait with this shared logic.
 
+use std::cell::{Cell, RefCell};
+
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
+use oasis_app_core::render::{
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+};
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_types::backend::TextureId;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
+
+pub mod image;
+mod music_ui;
+mod photo_ui;
 
 /// File-browsing app implementing the `App` trait.
 ///
@@ -34,6 +44,29 @@ pub struct BrowsingApp {
     slideshow: bool,
     /// Frame counter for slideshow timing.
     slideshow_timer: u32,
+    /// Decoded pixel buffer for the currently viewed image (photo mode).
+    /// Populated by `open_file`; the backend owns the GPU texture, keyed
+    /// by the viewed file path.
+    decoded_image: Option<image::DecodedImage>,
+    /// Cached backend texture handle for the currently viewed image.
+    /// Uploaded lazily in `photo_ui::draw` on first frame after `open_file`
+    /// and reused across subsequent frames so we don't churn a GPU upload
+    /// per redraw.
+    pub(crate) cached_photo_texture: Cell<Option<TextureId>>,
+    /// Textures from previous images that need to be destroyed on the
+    /// next `photo_ui::draw` call. A queue — not a single slot — so
+    /// that `BrowsingApp::inherit_textures_from` can hand off multiple
+    /// pending textures when a runner is swapped out by
+    /// `launch_app_window_for_file`.
+    pub(crate) stale_photo_textures: RefCell<Vec<TextureId>>,
+    /// Raw audio bytes for the currently viewed track (music mode).
+    /// The app loads the bytes during `open_file` so the host audio
+    /// controller can feed them to the backend without re-reading VFS.
+    /// Metadata (title, duration) displayed in the UI is derived from
+    /// the same bytes.
+    track_title: Option<String>,
+    track_duration_str: Option<String>,
+    track_size_bytes: Option<usize>,
 }
 
 /// How files should be viewed when opened.
@@ -76,7 +109,41 @@ impl BrowsingApp {
             rotation: 0,
             slideshow: false,
             slideshow_timer: 0,
+            decoded_image: None,
+            cached_photo_texture: Cell::new(None),
+            stale_photo_textures: RefCell::new(Vec::new()),
+            track_title: None,
+            track_duration_str: None,
+            track_size_bytes: None,
         }
+    }
+
+    /// Decoded image for the currently viewed photo, if any.
+    pub fn decoded_image(&self) -> Option<&image::DecodedImage> {
+        self.decoded_image.as_ref()
+    }
+
+    /// Move any pending GPU textures from `other` into this app's
+    /// stale queue so they get destroyed on the next render frame.
+    /// Used by `launch_app_window_for_file` when it swaps in a new
+    /// `BrowsingApp` for the same window slot — without this the old
+    /// app's cached texture would leak in the backend's texture map.
+    pub fn inherit_textures_from(&self, other: &BrowsingApp) {
+        if let Some(t) = other.cached_photo_texture.take() {
+            self.stale_photo_textures.borrow_mut().push(t);
+        }
+        let mut drained: Vec<TextureId> =
+            other.stale_photo_textures.borrow_mut().drain(..).collect();
+        self.stale_photo_textures.borrow_mut().append(&mut drained);
+    }
+
+    /// Track display info for the currently open music track.
+    pub fn track_info(&self) -> (Option<&str>, Option<&str>, Option<usize>) {
+        (
+            self.track_title.as_deref(),
+            self.track_duration_str.as_deref(),
+            self.track_size_bytes,
+        )
     }
 
     /// Create the Music Player app.
@@ -101,6 +168,36 @@ impl BrowsingApp {
             ViewerMode::Image,
             vfs,
         )
+    }
+
+    /// Create the Music Player app, pre-opening `file_path` so the viewer
+    /// starts in track-view mode. The app's browse directory is set to the
+    /// parent of the file so Cancel returns the user to a useful listing.
+    pub fn music_player_at(path: &str, file_path: &str, vfs: &dyn Vfs) -> Self {
+        let mut app = Self::new(
+            "Music Player",
+            path,
+            parent_dir(file_path).as_str(),
+            "Music directory not found",
+            ViewerMode::Audio,
+            vfs,
+        );
+        app.open_file(vfs, file_path);
+        app
+    }
+
+    /// Create the Photo Viewer app, pre-opening `file_path`.
+    pub fn photo_viewer_at(path: &str, file_path: &str, vfs: &dyn Vfs) -> Self {
+        let mut app = Self::new(
+            "Photo Viewer",
+            path,
+            parent_dir(file_path).as_str(),
+            "Photos directory not found",
+            ViewerMode::Image,
+            vfs,
+        );
+        app.open_file(vfs, file_path);
+        app
     }
 
     /// Enter the selected directory or open the selected file.
@@ -187,6 +284,11 @@ impl BrowsingApp {
         &self.playlist
     }
 
+    /// Whether shuffle mode is on (music mode).
+    pub fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+
     /// Get the current zoom level (photo viewer).
     pub fn zoom_level(&self) -> u32 {
         self.zoom_level
@@ -266,6 +368,17 @@ impl BrowsingApp {
         self.content.viewing_file = Some(path.to_string());
         self.content.scroll = 0;
         self.content.cursor = 0;
+        // Clear any previous view-specific state.
+        self.decoded_image = None;
+        // Hand the previous texture to the render path so it can be
+        // destroyed on the next frame; clear the active slot so the new
+        // image is re-uploaded.
+        if let Some(prev) = self.cached_photo_texture.take() {
+            self.stale_photo_textures.borrow_mut().push(prev);
+        }
+        self.track_title = None;
+        self.track_duration_str = None;
+        self.track_size_bytes = None;
 
         let data = match vfs.read(path) {
             Ok(d) => d,
@@ -283,16 +396,218 @@ impl BrowsingApp {
             ViewerMode::Image => view_image_file(path, &data),
             ViewerMode::Generic => view_generic_file(path, &data),
         };
+
+        match self.viewer_mode {
+            ViewerMode::Image => {
+                self.decoded_image = image::decode(&data);
+                if self.decoded_image.is_none() {
+                    log::warn!(
+                        "photo viewer: unsupported or unreadable image at {path} ({} bytes)",
+                        data.len(),
+                    );
+                }
+            },
+            ViewerMode::Audio => {
+                let (title, duration) = parse_audio_metadata(path, &data);
+                self.track_title = Some(title);
+                self.track_duration_str = duration;
+                self.track_size_bytes = Some(data.len());
+                // Ask the host audio subsystem to load + play the
+                // track. Consumed by `oasis-app::media_controller`.
+                self.content.pending_vfs_request =
+                    Some((MEDIA_REQUEST_PATH.to_string(), format!("play_file {path}")));
+            },
+            ViewerMode::Generic => {},
+        }
     }
 }
 
+/// Extract a display title and duration string from an audio file.
+/// Falls back to the filename stem if ID3 tags are not available.
+fn parse_audio_metadata(path: &str, data: &[u8]) -> (String, Option<String>) {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let fallback_title = filename
+        .rsplit_once('.')
+        .map_or(filename, |(stem, _)| stem)
+        .replace(['_', '-'], " ");
+    let title = id3v2_title(data).unwrap_or(fallback_title);
+    let duration = mp3_duration(data).map(format_duration);
+    (title, duration)
+}
+
+/// Small ID3v2 TIT2 (title) reader. Handles the two tag-size encodings
+/// that real-world MP3s use:
+///
+/// * v2.3 (`data[3] == 3`): frame sizes are plain big-endian `u32`.
+/// * v2.4 (`data[3] == 4`): frame sizes are 28-bit syncsafe integers
+///   (same shape as the tag header size).
+///
+/// Returns `None` for older v2.2, unknown versions, or malformed data.
+fn id3v2_title(data: &[u8]) -> Option<String> {
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return None;
+    }
+    let major = data[3];
+    // We know how to parse v2.3 and v2.4 frames. v2.2 uses 3-byte
+    // frame IDs with 3-byte sizes — different layout; skip it.
+    if major != 3 && major != 4 {
+        return None;
+    }
+    let size = ((data[6] as usize) << 21)
+        | ((data[7] as usize) << 14)
+        | ((data[8] as usize) << 7)
+        | (data[9] as usize);
+    let tag_end = 10 + size;
+    if tag_end > data.len() {
+        return None;
+    }
+    let tag = &data[10..tag_end];
+    let mut i = 0;
+    while i + 10 <= tag.len() {
+        let frame_id = &tag[i..i + 4];
+        if frame_id[0] == 0 {
+            break;
+        }
+        let size_bytes = [tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]];
+        let frame_size = if major == 4 {
+            syncsafe_to_usize(size_bytes)
+        } else {
+            u32::from_be_bytes(size_bytes) as usize
+        };
+        let body_start = i + 10;
+        let body_end = body_start + frame_size;
+        if body_end > tag.len() {
+            break;
+        }
+        if frame_id == b"TIT2" && frame_size >= 1 {
+            let encoding = tag[body_start];
+            let payload = &tag[body_start + 1..body_end];
+            if encoding == 0 || encoding == 3 {
+                let s = String::from_utf8_lossy(payload).into_owned();
+                let trimmed = s.trim_end_matches('\0').trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        i = body_end;
+    }
+    None
+}
+
+/// Decode a 4-byte ID3 syncsafe integer (7 bits per byte).
+fn syncsafe_to_usize(bytes: [u8; 4]) -> usize {
+    ((bytes[0] as usize) << 21)
+        | ((bytes[1] as usize) << 14)
+        | ((bytes[2] as usize) << 7)
+        | (bytes[3] as usize)
+}
+
+/// Estimate MP3 duration from first-frame bitrate + file size. Close
+/// enough for a UI readout; we're not a metadata library.
+fn mp3_duration(data: &[u8]) -> Option<u32> {
+    let audio_start = if data.len() >= 10 && &data[..3] == b"ID3" {
+        let size = ((data[6] as usize) << 21)
+            | ((data[7] as usize) << 14)
+            | ((data[8] as usize) << 7)
+            | (data[9] as usize);
+        10 + size
+    } else {
+        0
+    };
+    if audio_start >= data.len() {
+        return None;
+    }
+    let audio = &data[audio_start..];
+    let header_pos = audio
+        .windows(2)
+        .position(|w| w[0] == 0xFF && (w[1] & 0xE0) == 0xE0)?;
+    let header = audio.get(header_pos..header_pos + 4)?;
+    let bitrate_index = (header[2] >> 4) & 0x0F;
+    const BITRATES: [u32; 16] = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+    ];
+    let bitrate_kbps = BITRATES[bitrate_index as usize];
+    if bitrate_kbps == 0 {
+        return None;
+    }
+    let bits = (audio.len() as u64) * 8;
+    Some((bits / (bitrate_kbps as u64 * 1000)) as u32)
+}
+
+fn format_duration(secs: u32) -> String {
+    let m = secs / 60;
+    let s = secs % 60;
+    format!("{m:02}:{s:02}")
+}
+
+/// VFS IPC path used by the Music Player to talk to the audio host.
+/// The host writes back status here (track loaded, errors) and reads
+/// `play_file <path>` / `stop` requests from the same path.
+pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
+
 impl App for BrowsingApp {
-    impl_content_app_methods!(content);
+    fn title(&self) -> &str {
+        &self.content.title
+    }
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
+    fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+    }
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn oasis_types::backend::SdiBackend,
+        at: &oasis_skin::ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        // File listing: default content renderer.
+        if self.content.viewing_file.is_none() {
+            return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
+        }
+        match self.viewer_mode {
+            ViewerMode::Image => photo_ui::draw(self, cx, cy, cw, ch, backend, at),
+            ViewerMode::Audio => music_ui::draw(self, cx, cy, cw, ch, backend, at),
+            ViewerMode::Generic => {
+                draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+            },
+        }
+    }
+    fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+    fn take_pending_request(&mut self) -> Option<(String, String)> {
+        self.content.pending_vfs_request.take()
+    }
+    fn peek_pending_request(&self) -> Option<&(String, String)> {
+        self.content.pending_vfs_request.as_ref()
+    }
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         match button {
             Button::Cancel => {
                 if self.content.viewing_file.is_some() {
+                    // Stop audio if we were playing a track.
+                    if matches!(self.viewer_mode, ViewerMode::Audio) {
+                        self.content.pending_vfs_request =
+                            Some((MEDIA_REQUEST_PATH.to_string(), "stop".to_string()));
+                    }
                     self.content.viewing_file = None;
                     self.content.scroll = 0;
                     self.content.cursor = 0;
@@ -400,6 +715,94 @@ impl App for BrowsingApp {
 mod tests {
     use super::*;
     use oasis_vfs::MemoryVfs;
+
+    /// Build a minimal ID3v2 tag containing one TIT2 frame.
+    /// `major` is the version byte (3 for v2.3, 4 for v2.4).
+    fn make_id3_tag(title: &str, major: u8) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.push(0u8); // encoding = ISO-8859-1
+        payload.extend_from_slice(title.as_bytes());
+        let frame_size = payload.len() as u32;
+
+        let size_bytes: [u8; 4] = if major == 4 {
+            [
+                ((frame_size >> 21) & 0x7F) as u8,
+                ((frame_size >> 14) & 0x7F) as u8,
+                ((frame_size >> 7) & 0x7F) as u8,
+                (frame_size & 0x7F) as u8,
+            ]
+        } else {
+            frame_size.to_be_bytes()
+        };
+
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"TIT2");
+        frame.extend_from_slice(&size_bytes);
+        frame.extend_from_slice(&[0u8, 0u8]); // flags
+        frame.extend_from_slice(&payload);
+
+        let tag_size = frame.len() as u32;
+        // Tag size is always syncsafe (both v2.3 and v2.4).
+        let tag_size_bytes = [
+            ((tag_size >> 21) & 0x7F) as u8,
+            ((tag_size >> 14) & 0x7F) as u8,
+            ((tag_size >> 7) & 0x7F) as u8,
+            (tag_size & 0x7F) as u8,
+        ];
+
+        let mut tag = Vec::new();
+        tag.extend_from_slice(b"ID3");
+        tag.push(major);
+        tag.push(0); // minor
+        tag.push(0); // flags
+        tag.extend_from_slice(&tag_size_bytes);
+        tag.extend_from_slice(&frame);
+        tag
+    }
+
+    #[test]
+    fn id3v2_3_title_parses() {
+        let tag = make_id3_tag("Hello World", 3);
+        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Hello World"));
+    }
+
+    #[test]
+    fn id3v2_4_title_parses_syncsafe_frame_size() {
+        // v2.4 uses syncsafe for frame sizes too — the old code read
+        // them as plain big-endian and tripped `body_end > tag.len()`.
+        let tag = make_id3_tag("Modern MP3", 4);
+        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Modern MP3"));
+    }
+
+    #[test]
+    fn id3v2_returns_none_for_unknown_version() {
+        // v2.2 has a different frame layout we don't support.
+        let mut tag = make_id3_tag("Old", 3);
+        tag[3] = 2; // pretend v2.2
+        assert!(super::id3v2_title(&tag).is_none());
+    }
+
+    #[test]
+    fn inherit_textures_from_drains_old_app() {
+        // Two BrowsingApps, old one has a cached texture + one in its
+        // stale queue. After inherit the new app owns both.
+        let vfs = setup_vfs();
+        let old = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        let new = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        old.cached_photo_texture
+            .set(Some(oasis_types::backend::TextureId(11)));
+        old.stale_photo_textures
+            .borrow_mut()
+            .push(oasis_types::backend::TextureId(22));
+        new.inherit_textures_from(&old);
+        assert!(old.cached_photo_texture.get().is_none());
+        assert!(old.stale_photo_textures.borrow().is_empty());
+        let new_stale = new.stale_photo_textures.borrow();
+        assert_eq!(new_stale.len(), 2);
+        let ids: Vec<u64> = new_stale.iter().map(|t| t.0).collect();
+        assert!(ids.contains(&11));
+        assert!(ids.contains(&22));
+    }
 
     fn setup_vfs() -> MemoryVfs {
         let mut vfs = MemoryVfs::new();
@@ -553,6 +956,40 @@ mod tests {
         app.handle_input(&Button::Triangle, &vfs);
         app.handle_input(&Button::Triangle, &vfs);
         assert_eq!(app.playlist().len(), 1);
+    }
+
+    #[test]
+    fn music_open_emits_play_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        let req = app.content.pending_vfs_request.clone().expect("ipc");
+        assert_eq!(req.0, MEDIA_REQUEST_PATH);
+        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+    }
+
+    #[test]
+    fn music_cancel_emits_stop_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        // Drain the play IPC.
+        let _ = app.content.pending_vfs_request.take();
+        app.handle_input(&Button::Cancel, &vfs);
+        let req = app.content.pending_vfs_request.clone().expect("ipc");
+        assert_eq!(req.0, MEDIA_REQUEST_PATH);
+        assert_eq!(req.1, "stop");
+    }
+
+    #[test]
+    fn photo_open_does_not_emit_media_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        assert!(
+            app.content.pending_vfs_request.is_none(),
+            "photo viewer must not emit media IPC"
+        );
     }
 
     #[test]

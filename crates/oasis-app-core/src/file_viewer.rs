@@ -255,6 +255,24 @@ fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
     (0, 0)
 }
 
+/// Given a file path, pick the best-fit app title to open it in. Returns
+/// `None` for file types with no dedicated viewer; the caller should stay
+/// in the generic hex/text viewer for those.
+///
+/// The mapping is intentionally small and conservative — adding a new
+/// extension here silently changes File Manager's Confirm behaviour.
+pub fn app_for_file(path: &str) -> Option<&'static str> {
+    let lower = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+    let ext = lower.rsplit('.').next()?;
+    match ext {
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Some("Photo Viewer"),
+        "mp3" | "wav" | "ogg" | "flac" | "m4a" => Some("Music Player"),
+        "txt" | "md" | "rs" | "toml" | "json" | "yaml" | "yml" | "html" | "htm" | "css" | "js"
+        | "sh" | "py" | "c" | "cpp" | "h" | "hpp" | "log" | "ini" | "conf" => Some("Text Editor"),
+        _ => None,
+    }
+}
+
 /// Generic file viewer: text content or hex dump.
 pub fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
     let filename = path.rsplit('/').next().unwrap_or(path);

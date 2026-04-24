@@ -28,6 +28,9 @@ oasis-rasterize = { workspace = true }
 oasis-types = { workspace = true }
 # Direct import: oasis_skin::resolve_skin in lib.rs
 oasis-skin = { workspace = true }
+# Direct import: BrowsingApp::inherit_textures_from in launch_app_window_for_file
+# to avoid leaking GPU textures when a Photo Viewer window is reused.
+oasis-app-media = { workspace = true }
 # Direct import: oasis_platform::{PowerService, TimeService, ...} in platform.rs
 oasis-platform = { workspace = true }
 # Direct imports: oasis_audio::{radio, RadioManager, RADIO_REQUEST_PATH} in archive.rs, lib.rs

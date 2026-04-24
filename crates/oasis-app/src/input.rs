@@ -44,6 +44,22 @@ fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
     }
 }
 
+/// If the closing runner is the Music Player, tear down its playing
+/// track. The app itself emits a `stop` VFS IPC on Cancel, but the
+/// window-manager close button bypasses that path — the runner is
+/// dropped before `tick()` gets another chance to read the IPC.
+fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
+    const MUSIC_APP_TITLE: &str = "Music Player";
+    let is_music = state
+        .content
+        .open_runners
+        .iter()
+        .any(|(rid, runner)| rid == id && runner.title == MUSIC_APP_TITLE);
+    if is_music {
+        crate::media_controller::shutdown(state);
+    }
+}
+
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputResult {
@@ -161,6 +177,7 @@ pub fn handle_desktop_input(
                         state.content.fullscreen_app = None;
                     }
                     stop_radio_if_radio_runner(state, &id);
+                    stop_music_if_music_runner(state, &id);
                     state.content.open_runners.retain(|(rid, _)| *rid != id);
                     if id == "browser" {
                         state.content.browser = None;
@@ -271,6 +288,7 @@ pub fn handle_desktop_input(
                 }
                 let _ = state.wm.close_window(&active_id, sdi);
                 stop_radio_if_radio_runner(state, &active_id);
+                stop_music_if_music_runner(state, &active_id);
                 state
                     .content
                     .open_runners
@@ -406,6 +424,7 @@ pub fn handle_desktop_input(
                             }
                             let _ = state.wm.close_window(&active_id, sdi);
                             stop_radio_if_radio_runner(state, &active_id);
+                            stop_music_if_music_runner(state, &active_id);
                             state
                                 .content
                                 .open_runners
@@ -422,6 +441,19 @@ pub fn handle_desktop_input(
                                 let _ = state.wm.enter_fullscreen(&active_id, sdi);
                                 state.content.fullscreen_app = Some(active_id);
                             }
+                        },
+                        AppAction::LaunchAppWithFile {
+                            app_title,
+                            file_path,
+                        } => {
+                            launch::launch_app_window_for_file(
+                                &app_title,
+                                &file_path,
+                                &mut state.wm,
+                                sdi,
+                                &mut state.content.open_runners,
+                                vfs,
+                            );
                         },
                         AppAction::None => {},
                     }
@@ -452,6 +484,7 @@ pub fn handle_app_input(
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => {
                 let is_radio = runner.title == RADIO_APP_TITLE;
+                let is_music = runner.title == "Music Player";
                 match runner.handle_input(btn, vfs) {
                     AppAction::Exit => {
                         AppRunner::hide_sdi(sdi);
@@ -460,11 +493,30 @@ pub fn handle_app_input(
                         if is_radio {
                             stop_radio(state);
                         }
+                        if is_music {
+                            crate::media_controller::shutdown(state);
+                        }
                     },
                     AppAction::SwitchToTerminal => {
                         AppRunner::hide_sdi(sdi);
                         state.content.app_runner = None;
                         state.mode = Mode::Terminal;
+                    },
+                    AppAction::LaunchAppWithFile {
+                        app_title,
+                        file_path,
+                    } => {
+                        // Replace the current fullscreen runner with the
+                        // target app, with the file pre-opened.
+                        AppRunner::hide_sdi(sdi);
+                        let entry = oasis_core::dashboard::AppEntry {
+                            title: app_title.clone(),
+                            path: format!("/apps/{app_title}"),
+                            icon_png: Vec::new(),
+                            color: oasis_core::backend::Color::rgb(100, 100, 100),
+                        };
+                        state.content.app_runner =
+                            Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
                     },
                     AppAction::RequestFullscreen | AppAction::None => {},
                 }
@@ -880,6 +932,7 @@ mod tests {
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
+            media_track: None,
             tv_audio_chunks_fed: 0,
             tv_audio_samples_fed: 0,
             #[cfg(feature = "_video")]

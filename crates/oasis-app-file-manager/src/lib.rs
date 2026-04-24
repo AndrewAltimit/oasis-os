@@ -17,7 +17,8 @@ use oasis_ui::flex;
 use oasis_vfs::Vfs;
 
 pub use oasis_app_core::file_viewer::{
-    join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
+    app_for_file, join_path, list_directory, parent_dir, view_audio_file, view_generic_file,
+    view_image_file,
 };
 
 // ---------------------------------------------------------------
@@ -194,6 +195,12 @@ impl FileManagerApp {
                     let file_name = line.split("  (").next().unwrap_or(&line);
                     let dir = &p.browse_dir;
                     let file_path = join_path(dir, file_name);
+                    if let Some(app_title) = app_for_file(&file_path) {
+                        return AppAction::LaunchAppWithFile {
+                            app_title: app_title.to_string(),
+                            file_path,
+                        };
+                    }
                     self.open_file(vfs, &file_path);
                 } else {
                     p.enter_selected(vfs);

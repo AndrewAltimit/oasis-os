@@ -94,6 +94,66 @@ pub fn launch_app_window(
     LaunchResult::Desktop
 }
 
+/// Launch an app as a floating window with `file_path` pre-loaded in its
+/// viewer. Used when File Manager hands off to Photo Viewer / Music Player
+/// / Text Editor on Confirm of a typed file.
+///
+/// Reuses an existing window if one of the same id is already open (so
+/// opening five PNGs in a row reuses the Photo Viewer window rather than
+/// stacking five of them).
+pub fn launch_app_window_for_file(
+    app_title: &str,
+    file_path: &str,
+    wm: &mut WindowManager,
+    sdi: &mut SdiRegistry,
+    open_runners: &mut Vec<(String, AppRunner)>,
+    vfs: &MemoryVfs,
+) {
+    let win_id = app_title.to_lowercase().replace(' ', "_");
+    let entry = AppEntry {
+        title: app_title.to_string(),
+        path: format!("/apps/{app_title}"),
+        icon_png: Vec::new(),
+        color: oasis_core::backend::Color::rgb(100, 100, 100),
+    };
+
+    if wm.get_window(&win_id).is_some() {
+        // Replace the existing runner so the file is pre-loaded.
+        let _ = wm.focus_window(&win_id, sdi);
+        if let Some(entry_mut) = open_runners.iter_mut().find(|(id, _)| *id == win_id) {
+            let new_runner = AppRunner::launch_with_file(&entry, file_path, vfs);
+            // Hand any pending GPU textures from the outgoing runner's
+            // BrowsingApp (Photo Viewer) over to the new one so they
+            // get destroyed on its next render frame — otherwise the
+            // old textures would leak as the runner is dropped.
+            if let (Some(old_app), Some(new_app)) = (
+                entry_mut.1.delegate_as::<oasis_app_media::BrowsingApp>(),
+                new_runner.delegate_as::<oasis_app_media::BrowsingApp>(),
+            ) {
+                new_app.inherit_textures_from(old_app);
+            }
+            entry_mut.1 = new_runner;
+        } else {
+            open_runners.push((win_id, AppRunner::launch_with_file(&entry, file_path, vfs)));
+        }
+        return;
+    }
+
+    let wc = WindowConfig {
+        id: win_id.clone(),
+        title: app_title.to_string(),
+        x: None,
+        y: None,
+        width: 380,
+        height: 220,
+        window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
+    };
+    let _ = wm.create_window(&wc, sdi);
+    open_runners.push((win_id, AppRunner::launch_with_file(&entry, file_path, vfs)));
+}
+
 /// Create a fade-in transition.
 pub fn make_transition(w: u32, h: u32, fade_frames: u32) -> transition::TransitionState {
     transition::fade_in_custom(w, h, fade_frames)

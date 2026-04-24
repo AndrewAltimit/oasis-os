@@ -22,6 +22,7 @@ pub mod simple_app;
 pub mod video_embed;
 
 pub use app_trait::{App, AppAction, ContentState};
+pub use oasis_app_core::file_viewer::app_for_file;
 pub use runner::AppRunner;
 
 /// Re-export TV Guide crate for backwards compatibility with external crates.

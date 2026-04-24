@@ -455,6 +455,12 @@ impl OasisWasm {
                                     self.fullscreen_app = Some(active_id);
                                 }
                             },
+                            AppAction::LaunchAppWithFile {
+                                app_title,
+                                file_path,
+                            } => {
+                                self.launch_app_window_for_file(&app_title, &file_path);
+                            },
                             AppAction::None => {},
                         }
                     }
@@ -489,6 +495,20 @@ impl OasisWasm {
                     AppRunner::hide_sdi(&mut self.sdi);
                     self.app_runner = None;
                     self.mode = Mode::Terminal;
+                },
+                AppAction::LaunchAppWithFile {
+                    app_title,
+                    file_path,
+                } => {
+                    AppRunner::hide_sdi(&mut self.sdi);
+                    let entry = oasis_core::dashboard::AppEntry {
+                        title: app_title.clone(),
+                        path: format!("/apps/{app_title}"),
+                        icon_png: Vec::new(),
+                        color: oasis_core::backend::Color::rgb(100, 100, 100),
+                    };
+                    self.app_runner =
+                        Some(AppRunner::launch_with_file(&entry, &file_path, &self.vfs));
                 },
                 AppAction::RequestFullscreen | AppAction::None => {},
             }

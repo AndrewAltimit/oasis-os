@@ -11,6 +11,7 @@ mod boot_splash;
 mod commands;
 mod input;
 mod launch;
+mod media_controller;
 mod radio_controller;
 mod render;
 mod sysinfo;
@@ -411,6 +412,7 @@ fn main() -> Result<()> {
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
+        media_track: None,
         tv_audio_chunks_fed: 0,
         tv_audio_samples_fed: 0,
         #[cfg(feature = "_video")]
@@ -666,8 +668,9 @@ fn main() -> Result<()> {
         // so the wallpaper texture is regenerated against the new theme.
         commands::refresh_wallpaper_if_pending(&mut state, &mut sdi, &mut backend);
 
-        // Tick radio and TV subsystems.
+        // Tick radio, music player, and TV subsystems.
         radio_controller::tick(&mut state, &mut vfs);
+        media_controller::tick(&mut state, &mut vfs);
         tv_controller::tick(&mut state, &mut backend, &mut vfs);
 
         // Auto-exit timer for TV streaming tests.

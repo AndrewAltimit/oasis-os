@@ -128,6 +128,8 @@ pub struct AppState {
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
+    /// Audio track for the Music Player app.
+    pub media_track: Option<AudioTrackId>,
     /// Diagnostic: total audio chunks fed to the backend since last tune.
     pub tv_audio_chunks_fed: u64,
     /// Diagnostic: total audio samples fed to the backend since last tune.

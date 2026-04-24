@@ -209,7 +209,7 @@ impl App for SimpleApp {
                 self.content.navigate_down();
                 AppAction::None
             },
-            Button::Confirm => self.confirm_action,
+            Button::Confirm => self.confirm_action.clone(),
             _ => AppAction::None,
         }
     }

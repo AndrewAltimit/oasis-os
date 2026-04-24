@@ -14,7 +14,7 @@ use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::vfs::Vfs;
 
-use super::registry::create_app_delegate;
+use super::registry::{create_app_delegate, create_app_delegate_for_file};
 
 /// Runtime state for a launched application screen.
 ///
@@ -68,6 +68,42 @@ impl AppRunner {
             scroll: 0,
             browse_dir: delegate.browse_dir().map(String::from),
             viewing_file: None,
+            cursor: 0,
+            pending_vfs_request: None,
+            delegate: Some(delegate),
+        }
+    }
+
+    /// Launch an app with a specific file pre-opened in its viewer.
+    ///
+    /// Used when File Manager dispatches to Photo Viewer / Music Player /
+    /// Text Editor via `AppAction::LaunchAppWithFile`. Falls back to the
+    /// regular [`launch`](Self::launch) path for apps without a
+    /// file-specific entry.
+    pub fn launch_with_file(app: &AppEntry, file_path: &str, vfs: &dyn Vfs) -> Self {
+        let title = app.title.clone();
+        let path = app.path.clone();
+
+        let delegate: Box<dyn super::app_trait::App> =
+            create_app_delegate_for_file(&title, &path, file_path, vfs).unwrap_or_else(|| {
+                Box::new(super::simple_app::SimpleApp::new(
+                    &title,
+                    &path,
+                    vec![
+                        title.clone(),
+                        String::new(),
+                        format!("(Cannot open {file_path} with this app)"),
+                    ],
+                ))
+            });
+
+        Self {
+            title: delegate.title().to_string(),
+            path: delegate.path().to_string(),
+            lines: delegate.lines().to_vec(),
+            scroll: 0,
+            browse_dir: delegate.browse_dir().map(String::from),
+            viewing_file: delegate.viewing_file().map(String::from),
             cursor: 0,
             pending_vfs_request: None,
             delegate: Some(delegate),
@@ -161,6 +197,7 @@ mod tests {
     use crate::input::Button;
     use crate::sdi::SdiRegistry;
     use crate::vfs::MemoryVfs;
+    use oasis_app_core::App;
 
     const MAX_VISIBLE_LINES: usize = 13;
 
@@ -405,7 +442,10 @@ mod tests {
     }
 
     #[test]
-    fn file_manager_open_file() {
+    fn file_manager_open_text_file_dispatches_to_text_editor() {
+        // Confirming on a .txt file now yields a LaunchAppWithFile action
+        // targeting the Text Editor — File Manager hands off to a real
+        // viewer instead of showing the file inline.
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let home_idx = find_panel_entry(&runner, "home");
@@ -416,15 +456,27 @@ mod tests {
         runner.handle_input(&Button::Confirm, &vfs);
         let file_idx = find_panel_entry(&runner, "readme.txt");
         navigate_panel_to(&mut runner, file_idx, &vfs);
-        runner.handle_input(&Button::Confirm, &vfs);
-        assert!(runner.viewing_file.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("Hello!")));
+        let action = runner.handle_input(&Button::Confirm, &vfs);
+        match action {
+            AppAction::LaunchAppWithFile {
+                app_title,
+                file_path,
+            } => {
+                assert_eq!(app_title, "Text Editor");
+                assert_eq!(file_path, "/home/user/readme.txt");
+            },
+            other => panic!("expected LaunchAppWithFile, got {other:?}"),
+        }
     }
 
     #[test]
-    fn file_viewer_cancel_returns_to_dir() {
-        use crate::apps::file_manager::FileManagerApp;
-        let vfs = setup_vfs();
+    fn file_manager_open_untyped_file_uses_inline_viewer() {
+        // `data.bin` has no registered viewer, so File Manager opens it in
+        // its own hex viewer (backward-compatible path).
+        use crate::vfs::Vfs;
+        let mut vfs = setup_vfs();
+        vfs.write("/home/user/data.bin", &[0x00, 0x01, 0xFF, 0xFE, 0x80])
+            .unwrap();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let home_idx = find_panel_entry(&runner, "home");
         navigate_panel_to(&mut runner, home_idx, &vfs);
@@ -432,20 +484,96 @@ mod tests {
         let user_idx = find_panel_entry(&runner, "user");
         navigate_panel_to(&mut runner, user_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        let file_idx = find_panel_entry(&runner, "readme.txt");
+        let file_idx = find_panel_entry(&runner, "data.bin");
         navigate_panel_to(&mut runner, file_idx, &vfs);
-        runner.handle_input(&Button::Confirm, &vfs);
-        assert!(runner.viewing_file.is_some());
-        let action = runner.handle_input(&Button::Cancel, &vfs);
+        let action = runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(action, AppAction::None);
-        assert!(runner.viewing_file.is_none());
-        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
-        assert!(
-            fm.panels[0]
-                .lines
-                .iter()
-                .any(|l: &String| l.contains("readme.txt"))
+        assert!(runner.viewing_file.is_some());
+        assert!(runner.lines.iter().any(|l| l.contains("Binary file")));
+    }
+
+    #[test]
+    fn launch_photo_viewer_with_file_preopens_image() {
+        use crate::vfs::Vfs;
+        use oasis_app_media::BrowsingApp;
+        let mut vfs = setup_vfs();
+        // Overwrite sunset.png with a minimal valid PNG so the view_image
+        // path identifies it by magic bytes.
+        vfs.write(
+            "/home/user/photos/sunset.png",
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\xe0\x00\x00\x01\x10\x08\x06",
+        )
+        .unwrap();
+        let runner = AppRunner::launch_with_file(
+            &make_app("Photo Viewer"),
+            "/home/user/photos/sunset.png",
+            &vfs,
         );
+        assert_eq!(
+            runner.viewing_file.as_deref(),
+            Some("/home/user/photos/sunset.png")
+        );
+        let app = runner.delegate_as::<BrowsingApp>().unwrap();
+        assert!(app.viewing_file().is_some());
+    }
+
+    #[test]
+    fn launch_text_editor_with_file_preopens_content() {
+        use crate::vfs::Vfs;
+        use oasis_app_text_editor::TextEditorApp;
+        let mut vfs = setup_vfs();
+        vfs.write("/home/user/notes.txt", b"hello\nworld").unwrap();
+        let runner =
+            AppRunner::launch_with_file(&make_app("Text Editor"), "/home/user/notes.txt", &vfs);
+        let app = runner.delegate_as::<TextEditorApp>().unwrap();
+        assert_eq!(app.viewing_file(), Some("/home/user/notes.txt"));
+    }
+
+    #[test]
+    fn launch_music_player_with_file_preopens_track() {
+        use oasis_app_media::BrowsingApp;
+        let vfs = setup_vfs();
+        let runner = AppRunner::launch_with_file(
+            &make_app("Music Player"),
+            "/home/user/music/ambient_dawn.mp3",
+            &vfs,
+        );
+        let app = runner.delegate_as::<BrowsingApp>().unwrap();
+        assert_eq!(
+            app.viewing_file(),
+            Some("/home/user/music/ambient_dawn.mp3")
+        );
+    }
+
+    #[test]
+    fn file_manager_open_image_dispatches_to_photo_viewer() {
+        use crate::vfs::Vfs;
+        let mut vfs = setup_vfs();
+        vfs.write("/home/user/photos/sunset.png", b"\x89PNG\r\n\x1a\n")
+            .unwrap();
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        let home_idx = find_panel_entry(&runner, "home");
+        navigate_panel_to(&mut runner, home_idx, &vfs);
+        runner.handle_input(&Button::Confirm, &vfs);
+        let user_idx = find_panel_entry(&runner, "user");
+        navigate_panel_to(&mut runner, user_idx, &vfs);
+        runner.handle_input(&Button::Confirm, &vfs);
+        let photos_idx = find_panel_entry(&runner, "photos");
+        navigate_panel_to(&mut runner, photos_idx, &vfs);
+        runner.handle_input(&Button::Confirm, &vfs);
+        let file_idx = find_panel_entry(&runner, "sunset.png");
+        navigate_panel_to(&mut runner, file_idx, &vfs);
+        let action = runner.handle_input(&Button::Confirm, &vfs);
+        match action {
+            AppAction::LaunchAppWithFile {
+                app_title,
+                file_path,
+            } => {
+                assert_eq!(app_title, "Photo Viewer");
+                assert!(file_path.ends_with("sunset.png"));
+            },
+            other => panic!("expected LaunchAppWithFile, got {other:?}"),
+        }
     }
 
     #[test]

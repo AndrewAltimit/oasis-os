@@ -56,5 +56,10 @@ impl AppRunner {
 
         // Hide TV Guide objects.
         oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
+
+        // Hide Text Editor Notepad chrome. The authoritative cleanup
+        // lives on the text-editor crate, which owns the pool sizes
+        // for the menu/dropdown/line slots.
+        oasis_app_text_editor::hide_notepad_sdi_objects(sdi);
     }
 }

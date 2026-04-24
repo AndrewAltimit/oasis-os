@@ -13,6 +13,9 @@ oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
+png = { workspace = true }
+jpeg-decoder = { workspace = true }
+log = { workspace = true }
 
 [lints]
 workspace = true
