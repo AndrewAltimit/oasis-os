@@ -192,16 +192,20 @@ impl TextEditorApp {
                 }
             }
 
-            // Cursor caret on the active line in Insert/Normal mode.
+            // Cursor caret on the active line — a solid 2px bar in
+            // Insert mode (blue, always visible), a dimmer grey bar
+            // in Normal mode. Kept opaque rather than blinking to
+            // avoid burning frame time on a redraw just for the
+            // caret.
             if line_idx == self.cursor_line {
                 let prefix: String = line_text.chars().take(self.cursor_col).collect();
                 let caret_x = cx + pad_left + backend.measure_text(&prefix, font_size) as i32;
-                let caret_color = if self.mode == EditorMode::Insert {
-                    Color::rgb(0, 100, 200)
+                let (caret_color, caret_w) = if self.mode == EditorMode::Insert {
+                    (Color::rgb(0, 100, 220), 2u32)
                 } else {
-                    Color::rgb(60, 60, 60)
+                    (Color::rgb(60, 60, 60), 2u32)
                 };
-                backend.fill_rect(caret_x, y - 1, 2, line_h as u32, caret_color)?;
+                backend.fill_rect(caret_x, y - 1, caret_w, line_h as u32, caret_color)?;
             }
         }
 

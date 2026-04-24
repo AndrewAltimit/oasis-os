@@ -151,6 +151,101 @@ impl App for TextEditorApp {
         }
     }
 
+    fn handle_text_input(&mut self, ch: char) {
+        // Non-printable control characters (Enter, Tab, etc. that
+        // already come through as ButtonPress events) are filtered
+        // out so they don't produce spurious glyphs in the buffer.
+        if ch.is_control() {
+            return;
+        }
+        // Typing in Normal mode auto-drops into Insert mode — it's
+        // what every casual user expects from a Notepad-style editor
+        // and matches Windows Notepad behaviour.
+        if self.mode == EditorMode::Normal {
+            self.mode = EditorMode::Insert;
+        }
+        if self.mode == EditorMode::Insert {
+            self.insert_char(ch);
+        } else if self.mode == EditorMode::Find {
+            self.find_query.push(ch);
+        }
+    }
+
+    fn handle_backspace(&mut self) {
+        match self.mode {
+            EditorMode::Insert => self.delete_char(),
+            EditorMode::Find => {
+                self.find_query.pop();
+            },
+            EditorMode::Normal => {
+                // Backspace in Normal mode also deletes — matches
+                // what a user expects after clicking into a window
+                // and pressing Backspace without hitting Enter first.
+                self.mode = EditorMode::Insert;
+                self.delete_char();
+            },
+            EditorMode::Saving => {},
+        }
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+        // Notepad click-to-position: convert the pixel (lx, ly) to
+        // a (line, column) pair in the buffer, then switch to Insert
+        // mode so the next keystroke types at the clicked position.
+        // The layout constants here mirror `draw_notepad`.
+        let title_h = 20i32; // matches at.app.title_bar_height.max(18)
+        let menu_h = 18i32;
+        let area_top = title_h + menu_h;
+        let status_h = 18i32;
+        let area_bottom = ch as i32 - status_h;
+
+        // Clicks in the title / status strips are ignored.
+        if ly < title_h || ly >= area_bottom {
+            return AppAction::None;
+        }
+
+        // Clicks on the menu bar: route to a menu action. For now
+        // each label is a no-op placeholder that drops a status
+        // message so the user sees the click was detected.
+        if ly < area_top {
+            let menu_labels = ["File", "Edit", "View", "Help"];
+            let mut mx = 6i32;
+            for label in &menu_labels {
+                let label_w = label.len() as i32 * 7 + 8;
+                if lx >= mx && lx < mx + label_w {
+                    self.status_message =
+                        Some(format!("{label} menu (drop-down not yet implemented)"));
+                    return AppAction::None;
+                }
+                mx += label.len() as i32 * 7 + 14;
+            }
+            return AppAction::None;
+        }
+
+        // Clicks in the text area: place the caret at the nearest
+        // character. Approximate 7px per glyph for the 12px bitmap
+        // font; we don't have a backend here to call `measure_text`.
+        let pad_left = 8i32;
+        let pad_top = 6i32;
+        let line_h = 14i32;
+        let relative_y = ly - area_top - pad_top;
+        let clicked_line = (relative_y / line_h).max(0) as usize;
+        let target_line =
+            (self.content.scroll + clicked_line).min(self.buffer.line_count().saturating_sub(1));
+        let line_text = self.buffer.get_line(target_line).unwrap_or("");
+        let approx_col = ((lx - pad_left - 8).max(0) / 7) as usize;
+        let target_col = approx_col.min(line_text.chars().count());
+
+        self.cursor_line = target_line;
+        self.cursor_col = target_col;
+        self.mode = EditorMode::Insert;
+        self.ensure_cursor_visible();
+        self.rebuild_display_lines();
+        // Swallow the click — clippy would flag an unused parameter.
+        let _ = cw;
+        AppAction::None
+    }
+
     fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         self.content.title = self.build_title();
         self.content.update_layout(at);
@@ -227,6 +322,75 @@ mod tests {
 
     fn make_vfs() -> MemoryVfs {
         MemoryVfs::new()
+    }
+
+    /// Plain character input through the `handle_text_input` path
+    /// must reach the buffer — this was the core "only Enter types"
+    /// bug. Typing in Normal mode also auto-drops into Insert mode.
+    #[test]
+    fn text_input_inserts_chars_and_enters_insert_mode() {
+        let mut app = TextEditorApp::new("/apps/editor");
+        assert_eq!(app.mode, EditorMode::Normal);
+        app.handle_text_input('h');
+        app.handle_text_input('i');
+        assert_eq!(app.mode, EditorMode::Insert);
+        assert_eq!(app.buffer.get_line(0), Some("hi"));
+        assert_eq!(app.cursor_col, 2);
+    }
+
+    /// Control characters (Tab, newline, etc.) must not produce
+    /// stray glyphs in the buffer — they're handled through the
+    /// ButtonPress path.
+    #[test]
+    fn text_input_ignores_control_chars() {
+        let mut app = TextEditorApp::new("/apps/editor");
+        app.handle_text_input('\n');
+        app.handle_text_input('\t');
+        assert_eq!(app.buffer.get_line(0), Some(""));
+    }
+
+    /// Backspace via the text-input channel must delete the last
+    /// character, matching Notepad behaviour when a user presses
+    /// backspace after typing.
+    #[test]
+    fn backspace_deletes_in_insert_mode() {
+        let mut app = TextEditorApp::new("/apps/editor");
+        app.handle_text_input('a');
+        app.handle_text_input('b');
+        app.handle_text_input('c');
+        app.handle_backspace();
+        assert_eq!(app.buffer.get_line(0), Some("ab"));
+    }
+
+    /// Clicking inside the text area places the caret at the
+    /// clicked position and switches to Insert mode so the next
+    /// keystroke types there.
+    #[test]
+    fn click_in_text_area_places_cursor_and_enters_insert() {
+        let mut app = TextEditorApp::open_file("/test.txt", "hello world");
+        // Click roughly at column 6 in the first line. Area top is
+        // title_h + menu_h = 38, so ly = 40 + 6 (pad) puts us on
+        // line 0.
+        let action = app.handle_click(8 + 6 * 7, 44, 400, 300, false);
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.mode, EditorMode::Insert);
+        assert_eq!(app.cursor_line, 0);
+        assert!(app.cursor_col > 0 && app.cursor_col <= 11);
+    }
+
+    /// Clicking on a menu label posts a status message so the user
+    /// sees the click was registered. Drop-downs are future work.
+    #[test]
+    fn click_on_menu_label_sets_status_message() {
+        let mut app = TextEditorApp::new("/apps/editor");
+        // "File" label at x=6, y ~= 20 + 3 = 23 (menu strip). Menu
+        // bar spans y=title_h..title_h+menu_h, so ly=28 hits it.
+        let _ = app.handle_click(10, 28, 400, 300, false);
+        assert!(
+            app.status_message.as_deref().unwrap_or("").contains("File"),
+            "expected File menu status, got {:?}",
+            app.status_message,
+        );
     }
 
     /// `update_sdi` must populate the Notepad chrome (menu bar, text
