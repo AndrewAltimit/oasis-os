@@ -25,6 +25,7 @@ pub mod icon;
 pub mod input_field;
 pub mod layout;
 pub mod list_view;
+pub mod menu_bar;
 pub mod modal;
 pub mod nine_patch;
 pub mod panel;

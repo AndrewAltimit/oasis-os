@@ -1097,6 +1097,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 

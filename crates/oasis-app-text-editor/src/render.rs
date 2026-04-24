@@ -117,18 +117,16 @@ impl TextEditorApp {
             at.app.title_bar_text,
         )?;
 
-        // Menu bar: File / Edit / View / Help — pure cosmetic labels
-        // for now (no popup menus). Gives the editor the right look.
+        // Menu bar: real widget with live drop-downs.
         let menu_h: u32 = 18;
         let menu_y = cy + title_h as i32;
-        backend.fill_rect(cx, menu_y, cw, menu_h, chrome_bg)?;
-        backend.fill_rect(cx, menu_y + menu_h as i32 - 1, cw, 1, chrome_border)?;
-        let menu_labels = ["File", "Edit", "View", "Help"];
-        let mut mx = cx + 6;
-        for label in &menu_labels {
-            backend.draw_text(label, mx, menu_y + 3, 11, Color::rgb(40, 40, 40))?;
-            mx += (label.len() as i32 * 7) + 14;
-        }
+        let menu_style = oasis_ui::menu_bar::MenuStyle::default();
+        self.menu
+            .draw_bar(backend, cx, menu_y, cw, menu_h, &menu_style)?;
+        // Suppress unused warnings — still using these palette
+        // entries for text-area chrome below.
+        let _ = chrome_bg;
+        let _ = chrome_border;
 
         // Text area.
         let area_y = menu_y + menu_h as i32;
@@ -239,6 +237,14 @@ impl TextEditorApp {
             11,
             status_fg,
         )?;
+
+        // Drop-down must render ABOVE the text area and status bar.
+        // Draw it last so it naturally layers on top without needing
+        // any z-ordering from the backend.
+        if self.menu.is_open() {
+            self.menu
+                .draw_dropdown(backend, cx, menu_y, menu_h, &menu_style)?;
+        }
 
         Ok(())
     }
@@ -438,7 +444,7 @@ impl TextEditorApp {
             obj.z = 102;
         }
 
-        // Menu bar strip.
+        // Menu bar strip + labels with open-state highlight.
         rect(sdi, "np_menu_bg", 0, menu_y, sw, menu_h, chrome_bg, 103);
         rect(
             sdi,
@@ -450,22 +456,47 @@ impl TextEditorApp {
             chrome_border,
             104,
         );
-        let menu_labels = ["File", "Edit", "View", "Help"];
+        let label_hot_bg = Color::rgb(49, 106, 197);
+        let label_hot_text = Color::rgb(255, 255, 255);
+        let label_text = Color::rgb(40, 40, 40);
         let mut mx = 6i32;
-        for (i, label) in menu_labels.iter().enumerate() {
-            let name = format!("np_menu_{i}");
+        for (i, m) in self.menu.menus.iter().enumerate() {
+            let label_w = m.label.chars().count() as i32 * 7 + 16;
+            let is_open = self.menu.open == Some(i);
+            // Open-menu highlight strip — one SDI rect per slot,
+            // toggled via `visible` so we reuse the object across
+            // frames without churning the registry.
+            let hot_name = format!("np_menu_hot_{i}");
+            rect_visible(
+                sdi,
+                &hot_name,
+                mx,
+                menu_y + 2,
+                label_w as u32,
+                menu_h - 4,
+                label_hot_bg,
+                104,
+                is_open,
+            );
+            let label_name = format!("np_menu_{i}");
+            let text_color = if is_open { label_hot_text } else { label_text };
             text(
                 sdi,
-                &name,
-                mx,
+                &label_name,
+                mx + 8,
                 menu_y + 3,
                 11,
-                Color::rgb(40, 40, 40),
-                label,
+                text_color,
+                &m.label,
                 105,
             );
-            mx += (label.len() as i32 * 7) + 14;
+            mx += label_w;
         }
+
+        // Drop-down overlay: a bordered rect + one item row per
+        // entry. Rendered with higher z than the text area so items
+        // float above buffer content.
+        self.render_dropdown_sdi(sdi, menu_y, menu_h);
 
         // Text area background.
         rect(sdi, "np_area_bg", 0, area_y, sw, area_h, body_bg, 103);
@@ -639,6 +670,144 @@ impl TextEditorApp {
         );
     }
 
+    /// Render the active drop-down (if any) as SDI objects. Uses a
+    /// fixed `NP_MAX_ENTRIES` pool of item names so the registry
+    /// churn stays bounded across frames.
+    fn render_dropdown_sdi(&self, sdi: &mut SdiRegistry, menu_y: i32, menu_h: u32) {
+        // Hide every pooled item first, then repopulate only the
+        // slots we actually need this frame.
+        for i in 0..NP_MAX_DROPDOWN_ENTRIES {
+            for kind in ["hot", "text", "shortcut", "sep"] {
+                let name = format!("np_dd_{kind}_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+        for name in ["np_dd_bg", "np_dd_border_l", "np_dd_border_d"] {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+
+        let Some(idx) = self.menu.open else {
+            return;
+        };
+        let menu = &self.menu.menus[idx];
+
+        // Compute label x to anchor the drop-down.
+        let mut label_x = 6i32;
+        for i in 0..idx {
+            label_x += self.menu.menus[i].label.chars().count() as i32 * 7 + 16;
+        }
+
+        let dd_x = label_x;
+        let dd_y = menu_y + menu_h as i32;
+        let (dd_w, dd_h) = dropdown_size(menu);
+
+        let bg = Color::rgb(236, 236, 236);
+        let light = Color::rgb(255, 255, 255);
+        let dark = Color::rgb(105, 105, 105);
+        let item_text_color = Color::rgb(20, 20, 20);
+        let item_hot_bg = Color::rgb(49, 106, 197);
+        let item_hot_text = Color::rgb(255, 255, 255);
+        let disabled = Color::rgb(150, 150, 150);
+        let sep_color = Color::rgb(170, 170, 170);
+
+        // Background + bezel. Very high z so items float above the
+        // text area (z=103) and line text (z=105).
+        rect(sdi, "np_dd_bg", dd_x, dd_y, dd_w, dd_h, bg, 150);
+        rect(sdi, "np_dd_border_l", dd_x, dd_y, dd_w, 1, light, 151);
+        rect(
+            sdi,
+            "np_dd_border_d",
+            dd_x,
+            dd_y + dd_h as i32 - 1,
+            dd_w,
+            1,
+            dark,
+            151,
+        );
+
+        let mut item_y = dd_y + 4;
+        for (i, entry) in menu
+            .entries
+            .iter()
+            .enumerate()
+            .take(NP_MAX_DROPDOWN_ENTRIES)
+        {
+            match entry {
+                super::MenuEntry::Action {
+                    label,
+                    shortcut,
+                    enabled,
+                    ..
+                } => {
+                    let hot = self.menu.hovered_item == Some(i) && *enabled;
+                    let hot_name = format!("np_dd_hot_{i}");
+                    rect_visible(
+                        sdi,
+                        &hot_name,
+                        dd_x + 2,
+                        item_y,
+                        dd_w - 4,
+                        20,
+                        item_hot_bg,
+                        152,
+                        hot,
+                    );
+                    let color = if !enabled {
+                        disabled
+                    } else if hot {
+                        item_hot_text
+                    } else {
+                        item_text_color
+                    };
+                    let text_name = format!("np_dd_text_{i}");
+                    text(
+                        sdi,
+                        &text_name,
+                        dd_x + 22,
+                        item_y + 4,
+                        11,
+                        color,
+                        label,
+                        153,
+                    );
+                    if let Some(sc) = shortcut {
+                        let sc_w = sc.chars().count() as i32 * 7;
+                        let sc_name = format!("np_dd_shortcut_{i}");
+                        text(
+                            sdi,
+                            &sc_name,
+                            dd_x + dd_w as i32 - sc_w - 22,
+                            item_y + 4,
+                            11,
+                            color,
+                            sc,
+                            153,
+                        );
+                    }
+                    item_y += 20;
+                },
+                super::MenuEntry::Separator => {
+                    let sep_name = format!("np_dd_sep_{i}");
+                    rect(
+                        sdi,
+                        &sep_name,
+                        dd_x + 4,
+                        item_y + 3,
+                        dd_w - 8,
+                        1,
+                        sep_color,
+                        152,
+                    );
+                    item_y += 6;
+                },
+            }
+        }
+    }
+
     /// Hide every SDI object the notepad renderer creates so a
     /// subsequent app launch doesn't leak stale chrome onto the screen.
     pub(crate) fn hide_notepad_sdi(&self, sdi: &mut SdiRegistry) {
@@ -652,6 +821,9 @@ impl TextEditorApp {
             "np_status_border",
             "np_status_left",
             "np_status_right",
+            "np_dd_bg",
+            "np_dd_border_l",
+            "np_dd_border_d",
         ];
         for name in fixed {
             if let Ok(obj) = sdi.get_mut(name) {
@@ -659,9 +831,18 @@ impl TextEditorApp {
             }
         }
         for i in 0..menu_label_count() {
-            let name = format!("np_menu_{i}");
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
+            for name in [format!("np_menu_{i}"), format!("np_menu_hot_{i}")] {
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+        for i in 0..NP_MAX_DROPDOWN_ENTRIES {
+            for kind in ["hot", "text", "shortcut", "sep"] {
+                let name = format!("np_dd_{kind}_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
             }
         }
         for i in 0..NP_MAX_VISIBLE_LINES {
@@ -674,6 +855,37 @@ impl TextEditorApp {
             }
         }
     }
+}
+
+/// Maximum drop-down items the SDI renderer preallocates slots for.
+const NP_MAX_DROPDOWN_ENTRIES: usize = 16;
+
+/// Compute (width, height) of a drop-down based on its entries.
+/// Kept in sync with `oasis_ui::menu_bar` layout constants.
+fn dropdown_size(menu: &super::Menu) -> (u32, u32) {
+    let mut max_label = 0i32;
+    let mut has_shortcut = false;
+    let mut max_shortcut = 0i32;
+    let mut h = 4i32;
+    for e in &menu.entries {
+        match e {
+            super::MenuEntry::Action {
+                label, shortcut, ..
+            } => {
+                max_label = max_label.max(label.chars().count() as i32 * 7);
+                if let Some(sc) = shortcut {
+                    has_shortcut = true;
+                    max_shortcut = max_shortcut.max(sc.chars().count() as i32 * 7);
+                }
+                h += 20;
+            },
+            super::MenuEntry::Separator => {
+                h += 6;
+            },
+        }
+    }
+    let w = 22 + max_label + if has_shortcut { 16 + max_shortcut } else { 0 } + 22;
+    ((w as u32).max(120), (h + 4) as u32)
 }
 
 const fn menu_label_count() -> usize {

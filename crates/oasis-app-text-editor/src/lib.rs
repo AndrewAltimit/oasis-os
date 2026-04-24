@@ -12,6 +12,7 @@ use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
+use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
 use oasis_vfs::Vfs;
 
 pub mod buffer;
@@ -60,6 +61,34 @@ pub struct TextEditorApp {
     pub(crate) undo_stack: Vec<EditOperation>,
     pub(crate) redo_stack: Vec<EditOperation>,
     pub(crate) file_type: FileType,
+    /// Top menu bar widget (File / Edit / View / Help) with drop-downs.
+    pub(crate) menu: MenuBar,
+}
+
+/// Build the default Text-Editor menu.
+fn default_menu_bar() -> MenuBar {
+    MenuBar::new(vec![
+        Menu::new(
+            "File",
+            vec![
+                MenuEntry::action("New", "file.new").with_shortcut("Ctrl+N"),
+                MenuEntry::action("Save", "file.save").with_shortcut("Ctrl+S"),
+                MenuEntry::Separator,
+                MenuEntry::action("Exit", "file.exit").with_shortcut("Esc"),
+            ],
+        ),
+        Menu::new(
+            "Edit",
+            vec![
+                MenuEntry::action("Undo", "edit.undo").with_shortcut("Ctrl+Z"),
+                MenuEntry::action("Redo", "edit.redo").with_shortcut("Ctrl+Y"),
+                MenuEntry::Separator,
+                MenuEntry::action("Find…", "edit.find").with_shortcut("Ctrl+F"),
+            ],
+        ),
+        Menu::new("View", vec![MenuEntry::action("Status Bar", "view.status")]),
+        Menu::new("Help", vec![MenuEntry::action("About", "help.about")]),
+    ])
 }
 
 impl TextEditorApp {
@@ -81,6 +110,7 @@ impl TextEditorApp {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_type: FileType::Plain,
+            menu: default_menu_bar(),
         };
         editor.rebuild_display_lines();
         editor
@@ -123,9 +153,64 @@ impl TextEditorApp {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_type: ft,
+            menu: default_menu_bar(),
         };
         editor.rebuild_display_lines();
         editor
+    }
+
+    /// Execute a menu action by its registered id string. Returns an
+    /// `AppAction` so the host can act on exit requests.
+    pub(crate) fn run_menu_action(&mut self, id: &str) -> AppAction {
+        match id {
+            "file.new" => {
+                self.buffer = EditorBuffer::new();
+                self.cursor_line = 0;
+                self.cursor_col = 0;
+                self.undo_stack.clear();
+                self.redo_stack.clear();
+                self.modified = false;
+                self.file_path = None;
+                self.status_message = Some("New document".into());
+                self.rebuild_display_lines();
+            },
+            "file.save" => {
+                // Mirror the Start-button flow used by the keyboard:
+                // enter Saving mode, the host writes on Confirm. For
+                // menu users we skip the confirmation modal and just
+                // queue the write immediately.
+                if let Some(ref path) = self.file_path {
+                    self.content.pending_vfs_request = Some((path.clone(), self.save_content()));
+                    self.modified = false;
+                    self.status_message = Some(format!("Saved {path}"));
+                } else {
+                    self.status_message = Some("No file path — Save As not yet implemented".into());
+                }
+                self.rebuild_display_lines();
+            },
+            "file.exit" => return AppAction::Exit,
+            "edit.undo" => {
+                self.undo();
+            },
+            "edit.redo" => {
+                self.redo();
+            },
+            "edit.find" => {
+                self.mode = EditorMode::Find;
+                self.rebuild_display_lines();
+            },
+            "view.status" => {
+                self.status_message = Some("Status bar is always visible.".into());
+                self.rebuild_display_lines();
+            },
+            "help.about" => {
+                self.status_message =
+                    Some("OASIS_OS Text Editor — Ctrl+S to save, Ctrl+F to find.".into());
+                self.rebuild_display_lines();
+            },
+            _ => {},
+        }
+        AppAction::None
     }
 }
 
@@ -143,6 +228,13 @@ impl App for TextEditorApp {
     }
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+        // An open drop-down absorbs every key press — it's a modal
+        // widget. Any button closes it (Win95-style: Esc cancels,
+        // anything else is treated as "cancel and continue").
+        if self.menu.is_open() {
+            self.menu.close();
+            return AppAction::None;
+        }
         match self.mode {
             EditorMode::Normal => self.handle_normal_input(button),
             EditorMode::Insert => self.handle_insert_input(button),
@@ -152,6 +244,12 @@ impl App for TextEditorApp {
     }
 
     fn handle_text_input(&mut self, ch: char) {
+        // Typing while a drop-down is open cancels it rather than
+        // inserting a glyph behind the menu.
+        if self.menu.is_open() {
+            self.menu.close();
+            return;
+        }
         // Non-printable control characters (Enter, Tab, etc. that
         // already come through as ButtonPress events) are filtered
         // out so they don't produce spurious glyphs in the buffer.
@@ -189,36 +287,51 @@ impl App for TextEditorApp {
     }
 
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
-        // Notepad click-to-position: convert the pixel (lx, ly) to
-        // a (line, column) pair in the buffer, then switch to Insert
-        // mode so the next keystroke types at the clicked position.
-        // The layout constants here mirror `draw_notepad`.
-        let title_h = 20i32; // matches at.app.title_bar_height.max(18)
+        // Layout constants — must mirror `draw_notepad`.
+        let title_h = 20i32;
         let menu_h = 18i32;
+        let menu_y = title_h;
         let area_top = title_h + menu_h;
         let status_h = 18i32;
         let area_bottom = ch as i32 - status_h;
 
-        // Clicks in the title / status strips are ignored.
-        if ly < title_h || ly >= area_bottom {
-            return AppAction::None;
-        }
-
-        // Clicks on the menu bar: route to a menu action. For now
-        // each label is a no-op placeholder that drops a status
-        // message so the user sees the click was detected.
-        if ly < area_top {
-            let menu_labels = ["File", "Edit", "View", "Help"];
-            let mut mx = 6i32;
-            for label in &menu_labels {
-                let label_w = label.len() as i32 * 7 + 8;
-                if lx >= mx && lx < mx + label_w {
-                    self.status_message =
-                        Some(format!("{label} menu (drop-down not yet implemented)"));
+        // Route first through the menu-bar widget: clicks on labels
+        // toggle the drop-down, clicks on drop-down items dispatch an
+        // action, anything else just closes an open drop-down.
+        let hit = self.menu.hit_test(lx, ly, 0, menu_y, cw, menu_h as u32);
+        match hit {
+            MenuHit::Label(i) => {
+                if self.menu.open == Some(i) {
+                    self.menu.close();
+                } else {
+                    self.menu.open = Some(i);
+                    self.menu.hovered_item = None;
+                }
+                return AppAction::None;
+            },
+            MenuHit::Item { id } => {
+                self.menu.close();
+                return self.run_menu_action(&id);
+            },
+            MenuHit::NoOp => {
+                // Click landed on a separator / disabled item — keep
+                // the drop-down open.
+                return AppAction::None;
+            },
+            MenuHit::Outside => {
+                // If a drop-down was open, close it now and don't
+                // also move the caret — avoids the user accidentally
+                // typing where the menu just was.
+                if self.menu.is_open() {
+                    self.menu.close();
                     return AppAction::None;
                 }
-                mx += label.len() as i32 * 7 + 14;
-            }
+            },
+        }
+
+        // Clicks in the title / menu-bar / status strips outside the
+        // menu labels are ignored.
+        if ly < area_top || ly >= area_bottom {
             return AppAction::None;
         }
 
@@ -241,8 +354,6 @@ impl App for TextEditorApp {
         self.mode = EditorMode::Insert;
         self.ensure_cursor_visible();
         self.rebuild_display_lines();
-        // Swallow the click — clippy would flag an unused parameter.
-        let _ = cw;
         AppAction::None
     }
 
@@ -378,19 +489,60 @@ mod tests {
         assert!(app.cursor_col > 0 && app.cursor_col <= 11);
     }
 
-    /// Clicking on a menu label posts a status message so the user
-    /// sees the click was registered. Drop-downs are future work.
+    /// Clicking on a menu label opens that menu's drop-down. Clicking
+    /// the same label again closes it.
     #[test]
-    fn click_on_menu_label_sets_status_message() {
+    fn click_on_menu_label_toggles_dropdown() {
         let mut app = TextEditorApp::new("/apps/editor");
-        // "File" label at x=6, y ~= 20 + 3 = 23 (menu strip). Menu
-        // bar spans y=title_h..title_h+menu_h, so ly=28 hits it.
+        assert!(!app.menu.is_open());
+        // "File" label at x=6, menu strip y=20..38 so ly=28 hits it.
         let _ = app.handle_click(10, 28, 400, 300, false);
-        assert!(
-            app.status_message.as_deref().unwrap_or("").contains("File"),
-            "expected File menu status, got {:?}",
-            app.status_message,
-        );
+        assert_eq!(app.menu.open, Some(0), "File dropdown should be open");
+        // Clicking File again toggles it closed.
+        let _ = app.handle_click(10, 28, 400, 300, false);
+        assert!(!app.menu.is_open(), "second click should close");
+    }
+
+    /// Clicking a File > Save item runs the save action, closes the
+    /// menu, and emits the VFS IPC.
+    #[test]
+    fn click_file_save_item_emits_vfs_write() {
+        let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
+        // Open the File menu.
+        let _ = app.handle_click(10, 28, 400, 300, false);
+        assert!(app.menu.is_open());
+        // File dropdown starts just below the menu bar (y=38) with
+        // 4px padding, so first item row is y=42..62. New, then
+        // Save is the second entry (y=62..82).
+        let action = app.handle_click(20, 66, 400, 300, false);
+        assert_eq!(action, AppAction::None);
+        assert!(!app.menu.is_open(), "menu should close after dispatch");
+        let req = app.content.pending_vfs_request.take().expect("vfs write");
+        assert_eq!(req.0, "/tmp/notes.txt");
+        assert_eq!(req.1, "hello");
+    }
+
+    /// Clicking File > Exit returns `AppAction::Exit` so the host
+    /// closes the editor window.
+    #[test]
+    fn click_file_exit_item_returns_exit() {
+        let mut app = TextEditorApp::new("/apps/editor");
+        let _ = app.handle_click(10, 28, 400, 300, false);
+        // Exit is the 4th entry (New, Save, Separator, Exit).
+        // y=42+20+20+6 = 88 is the exit row.
+        let action = app.handle_click(20, 92, 400, 300, false);
+        assert_eq!(action, AppAction::Exit);
+    }
+
+    /// When a drop-down is open, a plain key press closes it rather
+    /// than typing through to the buffer.
+    #[test]
+    fn key_closes_open_dropdown() {
+        let vfs = make_vfs();
+        let mut app = TextEditorApp::new("/apps/editor");
+        app.menu.open = Some(0);
+        app.handle_input(&Button::Cancel, &vfs);
+        assert!(!app.menu.is_open());
     }
 
     /// `update_sdi` must populate the Notepad chrome (menu bar, text

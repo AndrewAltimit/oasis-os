@@ -71,6 +71,9 @@ impl AppRunner {
             "np_status_border",
             "np_status_left",
             "np_status_right",
+            "np_dd_bg",
+            "np_dd_border_l",
+            "np_dd_border_d",
         ];
         for name in np_fixed {
             if let Ok(obj) = sdi.get_mut(name) {
@@ -78,9 +81,18 @@ impl AppRunner {
             }
         }
         for i in 0..4 {
-            let name = format!("np_menu_{i}");
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
+            for name in [format!("np_menu_{i}"), format!("np_menu_hot_{i}")] {
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+        for i in 0..16 {
+            for kind in ["hot", "text", "shortcut", "sep"] {
+                let name = format!("np_dd_{kind}_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
             }
         }
         for i in 0..64 {
