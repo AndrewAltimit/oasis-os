@@ -49,7 +49,9 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     if w == 0 || h == 0 {
         return None;
     }
-    let color = info.color_type;
+    // Use the post-transformation color type so palette-indexed PNGs
+    // (expanded to RGB/RGBA by EXPAND) match the correct arm below.
+    let (color, _) = reader.output_color_type();
     let mut buf = vec![0u8; reader.output_buffer_size()];
     reader.next_frame(&mut buf).ok()?;
 
@@ -174,6 +176,28 @@ mod tests {
         assert_eq!(img.height, 2);
         assert_eq!(img.rgba.len(), 16);
         // First pixel is red with opaque alpha.
+        assert_eq!(&img.rgba[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn decode_png_palette() {
+        // Palette-indexed PNG. EXPAND converts it to RGB; the decoder
+        // must use the post-transformation color type to match the buffer.
+        let mut buf = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut buf, 2, 2);
+            enc.set_color(png::ColorType::Indexed);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.set_palette(vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 128, 128, 128]);
+            let mut writer = enc.write_header().expect("png header");
+            writer
+                .write_image_data(&[0, 1, 2, 3])
+                .expect("palette png data");
+        }
+        let img = decode(&buf).expect("palette png decode");
+        assert_eq!(img.width, 2);
+        assert_eq!(img.height, 2);
+        assert_eq!(img.rgba.len(), 16);
         assert_eq!(&img.rgba[..4], &[255, 0, 0, 255]);
     }
 
