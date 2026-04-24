@@ -102,3 +102,27 @@ pub(crate) fn create_app_delegate(
         .find(|(name, _)| *name == title)
         .map(|(_, factory)| factory(path, vfs))
 }
+
+/// Create an app delegate with `file_path` pre-opened. Used by File Manager
+/// when the user Confirms on a typed file (image, audio, text) to hand off
+/// to the appropriate viewer. Falls back to [`create_app_delegate`] for
+/// apps that have no "start pointing at this file" concept.
+pub(crate) fn create_app_delegate_for_file(
+    title: &str,
+    path: &str,
+    file_path: &str,
+    vfs: &dyn Vfs,
+) -> Option<Box<dyn super::app_trait::App>> {
+    match title {
+        "Music Player" => Some(Box::new(oasis_app_media::BrowsingApp::music_player_at(
+            path, file_path, vfs,
+        ))),
+        "Photo Viewer" => Some(Box::new(oasis_app_media::BrowsingApp::photo_viewer_at(
+            path, file_path, vfs,
+        ))),
+        "Text Editor" => Some(Box::new(
+            oasis_app_text_editor::TextEditorApp::open_from_vfs(file_path, vfs),
+        )),
+        _ => create_app_delegate(title, path, vfs),
+    }
+}

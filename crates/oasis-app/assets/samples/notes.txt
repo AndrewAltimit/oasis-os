@@ -1,0 +1,12 @@
+Notes
+=====
+
+A scratchpad for whatever you want to jot down.
+
+Text Editor keys:
+  Confirm     Enter insert mode
+  Cancel      Return to normal mode / exit app
+  Triangle    Find
+  Start       Save
+  Select      Undo (normal)  / Backspace (insert)
+  Square      Redo (normal)  / Delete forward (insert)

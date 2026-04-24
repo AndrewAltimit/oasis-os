@@ -423,6 +423,19 @@ pub fn handle_desktop_input(
                                 state.content.fullscreen_app = Some(active_id);
                             }
                         },
+                        AppAction::LaunchAppWithFile {
+                            app_title,
+                            file_path,
+                        } => {
+                            launch::launch_app_window_for_file(
+                                &app_title,
+                                &file_path,
+                                &mut state.wm,
+                                sdi,
+                                &mut state.content.open_runners,
+                                vfs,
+                            );
+                        },
                         AppAction::None => {},
                     }
                 }
@@ -465,6 +478,22 @@ pub fn handle_app_input(
                         AppRunner::hide_sdi(sdi);
                         state.content.app_runner = None;
                         state.mode = Mode::Terminal;
+                    },
+                    AppAction::LaunchAppWithFile {
+                        app_title,
+                        file_path,
+                    } => {
+                        // Replace the current fullscreen runner with the
+                        // target app, with the file pre-opened.
+                        AppRunner::hide_sdi(sdi);
+                        let entry = oasis_core::dashboard::AppEntry {
+                            title: app_title.clone(),
+                            path: format!("/apps/{app_title}"),
+                            icon_png: Vec::new(),
+                            color: oasis_core::backend::Color::rgb(100, 100, 100),
+                        };
+                        state.content.app_runner =
+                            Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
                     },
                     AppAction::RequestFullscreen | AppAction::None => {},
                 }
@@ -880,6 +909,7 @@ mod tests {
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
+            media_track: None,
             tv_audio_chunks_fed: 0,
             tv_audio_samples_fed: 0,
             #[cfg(feature = "_video")]

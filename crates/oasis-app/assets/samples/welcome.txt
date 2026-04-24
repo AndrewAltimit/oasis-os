@@ -1,0 +1,18 @@
+Welcome to OASIS_OS!
+====================
+
+This is your home directory. Have a look around:
+
+  /home/user/Documents/   Your text files and notes.
+  /home/user/Music/       Sample tracks — try the Music Player.
+  /home/user/Pictures/    Sample images — try the Photo Viewer.
+  /home/user/scripts/     Shell scripts you can run in the Terminal.
+
+Tips
+----
+- Open the Dashboard (Start menu) to browse installed apps.
+- Highlight a file in File Manager and press Confirm to open it
+  in the right viewer (Photo Viewer, Music Player, or Text Editor).
+- Press Cancel to back out of any app.
+
+Have fun!

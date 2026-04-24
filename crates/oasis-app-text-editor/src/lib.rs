@@ -88,6 +88,22 @@ impl TextEditorApp {
         editor
     }
 
+    /// Open a file from the VFS. If the file doesn't exist or can't be
+    /// read, returns an editor with a status message rather than panicking.
+    pub fn open_from_vfs(path: &str, vfs: &dyn Vfs) -> Self {
+        match vfs.read(path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                Self::open_file(path, &text)
+            },
+            Err(e) => {
+                let mut editor = Self::new("/apps/editor");
+                editor.status_message = Some(format!("Could not read {path}: {e}"));
+                editor
+            },
+        }
+    }
+
     /// Open a file with the given content.
     pub fn open_file(path: &str, content: &str) -> Self {
         let file_name = path.rsplit('/').next().unwrap_or(path);
@@ -852,6 +868,26 @@ mod tests {
         let app = TextEditorApp::new("/apps/editor");
         let any = app.as_any();
         assert!(any.downcast_ref::<TextEditorApp>().is_some());
+    }
+
+    #[test]
+    fn open_from_vfs_loads_existing_file() {
+        use oasis_vfs::Vfs;
+        let mut vfs = make_vfs();
+        vfs.write("/notes.txt", b"line one\nline two\n").unwrap();
+        let app = TextEditorApp::open_from_vfs("/notes.txt", &vfs);
+        assert_eq!(app.viewing_file(), Some("/notes.txt"));
+        assert_eq!(app.buffer.get_line(0), Some("line one"));
+        assert_eq!(app.buffer.get_line(1), Some("line two"));
+    }
+
+    #[test]
+    fn open_from_vfs_missing_file_returns_editor_with_status() {
+        let vfs = make_vfs();
+        let app = TextEditorApp::open_from_vfs("/does_not_exist.txt", &vfs);
+        // Empty editor + status message.
+        assert!(app.viewing_file().is_none());
+        assert!(app.status_message.is_some());
     }
 
     #[test]

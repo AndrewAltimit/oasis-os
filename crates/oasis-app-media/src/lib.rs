@@ -103,6 +103,36 @@ impl BrowsingApp {
         )
     }
 
+    /// Create the Music Player app, pre-opening `file_path` so the viewer
+    /// starts in track-view mode. The app's browse directory is set to the
+    /// parent of the file so Cancel returns the user to a useful listing.
+    pub fn music_player_at(path: &str, file_path: &str, vfs: &dyn Vfs) -> Self {
+        let mut app = Self::new(
+            "Music Player",
+            path,
+            parent_dir(file_path).as_str(),
+            "Music directory not found",
+            ViewerMode::Audio,
+            vfs,
+        );
+        app.open_file(vfs, file_path);
+        app
+    }
+
+    /// Create the Photo Viewer app, pre-opening `file_path`.
+    pub fn photo_viewer_at(path: &str, file_path: &str, vfs: &dyn Vfs) -> Self {
+        let mut app = Self::new(
+            "Photo Viewer",
+            path,
+            parent_dir(file_path).as_str(),
+            "Photos directory not found",
+            ViewerMode::Image,
+            vfs,
+        );
+        app.open_file(vfs, file_path);
+        app
+    }
+
     /// Enter the selected directory or open the selected file.
     fn enter_selected(&mut self, vfs: &dyn Vfs) {
         let abs_idx = self.content.scroll + self.content.cursor;
@@ -283,8 +313,20 @@ impl BrowsingApp {
             ViewerMode::Image => view_image_file(path, &data),
             ViewerMode::Generic => view_generic_file(path, &data),
         };
+
+        // Music mode: ask the host audio subsystem to load + play the
+        // track. The IPC is consumed by `oasis-app::media_controller`.
+        if matches!(self.viewer_mode, ViewerMode::Audio) {
+            self.content.pending_vfs_request =
+                Some((MEDIA_REQUEST_PATH.to_string(), format!("play_file {path}")));
+        }
     }
 }
+
+/// VFS IPC path used by the Music Player to talk to the audio host.
+/// The host writes back status here (track loaded, errors) and reads
+/// `play_file <path>` / `stop` requests from the same path.
+pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
 
 impl App for BrowsingApp {
     impl_content_app_methods!(content);
@@ -293,6 +335,11 @@ impl App for BrowsingApp {
         match button {
             Button::Cancel => {
                 if self.content.viewing_file.is_some() {
+                    // Stop audio if we were playing a track.
+                    if matches!(self.viewer_mode, ViewerMode::Audio) {
+                        self.content.pending_vfs_request =
+                            Some((MEDIA_REQUEST_PATH.to_string(), "stop".to_string()));
+                    }
                     self.content.viewing_file = None;
                     self.content.scroll = 0;
                     self.content.cursor = 0;
@@ -553,6 +600,40 @@ mod tests {
         app.handle_input(&Button::Triangle, &vfs);
         app.handle_input(&Button::Triangle, &vfs);
         assert_eq!(app.playlist().len(), 1);
+    }
+
+    #[test]
+    fn music_open_emits_play_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        let req = app.content.pending_vfs_request.clone().expect("ipc");
+        assert_eq!(req.0, MEDIA_REQUEST_PATH);
+        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+    }
+
+    #[test]
+    fn music_cancel_emits_stop_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        // Drain the play IPC.
+        let _ = app.content.pending_vfs_request.take();
+        app.handle_input(&Button::Cancel, &vfs);
+        let req = app.content.pending_vfs_request.clone().expect("ipc");
+        assert_eq!(req.0, MEDIA_REQUEST_PATH);
+        assert_eq!(req.1, "stop");
+    }
+
+    #[test]
+    fn photo_open_does_not_emit_media_ipc() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        assert!(
+            app.content.pending_vfs_request.is_none(),
+            "photo viewer must not emit media IPC"
+        );
     }
 
     #[test]

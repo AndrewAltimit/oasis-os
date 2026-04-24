@@ -11,7 +11,7 @@ pub mod render;
 pub use app_trait::{App, ContentState};
 
 /// Action returned by an app after handling input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppAction {
     /// App consumed the input, no mode change needed.
     None,
@@ -21,6 +21,13 @@ pub enum AppAction {
     SwitchToTerminal,
     /// App requests entering fullscreen kiosk mode.
     RequestFullscreen,
+    /// App asks the host to launch `app_title` with `file_path` pre-loaded.
+    /// Used by File Manager when the user opens a typed file (image, audio,
+    /// text) to hand off to the appropriate viewer.
+    LaunchAppWithFile {
+        app_title: String,
+        file_path: String,
+    },
 }
 
 /// Generate the boilerplate `App` trait methods that delegate to a
