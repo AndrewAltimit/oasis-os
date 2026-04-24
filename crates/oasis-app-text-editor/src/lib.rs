@@ -6,9 +6,7 @@
 
 use std::any::Any;
 
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
+use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
@@ -170,10 +168,11 @@ impl App for TextEditorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        if self.file_type == FileType::Plain {
-            return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
-        }
-        self.draw_highlighted(cx, cy, cw, ch, backend, at)
+        // Windows-Notepad-style GUI: menu bar, text area, status bar.
+        // The (shared with `draw_highlighted`) syntax-highlighting
+        // pipeline is used for known file types; plain files render
+        // with a single foreground colour.
+        self.draw_notepad(cx, cy, cw, ch, backend, at)
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {

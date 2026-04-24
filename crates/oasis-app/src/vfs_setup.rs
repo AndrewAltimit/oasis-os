@@ -8,7 +8,6 @@ use oasis_core::vfs::MemoryVfs;
 const SAMPLE_WELCOME_TXT: &[u8] = include_bytes!("../assets/samples/welcome.txt");
 const SAMPLE_NOTES_TXT: &[u8] = include_bytes!("../assets/samples/notes.txt");
 const SAMPLE_HELLO_SH: &[u8] = include_bytes!("../assets/samples/hello.sh");
-const SAMPLE_CHIME_WAV: &[u8] = include_bytes!("../assets/samples/oasis_chime.wav");
 const SAMPLE_AMBIENT_MP3: &[u8] = include_bytes!("../assets/samples/ambient_dawn.mp3");
 const SAMPLE_SUNSET_PNG: &[u8] = include_bytes!("../assets/samples/oasis_sample.png");
 
@@ -290,8 +289,6 @@ fn write_bundled_samples(vfs: &mut MemoryVfs) {
 
     vfs.write("/home/user/music/ambient_dawn.mp3", SAMPLE_AMBIENT_MP3)
         .expect("vfs write /home/user/music/ambient_dawn.mp3");
-    vfs.write("/home/user/music/oasis_chime.wav", SAMPLE_CHIME_WAV)
-        .expect("vfs write /home/user/music/oasis_chime.wav");
     vfs.write("/home/user/photos/oasis_sample.png", SAMPLE_SUNSET_PNG)
         .expect("vfs write /home/user/photos/oasis_sample.png");
     vfs.write("/home/user/documents/notes.txt", SAMPLE_NOTES_TXT)
@@ -529,12 +526,6 @@ mod tests {
             "ambient_dawn.mp3 should be real audio, got first bytes: {:?}",
             &mp3[..mp3.len().min(4)]
         );
-
-        let wav = vfs
-            .read("/home/user/music/oasis_chime.wav")
-            .expect("bundled wav should exist");
-        assert!(wav.starts_with(b"RIFF"), "oasis_chime.wav should be WAV");
-        assert!(&wav[8..12] == b"WAVE");
     }
 
     #[test]

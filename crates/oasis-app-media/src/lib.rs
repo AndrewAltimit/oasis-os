@@ -7,9 +7,16 @@
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
+use oasis_app_core::render::{
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+};
+use oasis_app_core::{App, AppAction, ContentState};
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
+
+pub mod image;
+mod music_ui;
+mod photo_ui;
 
 /// File-browsing app implementing the `App` trait.
 ///
@@ -34,6 +41,18 @@ pub struct BrowsingApp {
     slideshow: bool,
     /// Frame counter for slideshow timing.
     slideshow_timer: u32,
+    /// Decoded pixel buffer for the currently viewed image (photo mode).
+    /// Populated by `open_file`; the backend owns the GPU texture, keyed
+    /// by the viewed file path.
+    decoded_image: Option<image::DecodedImage>,
+    /// Raw audio bytes for the currently viewed track (music mode).
+    /// The app loads the bytes during `open_file` so the host audio
+    /// controller can feed them to the backend without re-reading VFS.
+    /// Metadata (title, duration) displayed in the UI is derived from
+    /// the same bytes.
+    track_title: Option<String>,
+    track_duration_str: Option<String>,
+    track_size_bytes: Option<usize>,
 }
 
 /// How files should be viewed when opened.
@@ -76,7 +95,25 @@ impl BrowsingApp {
             rotation: 0,
             slideshow: false,
             slideshow_timer: 0,
+            decoded_image: None,
+            track_title: None,
+            track_duration_str: None,
+            track_size_bytes: None,
         }
+    }
+
+    /// Decoded image for the currently viewed photo, if any.
+    pub fn decoded_image(&self) -> Option<&image::DecodedImage> {
+        self.decoded_image.as_ref()
+    }
+
+    /// Track display info for the currently open music track.
+    pub fn track_info(&self) -> (Option<&str>, Option<&str>, Option<usize>) {
+        (
+            self.track_title.as_deref(),
+            self.track_duration_str.as_deref(),
+            self.track_size_bytes,
+        )
     }
 
     /// Create the Music Player app.
@@ -217,6 +254,11 @@ impl BrowsingApp {
         &self.playlist
     }
 
+    /// Whether shuffle mode is on (music mode).
+    pub fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+
     /// Get the current zoom level (photo viewer).
     pub fn zoom_level(&self) -> u32 {
         self.zoom_level
@@ -296,6 +338,11 @@ impl BrowsingApp {
         self.content.viewing_file = Some(path.to_string());
         self.content.scroll = 0;
         self.content.cursor = 0;
+        // Clear any previous view-specific state.
+        self.decoded_image = None;
+        self.track_title = None;
+        self.track_duration_str = None;
+        self.track_size_bytes = None;
 
         let data = match vfs.read(path) {
             Ok(d) => d,
@@ -314,13 +361,124 @@ impl BrowsingApp {
             ViewerMode::Generic => view_generic_file(path, &data),
         };
 
-        // Music mode: ask the host audio subsystem to load + play the
-        // track. The IPC is consumed by `oasis-app::media_controller`.
-        if matches!(self.viewer_mode, ViewerMode::Audio) {
-            self.content.pending_vfs_request =
-                Some((MEDIA_REQUEST_PATH.to_string(), format!("play_file {path}")));
+        match self.viewer_mode {
+            ViewerMode::Image => {
+                self.decoded_image = image::decode(&data);
+                if self.decoded_image.is_none() {
+                    log::warn!(
+                        "photo viewer: unsupported or unreadable image at {path} ({} bytes)",
+                        data.len(),
+                    );
+                }
+            },
+            ViewerMode::Audio => {
+                let (title, duration) = parse_audio_metadata(path, &data);
+                self.track_title = Some(title);
+                self.track_duration_str = duration;
+                self.track_size_bytes = Some(data.len());
+                // Ask the host audio subsystem to load + play the
+                // track. Consumed by `oasis-app::media_controller`.
+                self.content.pending_vfs_request =
+                    Some((MEDIA_REQUEST_PATH.to_string(), format!("play_file {path}")));
+            },
+            ViewerMode::Generic => {},
         }
     }
+}
+
+/// Extract a display title and duration string from an audio file.
+/// Falls back to the filename stem if ID3 tags are not available.
+fn parse_audio_metadata(path: &str, data: &[u8]) -> (String, Option<String>) {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let fallback_title = filename
+        .rsplit_once('.')
+        .map_or(filename, |(stem, _)| stem)
+        .replace(['_', '-'], " ");
+    let title = id3v2_title(data).unwrap_or(fallback_title);
+    let duration = mp3_duration(data).map(format_duration);
+    (title, duration)
+}
+
+/// Small ID3v2 TIT2 (title) reader. Returns `None` if not present —
+/// just enough to show a nice track title when one is available.
+fn id3v2_title(data: &[u8]) -> Option<String> {
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return None;
+    }
+    let size = ((data[6] as usize) << 21)
+        | ((data[7] as usize) << 14)
+        | ((data[8] as usize) << 7)
+        | (data[9] as usize);
+    let tag_end = 10 + size;
+    if tag_end > data.len() {
+        return None;
+    }
+    let tag = &data[10..tag_end];
+    let mut i = 0;
+    while i + 10 <= tag.len() {
+        let frame_id = &tag[i..i + 4];
+        if frame_id[0] == 0 {
+            break;
+        }
+        let frame_size =
+            u32::from_be_bytes([tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]]) as usize;
+        let body_start = i + 10;
+        let body_end = body_start + frame_size;
+        if body_end > tag.len() {
+            break;
+        }
+        if frame_id == b"TIT2" && frame_size >= 1 {
+            let encoding = tag[body_start];
+            let payload = &tag[body_start + 1..body_end];
+            if encoding == 0 || encoding == 3 {
+                let s = String::from_utf8_lossy(payload).into_owned();
+                let trimmed = s.trim_end_matches('\0').trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        i = body_end;
+    }
+    None
+}
+
+/// Estimate MP3 duration from first-frame bitrate + file size. Close
+/// enough for a UI readout; we're not a metadata library.
+fn mp3_duration(data: &[u8]) -> Option<u32> {
+    let audio_start = if data.len() >= 10 && &data[..3] == b"ID3" {
+        let size = ((data[6] as usize) << 21)
+            | ((data[7] as usize) << 14)
+            | ((data[8] as usize) << 7)
+            | (data[9] as usize);
+        10 + size
+    } else {
+        0
+    };
+    if audio_start >= data.len() {
+        return None;
+    }
+    let audio = &data[audio_start..];
+    let header_pos = audio
+        .windows(2)
+        .position(|w| w[0] == 0xFF && (w[1] & 0xE0) == 0xE0)?;
+    let header = audio.get(header_pos..header_pos + 4)?;
+    let bitrate_index = (header[2] >> 4) & 0x0F;
+    const BITRATES: [u32; 16] = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+    ];
+    let bitrate_kbps = BITRATES[bitrate_index as usize];
+    if bitrate_kbps == 0 {
+        return None;
+    }
+    let bits = (audio.len() as u64) * 8;
+    Some((bits / (bitrate_kbps as u64 * 1000)) as u32)
+}
+
+fn format_duration(secs: u32) -> String {
+    let m = secs / 60;
+    let s = secs % 60;
+    format!("{m:02}:{s:02}")
 }
 
 /// VFS IPC path used by the Music Player to talk to the audio host.
@@ -329,7 +487,57 @@ impl BrowsingApp {
 pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
 
 impl App for BrowsingApp {
-    impl_content_app_methods!(content);
+    fn title(&self) -> &str {
+        &self.content.title
+    }
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
+    fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+    }
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn oasis_types::backend::SdiBackend,
+        at: &oasis_skin::ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        // File listing: default content renderer.
+        if self.content.viewing_file.is_none() {
+            return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
+        }
+        match self.viewer_mode {
+            ViewerMode::Image => photo_ui::draw(self, cx, cy, cw, ch, backend, at),
+            ViewerMode::Audio => music_ui::draw(self, cx, cy, cw, ch, backend, at),
+            ViewerMode::Generic => {
+                draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+            },
+        }
+    }
+    fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+    fn take_pending_request(&mut self) -> Option<(String, String)> {
+        self.content.pending_vfs_request.take()
+    }
+    fn peek_pending_request(&self) -> Option<&(String, String)> {
+        self.content.pending_vfs_request.as_ref()
+    }
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         match button {
