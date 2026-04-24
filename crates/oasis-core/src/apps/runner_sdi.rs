@@ -56,5 +56,41 @@ impl AppRunner {
 
         // Hide TV Guide objects.
         oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
+
+        // Hide Text Editor Notepad chrome.  Each app could expose its
+        // own static hide helper; for now we inline the small set of
+        // `np_*` names. Keep this in sync with
+        // `oasis_app_text_editor::render::render_notepad_sdi`.
+        let np_fixed = [
+            "np_menu_bg",
+            "np_menu_border",
+            "np_area_bg",
+            "np_sel_bg",
+            "np_caret",
+            "np_status_bg",
+            "np_status_border",
+            "np_status_left",
+            "np_status_right",
+        ];
+        for name in np_fixed {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..4 {
+            let name = format!("np_menu_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..64 {
+            let name = format!("np_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
     }
 }

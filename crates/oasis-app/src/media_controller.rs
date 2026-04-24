@@ -71,9 +71,10 @@ fn stop_track(state: &mut AppState) {
     }
 }
 
-/// Unload the music track on app shutdown — call from the quit path so
-/// we don't leave a playing track alive past the last render.
-#[allow(dead_code)]
+/// Unload the music track when the Music Player window/app closes.
+/// Invoked from the input dispatcher when the closing runner is the
+/// Music Player — the app's own Cancel handler emits a `stop` IPC
+/// but the window-manager close button bypasses that path.
 pub fn shutdown(state: &mut AppState) {
     stop_track(state);
 }

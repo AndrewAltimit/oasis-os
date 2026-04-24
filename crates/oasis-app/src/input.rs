@@ -44,6 +44,22 @@ fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
     }
 }
 
+/// If the closing runner is the Music Player, tear down its playing
+/// track. The app itself emits a `stop` VFS IPC on Cancel, but the
+/// window-manager close button bypasses that path — the runner is
+/// dropped before `tick()` gets another chance to read the IPC.
+fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
+    const MUSIC_APP_TITLE: &str = "Music Player";
+    let is_music = state
+        .content
+        .open_runners
+        .iter()
+        .any(|(rid, runner)| rid == id && runner.title == MUSIC_APP_TITLE);
+    if is_music {
+        crate::media_controller::shutdown(state);
+    }
+}
+
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputResult {
@@ -161,6 +177,7 @@ pub fn handle_desktop_input(
                         state.content.fullscreen_app = None;
                     }
                     stop_radio_if_radio_runner(state, &id);
+                    stop_music_if_music_runner(state, &id);
                     state.content.open_runners.retain(|(rid, _)| *rid != id);
                     if id == "browser" {
                         state.content.browser = None;
@@ -271,6 +288,7 @@ pub fn handle_desktop_input(
                 }
                 let _ = state.wm.close_window(&active_id, sdi);
                 stop_radio_if_radio_runner(state, &active_id);
+                stop_music_if_music_runner(state, &active_id);
                 state
                     .content
                     .open_runners
@@ -406,6 +424,7 @@ pub fn handle_desktop_input(
                             }
                             let _ = state.wm.close_window(&active_id, sdi);
                             stop_radio_if_radio_runner(state, &active_id);
+                            stop_music_if_music_runner(state, &active_id);
                             state
                                 .content
                                 .open_runners
@@ -465,6 +484,7 @@ pub fn handle_app_input(
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => {
                 let is_radio = runner.title == RADIO_APP_TITLE;
+                let is_music = runner.title == "Music Player";
                 match runner.handle_input(btn, vfs) {
                     AppAction::Exit => {
                         AppRunner::hide_sdi(sdi);
@@ -472,6 +492,9 @@ pub fn handle_app_input(
                         state.mode = Mode::Dashboard;
                         if is_radio {
                             stop_radio(state);
+                        }
+                        if is_music {
+                            crate::media_controller::shutdown(state);
                         }
                     },
                     AppAction::SwitchToTerminal => {

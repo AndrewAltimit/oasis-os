@@ -374,6 +374,25 @@ impl TextEditorApp {
     /// objects instead of direct backend draw calls so it survives the
     /// classic-skin fullscreen render path.
     pub(crate) fn render_notepad_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // Defensive: hide the generic content-listing SDI objects that
+        // a previously-open app may have populated and left visible.
+        // Without this, stale `app_line_*` text bleeds through our
+        // white text area because we never repopulate them ourselves.
+        for name in ["app_sel_bg", "app_sel_accent", "app_scroll", "app_divider"] {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..100 {
+            let name = format!("app_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+
         let body_bg = Color::rgb(255, 255, 255);
         let body_fg = Color::rgb(16, 16, 16);
         let chrome_bg = Color::rgb(240, 240, 240);

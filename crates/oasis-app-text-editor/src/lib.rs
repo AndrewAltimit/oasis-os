@@ -220,11 +220,60 @@ mod tests {
     use super::TextEditorApp;
     use oasis_app_core::App;
     use oasis_app_core::AppAction;
+    use oasis_sdi::SdiRegistry;
+    use oasis_skin::ActiveTheme;
     use oasis_types::input::Button;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
         MemoryVfs::new()
+    }
+
+    /// `update_sdi` must populate the Notepad chrome (menu bar, text
+    /// area, status bar) — not leave the generic content-listing
+    /// objects behind. This guards against the old "> 1 | text" CLI
+    /// style showing in the classic fullscreen path.
+    #[test]
+    fn update_sdi_renders_notepad_chrome() {
+        let mut app = TextEditorApp::open_file("/welcome.txt", "hello\nworld");
+        let mut sdi = SdiRegistry::new();
+        app.update_sdi(&mut sdi, &ActiveTheme::default());
+        // Notepad chrome objects exist and are visible.
+        for name in [
+            "np_menu_bg",
+            "np_area_bg",
+            "np_status_bg",
+            "np_menu_0",
+            "np_status_left",
+            "np_status_right",
+        ] {
+            let obj = sdi
+                .get(name)
+                .unwrap_or_else(|_| panic!("{name} should exist after update_sdi"));
+            assert!(obj.visible, "{name} should be visible");
+        }
+        // Menu labels present.
+        let file_label = sdi.get("np_menu_0").unwrap();
+        assert_eq!(file_label.text.as_deref(), Some("File"));
+        // First buffer line rendered as an np_line_* object.
+        let line0 = sdi.get("np_line_0").unwrap();
+        assert!(line0.visible);
+        assert_eq!(line0.text.as_deref(), Some("hello"));
+    }
+
+    /// After the editor populates its SDI, a subsequent `hide_sdi`
+    /// must drop every Notepad object — otherwise the chrome leaks
+    /// onto whichever app is opened next.
+    #[test]
+    fn hide_sdi_hides_notepad_chrome() {
+        let mut app = TextEditorApp::open_file("/welcome.txt", "hi");
+        let mut sdi = SdiRegistry::new();
+        app.update_sdi(&mut sdi, &ActiveTheme::default());
+        app.hide_sdi(&mut sdi);
+        for name in ["np_menu_bg", "np_area_bg", "np_status_bg", "np_line_0"] {
+            let obj = sdi.get(name).unwrap();
+            assert!(!obj.visible, "{name} should be hidden");
+        }
     }
 
     // -- EditorBuffer tests --
