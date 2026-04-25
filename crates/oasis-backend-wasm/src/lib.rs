@@ -949,8 +949,7 @@ impl OasisWasm {
         }
 
         if let Some(id) = data.strip_prefix("play:") {
-            self.youtube_active_url =
-                Some(oasis_core::apps::video_embed::embed_url(id));
+            self.youtube_active_url = Some(oasis_core::apps::video_embed::embed_url(id));
             self.youtube_active_id = Some(id.to_string());
             self.iframe.set_youtube_mode();
         }

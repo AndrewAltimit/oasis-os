@@ -265,6 +265,7 @@ impl OasisWasm {
                         #[cfg(feature = "wasm-youtube")]
                         if id == "video_embed" {
                             self.youtube_active_id = None;
+                            self.youtube_active_url = None;
                             self.iframe.hide();
                             for tex in self.youtube_thumb_textures.drain(..) {
                                 let _ = self.backend.destroy_texture(tex);
