@@ -20,6 +20,8 @@ use oasis_core::startmenu::StartMenuAction;
 use oasis_core::terminal_sdi;
 use oasis_core::transition;
 use oasis_core::wm::manager::WmEvent;
+#[cfg(feature = "wasm-youtube")]
+use oasis_types::backend::SdiCore;
 
 use crate::vfs_content::trim_output;
 use crate::{Mode, OasisWasm};
@@ -260,6 +262,15 @@ impl OasisWasm {
                             self.browser = None;
                             self.iframe.hide();
                         }
+                        #[cfg(feature = "wasm-youtube")]
+                        if id == "video_embed" {
+                            self.youtube_active_id = None;
+                            self.youtube_active_url = None;
+                            self.iframe.hide();
+                            for tex in self.youtube_thumb_textures.drain(..) {
+                                let _ = self.backend.destroy_texture(tex);
+                            }
+                        }
                         if self.wm.window_count() == 0 {
                             self.mode = Mode::Dashboard;
                         }
@@ -376,7 +387,14 @@ impl OasisWasm {
                 Some("terminal") => {
                     self.input_buf.push(*ch);
                 },
-                _ => {},
+                Some(id) => {
+                    if let Some((_, runner)) =
+                        self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+                    {
+                        runner.handle_text_input(*ch);
+                    }
+                },
+                None => {},
             },
             InputEvent::Backspace => match self.wm.active_window() {
                 Some("browser") => {
@@ -387,7 +405,14 @@ impl OasisWasm {
                 Some("terminal") => {
                     self.input_buf.pop();
                 },
-                _ => {},
+                Some(id) => {
+                    if let Some((_, runner)) =
+                        self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+                    {
+                        runner.handle_backspace();
+                    }
+                },
+                None => {},
             },
             InputEvent::MouseWheel { delta } => match self.wm.active_window() {
                 Some("browser") => {

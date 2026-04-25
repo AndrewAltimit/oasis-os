@@ -103,7 +103,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 └── oasis-core       (coordination: dashboard, agent, plugin, script; apps extracted to oasis-app-* crates)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
-    ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay; feature: wasm-youtube)
+    ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; oasis-video[video-decode])
     ├── oasis-backend-psp  (excluded from workspace, PSP hardware; oasis-video[no-std-demux])

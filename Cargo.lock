@@ -1166,6 +1166,8 @@ dependencies = [
  "oasis-skin",
  "oasis-types",
  "oasis-wm",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

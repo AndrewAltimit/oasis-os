@@ -17,6 +17,8 @@ mod shapes;
 mod textures;
 pub mod tv_catalog;
 pub mod video;
+#[cfg(feature = "wasm-youtube")]
+pub mod youtube;
 
 mod input_dispatch;
 mod vfs_content;
@@ -136,6 +138,26 @@ pub struct OasisWasm {
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
+    /// In-flight YouTube search; backend polls each tick and publishes
+    /// results to `/tmp/video_embed_results` so the embed app can
+    /// re-render.
+    #[cfg(feature = "wasm-youtube")]
+    pending_youtube_search: Option<youtube::WasmYoutubeSearchFetcher>,
+    /// Textures allocated for the most recent search's thumbnails. Held
+    /// here so the next search can free them up front instead of
+    /// leaking offscreen `<canvas>` elements.
+    #[cfg(feature = "wasm-youtube")]
+    youtube_thumb_textures: Vec<TextureId>,
+    /// Video id currently being shown in the iframe overlay (if any).
+    /// `None` while the embed app is in search/results mode; set when
+    /// `play:<id>` is received and cleared on `stop` or window close.
+    #[cfg(feature = "wasm-youtube")]
+    youtube_active_id: Option<String>,
+    /// Pre-built embed URL for `youtube_active_id`, computed once on
+    /// `play:<id>` and reused every frame so the per-frame iframe glue
+    /// in `tick()` doesn't re-allocate `format!("…/embed/{id}…")`.
+    #[cfg(feature = "wasm-youtube")]
+    youtube_active_url: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -342,6 +364,14 @@ impl OasisWasm {
             pending_tv_catalog: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
+            #[cfg(feature = "wasm-youtube")]
+            pending_youtube_search: None,
+            #[cfg(feature = "wasm-youtube")]
+            youtube_thumb_textures: Vec::new(),
+            #[cfg(feature = "wasm-youtube")]
+            youtube_active_id: None,
+            #[cfg(feature = "wasm-youtube")]
+            youtube_active_url: None,
         })
     }
 
@@ -399,27 +429,26 @@ impl OasisWasm {
             if let Some((path, data)) = pending {
                 #[cfg(feature = "wasm-youtube")]
                 if path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
-                    if data.is_empty() {
-                        self.iframe.hide();
-                    } else {
-                        self.iframe.set_youtube_mode();
-                        // Position the iframe over the full app content area.
-                        let at = &self.active_theme;
-                        let cx = 0i32;
-                        let cy = at.statusbar_height as i32;
-                        let cw = self.width;
-                        let ch = self
-                            .height
-                            .saturating_sub(at.statusbar_height)
-                            .saturating_sub(at.bottombar_height);
-                        self.iframe.show(&data, cx, cy, cw, ch);
-                    }
+                    self.handle_video_embed_request(&data);
                 } else {
                     let _ = self.vfs.write(&path, data.as_bytes());
                 }
                 #[cfg(not(feature = "wasm-youtube"))]
                 {
                     let _ = self.vfs.write(&path, data.as_bytes());
+                }
+            }
+
+            // Drive the YouTube search fetcher and let the embed app
+            // pick up freshly-published results from VFS.
+            #[cfg(feature = "wasm-youtube")]
+            {
+                self.poll_youtube_search();
+                if let Some(ref mut runner) = self.app_runner {
+                    runner.refresh_video_embed(&self.vfs);
+                }
+                for (_, runner) in &mut self.open_runners {
+                    runner.refresh_video_embed(&self.vfs);
                 }
             }
         }
@@ -723,6 +752,26 @@ impl OasisWasm {
             );
         }
 
+        // Pre-draw: hide the YouTube iframe if its window is minimized or
+        // gone. Windows in `Minimized` state are not visited by
+        // `draw_with_clips_overlay`, so without this the iframe would
+        // stay glued to its last position even though the canvas has
+        // already cleared the area. Use `soft_hide` for the minimize
+        // case so playback state survives until the user restores the
+        // window; full `hide` is reserved for stop/close.
+        #[cfg(feature = "wasm-youtube")]
+        if self.youtube_active_id.is_some() {
+            match self.wm.get_window("video_embed") {
+                Some(w) if w.state == oasis_core::wm::window::WindowState::Minimized => {
+                    self.iframe.soft_hide();
+                },
+                None => {
+                    self.iframe.hide();
+                },
+                _ => {},
+            }
+        }
+
         if self.mode == Mode::Desktop && self.wm.window_count() > 0 {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
@@ -730,6 +779,8 @@ impl OasisWasm {
             let active_theme = &self.active_theme;
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
+            #[cfg(feature = "wasm-youtube")]
+            let youtube_active_url = self.youtube_active_url.clone();
             let wants_vector_icons =
                 self.skin.features.dashboard && active_theme.icon.style == "vector";
             let overlay =
@@ -769,7 +820,19 @@ impl OasisWasm {
                     } else if let Some((_, runner)) =
                         open_runners.iter().find(|(id, _)| id == window_id)
                     {
-                        runner.draw_windowed(cx, cy, cw, ch, be, active_theme)
+                        let r = runner.draw_windowed(cx, cy, cw, ch, be, active_theme);
+                        // YouTube iframe: glue to the Video Embed window's
+                        // content rect every frame so drag/resize tracks.
+                        #[cfg(feature = "wasm-youtube")]
+                        if window_id == "video_embed"
+                            && let Some(ref url) = youtube_active_url
+                        {
+                            let title_h = active_theme.app.title_bar_height as i32;
+                            let inner_y = cy + title_h;
+                            let inner_h = ch.saturating_sub(active_theme.app.title_bar_height);
+                            iframe_ref.show(url, cx, inner_y, cw, inner_h);
+                        }
+                        r
                     } else {
                         Ok(())
                     };
@@ -866,6 +929,121 @@ impl OasisWasm {
 
     /// When the current episode's `<video>` element fires `ended`, stop the
     /// player and tune to whatever the deterministic schedule says should be
+    /// Handle a request from the Video Embed app: `search:<q>`,
+    /// `play:<id>`, `stop`, or empty (alias for `stop`). Search kicks off
+    /// the async fetcher; play+stop record the desired iframe state — the
+    /// per-window draw callback applies it so dragging/resizing the
+    /// containing window keeps the iframe glued in place.
+    #[cfg(feature = "wasm-youtube")]
+    fn handle_video_embed_request(&mut self, data: &str) {
+        if data.is_empty() || data == "stop" {
+            self.youtube_active_id = None;
+            self.youtube_active_url = None;
+            self.iframe.hide();
+            return;
+        }
+
+        if let Some(query) = data.strip_prefix("search:") {
+            self.kick_youtube_search(query);
+            return;
+        }
+
+        if let Some(id) = data.strip_prefix("play:") {
+            self.youtube_active_url = Some(oasis_core::apps::video_embed::embed_url(id));
+            self.youtube_active_id = Some(id.to_string());
+            self.iframe.set_youtube_mode();
+        }
+    }
+
+    /// Free thumbnail textures from the previous search and start a new
+    /// fetcher. Idempotent — calling repeatedly with the same query
+    /// just discards the in-flight fetch.
+    #[cfg(feature = "wasm-youtube")]
+    fn kick_youtube_search(&mut self, query: &str) {
+        for tex in self.youtube_thumb_textures.drain(..) {
+            let _ = self.backend.destroy_texture(tex);
+        }
+        // Publish a "loading" placeholder immediately so the app's next
+        // refresh() reflects in-flight state instead of stale results.
+        let pending = oasis_core::apps::video_embed::SearchResults {
+            query: query.to_string(),
+            status: oasis_core::apps::video_embed::SearchStatus::Loading,
+            error: None,
+            results: Vec::new(),
+        };
+        if let Ok(json) = serde_json::to_string(&pending) {
+            let _ = self.vfs.write(
+                oasis_core::apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
+                json.as_bytes(),
+            );
+        }
+
+        self.pending_youtube_search = Some(youtube::WasmYoutubeSearchFetcher::new(query));
+    }
+
+    /// Poll the YouTube search fetcher; when ready, allocate textures
+    /// for thumbnails, kick off image loads, and publish the result blob
+    /// over VFS IPC.
+    #[cfg(feature = "wasm-youtube")]
+    fn poll_youtube_search(&mut self) {
+        let Some(fetcher) = self.pending_youtube_search.as_ref() else {
+            return;
+        };
+        if !fetcher.is_ready() {
+            return;
+        }
+
+        let query = fetcher.query.clone();
+        let result = fetcher.take_results();
+        self.pending_youtube_search = None;
+
+        let blob = match result {
+            Ok(hits) => {
+                let (tw, th) = youtube::thumb_dimensions();
+                let mut out = Vec::with_capacity(hits.len());
+                for hit in hits {
+                    let (tex, canvas) = match self.backend.allocate_paintable_texture(tw, th) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            console_log!("youtube: alloc texture: {e}");
+                            continue;
+                        },
+                    };
+                    self.youtube_thumb_textures.push(tex);
+                    if let Err(e) = youtube::paint_canvas_from_url(canvas, &hit.thumbnail_url) {
+                        console_log!("youtube: img load: {e:?}");
+                    }
+                    out.push(oasis_core::apps::video_embed::SearchResult {
+                        id: hit.video_id,
+                        title: hit.title,
+                        author: hit.author,
+                        duration: hit.duration,
+                        thumb_tex: tex.0,
+                    });
+                }
+                oasis_core::apps::video_embed::SearchResults {
+                    query,
+                    status: oasis_core::apps::video_embed::SearchStatus::Ready,
+                    error: None,
+                    results: out,
+                }
+            },
+            Err(e) => oasis_core::apps::video_embed::SearchResults {
+                query,
+                status: oasis_core::apps::video_embed::SearchStatus::Error,
+                error: Some(e),
+                results: Vec::new(),
+            },
+        };
+
+        if let Ok(json) = serde_json::to_string(&blob) {
+            let _ = self.vfs.write(
+                oasis_core::apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
+                json.as_bytes(),
+            );
+        }
+    }
+
     /// playing now (which will be the next episode).
     fn auto_advance_episode(&mut self) {
         // Gather schedule info from the guide state, then release the borrow.

@@ -54,6 +54,17 @@ impl AppRunner {
         }
     }
 
+    /// Refresh the Video Embed app from VFS-published search results.
+    pub fn refresh_video_embed(&mut self, vfs: &dyn Vfs) {
+        if self.title != "Video Embed" {
+            return;
+        }
+        if let Some(ref mut app) = self.delegate {
+            app.refresh(vfs);
+            self.sync_from_delegate();
+        }
+    }
+
     /// Refresh TV Guide text display after catalog changes.
     ///
     /// Delegates to `TvGuideApp::refresh_text()` through the delegate,
