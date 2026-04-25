@@ -189,6 +189,11 @@ pub struct FileManagerApp {
     explorer_cols: Cell<usize>,
     /// Cached visible row count for the Explorer icon grid.
     explorer_visible_rows: Cell<usize>,
+    /// Cached `font_hint` value from the active theme. Used by the click
+    /// handler (which has no `&ActiveTheme`) to derive tree-pane row
+    /// heights consistently with the renderer's
+    /// `(font_hint as i32 + 2).max(11)` formula.
+    cached_font_hint: Cell<u16>,
     /// Top menu bar (File / Edit / View) shared by both view modes.
     pub menu: MenuBar,
     /// Last-clicked tile index (absolute, into `panels[active].lines`).
@@ -238,6 +243,7 @@ impl FileManagerApp {
             view_mode: ViewMode::Explorer,
             explorer_cols: Cell::new(1),
             explorer_visible_rows: Cell::new(1),
+            cached_font_hint: Cell::new(11),
             menu: default_menu_bar(),
             last_click_tile: Cell::new(None),
             pending_navigation: None,
@@ -814,6 +820,7 @@ impl FileManagerApp {
         let g = compute_explorer_geom(0, body_top, at.screen_w, body_h);
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
+        self.cached_font_hint.set(at.font_hint);
 
         let dark = at.app.divider;
 
@@ -1128,6 +1135,7 @@ impl FileManagerApp {
         let g = compute_explorer_geom(cx, body_top, cw, body_h);
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
+        self.cached_font_hint.set(at.font_hint);
 
         let dark = at.app.divider;
 
@@ -1469,15 +1477,22 @@ fn tree_entry_path(current: &str, idx: usize) -> Option<String> {
 }
 
 /// Hit-test the folder-tree pane in Explorer view. Returns the absolute
-/// path of the clicked row, if any.
-fn tree_hit_test(g: &ExplorerGeom, lx: i32, ly: i32, current: &str) -> Option<String> {
+/// path of the clicked row, if any. `font_hint` must match the value used
+/// by the renderer so the row metric is identical.
+fn tree_hit_test(
+    g: &ExplorerGeom,
+    lx: i32,
+    ly: i32,
+    current: &str,
+    font_hint: u16,
+) -> Option<String> {
     if lx < g.tree_x || lx >= g.tree_x + g.tree_w as i32 {
         return None;
     }
     if ly < g.body_y + 4 || ly >= g.body_y + g.body_h as i32 - 4 {
         return None;
     }
-    let line_h = 13i32; // matches the renderer's `(font_hint as i32 + 2).max(11)` at default.
+    let line_h = (font_hint as i32 + 2).max(11);
     let row = ((ly - (g.body_y + 4)) / line_h) as usize;
     tree_entry_path(current, row)
 }
@@ -2078,22 +2093,30 @@ impl App for FileManagerApp {
         if !matches!(self.view_mode, ViewMode::Explorer) {
             return AppAction::None;
         }
-        let body_top = title_h + FM_MENU_H as i32;
+        // `compute_explorer_geom` carves out the menu strip internally
+        // (`addr_y = cy + menu_h`), so `cy` here is the top of the menu —
+        // i.e. just below the title bar. This matches `update_sdi_explorer`
+        // (`body_top = title_h`) and `draw_windowed_explorer`
+        // (`body_top = cy + title_h`).
+        let body_top = title_h;
         let body_h_local = (ch as i32 - body_top).max(20) as u32;
         let g = compute_explorer_geom(0, body_top, cw, body_h_local);
 
         // Tree row click: single-click navigates immediately.
-        if let Some(target) = tree_hit_test(&g, lx, ly, &self.active().browse_dir) {
+        let font_hint = self.cached_font_hint.get();
+        if let Some(target) = tree_hit_test(&g, lx, ly, &self.active().browse_dir, font_hint) {
             self.pending_navigation = Some(NavTarget::Folder(target));
             self.last_click_tile.set(None);
             return AppAction::None;
         }
 
         // Icon grid click: select on first click, activate on second.
+        // `grid_hit_test` only returns indices for tiles already visible
+        // within the current scroll window, so don't shift `scroll` —
+        // re-aligning the row would jump the view under the user's cursor.
         if let Some(abs) = grid_hit_test(&g, lx, ly, &self.active().lines, self.active().scroll) {
             let panel = self.active_mut();
-            panel.scroll = (abs / g.cols.max(1)) * g.cols.max(1);
-            panel.cursor = abs - panel.scroll;
+            panel.cursor = abs.saturating_sub(panel.scroll);
             if self.last_click_tile.get() == Some(abs) {
                 self.last_click_tile.set(None);
                 return self.activate_index(abs);
@@ -2567,7 +2590,8 @@ mod tests {
         let first = fm.panels[0].lines[0].clone();
         let expected_name = first.trim_end_matches('/');
         let expected_path = format!("/{expected_name}");
-        let g = compute_explorer_geom(0, 38, 600, 320);
+        // Mirror the handler: body_top = title_h (20), body_h = ch - 20.
+        let g = compute_explorer_geom(0, 20, 600, 380);
         let tile_x = g.grid_x + 4 + g.tile_w as i32 / 2;
         let tile_y = g.body_y + 4 + g.tile_h as i32 / 2;
         // First click selects.
@@ -2592,8 +2616,10 @@ mod tests {
         // First go into /home so the tree has multiple rows.
         fm.pending_navigation = Some(NavTarget::Folder("/home".to_string()));
         fm.refresh(&vfs);
-        // Tree row 1 is "/" (root). Compute its position.
-        let g = compute_explorer_geom(0, 38, 600, 320);
+        // Tree row 1 is "/" (root). Compute its position. Mirror the handler:
+        // body_top = title_h (20), body_h = ch - 20.
+        let g = compute_explorer_geom(0, 20, 600, 380);
+        // cached_font_hint defaults to 11 → (11+2).max(11) = 13.
         let tree_line_h = 13;
         let row_idx = 1; // "/" entry.
         let tx = g.tree_x + 8;
