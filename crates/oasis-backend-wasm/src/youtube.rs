@@ -146,10 +146,11 @@ async fn search(query: &str) -> Result<Vec<YoutubeHit>, String> {
     for base in INSTANCES {
         let url = format!("{base}/api/v1/search?q={encoded}&type=video");
         match try_instance(&window, base, &url).await {
-            Ok(hits) if !hits.is_empty() => return Ok(hits),
-            Ok(_) => {
-                last_err = format!("{base}: empty response");
-            },
+            // A successful response — including a legitimately empty hit
+            // list — is the authoritative answer. Falling through to the
+            // next instance on `is_empty()` would exhaust all instances on
+            // every zero-result query and surface as a transport error.
+            Ok(hits) => return Ok(hits),
             Err(e) => {
                 last_err = format!("{base}: {e}");
             },

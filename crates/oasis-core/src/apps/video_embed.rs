@@ -111,6 +111,10 @@ pub struct VideoEmbedApp {
     page: usize,
     /// Selected cell within the visible page.
     selection: usize,
+    /// Cached `title_bar_height` from the active skin (varies 16–36 px).
+    /// Captured in `update_sdi` so click-time hit-testing — which has no
+    /// access to `ActiveTheme` — can stay in sync with what was drawn.
+    cached_title_bar_h: i32,
 }
 
 impl VideoEmbedApp {
@@ -126,6 +130,7 @@ impl VideoEmbedApp {
             results: SearchResults::default(),
             page: 0,
             selection: 0,
+            cached_title_bar_h: 22,
         }
     }
 
@@ -256,13 +261,13 @@ impl VideoEmbedApp {
 
     /// Compute the rect of grid cell `i` (0..GRID_PAGE) within `(cw, ch)`.
     ///
-    /// `avail_w`/`avail_h` are clamped to 0 before division so cells from a
-    /// window narrower than the gap padding don't end up with negative
-    /// dimensions that the `.max(40)` floor would mask. Callers that draw
-    /// the resulting cells should still guard against very small windows;
+    /// `title_h` is the active skin's `title_bar_height` (16–36 px across the
+    /// shipped skins). `avail_w`/`avail_h` are clamped to 0 before division so
+    /// cells from a window narrower than the gap padding don't end up with
+    /// negative dimensions that the `.max(40)` floor would mask. Callers that
+    /// draw the resulting cells should still guard against very small windows;
     /// here we just guarantee non-NaN, in-bounds-relative-to-origin rects.
-    fn cell_rect(cw: u32, ch: u32, i: usize) -> (i32, i32, u32, u32) {
-        let title_h = 20i32;
+    fn cell_rect(cw: u32, ch: u32, title_h: i32, i: usize) -> (i32, i32, u32, u32) {
         let avail_w = (cw as i32 - CELL_GAP * (GRID_COLS as i32 + 1)).max(0);
         let avail_h =
             (ch as i32 - title_h - SEARCH_BAR_H - FOOTER_H - CELL_GAP * (GRID_ROWS as i32 + 1))
@@ -277,10 +282,11 @@ impl VideoEmbedApp {
     }
 
     /// Hit-test a click at local coords against the grid; returns the page-
-    /// local cell index, or `None`.
-    fn hit_test_grid(lx: i32, ly: i32, cw: u32, ch: u32) -> Option<usize> {
+    /// local cell index, or `None`. `title_h` matches the active skin so the
+    /// hit zones line up with what `draw_results_grid` rendered.
+    fn hit_test_grid(lx: i32, ly: i32, cw: u32, ch: u32, title_h: i32) -> Option<usize> {
         for i in 0..GRID_PAGE {
-            let (x, y, w, h) = Self::cell_rect(cw, ch, i);
+            let (x, y, w, h) = Self::cell_rect(cw, ch, title_h, i);
             if lx >= x && ly >= y && lx < x + w as i32 && ly < y + h as i32 {
                 return Some(i);
             }
@@ -432,7 +438,7 @@ impl App for VideoEmbedApp {
         if self.state != EmbedState::Results {
             return AppAction::None;
         }
-        if let Some(cell) = Self::hit_test_grid(lx, ly, cw, ch) {
+        if let Some(cell) = Self::hit_test_grid(lx, ly, cw, ch, self.cached_title_bar_h) {
             let v = self.visible_count();
             if cell < v {
                 self.selection = cell;
@@ -475,6 +481,7 @@ impl App for VideoEmbedApp {
 
     fn update_sdi(&mut self, _sdi: &mut SdiRegistry, at: &ActiveTheme) {
         self.content.update_layout(at);
+        self.cached_title_bar_h = at.app.title_bar_height as i32;
     }
 
     fn draw_windowed(
@@ -632,7 +639,7 @@ fn draw_results_grid(
                 let grid_origin_y = cy;
                 for (i, idx) in (start..end).enumerate() {
                     let r = &app.results.results[idx];
-                    let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(cw, ch, i);
+                    let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(cw, ch, title_bar_h, i);
                     let cell_x = grid_origin_x + rx;
                     let cell_y = grid_origin_y + ry;
 
@@ -878,7 +885,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, 0);
+        let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, 22, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
         app.handle_click(cx, cy, 640, 400, false);
