@@ -202,6 +202,9 @@ pub fn handle_desktop_input(
                     {
                         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
                         let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
+                        // Apply any vfs work the click queued (e.g. file
+                        // manager folder navigation).
+                        runner.refresh_app(vfs);
                         if action == AppAction::RequestFullscreen
                             && state.content.fullscreen_app.is_none()
                         {

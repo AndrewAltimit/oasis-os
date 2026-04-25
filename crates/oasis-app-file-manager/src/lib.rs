@@ -21,6 +21,10 @@ use oasis_vfs::Vfs;
 /// Pixel height reserved for the file-manager menu bar (matches the
 /// dimensions used by Notepad's `MenuBar` rendering).
 const FM_MENU_H: u32 = 18;
+/// Pixel height of the address bar in Explorer view.
+const FM_ADDR_H: u32 = 18;
+/// Pixel height of the status strip in Explorer view.
+const FM_STATUS_H: u32 = 14;
 
 pub use oasis_app_core::file_viewer::{
     app_for_file, join_path, list_directory, parent_dir, view_audio_file, view_generic_file,
@@ -146,6 +150,17 @@ pub enum FileOp {
     Mkdir(String),
 }
 
+/// A target the user activated by clicking and that needs vfs to apply.
+/// `App::handle_click` doesn't get a vfs reference, so the click handler
+/// queues the action here and `App::refresh(vfs)` consumes it.
+#[derive(Debug, Clone)]
+pub enum NavTarget {
+    /// Navigate the active panel to this absolute path.
+    Folder(String),
+    /// Open this file in the embedded viewer.
+    File(String),
+}
+
 /// Which presentation the file manager is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -176,6 +191,13 @@ pub struct FileManagerApp {
     explorer_visible_rows: Cell<usize>,
     /// Top menu bar (File / Edit / View) shared by both view modes.
     pub menu: MenuBar,
+    /// Last-clicked tile index (absolute, into `panels[active].lines`).
+    /// Used to fake double-click without timing info: clicking the same
+    /// already-selected tile activates it; clicking a different tile
+    /// just selects it.
+    last_click_tile: Cell<Option<usize>>,
+    /// Click target waiting for vfs (applied on the next refresh tick).
+    pub pending_navigation: Option<NavTarget>,
 }
 
 /// Build the default file-manager menu bar.
@@ -217,6 +239,8 @@ impl FileManagerApp {
             explorer_cols: Cell::new(1),
             explorer_visible_rows: Cell::new(1),
             menu: default_menu_bar(),
+            last_click_tile: Cell::new(None),
+            pending_navigation: None,
         }
     }
 
@@ -226,6 +250,28 @@ impl FileManagerApp {
             ViewMode::Dual => ViewMode::Explorer,
             ViewMode::Explorer => ViewMode::Dual,
         };
+    }
+
+    /// Queue navigation/open for the entry at `abs_idx` of the active panel.
+    /// Used by click activation; the actual vfs work happens in `refresh`.
+    fn activate_index(&mut self, abs_idx: usize) -> AppAction {
+        let p = self.active();
+        let Some(line) = p.lines.get(abs_idx).cloned() else {
+            return AppAction::None;
+        };
+        let trimmed = line.trim();
+        if trimmed == ".." {
+            self.pending_navigation = Some(NavTarget::Folder(parent_dir(&p.browse_dir)));
+            return AppAction::None;
+        }
+        if let Some(name) = trimmed.strip_suffix('/') {
+            self.pending_navigation = Some(NavTarget::Folder(join_path(&p.browse_dir, name)));
+            return AppAction::None;
+        }
+        let name = trimmed.split("  (").next().unwrap_or(trimmed);
+        let file_path = join_path(&p.browse_dir, name);
+        self.pending_navigation = Some(NavTarget::File(file_path));
+        AppAction::None
     }
 
     /// Dispatch a menu-bar action by id.
@@ -765,7 +811,7 @@ impl FileManagerApp {
         let body_h = at
             .screen_h
             .saturating_sub(at.app.title_bar_height + at.statusbar_height + at.bottombar_height);
-        let g = compute_explorer_geom(0, body_top, at.screen_w, body_h, at);
+        let g = compute_explorer_geom(0, body_top, at.screen_w, body_h);
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
 
@@ -1079,7 +1125,7 @@ impl FileManagerApp {
 
         let body_top = cy + title_h;
         let body_h = ch.saturating_sub(title_h as u32);
-        let g = compute_explorer_geom(cx, body_top, cw, body_h, at);
+        let g = compute_explorer_geom(cx, body_top, cw, body_h);
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
 
@@ -1292,10 +1338,10 @@ struct ExplorerGeom {
     rows: usize,
 }
 
-fn compute_explorer_geom(cx: i32, cy: i32, cw: u32, ch: u32, at: &ActiveTheme) -> ExplorerGeom {
+fn compute_explorer_geom(cx: i32, cy: i32, cw: u32, ch: u32) -> ExplorerGeom {
     let menu_h = FM_MENU_H;
-    let addr_h = ((at.font_hint as u32) + 8).max(16);
-    let status_h = 14u32;
+    let addr_h = FM_ADDR_H;
+    let status_h = FM_STATUS_H;
     let pad = 4i32;
 
     let menu_x = cx;
@@ -1393,6 +1439,75 @@ fn build_tree_entries(current: &str) -> Vec<TreeEntry> {
         });
     }
     out
+}
+
+/// Map a tree-pane row index back to the absolute path that row represents.
+/// `idx` is the position in `build_tree_entries`'s returned vec.
+fn tree_entry_path(current: &str, idx: usize) -> Option<String> {
+    if idx == 0 {
+        // "Desktop" — alias to root.
+        return Some("/".to_string());
+    }
+    if idx == 1 {
+        return Some("/".to_string());
+    }
+    let trimmed = current.trim_start_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
+    let want = idx - 1; // first directory part is at vec idx 2 → want = 1.
+    if want > parts.len() {
+        return None;
+    }
+    let mut path = String::new();
+    for p in &parts[..want] {
+        path.push('/');
+        path.push_str(p);
+    }
+    if path.is_empty() {
+        path.push('/');
+    }
+    Some(path)
+}
+
+/// Hit-test the folder-tree pane in Explorer view. Returns the absolute
+/// path of the clicked row, if any.
+fn tree_hit_test(g: &ExplorerGeom, lx: i32, ly: i32, current: &str) -> Option<String> {
+    if lx < g.tree_x || lx >= g.tree_x + g.tree_w as i32 {
+        return None;
+    }
+    if ly < g.body_y + 4 || ly >= g.body_y + g.body_h as i32 - 4 {
+        return None;
+    }
+    let line_h = 13i32; // matches the renderer's `(font_hint as i32 + 2).max(11)` at default.
+    let row = ((ly - (g.body_y + 4)) / line_h) as usize;
+    tree_entry_path(current, row)
+}
+
+/// Hit-test the icon grid. Returns the absolute index into `lines` (i.e.
+/// `panel.scroll + tile_index`) when the click lands on a populated tile.
+fn grid_hit_test(
+    g: &ExplorerGeom,
+    lx: i32,
+    ly: i32,
+    lines: &[String],
+    scroll: usize,
+) -> Option<usize> {
+    if lx < g.grid_x + 2 || lx >= g.grid_x + g.grid_w as i32 - 2 {
+        return None;
+    }
+    if ly < g.body_y + 2 || ly >= g.body_y + g.body_h as i32 - 2 {
+        return None;
+    }
+    let col = ((lx - (g.grid_x + 4)) / g.tile_w.max(1) as i32).max(0) as usize;
+    let row = ((ly - (g.body_y + 4)) / g.tile_h.max(1) as i32).max(0) as usize;
+    if col >= g.cols || row >= g.rows {
+        return None;
+    }
+    let idx = row * g.cols.max(1) + col;
+    let abs = scroll + idx;
+    if abs >= lines.len() {
+        return None;
+    }
+    Some(abs)
 }
 
 /// Rectangle in screen coordinates, used by Explorer-view SDI helpers.
@@ -1926,19 +2041,14 @@ impl App for FileManagerApp {
         }
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        _ch: u32,
-        _fullscreen: bool,
-    ) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
         if self.content.viewing_file.is_some() {
             return AppAction::None;
         }
         let title_h = self.content.cached_title_bar_height.max(16) as i32;
         let menu_y = title_h;
+
+        // 1. Menu bar.
         match self.menu.hit_test(lx, ly, 0, menu_y, cw, FM_MENU_H) {
             MenuHit::Label(i) => {
                 if self.menu.open == Some(i) {
@@ -1947,18 +2057,70 @@ impl App for FileManagerApp {
                     self.menu.open = Some(i);
                     self.menu.hovered_item = None;
                 }
-                AppAction::None
+                self.last_click_tile.set(None);
+                return AppAction::None;
             },
             MenuHit::Item { id } => {
                 self.menu.close();
-                self.run_menu_action(&id)
+                self.last_click_tile.set(None);
+                return self.run_menu_action(&id);
             },
-            MenuHit::NoOp => AppAction::None,
+            MenuHit::NoOp => return AppAction::None,
             MenuHit::Outside => {
                 if self.menu.is_open() {
                     self.menu.close();
+                    return AppAction::None;
                 }
-                AppAction::None
+            },
+        }
+
+        // 2. Explorer view: tree pane + icon grid.
+        if !matches!(self.view_mode, ViewMode::Explorer) {
+            return AppAction::None;
+        }
+        let body_top = title_h + FM_MENU_H as i32;
+        let body_h_local = (ch as i32 - body_top).max(20) as u32;
+        let g = compute_explorer_geom(0, body_top, cw, body_h_local);
+
+        // Tree row click: single-click navigates immediately.
+        if let Some(target) = tree_hit_test(&g, lx, ly, &self.active().browse_dir) {
+            self.pending_navigation = Some(NavTarget::Folder(target));
+            self.last_click_tile.set(None);
+            return AppAction::None;
+        }
+
+        // Icon grid click: select on first click, activate on second.
+        if let Some(abs) = grid_hit_test(&g, lx, ly, &self.active().lines, self.active().scroll) {
+            let panel = self.active_mut();
+            panel.scroll = (abs / g.cols.max(1)) * g.cols.max(1);
+            panel.cursor = abs - panel.scroll;
+            if self.last_click_tile.get() == Some(abs) {
+                self.last_click_tile.set(None);
+                return self.activate_index(abs);
+            }
+            self.last_click_tile.set(Some(abs));
+            return AppAction::None;
+        }
+
+        self.last_click_tile.set(None);
+        AppAction::None
+    }
+
+    fn refresh(&mut self, vfs: &dyn Vfs) {
+        let Some(target) = self.pending_navigation.take() else {
+            return;
+        };
+        match target {
+            NavTarget::Folder(path) => {
+                let p = self.active_mut();
+                p.browse_dir = path.clone();
+                p.lines = list_directory(vfs, &path);
+                p.scroll = 0;
+                p.cursor = 0;
+                self.content.browse_dir = Some(path);
+            },
+            NavTarget::File(path) => {
+                self.open_file(vfs, &path);
             },
         }
     }
@@ -2393,6 +2555,56 @@ mod tests {
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
         let action = fm.run_menu_action("file.close");
         assert_eq!(action, AppAction::Exit);
+    }
+
+    #[test]
+    fn double_click_on_folder_navigates_after_refresh() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.explorer_cols.set(4);
+        fm.explorer_visible_rows.set(4);
+        // Pick whichever directory ends up first after sorting.
+        let first = fm.panels[0].lines[0].clone();
+        let expected_name = first.trim_end_matches('/');
+        let expected_path = format!("/{expected_name}");
+        let g = compute_explorer_geom(0, 38, 600, 320);
+        let tile_x = g.grid_x + 4 + g.tile_w as i32 / 2;
+        let tile_y = g.body_y + 4 + g.tile_h as i32 / 2;
+        // First click selects.
+        fm.handle_click(tile_x, tile_y, 600, 400, false);
+        assert_eq!(fm.last_click_tile.get(), Some(0));
+        assert!(fm.pending_navigation.is_none());
+        // Second click on same tile activates.
+        fm.handle_click(tile_x, tile_y, 600, 400, false);
+        match &fm.pending_navigation {
+            Some(NavTarget::Folder(p)) => assert_eq!(p, &expected_path),
+            other => panic!("expected Folder({expected_path}), got {other:?}"),
+        }
+        fm.refresh(&vfs);
+        assert_eq!(fm.panels[0].browse_dir, expected_path);
+        assert!(fm.pending_navigation.is_none());
+    }
+
+    #[test]
+    fn click_on_tree_row_navigates_immediately() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        // First go into /home so the tree has multiple rows.
+        fm.pending_navigation = Some(NavTarget::Folder("/home".to_string()));
+        fm.refresh(&vfs);
+        // Tree row 1 is "/" (root). Compute its position.
+        let g = compute_explorer_geom(0, 38, 600, 320);
+        let tree_line_h = 13;
+        let row_idx = 1; // "/" entry.
+        let tx = g.tree_x + 8;
+        let ty = g.body_y + 4 + row_idx * tree_line_h + tree_line_h / 2;
+        fm.handle_click(tx, ty, 600, 400, false);
+        assert!(matches!(
+            fm.pending_navigation,
+            Some(NavTarget::Folder(ref p)) if p == "/"
+        ));
+        fm.refresh(&vfs);
+        assert_eq!(fm.panels[0].browse_dir, "/");
     }
 
     #[test]
