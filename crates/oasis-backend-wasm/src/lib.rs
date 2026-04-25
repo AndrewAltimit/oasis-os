@@ -153,6 +153,11 @@ pub struct OasisWasm {
     /// `play:<id>` is received and cleared on `stop` or window close.
     #[cfg(feature = "wasm-youtube")]
     youtube_active_id: Option<String>,
+    /// Pre-built embed URL for `youtube_active_id`, computed once on
+    /// `play:<id>` and reused every frame so the per-frame iframe glue
+    /// in `tick()` doesn't re-allocate `format!("…/embed/{id}…")`.
+    #[cfg(feature = "wasm-youtube")]
+    youtube_active_url: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -365,6 +370,8 @@ impl OasisWasm {
             youtube_thumb_textures: Vec::new(),
             #[cfg(feature = "wasm-youtube")]
             youtube_active_id: None,
+            #[cfg(feature = "wasm-youtube")]
+            youtube_active_url: None,
         })
     }
 
@@ -773,7 +780,7 @@ impl OasisWasm {
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
             #[cfg(feature = "wasm-youtube")]
-            let youtube_active_id = self.youtube_active_id.clone();
+            let youtube_active_url = self.youtube_active_url.clone();
             let wants_vector_icons =
                 self.skin.features.dashboard && active_theme.icon.style == "vector";
             let overlay =
@@ -818,13 +825,12 @@ impl OasisWasm {
                         // content rect every frame so drag/resize tracks.
                         #[cfg(feature = "wasm-youtube")]
                         if window_id == "video_embed"
-                            && let Some(ref id) = youtube_active_id
+                            && let Some(ref url) = youtube_active_url
                         {
-                            let url = oasis_core::apps::video_embed::embed_url(id);
                             let title_h = active_theme.app.title_bar_height as i32;
                             let inner_y = cy + title_h;
                             let inner_h = ch.saturating_sub(active_theme.app.title_bar_height);
-                            iframe_ref.show(&url, cx, inner_y, cw, inner_h);
+                            iframe_ref.show(url, cx, inner_y, cw, inner_h);
                         }
                         r
                     } else {
@@ -932,6 +938,7 @@ impl OasisWasm {
     fn handle_video_embed_request(&mut self, data: &str) {
         if data.is_empty() || data == "stop" {
             self.youtube_active_id = None;
+            self.youtube_active_url = None;
             self.iframe.hide();
             return;
         }
@@ -942,6 +949,8 @@ impl OasisWasm {
         }
 
         if let Some(id) = data.strip_prefix("play:") {
+            self.youtube_active_url =
+                Some(oasis_core::apps::video_embed::embed_url(id));
             self.youtube_active_id = Some(id.to_string());
             self.iframe.set_youtube_mode();
         }
