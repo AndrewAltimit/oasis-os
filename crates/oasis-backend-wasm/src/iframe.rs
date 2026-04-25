@@ -97,6 +97,17 @@ impl IframeOverlay {
         }
     }
 
+    /// Hide the iframe visually but keep its document alive — playback,
+    /// scroll position, and form state are all preserved. Use this when
+    /// the host window is temporarily off-screen (e.g. minimized) so the
+    /// next [`Self::show`] resumes instead of restarting.
+    pub fn soft_hide(&mut self) {
+        if self.visible {
+            let _ = self.iframe.style().set_property("display", "none");
+            self.visible = false;
+        }
+    }
+
     /// Update the iframe's CSS position to track window drag/resize.
     pub fn update_position(&self, cx: i32, cy: i32, cw: u32, ch: u32) {
         if self.visible {

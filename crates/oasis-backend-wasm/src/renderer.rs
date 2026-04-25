@@ -868,6 +868,20 @@ impl WasmBackend {
         self.textures.insert(id, TextureData { canvas });
         TextureId(id)
     }
+
+    /// Allocate a transparent offscreen `<canvas>` of the given size and
+    /// register it as a texture, returning both the id and a clone of the
+    /// canvas element so the caller can paint into it asynchronously
+    /// (e.g. once an `<img>` finishes loading from a URL).
+    pub fn allocate_paintable_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<(TextureId, HtmlCanvasElement)> {
+        let canvas = self.make_offscreen(width, height)?;
+        let id = self.register_canvas_as_texture(canvas.clone());
+        Ok((id, canvas))
+    }
 }
 
 // ---------------------------------------------------------------------------
