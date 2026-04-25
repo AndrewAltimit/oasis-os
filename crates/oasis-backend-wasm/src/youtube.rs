@@ -182,7 +182,7 @@ async fn try_instance(
         serde_json::from_str(&body).map_err(|e| format!("json: {e}"))?;
     let mut out = Vec::new();
     for hit in parsed {
-        if hit.r#type != "video" || hit.video_id.is_empty() {
+        if hit.r#type != "video" || !is_valid_video_id(&hit.video_id) {
             continue;
         }
         out.push(YoutubeHit {
@@ -199,11 +199,26 @@ async fn try_instance(
     Ok(out)
 }
 
+/// Defence-in-depth: a malicious or compromised Invidious instance could
+/// inject `?`, `&`, or other separators into a returned `videoId`,
+/// corrupting the embed URL we later build with `format!("…/embed/{id}…")`.
+/// Apply the same character/length filter as `extract_video_id` so the
+/// fetcher and the user-typed paths agree on what a valid id looks like.
+fn is_valid_video_id(id: &str) -> bool {
+    let len = id.len();
+    (6..=20).contains(&len)
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Race a promise against `setTimeout(ms)`. Returns the resolved value on
 /// success, or `"timeout"` / the underlying rejection string on failure.
 ///
 /// Uses a unique JS object as a sentinel — the timeout `setTimeout`
 /// resolves with that object; we identify it via reference equality.
+/// On the fast (fetch) path, the pending `setTimeout` is cancelled via
+/// `clearTimeout` so the closure and timer slot are not leaked.
 async fn race_with_timeout(
     window: &web_sys::Window,
     promise: js_sys::Promise,
@@ -211,18 +226,28 @@ async fn race_with_timeout(
 ) -> Result<JsValue, String> {
     let sentinel: JsValue = js_sys::Object::new().into();
     let sentinel_for_cb = sentinel.clone();
+    let timer_id: Rc<RefCell<Option<i32>>> = Rc::new(RefCell::new(None));
+    let timer_id_for_cb = Rc::clone(&timer_id);
     let timeout = js_sys::Promise::new(&mut |resolve, _reject| {
         let s = sentinel_for_cb.clone();
         let cb = Closure::once_into_js(move || {
             let _ = resolve.call1(&JsValue::NULL, &s);
         });
-        let _ =
-            window.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), ms);
+        if let Ok(id) =
+            window.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), ms)
+        {
+            *timer_id_for_cb.borrow_mut() = Some(id);
+        }
     });
     let race = js_sys::Promise::race(&js_sys::Array::of2(&promise, &timeout));
     let v = JsFuture::from(race).await.map_err(|e| format!("{e:?}"))?;
     if v == sentinel {
         return Err("timeout".to_string());
+    }
+    // Fetch won — cancel the pending timeout so the closure isn't held
+    // alive until the timer fires.
+    if let Some(id) = timer_id.borrow_mut().take() {
+        window.clear_timeout_with_handle(id);
     }
     Ok(v)
 }
@@ -303,5 +328,22 @@ mod tests {
     #[test]
     fn duration_hours() {
         assert_eq!(format_duration(3725), "1:02:05");
+    }
+
+    #[test]
+    fn valid_video_ids_accepted() {
+        assert!(is_valid_video_id("dQw4w9WgXcQ"));
+        assert!(is_valid_video_id("abc123"));
+        assert!(is_valid_video_id("a-b_c-d_e-f"));
+    }
+
+    #[test]
+    fn invalid_video_ids_rejected() {
+        assert!(!is_valid_video_id(""));
+        assert!(!is_valid_video_id("abc"));
+        assert!(!is_valid_video_id("dQw4w9WgXcQ?injected=1"));
+        assert!(!is_valid_video_id("dQw4w9WgXcQ&foo=bar"));
+        assert!(!is_valid_video_id("a/b/c/d/e/f"));
+        assert!(!is_valid_video_id("waaaaaaaaaaaaaaaytoolong"));
     }
 }

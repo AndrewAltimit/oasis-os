@@ -255,11 +255,18 @@ impl VideoEmbedApp {
     }
 
     /// Compute the rect of grid cell `i` (0..GRID_PAGE) within `(cw, ch)`.
+    ///
+    /// `avail_w`/`avail_h` are clamped to 0 before division so cells from a
+    /// window narrower than the gap padding don't end up with negative
+    /// dimensions that the `.max(40)` floor would mask. Callers that draw
+    /// the resulting cells should still guard against very small windows;
+    /// here we just guarantee non-NaN, in-bounds-relative-to-origin rects.
     fn cell_rect(cw: u32, ch: u32, i: usize) -> (i32, i32, u32, u32) {
         let title_h = 20i32;
-        let avail_w = cw as i32 - CELL_GAP * (GRID_COLS as i32 + 1);
+        let avail_w = (cw as i32 - CELL_GAP * (GRID_COLS as i32 + 1)).max(0);
         let avail_h =
-            ch as i32 - title_h - SEARCH_BAR_H - FOOTER_H - CELL_GAP * (GRID_ROWS as i32 + 1);
+            (ch as i32 - title_h - SEARCH_BAR_H - FOOTER_H - CELL_GAP * (GRID_ROWS as i32 + 1))
+                .max(0);
         let cell_w = (avail_w / GRID_COLS as i32).max(40);
         let cell_h = (avail_h / GRID_ROWS as i32).max(40);
         let col = (i % GRID_COLS) as i32;
@@ -674,7 +681,12 @@ fn draw_results_grid(
                         at.app.dim_text,
                     )?;
                     if !r.duration.is_empty() {
-                        let dx = cell_x + rw as i32 - (r.duration.len() as i32 * 6) - 4;
+                        // Right-align inside the cell; clamp to the cell's
+                        // left edge so very small cells with long duration
+                        // strings don't render the label into the
+                        // neighbouring cell.
+                        let dx =
+                            (cell_x + rw as i32 - (r.duration.len() as i32 * 6) - 4).max(cell_x);
                         backend.draw_text(
                             &r.duration,
                             dx,
@@ -703,6 +715,9 @@ fn draw_results_grid(
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
     if s.chars().count() <= max_chars {
         return s.to_string();
     }
