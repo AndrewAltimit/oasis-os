@@ -194,6 +194,11 @@ pub struct FileManagerApp {
     /// heights consistently with the renderer's
     /// `(font_hint as i32 + 2).max(11)` formula.
     cached_font_hint: Cell<u16>,
+    /// Cached `statusbar_height + bottombar_height` from the active theme.
+    /// In SDI/fullscreen mode the renderer subtracts these from `body_h`
+    /// before computing geometry; the click handler needs the same value
+    /// so hit-tests don't extend over the system bars.
+    cached_system_bars: Cell<u32>,
     /// Top menu bar (File / Edit / View) shared by both view modes.
     pub menu: MenuBar,
     /// Last-clicked tile index (absolute, into `panels[active].lines`).
@@ -244,6 +249,7 @@ impl FileManagerApp {
             explorer_cols: Cell::new(1),
             explorer_visible_rows: Cell::new(1),
             cached_font_hint: Cell::new(11),
+            cached_system_bars: Cell::new(0),
             menu: default_menu_bar(),
             last_click_tile: Cell::new(None),
             pending_navigation: None,
@@ -821,6 +827,8 @@ impl FileManagerApp {
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
         self.cached_font_hint.set(at.font_hint);
+        self.cached_system_bars
+            .set(at.statusbar_height + at.bottombar_height);
 
         let dark = at.app.divider;
 
@@ -1136,6 +1144,8 @@ impl FileManagerApp {
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
         self.cached_font_hint.set(at.font_hint);
+        self.cached_system_bars
+            .set(at.statusbar_height + at.bottombar_height);
 
         let dark = at.app.divider;
 
@@ -2056,7 +2066,7 @@ impl App for FileManagerApp {
         }
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
         if self.content.viewing_file.is_some() {
             return AppAction::None;
         }
@@ -2099,7 +2109,16 @@ impl App for FileManagerApp {
         // (`body_top = title_h`) and `draw_windowed_explorer`
         // (`body_top = cy + title_h`).
         let body_top = title_h;
-        let body_h_local = (ch as i32 - body_top).max(20) as u32;
+        // In SDI/fullscreen mode `ch == screen_h` and the renderer subtracts
+        // `statusbar_height + bottombar_height` before computing geometry —
+        // mirror that here so hit-tests don't extend over the system bars.
+        // In windowed mode `ch` already excludes the system bars.
+        let system_bars = if fullscreen {
+            self.cached_system_bars.get() as i32
+        } else {
+            0
+        };
+        let body_h_local = (ch as i32 - body_top - system_bars).max(20) as u32;
         let g = compute_explorer_geom(0, body_top, cw, body_h_local);
 
         // Tree row click: single-click navigates immediately.
