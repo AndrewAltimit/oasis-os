@@ -46,9 +46,9 @@ pub struct SearchResult {
     pub author: String,
     pub duration: String,
     /// Numeric texture id for the thumbnail. `0` means "not yet loaded".
+    /// `draw_results_grid` derives display dimensions from cell layout via
+    /// `thumb_rect`, so the source thumbnail size doesn't need to round-trip.
     pub thumb_tex: u64,
-    pub thumb_w: u32,
-    pub thumb_h: u32,
 }
 
 /// Lifecycle of an in-flight or completed search.
@@ -262,18 +262,18 @@ impl VideoEmbedApp {
     /// Compute the rect of grid cell `i` (0..GRID_PAGE) within `(cw, ch)`.
     ///
     /// `title_h` is the active skin's `title_bar_height` (16–36 px across the
-    /// shipped skins). `avail_w`/`avail_h` are clamped to 0 before division so
-    /// cells from a window narrower than the gap padding don't end up with
-    /// negative dimensions that the `.max(40)` floor would mask. Callers that
-    /// draw the resulting cells should still guard against very small windows;
-    /// here we just guarantee non-NaN, in-bounds-relative-to-origin rects.
+    /// shipped skins). Cells use the natural fitting size `avail_w / GRID_COLS`
+    /// (no minimum-size floor) so a column at the right edge of a very small
+    /// window can never produce an x position past `cw`. Cells smaller than
+    /// ~40 px are illegible but cosmetically degraded — that's preferable to
+    /// rendering past the window edge into a neighbour.
     fn cell_rect(cw: u32, ch: u32, title_h: i32, i: usize) -> (i32, i32, u32, u32) {
         let avail_w = (cw as i32 - CELL_GAP * (GRID_COLS as i32 + 1)).max(0);
         let avail_h =
             (ch as i32 - title_h - SEARCH_BAR_H - FOOTER_H - CELL_GAP * (GRID_ROWS as i32 + 1))
                 .max(0);
-        let cell_w = (avail_w / GRID_COLS as i32).max(40);
-        let cell_h = (avail_h / GRID_ROWS as i32).max(40);
+        let cell_w = avail_w / GRID_COLS as i32;
+        let cell_h = avail_h / GRID_ROWS as i32;
         let col = (i % GRID_COLS) as i32;
         let row = (i / GRID_COLS) as i32;
         let x = CELL_GAP + col * (cell_w + CELL_GAP);
@@ -860,8 +860,6 @@ mod tests {
                 author: "Cute Cats".to_string(),
                 duration: "3:21".to_string(),
                 thumb_tex: 7,
-                thumb_w: 320,
-                thumb_h: 180,
             }],
         };
         let json = serde_json::to_string(&payload).unwrap();

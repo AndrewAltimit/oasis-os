@@ -1011,8 +1011,6 @@ impl OasisWasm {
                         author: hit.author,
                         duration: hit.duration,
                         thumb_tex: tex.0,
-                        thumb_w: tw,
-                        thumb_h: th,
                     });
                 }
                 oasis_core::apps::video_embed::SearchResults {
