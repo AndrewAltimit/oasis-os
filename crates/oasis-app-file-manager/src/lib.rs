@@ -15,7 +15,12 @@ use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::input::Button;
 use oasis_ui::flex;
+use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit, MenuStyle};
 use oasis_vfs::Vfs;
+
+/// Pixel height reserved for the file-manager menu bar (matches the
+/// dimensions used by Notepad's `MenuBar` rendering).
+const FM_MENU_H: u32 = 18;
 
 pub use oasis_app_core::file_viewer::{
     app_for_file, join_path, list_directory, parent_dir, view_audio_file, view_generic_file,
@@ -169,6 +174,32 @@ pub struct FileManagerApp {
     explorer_cols: Cell<usize>,
     /// Cached visible row count for the Explorer icon grid.
     explorer_visible_rows: Cell<usize>,
+    /// Top menu bar (File / Edit / View) shared by both view modes.
+    pub menu: MenuBar,
+}
+
+/// Build the default file-manager menu bar.
+fn default_menu_bar() -> MenuBar {
+    MenuBar::new(vec![
+        Menu::new(
+            "File",
+            vec![MenuEntry::action("Close", "file.close").with_shortcut("Esc")],
+        ),
+        Menu::new(
+            "Edit",
+            vec![
+                MenuEntry::action("New Folder", "edit.mkdir").with_shortcut("\u{25a1}"),
+                MenuEntry::action("Delete", "edit.delete").with_shortcut("\u{25b3}"),
+            ],
+        ),
+        Menu::new(
+            "View",
+            vec![
+                MenuEntry::action("Grid", "view.grid"),
+                MenuEntry::action("List", "view.list"),
+            ],
+        ),
+    ])
 }
 
 impl FileManagerApp {
@@ -182,9 +213,10 @@ impl FileManagerApp {
             panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
             active_panel: 0,
             pending_op: None,
-            view_mode: ViewMode::Dual,
+            view_mode: ViewMode::Explorer,
             explorer_cols: Cell::new(1),
             explorer_visible_rows: Cell::new(1),
+            menu: default_menu_bar(),
         }
     }
 
@@ -194,6 +226,30 @@ impl FileManagerApp {
             ViewMode::Dual => ViewMode::Explorer,
             ViewMode::Explorer => ViewMode::Dual,
         };
+    }
+
+    /// Dispatch a menu-bar action by id.
+    pub(crate) fn run_menu_action(&mut self, id: &str) -> AppAction {
+        match id {
+            "view.grid" => {
+                self.view_mode = ViewMode::Explorer;
+            },
+            "view.list" => {
+                self.view_mode = ViewMode::Dual;
+            },
+            "edit.mkdir" => {
+                let dir = self.active().browse_dir.clone();
+                self.pending_op = Some(FileOp::Mkdir(join_path(&dir, "new_folder")));
+            },
+            "edit.delete" => {
+                if let Some(path) = self.active().selected_path() {
+                    self.pending_op = Some(FileOp::Delete(path));
+                }
+            },
+            "file.close" => return AppAction::Exit,
+            _ => {},
+        }
+        AppAction::None
     }
 
     /// Currently active panel (the one driving Explorer view too).
@@ -453,10 +509,15 @@ impl FileManagerApp {
             at.app.divider,
         )?;
 
-        // Vertical divider.
+        // Menu bar below the title bar.
         let title_h = at.app.title_bar_height as i32;
-        let content_y = cy + title_h;
-        let content_h = ch.saturating_sub(title_h as u32 + 14);
+        let menu_y = cy + title_h;
+        self.menu
+            .draw_bar(backend, cx, menu_y, cw, FM_MENU_H, &MenuStyle::default())?;
+
+        // Vertical divider below the menu strip.
+        let content_y = menu_y + FM_MENU_H as i32;
+        let content_h = ch.saturating_sub(title_h as u32 + FM_MENU_H + 14);
         backend.fill_rect(divider_x, content_y, 1, content_h, at.app.divider)?;
 
         // Draw each panel.
@@ -503,12 +564,18 @@ impl FileManagerApp {
 
         let scroll_y = cy + ch as i32 - 14;
         backend.draw_text(
-            "L/R=panel  \u{25b3}=delete  \u{25a1}=mkdir  Cancel=back",
+            "L/R=panel  \u{25b3}=del  \u{25a1}=mkdir  View>Grid  Cancel=back",
             cx + 4,
             scroll_y,
             10,
             at.app.dim_text,
         )?;
+
+        // Drop-down floats above the rest of the windowed content.
+        if self.menu.is_open() {
+            self.menu
+                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &MenuStyle::default())?;
+        }
 
         Ok(())
     }
@@ -531,9 +598,11 @@ impl FileManagerApp {
             obj.z = 102;
         }
 
-        // Responsive dual-panel geometry.
+        // Responsive dual-panel geometry. Reserve a row below the title
+        // bar for the menu strip so it sits between title and panels.
         let title_h = at.app.title_bar_height;
-        let content_y = (title_h + 4) as i32;
+        let menu_y = title_h as i32;
+        let content_y = (title_h + FM_MENU_H + 4) as i32;
         let half_w = at.screen_w / 2;
         let panel_pad = 8u32;
         let divider_x = half_w as i32;
@@ -541,9 +610,15 @@ impl FileManagerApp {
         let left_w = half_w - panel_pad - left_x as u32;
         let right_x = divider_x + panel_pad as i32;
         let right_w = at.screen_w - right_x as u32 - panel_pad;
-        let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
-        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+        let divider_h = at
+            .screen_h
+            .saturating_sub(title_h + FM_MENU_H + at.statusbar_height + at.bottombar_height);
+        let usable_h = at
+            .screen_h
+            .saturating_sub(title_h + FM_MENU_H + at.statusbar_height + at.bottombar_height + 14);
         let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
+
+        update_menu_bar_sdi(sdi, &self.menu, 0, menu_y, at.screen_w, FM_MENU_H);
 
         // Vertical divider.
         if !sdi.contains("app_divider") {
@@ -642,7 +717,8 @@ impl FileManagerApp {
             sdi.create("app_scroll");
         }
         if let Ok(obj) = sdi.get_mut("app_scroll") {
-            obj.text = Some("L/R=panel  \u{25b3}=delete  \u{25a1}=mkdir  Cancel=back".to_string());
+            obj.text =
+                Some("L/R=panel  \u{25b3}=del  \u{25a1}=mkdir  View>Grid  Cancel=back".to_string());
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
             obj.font_size = at.font_hint;
@@ -652,6 +728,9 @@ impl FileManagerApp {
             obj.visible = true;
             obj.z = 102;
         }
+
+        // Drop-down overlay (when an open menu exists).
+        update_menu_dropdown_sdi(sdi, &self.menu, 0, menu_y, FM_MENU_H);
 
         // Hide single-panel lines.
         for i in 0..100 {
@@ -692,43 +771,8 @@ impl FileManagerApp {
 
         let dark = at.app.divider;
 
-        // Menu bar.
-        ensure_rect(
-            sdi,
-            "app_xp_menu_bg",
-            Box2d {
-                x: g.menu_x,
-                y: g.menu_y,
-                w: g.menu_w,
-                h: g.menu_h,
-            },
-            at.app.title_bar_bg,
-            104,
-        );
-        ensure_text(
-            sdi,
-            "app_xp_menu_text",
-            "File  Edit  View  Favorites  Tools  Help",
-            g.menu_x + 4,
-            g.menu_y + 2,
-            TextStyle {
-                font_size: at.font_hint,
-                color: at.app.title_bar_text,
-                z: 105,
-            },
-        );
-        ensure_rect(
-            sdi,
-            "app_xp_menu_sep",
-            Box2d {
-                x: g.menu_x,
-                y: g.menu_y + g.menu_h as i32 - 1,
-                w: g.menu_w,
-                h: 1,
-            },
-            dark,
-            105,
-        );
+        // Menu bar (shared MenuBar widget; click hits routed via App::handle_click).
+        update_menu_bar_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_w, g.menu_h);
 
         // Address bar.
         ensure_rect(
@@ -999,7 +1043,7 @@ impl FileManagerApp {
         ensure_text(
             sdi,
             "app_xp_status_hint",
-            "Select=toggle  Cancel=back",
+            "View>List  Cancel=back",
             g.menu_x + g.menu_w as i32 - 180,
             g.status_y + 1,
             status_style,
@@ -1012,6 +1056,9 @@ impl FileManagerApp {
         if let Ok(obj) = sdi.get_mut("app_divider") {
             obj.visible = false;
         }
+
+        // Drop-down overlay last so it floats above the icon grid.
+        update_menu_dropdown_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_h);
     }
 
     /// Direct-draw Explorer view in windowed mode.
@@ -1038,16 +1085,15 @@ impl FileManagerApp {
 
         let dark = at.app.divider;
 
-        // Menu bar.
-        backend.fill_rect(g.menu_x, g.menu_y, g.menu_w, g.menu_h, at.app.title_bar_bg)?;
-        backend.draw_text(
-            "File  Edit  View  Favorites  Tools  Help",
-            g.menu_x + 4,
-            g.menu_y + 2,
-            at.font_hint,
-            at.app.title_bar_text,
+        // Menu bar via the shared MenuBar widget.
+        self.menu.draw_bar(
+            backend,
+            g.menu_x,
+            g.menu_y,
+            g.menu_w,
+            g.menu_h,
+            &MenuStyle::default(),
         )?;
-        backend.fill_rect(g.menu_x, g.menu_y + g.menu_h as i32 - 1, g.menu_w, 1, dark)?;
 
         // Address bar.
         backend.fill_rect(g.menu_x, g.addr_y, g.menu_w, g.addr_h, at.app.bg)?;
@@ -1176,12 +1222,23 @@ impl FileManagerApp {
             at.app.title_bar_text,
         )?;
         backend.draw_text(
-            "Select=toggle  Cancel=back",
+            "View>List  Cancel=back",
             g.menu_x + g.menu_w as i32 - 180,
             g.status_y + 1,
             at.font_hint,
             at.app.title_bar_text,
         )?;
+
+        // Drop-down floats above the rest of the windowed content.
+        if self.menu.is_open() {
+            self.menu.draw_dropdown(
+                backend,
+                g.menu_x,
+                g.menu_y,
+                g.menu_h,
+                &MenuStyle::default(),
+            )?;
+        }
 
         Ok(())
     }
@@ -1236,7 +1293,7 @@ struct ExplorerGeom {
 }
 
 fn compute_explorer_geom(cx: i32, cy: i32, cw: u32, ch: u32, at: &ActiveTheme) -> ExplorerGeom {
-    let menu_h = ((at.font_hint as u32) + 6).max(14);
+    let menu_h = FM_MENU_H;
     let addr_h = ((at.font_hint as u32) + 8).max(16);
     let status_h = 14u32;
     let pad = 4i32;
@@ -1468,9 +1525,6 @@ fn draw_icon(
 /// Hide all Explorer-view SDI objects.
 fn hide_explorer_sdi(sdi: &mut SdiRegistry) {
     let fixed = [
-        "app_xp_menu_bg",
-        "app_xp_menu_text",
-        "app_xp_menu_sep",
         "app_xp_addr_bg",
         "app_xp_addr_label",
         "app_xp_addr_field",
@@ -1512,6 +1566,318 @@ fn hide_explorer_sdi(sdi: &mut SdiRegistry) {
             "app_xp_t_lbl_",
         ] {
             if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
+                obj.visible = false;
+            }
+        }
+    }
+}
+
+/// Maximum number of menu labels rendered to SDI (matches `MenuBar::menus`
+/// length used by the file manager).
+const FM_MENU_MAX_LABELS: usize = 6;
+/// Maximum number of dropdown rows pooled as SDI objects.
+const FM_DROPDOWN_MAX_ROWS: usize = 8;
+
+/// Render the menu bar to SDI by mirroring `MenuBar::draw_bar` over named
+/// scene-graph objects. Pools labels/highlight rects per slot so we can
+/// hide unused ones each frame instead of churning the registry.
+fn update_menu_bar_sdi(
+    sdi: &mut SdiRegistry,
+    bar: &MenuBar,
+    bar_x: i32,
+    bar_y: i32,
+    bar_w: u32,
+    bar_h: u32,
+) {
+    let style = MenuStyle::default();
+    ensure_rect(
+        sdi,
+        "app_fm_menubar_bg",
+        Box2d {
+            x: bar_x,
+            y: bar_y,
+            w: bar_w,
+            h: bar_h,
+        },
+        style.bar_bg,
+        108,
+    );
+    ensure_rect(
+        sdi,
+        "app_fm_menubar_border",
+        Box2d {
+            x: bar_x,
+            y: bar_y + bar_h as i32 - 1,
+            w: bar_w,
+            h: 1,
+        },
+        style.bar_border,
+        109,
+    );
+
+    let mut cursor = 6i32;
+    for i in 0..FM_MENU_MAX_LABELS {
+        let hot_name = format!("app_fm_menubar_hot_{i}");
+        let label_name = format!("app_fm_menubar_lbl_{i}");
+        let Some(menu) = bar.menus.get(i) else {
+            if let Ok(obj) = sdi.get_mut(&hot_name) {
+                obj.visible = false;
+            }
+            if let Ok(obj) = sdi.get_mut(&label_name) {
+                obj.visible = false;
+            }
+            continue;
+        };
+        let label_w = menu.label.chars().count() as i32 * 7 + 16;
+        let is_open = bar.open == Some(i);
+        if !sdi.contains(&hot_name) {
+            sdi.create(&hot_name);
+        }
+        if let Ok(obj) = sdi.get_mut(&hot_name) {
+            obj.x = bar_x + cursor;
+            obj.y = bar_y + 2;
+            obj.w = label_w as u32;
+            obj.h = bar_h.saturating_sub(4);
+            obj.color = style.label_hot_bg;
+            obj.visible = is_open;
+            obj.text = None;
+            obj.stroke_width = None;
+            obj.z = 109;
+        }
+        let text_color = if is_open {
+            style.label_hot_text
+        } else {
+            style.label_text
+        };
+        ensure_text(
+            sdi,
+            &label_name,
+            &menu.label,
+            bar_x + cursor + 8,
+            bar_y + (bar_h as i32 - style.font_size as i32) / 2,
+            TextStyle {
+                font_size: style.font_size,
+                color: text_color,
+                z: 110,
+            },
+        );
+        cursor += label_w;
+    }
+}
+
+/// Render the open menu's drop-down to SDI; hides pooled objects when no
+/// menu is open.
+fn update_menu_dropdown_sdi(
+    sdi: &mut SdiRegistry,
+    bar: &MenuBar,
+    bar_x: i32,
+    bar_y: i32,
+    bar_h: u32,
+) {
+    for name in [
+        "app_fm_dd_bg",
+        "app_fm_dd_border_l_t",
+        "app_fm_dd_border_l_l",
+        "app_fm_dd_border_d_b",
+        "app_fm_dd_border_d_r",
+    ] {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
+    for i in 0..FM_DROPDOWN_MAX_ROWS {
+        for kind in ["hot", "text", "shortcut", "sep"] {
+            if let Ok(obj) = sdi.get_mut(&format!("app_fm_dd_{kind}_{i}")) {
+                obj.visible = false;
+            }
+        }
+    }
+    let Some(idx) = bar.open else {
+        return;
+    };
+    let Some(menu) = bar.menus.get(idx) else {
+        return;
+    };
+    let style = MenuStyle::default();
+
+    // Anchor x to the open label.
+    let mut label_x = 6i32;
+    for prev in 0..idx {
+        label_x += bar.menus[prev].label.chars().count() as i32 * 7 + 16;
+    }
+    let dd_x = bar_x + label_x;
+    let dd_y = bar_y + bar_h as i32;
+    let (dd_w, dd_h) = bar.dropdown_dimensions(menu);
+
+    ensure_rect(
+        sdi,
+        "app_fm_dd_bg",
+        Box2d {
+            x: dd_x,
+            y: dd_y,
+            w: dd_w,
+            h: dd_h,
+        },
+        style.dropdown_bg,
+        150,
+    );
+    ensure_rect(
+        sdi,
+        "app_fm_dd_border_l_t",
+        Box2d {
+            x: dd_x,
+            y: dd_y,
+            w: dd_w,
+            h: 1,
+        },
+        style.dropdown_border_light,
+        151,
+    );
+    ensure_rect(
+        sdi,
+        "app_fm_dd_border_l_l",
+        Box2d {
+            x: dd_x,
+            y: dd_y,
+            w: 1,
+            h: dd_h,
+        },
+        style.dropdown_border_light,
+        151,
+    );
+    ensure_rect(
+        sdi,
+        "app_fm_dd_border_d_b",
+        Box2d {
+            x: dd_x,
+            y: dd_y + dd_h as i32 - 1,
+            w: dd_w,
+            h: 1,
+        },
+        style.dropdown_border_dark,
+        151,
+    );
+    ensure_rect(
+        sdi,
+        "app_fm_dd_border_d_r",
+        Box2d {
+            x: dd_x + dd_w as i32 - 1,
+            y: dd_y,
+            w: 1,
+            h: dd_h,
+        },
+        style.dropdown_border_dark,
+        151,
+    );
+
+    let mut item_y = dd_y + 4;
+    for (i, entry) in menu.entries.iter().enumerate().take(FM_DROPDOWN_MAX_ROWS) {
+        match entry {
+            MenuEntry::Action {
+                label,
+                shortcut,
+                enabled,
+                ..
+            } => {
+                let hot = bar.hovered_item == Some(i) && *enabled;
+                let hot_name = format!("app_fm_dd_hot_{i}");
+                if !sdi.contains(&hot_name) {
+                    sdi.create(&hot_name);
+                }
+                if let Ok(obj) = sdi.get_mut(&hot_name) {
+                    obj.x = dd_x + 2;
+                    obj.y = item_y;
+                    obj.w = dd_w.saturating_sub(4);
+                    obj.h = 20;
+                    obj.color = style.item_hot_bg;
+                    obj.text = None;
+                    obj.stroke_width = None;
+                    obj.visible = hot;
+                    obj.z = 152;
+                }
+                let color = if !*enabled {
+                    style.item_disabled_text
+                } else if hot {
+                    style.item_hot_text
+                } else {
+                    style.item_text
+                };
+                ensure_text(
+                    sdi,
+                    &format!("app_fm_dd_text_{i}"),
+                    label,
+                    dd_x + 22,
+                    item_y + 4,
+                    TextStyle {
+                        font_size: style.font_size,
+                        color,
+                        z: 153,
+                    },
+                );
+                if let Some(sc) = shortcut {
+                    let sc_w = sc.chars().count() as i32 * 7;
+                    ensure_text(
+                        sdi,
+                        &format!("app_fm_dd_shortcut_{i}"),
+                        sc,
+                        dd_x + dd_w as i32 - sc_w - 22,
+                        item_y + 4,
+                        TextStyle {
+                            font_size: style.font_size,
+                            color,
+                            z: 153,
+                        },
+                    );
+                }
+                item_y += 20;
+            },
+            MenuEntry::Separator => {
+                ensure_rect(
+                    sdi,
+                    &format!("app_fm_dd_sep_{i}"),
+                    Box2d {
+                        x: dd_x + 4,
+                        y: item_y + 3,
+                        w: dd_w - 8,
+                        h: 1,
+                    },
+                    style.separator,
+                    152,
+                );
+                item_y += 6;
+            },
+        }
+    }
+}
+
+/// Hide all menu-bar SDI objects (called when the file manager is hidden).
+fn hide_menu_sdi(sdi: &mut SdiRegistry) {
+    for name in ["app_fm_menubar_bg", "app_fm_menubar_border"] {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
+    for i in 0..FM_MENU_MAX_LABELS {
+        for kind in ["hot", "lbl"] {
+            if let Ok(obj) = sdi.get_mut(&format!("app_fm_menubar_{kind}_{i}")) {
+                obj.visible = false;
+            }
+        }
+    }
+    for name in [
+        "app_fm_dd_bg",
+        "app_fm_dd_border_l_t",
+        "app_fm_dd_border_l_l",
+        "app_fm_dd_border_d_b",
+        "app_fm_dd_border_d_r",
+    ] {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
+    for i in 0..FM_DROPDOWN_MAX_ROWS {
+        for kind in ["hot", "text", "shortcut", "sep"] {
+            if let Ok(obj) = sdi.get_mut(&format!("app_fm_dd_{kind}_{i}")) {
                 obj.visible = false;
             }
         }
@@ -1560,13 +1926,51 @@ impl App for FileManagerApp {
         }
     }
 
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        _ch: u32,
+        _fullscreen: bool,
+    ) -> AppAction {
+        if self.content.viewing_file.is_some() {
+            return AppAction::None;
+        }
+        let title_h = self.content.cached_title_bar_height.max(16) as i32;
+        let menu_y = title_h;
+        match self.menu.hit_test(lx, ly, 0, menu_y, cw, FM_MENU_H) {
+            MenuHit::Label(i) => {
+                if self.menu.open == Some(i) {
+                    self.menu.close();
+                } else {
+                    self.menu.open = Some(i);
+                    self.menu.hovered_item = None;
+                }
+                AppAction::None
+            },
+            MenuHit::Item { id } => {
+                self.menu.close();
+                self.run_menu_action(&id)
+            },
+            MenuHit::NoOp => AppAction::None,
+            MenuHit::Outside => {
+                if self.menu.is_open() {
+                    self.menu.close();
+                }
+                AppAction::None
+            },
+        }
+    }
+
     fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         self.content.update_layout(at);
 
         if self.content.viewing_file.is_some() {
             // File viewer mode: use generic content rendering. Hide
-            // explorer/dual artefacts so they don't bleed through.
+            // explorer/dual/menu artefacts so they don't bleed through.
             hide_explorer_sdi(sdi);
+            hide_menu_sdi(sdi);
             render_app_chrome(sdi, at);
             if !sdi.contains("app_title_text") {
                 sdi.create("app_title_text");
@@ -1614,6 +2018,7 @@ impl App for FileManagerApp {
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {
         hide_app_sdi(sdi);
         hide_explorer_sdi(sdi);
+        hide_menu_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {
@@ -1724,6 +2129,7 @@ mod tests {
     fn file_manager_navigate_down() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
         assert_eq!(fm.panels[0].cursor, 0);
         fm.handle_input(&Button::Down, &vfs);
         assert_eq!(fm.panels[0].cursor, 1);
@@ -1733,6 +2139,7 @@ mod tests {
     fn file_manager_switch_panel() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
         assert_eq!(fm.active_panel, 0);
         fm.handle_input(&Button::Right, &vfs);
         assert_eq!(fm.active_panel, 1);
@@ -1884,10 +2291,10 @@ mod tests {
     }
 
     #[test]
-    fn view_mode_defaults_to_dual() {
+    fn view_mode_defaults_to_explorer() {
         let vfs = setup_vfs();
         let fm = FileManagerApp::new("/apps/fm", &vfs);
-        assert_eq!(fm.view_mode, ViewMode::Dual);
+        assert_eq!(fm.view_mode, ViewMode::Explorer);
     }
 
     #[test]
@@ -1895,9 +2302,9 @@ mod tests {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
         fm.handle_input(&Button::Select, &vfs);
-        assert_eq!(fm.view_mode, ViewMode::Explorer);
-        fm.handle_input(&Button::Select, &vfs);
         assert_eq!(fm.view_mode, ViewMode::Dual);
+        fm.handle_input(&Button::Select, &vfs);
+        assert_eq!(fm.view_mode, ViewMode::Explorer);
     }
 
     #[test]
@@ -1906,14 +2313,13 @@ mod tests {
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
         fm.open_file(&vfs, "/home/user/readme.txt");
         fm.handle_input(&Button::Select, &vfs);
-        assert_eq!(fm.view_mode, ViewMode::Dual);
+        assert_eq!(fm.view_mode, ViewMode::Explorer);
     }
 
     #[test]
     fn explorer_right_advances_cursor() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
-        fm.handle_input(&Button::Select, &vfs);
         // Force a 4-column grid so Right increments the cursor by 1.
         fm.explorer_cols.set(4);
         fm.explorer_visible_rows.set(4);
@@ -1926,7 +2332,6 @@ mod tests {
     fn explorer_down_advances_by_columns() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
-        fm.handle_input(&Button::Select, &vfs);
         // Root has 3 entries (home, etc, tmp). With cols=2, Down moves the
         // absolute cursor by 2 -> entry 2 which is in range.
         fm.explorer_cols.set(2);
@@ -1941,7 +2346,6 @@ mod tests {
     fn explorer_cancel_at_root_exits() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
-        fm.handle_input(&Button::Select, &vfs);
         let action = fm.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::Exit);
     }
@@ -1950,7 +2354,6 @@ mod tests {
     fn explorer_enter_directory() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
-        fm.handle_input(&Button::Select, &vfs);
         fm.explorer_cols.set(4);
         fm.explorer_visible_rows.set(4);
         let home_idx = fm.panels[0]
@@ -1963,6 +2366,47 @@ mod tests {
         }
         fm.handle_input(&Button::Confirm, &vfs);
         assert_eq!(fm.panels[0].browse_dir, "/home");
+    }
+
+    #[test]
+    fn view_menu_grid_action_sets_explorer() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
+        let action = fm.run_menu_action("view.grid");
+        assert_eq!(action, AppAction::None);
+        assert_eq!(fm.view_mode, ViewMode::Explorer);
+    }
+
+    #[test]
+    fn view_menu_list_action_sets_dual() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        let action = fm.run_menu_action("view.list");
+        assert_eq!(action, AppAction::None);
+        assert_eq!(fm.view_mode, ViewMode::Dual);
+    }
+
+    #[test]
+    fn file_close_action_exits() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        let action = fm.run_menu_action("file.close");
+        assert_eq!(action, AppAction::Exit);
+    }
+
+    #[test]
+    fn click_on_view_label_opens_dropdown() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        // Title bar is 20px tall by default. Menu bar starts at y=20,
+        // 18px tall. The View label is the third entry (after File+Edit).
+        let file_w = 4 * 7 + 16; // "File"
+        let edit_w = 4 * 7 + 16; // "Edit"
+        let view_x = 6 + file_w + edit_w + 4;
+        let action = fm.handle_click(view_x, 28, 600, 400, false);
+        assert_eq!(action, AppAction::None);
+        assert_eq!(fm.menu.open, Some(2));
     }
 
     #[test]

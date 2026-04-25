@@ -280,9 +280,14 @@ mod tests {
 
     #[test]
     fn file_manager_navigate_down() {
-        use crate::apps::file_manager::FileManagerApp;
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        // Switch to dual-panel mode for the legacy navigation test.
+        runner
+            .delegate_as_mut::<FileManagerApp>()
+            .unwrap()
+            .view_mode = ViewMode::Dual;
         let fm = runner.delegate_as::<FileManagerApp>().unwrap();
         assert_eq!(fm.panels[0].cursor, 0);
         runner.handle_input(&Button::Down, &vfs);
@@ -782,9 +787,13 @@ mod tests {
 
     #[test]
     fn dual_panel_switch_active() {
-        use crate::apps::file_manager::FileManagerApp;
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        runner
+            .delegate_as_mut::<FileManagerApp>()
+            .unwrap()
+            .view_mode = ViewMode::Dual;
         assert!(runner.delegate_as::<FileManagerApp>().is_some());
         assert_eq!(
             runner.delegate_as::<FileManagerApp>().unwrap().active_panel,
@@ -808,9 +817,13 @@ mod tests {
 
     #[test]
     fn dual_panel_independent_navigation() {
-        use crate::apps::file_manager::FileManagerApp;
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        runner
+            .delegate_as_mut::<FileManagerApp>()
+            .unwrap()
+            .view_mode = ViewMode::Dual;
 
         // Navigate down in left panel (panel 0).
         runner.handle_input(&Button::Down, &vfs);
@@ -859,8 +872,13 @@ mod tests {
 
     #[test]
     fn dual_panel_sdi_objects() {
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        runner
+            .delegate_as_mut::<FileManagerApp>()
+            .unwrap()
+            .view_mode = ViewMode::Dual;
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("app_bg"));
@@ -872,8 +890,13 @@ mod tests {
 
     #[test]
     fn dual_panel_hide_sdi() {
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        runner
+            .delegate_as_mut::<FileManagerApp>()
+            .unwrap()
+            .view_mode = ViewMode::Dual;
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         AppRunner::hide_sdi(&mut sdi);
