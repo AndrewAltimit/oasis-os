@@ -17,6 +17,32 @@ fn js_err(e: JsValue) -> OasisError {
     OasisError::Backend(format!("{e:?}").into())
 }
 
+/// Append a streaming `<audio>` element to `document.body` so the
+/// browser will actually route playback to the speakers.
+///
+/// A detached element will fail to fire `canplaythrough` on Firefox
+/// and silently drop autoplay output on Chrome, so when the body is
+/// unavailable (e.g. `load_streaming` racing the DOM during early
+/// init) we surface a console warning rather than skipping silently
+/// and stranding the radio in `Buffering`. `mode` is included in the
+/// log so direct-URL vs. MSE failures can be distinguished.
+fn attach_audio_to_body(audio_el: &web_sys::HtmlAudioElement, mode: &str) {
+    match web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.body())
+    {
+        Some(body) => {
+            let _ = body.append_child(audio_el);
+        },
+        None => {
+            web_sys::console::warn_1(&JsValue::from_str(&format!(
+                "oasis radio ({mode}): document.body unavailable, audio element \
+                 not attached — playback may stall in Buffering",
+            )));
+        },
+    }
+}
+
 /// Maximum pending chunks before dropping oldest (prevents unbounded growth
 /// when MSE SourceBuffer can't keep up, e.g. QuotaExceededError).
 const MAX_PENDING_CHUNKS: usize = 50;
@@ -28,15 +54,34 @@ const MAX_PENDING_CHUNKS: usize = 50;
 /// Shared optional JS closure slot for event handler lifecycle management.
 type SharedClosure = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
+/// How a [`StreamingTrack`] is fed audio.
+///
+/// Direct-URL hands the URL to a `<audio>` element and lets the browser
+/// stream + decode natively (used on Firefox, which doesn't decode
+/// `audio/mpeg` through MSE, and as a simpler path on Chrome). MSE feeds
+/// chunks through `MediaSource` + `SourceBuffer("audio/mpeg")`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingMode {
+    DirectUrl,
+    Mse,
+}
+
 struct StreamingTrack {
     audio_el: web_sys::HtmlAudioElement,
+    mode: StreamingMode,
+    /// `Some` only in MSE mode; `None` in direct-URL mode (the
+    /// `<audio>` element handles streaming/decoding itself, and
+    /// instantiating a `MediaSource` is unnecessary and would fail on
+    /// browsers without MSE support).
     #[allow(dead_code)]
-    media_source: web_sys::MediaSource,
+    media_source: Option<web_sys::MediaSource>,
     source_buffer: Rc<RefCell<Option<web_sys::SourceBuffer>>>,
     pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>>,
     #[allow(dead_code)]
     updating: Rc<Cell<bool>>,
     ready: Rc<Cell<bool>>,
+    /// Object URL backing the MSE `<audio>.src`; empty in direct-URL
+    /// mode. Stored so it can be revoked when the track is dropped.
     object_url: String,
     // Hold closures to prevent GC.
     #[allow(dead_code)]
@@ -211,7 +256,7 @@ impl AudioBackend for WasmAudioBackend {
             // call once the browser has buffered enough to play
             // through. We just record the playing state here so the
             // radio manager doesn't think we're stuck.
-            if st.object_url.is_empty() {
+            if st.mode == StreamingMode::DirectUrl {
                 return Ok(());
             }
             // MSE path: start playback immediately. Same muted-then-
@@ -285,7 +330,9 @@ impl AudioBackend for WasmAudioBackend {
         if let Some(st) = self.streaming_track.take() {
             st.audio_el.pause().ok();
             st.audio_el.remove();
-            let _ = web_sys::Url::revoke_object_url(&st.object_url);
+            if !st.object_url.is_empty() {
+                let _ = web_sys::Url::revoke_object_url(&st.object_url);
+            }
         }
         self.playing = false;
         self.paused = false;
@@ -335,7 +382,9 @@ impl AudioBackend for WasmAudioBackend {
             // across station changes. `remove()` is a no-op if it's
             // already detached.
             st.audio_el.remove();
-            let _ = web_sys::Url::revoke_object_url(&st.object_url);
+            if !st.object_url.is_empty() {
+                let _ = web_sys::Url::revoke_object_url(&st.object_url);
+            }
         }
         // Reset latched event flags before installing a new element.
         self.streaming_ended.set(false);
@@ -364,11 +413,7 @@ impl AudioBackend for WasmAudioBackend {
                 .style()
                 .set_property("display", "none")
                 .map_err(js_err)?;
-            if let Some(doc) = web_sys::window().and_then(|w| w.document())
-                && let Some(body) = doc.body()
-            {
-                let _ = body.append_child(&audio_el);
-            }
+            attach_audio_to_body(&audio_el, "direct-URL");
             audio_el.set_volume(self.volume as f64 / 100.0);
 
             let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
@@ -440,10 +485,13 @@ impl AudioBackend for WasmAudioBackend {
             self.next_id += 1;
             self.streaming_track = Some(StreamingTrack {
                 audio_el,
-                // No MediaSource for direct-URL mode; create a placeholder
-                // so the struct shape stays the same. This MediaSource is
-                // never attached to anything.
-                media_source: web_sys::MediaSource::new().map_err(js_err)?,
+                mode: StreamingMode::DirectUrl,
+                // No MediaSource needed in direct-URL mode — the
+                // `<audio>` element streams + decodes natively.
+                // Avoids `MediaSource::new()`, which fails on browsers
+                // without MSE support and would break the one path
+                // that explicitly does not need it.
+                media_source: None,
                 source_buffer: Rc::new(RefCell::new(None)),
                 pending_chunks: Rc::new(RefCell::new(VecDeque::new())),
                 updating: Rc::new(Cell::new(false)),
@@ -474,11 +522,7 @@ impl AudioBackend for WasmAudioBackend {
             .style()
             .set_property("display", "none")
             .map_err(js_err)?;
-        if let Some(doc) = web_sys::window().and_then(|w| w.document())
-            && let Some(body) = doc.body()
-        {
-            let _ = body.append_child(&audio_el);
-        }
+        attach_audio_to_body(&audio_el, "MSE");
 
         let source_buffer: Rc<RefCell<Option<web_sys::SourceBuffer>>> = Rc::new(RefCell::new(None));
         let pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::new(RefCell::new(VecDeque::new()));
@@ -564,7 +608,8 @@ impl AudioBackend for WasmAudioBackend {
 
         self.streaming_track = Some(StreamingTrack {
             audio_el,
-            media_source,
+            mode: StreamingMode::Mse,
+            media_source: Some(media_source),
             source_buffer,
             pending_chunks,
             updating,
@@ -583,12 +628,11 @@ impl AudioBackend for WasmAudioBackend {
 
     fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
         if let Some(ref st) = self.streaming_track {
-            // Direct-URL mode (object_url is empty when we set the
-            // `<audio>` element's src directly): the element handles
-            // its own network streaming, so any data the radio source
-            // produces here is just the synthetic primer chunk and
-            // should be discarded.
-            if st.object_url.is_empty() {
+            // Direct-URL mode: the `<audio>` element handles its own
+            // network streaming, so any data the radio source produces
+            // here is just the synthetic primer chunk and should be
+            // discarded.
+            if st.mode == StreamingMode::DirectUrl {
                 return Ok(());
             }
             // Always enqueue first to maintain FIFO order — earlier chunks

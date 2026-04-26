@@ -11,10 +11,17 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use oasis_audio::radio::BUFFER_THRESHOLD;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::icy::StreamMetadata;
 use oasis_audio::radio::source::{AudioChunk, RadioSource, SourceState};
 use oasis_types::error::Result;
+
+/// Size of each synthetic primer chunk: enough that two of them put
+/// `RadioManager`'s `audio_buf` comfortably above [`BUFFER_THRESHOLD`].
+/// Tied to that constant so the state-machine walk stays correct if the
+/// threshold ever changes.
+const PRIMER_CHUNK_BYTES: usize = BUFFER_THRESHOLD * 2;
 
 // ---------------------------------------------------------------------------
 // WasmArchiveSource -- direct-URL playback handed to the audio backend.
@@ -97,10 +104,11 @@ impl RadioSource for WasmArchiveSource {
             } else {
                 None
             };
-            // 64 KiB easily exceeds `BUFFER_THRESHOLD` (32 KiB), and
-            // two of them put the buffer well above threshold.
+            // Each primer chunk is `PRIMER_CHUNK_BYTES` (= 2 ×
+            // `BUFFER_THRESHOLD`); two of them put the buffer well
+            // above threshold so playback can transition.
             return Ok(Some(AudioChunk {
-                data: vec![0u8; 65536],
+                data: vec![0u8; PRIMER_CHUNK_BYTES],
                 metadata,
             }));
         }

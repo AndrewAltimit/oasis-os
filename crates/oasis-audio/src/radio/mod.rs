@@ -30,7 +30,13 @@ pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
 pub const RADIO_APP_TITLE: &str = "Internet Radio";
 
 /// Buffering threshold: start playback after accumulating this many bytes.
-const BUFFER_THRESHOLD: usize = 32 * 1024;
+///
+/// Public so platform-specific [`RadioSource`] implementations (e.g. the
+/// WASM archive primer, which seeds enough bytes to walk
+/// `Connecting → Buffering → Playing` without actually feeding decoded
+/// audio) can size their primer chunks against the same threshold and
+/// stay in sync if it ever changes.
+pub const BUFFER_THRESHOLD: usize = 32 * 1024;
 
 /// Radio playback state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
