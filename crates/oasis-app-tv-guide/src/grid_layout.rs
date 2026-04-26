@@ -148,14 +148,16 @@ pub(crate) struct VolumeBarRect {
 /// Compute the volume bar position for the bottom-right overlay area.
 ///
 /// The bar sits at the right side of the overlay strip shown when tuned.
+/// Sized to match the retro cable-TV look: wide enough for tick marks
+/// when the screen is large, but clamped down on small (PSP) layouts.
 pub(crate) fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect {
-    let bar_w = (cw / 4).clamp(60, 160);
-    let bar_h = 10u32;
+    let bar_w = (cw / 3).clamp(80, 220);
+    let bar_h = 12u32;
     let overlay_h = 20u32;
     let overlay_y = ch as i32 - overlay_h as i32;
     if expanded {
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 8,
+            x: cw as i32 - bar_w as i32 - 12,
             y: overlay_y + (overlay_h as i32 - bar_h as i32) / 2,
             w: bar_w,
             h: bar_h,
@@ -165,7 +167,7 @@ pub(crate) fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect
         let footer_h = (ch * 5 / 100).max(14);
         let ftr_y = ch as i32 - footer_h as i32;
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 8,
+            x: cw as i32 - bar_w as i32 - 12,
             y: ftr_y + (footer_h as i32 - bar_h as i32) / 2,
             w: bar_w,
             h: bar_h,
@@ -254,41 +256,41 @@ mod tests {
     #[test]
     fn volume_bar_rect_expanded_basic() {
         let r = volume_bar_rect(800, 600, true);
-        // bar_w = (800/4).clamp(60,160) = 160
-        assert_eq!(r.w, 160);
-        assert_eq!(r.h, 10);
-        // x = 800 - 160 - 8 = 632
-        assert_eq!(r.x, 632);
-        // overlay_y = 600 - 20 = 580, y = 580 + (20 - 10)/2 = 585
-        assert_eq!(r.y, 585);
+        // bar_w = (800/3).clamp(80,220) = 220
+        assert_eq!(r.w, 220);
+        assert_eq!(r.h, 12);
+        // x = 800 - 220 - 12 = 568
+        assert_eq!(r.x, 568);
+        // overlay_y = 600 - 20 = 580, y = 580 + (20 - 12)/2 = 584
+        assert_eq!(r.y, 584);
     }
 
     #[test]
     fn volume_bar_rect_collapsed_basic() {
         let r = volume_bar_rect(800, 600, false);
-        assert_eq!(r.w, 160);
-        assert_eq!(r.h, 10);
+        assert_eq!(r.w, 220);
+        assert_eq!(r.h, 12);
         // footer_h = (600*5/100).max(14) = 30
         // ftr_y = 600 - 30 = 570
-        // y = 570 + (30-10)/2 = 580
-        assert_eq!(r.y, 580);
+        // y = 570 + (30-12)/2 = 579
+        assert_eq!(r.y, 579);
     }
 
     #[test]
     fn volume_bar_rect_small_window() {
         let r = volume_bar_rect(200, 100, true);
-        // bar_w = (200/4).clamp(60,160) = 60
-        assert_eq!(r.w, 60);
-        // x = 200 - 60 - 8 = 132
-        assert_eq!(r.x, 132);
+        // bar_w = (200/3).clamp(80,220) = 80
+        assert_eq!(r.w, 80);
+        // x = 200 - 80 - 12 = 108
+        assert_eq!(r.x, 108);
     }
 
     #[test]
     fn volume_bar_rect_tiny_height() {
         // Even with tiny height, should not panic.
         let r = volume_bar_rect(100, 10, false);
-        assert!(r.w >= 60);
-        assert_eq!(r.h, 10);
+        assert!(r.w >= 80);
+        assert_eq!(r.h, 12);
     }
 
     // -- TvGuideColors --

@@ -80,6 +80,12 @@ impl TvGuideState {
                     obj.visible = false;
                 }
             }
+            for i in 0..5 {
+                let name = format!("tv_vol_tick_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
         }
     }
 
@@ -235,6 +241,10 @@ impl TvGuideState {
     }
 
     /// Render the volume bar as SDI objects.
+    ///
+    /// Retro cable-TV remote display: dark blue track, amber fill,
+    /// cobalt grid_line border, and tick marks at 0/25/50/75/100 when
+    /// the bar is wide enough.
     fn draw_volume_bar_sdi(
         &self,
         sdi: &mut SdiRegistry,
@@ -245,44 +255,68 @@ impl TvGuideState {
     ) {
         let vr = volume_bar_rect(cw, ch, expanded);
         let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+        let show_ticks = vr.w >= 140;
 
-        // Track background.
+        // Track (dark blue) with cobalt border via stroke.
         ensure_obj(sdi, "tv_vol_bg");
         if let Ok(obj) = sdi.get_mut("tv_vol_bg") {
             obj.x = vr.x;
             obj.y = vr.y;
             obj.w = vr.w;
             obj.h = vr.h;
-            obj.color = Color::rgba(40, 40, 50, 200);
-            obj.border_radius = Some(3);
+            obj.color = self.colors.time_header_bg;
+            obj.stroke_color = Some(self.colors.grid_line);
+            obj.stroke_width = Some(1);
+            obj.border_radius = None;
             obj.visible = true;
             obj.z = 114;
         }
 
-        // Filled portion.
+        // Filled portion (amber).
         ensure_obj(sdi, "tv_vol_fill");
         if let Ok(obj) = sdi.get_mut("tv_vol_fill") {
             obj.x = vr.x;
             obj.y = vr.y;
             obj.w = fill_w;
             obj.h = vr.h;
-            obj.color = self.colors.playing_text;
-            obj.border_radius = Some(3);
+            obj.color = self.colors.time_label;
+            obj.stroke_color = None;
+            obj.border_radius = None;
             obj.visible = fill_w > 0;
             obj.z = 115;
         }
 
-        // Label.
-        let label = format!("VOL {}%", self.volume);
+        // Label "VOLUME: X%" left of the bar (or short "VOL X%" on tight layouts).
+        let (label, label_offset) = if vr.w >= 140 {
+            (format!("VOLUME: {}%", self.volume), 75)
+        } else {
+            (format!("VOL {}%", self.volume), 45)
+        };
         ensure_obj(sdi, "tv_vol_label");
         if let Ok(obj) = sdi.get_mut("tv_vol_label") {
             obj.text = Some(label);
-            obj.x = vr.x - 50;
-            obj.y = vr.y;
+            obj.x = vr.x - label_offset;
+            obj.y = vr.y + (vr.h as i32 - at.font_hint as i32) / 2;
             obj.font_size = at.font_hint;
-            obj.text_color = self.colors.dim_text;
+            obj.text_color = self.colors.time_label;
             obj.visible = true;
             obj.z = 116;
+        }
+
+        // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
+        for (i, pct) in [0u32, 25, 50, 75, 100].iter().enumerate() {
+            let tick_name = format!("tv_vol_tick_{i}");
+            ensure_obj(sdi, &tick_name);
+            if let Ok(obj) = sdi.get_mut(&tick_name) {
+                let tx = vr.x + ((*pct as i32) * vr.w as i32 / 100);
+                obj.x = tx;
+                obj.y = vr.y + vr.h as i32 + 1;
+                obj.w = 1;
+                obj.h = 3;
+                obj.color = self.colors.dim_text;
+                obj.visible = show_ticks;
+                obj.z = 116;
+            }
         }
     }
 
@@ -1191,6 +1225,10 @@ impl TvGuideState {
     }
 
     /// Draw the volume bar using the backend's direct rendering.
+    ///
+    /// Retro cable-TV remote display: dark blue track, amber fill,
+    /// cobalt grid_line border, and tick marks at 0/25/50/75/100 when
+    /// the bar is wide enough.
     #[allow(clippy::too_many_arguments)]
     fn draw_volume_bar_windowed(
         &self,
@@ -1204,27 +1242,42 @@ impl TvGuideState {
     ) -> oasis_types::error::Result<()> {
         let vr = volume_bar_rect(cw, ch, expanded);
         let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+        let bx = cx + vr.x;
+        let by = cy + vr.y;
 
-        // Track background.
-        backend.fill_rect(
-            cx + vr.x,
-            cy + vr.y,
-            vr.w,
-            vr.h,
-            Color::rgba(40, 40, 50, 200),
-        )?;
-        // Filled portion.
+        // Track (dark blue).
+        backend.fill_rect(bx, by, vr.w, vr.h, self.colors.time_header_bg)?;
+        // Filled portion (amber).
         if fill_w > 0 {
-            backend.fill_rect(cx + vr.x, cy + vr.y, fill_w, vr.h, self.colors.playing_text)?;
+            backend.fill_rect(bx, by, fill_w, vr.h, self.colors.time_label)?;
         }
-        // Label.
+        // Cobalt border around the track.
+        backend.fill_rect(bx, by, vr.w, 1, self.colors.grid_line)?;
+        backend.fill_rect(bx, by + vr.h as i32 - 1, vr.w, 1, self.colors.grid_line)?;
+        backend.fill_rect(bx, by, 1, vr.h, self.colors.grid_line)?;
+        backend.fill_rect(bx + vr.w as i32 - 1, by, 1, vr.h, self.colors.grid_line)?;
+
+        // Label "VOLUME: X%" (or short "VOL X%" on tight layouts).
+        let (label, label_offset) = if vr.w >= 140 {
+            (format!("VOLUME: {}%", self.volume), 75)
+        } else {
+            (format!("VOL {}%", self.volume), 45)
+        };
         backend.draw_text(
-            &format!("VOL {}%", self.volume),
-            cx + vr.x - 50,
-            cy + vr.y,
+            &label,
+            bx - label_offset,
+            by + (vr.h as i32 - at.font_hint as i32) / 2,
             at.font_hint,
-            self.colors.dim_text,
+            self.colors.time_label,
         )?;
+
+        // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
+        if vr.w >= 140 {
+            for pct in [0u32, 25, 50, 75, 100] {
+                let tx = bx + ((pct as i32) * vr.w as i32 / 100);
+                backend.fill_rect(tx, by + vr.h as i32 + 1, 1, 3, self.colors.dim_text)?;
+            }
+        }
         Ok(())
     }
 
@@ -1267,6 +1320,12 @@ impl TvGuideState {
         ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..5 {
+            let name = format!("tv_vol_tick_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
         }
