@@ -93,4 +93,15 @@ impl AppRunner {
 
         AppAction::None
     }
+
+    /// Forward an `App::refresh` call to the delegate. Apps that don't
+    /// override `refresh` get the no-op default; apps like the file
+    /// manager use this to apply pending vfs work queued from
+    /// `handle_click` (which doesn't get a vfs reference).
+    pub fn refresh_app(&mut self, vfs: &dyn Vfs) {
+        if let Some(ref mut app) = self.delegate {
+            app.refresh(vfs);
+            self.sync_from_delegate();
+        }
+    }
 }
