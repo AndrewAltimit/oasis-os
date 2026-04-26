@@ -731,13 +731,13 @@ pub(crate) fn draw_tvguide_windowed(
     }
 
     // Retro cable-TV palette: deep navy bg, amber accents, cyan highlight.
-    be.fill_rect(cx, cy, cw, ch, Color::rgba(8, 14, 30, 220))?;
-    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(255, 176, 50))?;
-    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(45, 90, 160, 255))?;
+    be.fill_rect(cx, cy, cw, ch, TV_BG)?;
+    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, TV_TIME_LABEL)?;
+    be.fill_rect(cx, cy + 12, cw, 1, TV_GRID_LINE)?;
 
-    let lbl = Color::rgb(100, 130, 170);
-    let hi = Color::rgb(30, 15, 0); // dark warm — for amber selected bg
-    let sel_bg = Color::rgba(240, 165, 40, 255);
+    let lbl = TV_DIM_TEXT;
+    let hi = TV_SELECTED_TEXT; // dark warm — for amber selected bg
+    let sel_bg = TV_SELECTED_BG;
 
     if tuned {
         let mid_x = cx + cw as i32 / 2;
@@ -749,7 +749,7 @@ pub(crate) fn draw_tvguide_windowed(
             let pct = (download_progress * 100.0) as u32;
             let status = stack_fmt(&mut fbuf, format_args!("Downloading... {}%", pct));
             let sx = (mid_x - (status.len() as i32 * 4)).max(cx + 4);
-            be.draw_text(status, sx, mid_y - 20, 8, Color::rgb(255, 200, 80))?;
+            be.draw_text(status, sx, mid_y - 20, 8, TV_SELECTED_GLOW)?;
 
             // Progress bar.
             let bar_w = (cw as i32 - 20).max(40) as u32;
@@ -810,13 +810,13 @@ pub(crate) fn draw_tvguide_windowed(
         let is_sel = i == selected;
         if is_sel {
             be.fill_rect(cx, ry - 1, cw, row_h as u32, sel_bg)?;
-            be.fill_rect(cx, ry - 1, cw, 1, Color::rgb(255, 200, 80))?;
-            be.fill_rect(cx, ry + row_h - 2, cw, 1, Color::rgb(255, 200, 80))?;
+            be.fill_rect(cx, ry - 1, cw, 1, TV_SELECTED_GLOW)?;
+            be.fill_rect(cx, ry + row_h - 2, cw, 1, TV_SELECTED_GLOW)?;
         }
 
         let c = &channels[i];
-        let num_col = if is_sel { hi } else { Color::rgb(80, 190, 255) };
-        let name_col = if is_sel { hi } else { Color::rgb(220, 230, 255) };
+        let num_col = if is_sel { hi } else { TV_CHANNEL_LABEL };
+        let name_col = if is_sel { hi } else { TV_PROGRAM_TEXT };
 
         // Channel number.
         let mut fbuf = [0u8; 64];
@@ -839,7 +839,7 @@ pub(crate) fn draw_tvguide_windowed(
             if let Some(cat) = &catalogs[i] {
                 let ep_str = stack_fmt(&mut fbuf, format_args!("{}ep", cat.episodes.len()));
                 let ep_x = cx + cw as i32 - 30;
-                let ep_col = if is_sel { hi } else { Color::rgb(255, 176, 50) };
+                let ep_col = if is_sel { hi } else { TV_TIME_LABEL };
                 be.draw_text(ep_str, ep_x, ry, 8, ep_col)?;
             }
         }

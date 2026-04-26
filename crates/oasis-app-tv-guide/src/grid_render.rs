@@ -3,8 +3,8 @@ use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::Color;
 
 use crate::grid_layout::{
-    MAX_CELLS, SLOT_DURATION, VISIBLE_ROWS, VISIBLE_TIME_SLOTS, ensure_obj, truncate_title,
-    volume_bar_rect,
+    MAX_CELLS, SLOT_DURATION, VISIBLE_ROWS, VISIBLE_TIME_SLOTS, VOLUME_BAR_WIDE_THRESHOLD,
+    VOLUME_TICK_POSITIONS, ensure_obj, truncate_title, volume_bar_label, volume_bar_rect,
 };
 use crate::grid_state::TvGuideState;
 use crate::schedule;
@@ -80,7 +80,7 @@ impl TvGuideState {
                     obj.visible = false;
                 }
             }
-            for i in 0..5 {
+            for i in 0..VOLUME_TICK_POSITIONS.len() {
                 let name = format!("tv_vol_tick_{i}");
                 if let Ok(obj) = sdi.get_mut(&name) {
                     obj.visible = false;
@@ -255,7 +255,7 @@ impl TvGuideState {
     ) {
         let vr = volume_bar_rect(cw, ch, expanded);
         let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
-        let show_ticks = vr.w >= 140;
+        let show_ticks = vr.w >= VOLUME_BAR_WIDE_THRESHOLD;
 
         // Track (dark blue) with cobalt border via stroke.
         ensure_obj(sdi, "tv_vol_bg");
@@ -287,15 +287,12 @@ impl TvGuideState {
         }
 
         // Label "VOLUME: X%" left of the bar (or short "VOL X%" on tight layouts).
-        let (label, label_offset) = if vr.w >= 140 {
-            (format!("VOLUME: {}%", self.volume), 75)
-        } else {
-            (format!("VOL {}%", self.volume), 45)
-        };
+        let (label, label_offset) = volume_bar_label(vr.w, self.volume);
         ensure_obj(sdi, "tv_vol_label");
         if let Ok(obj) = sdi.get_mut("tv_vol_label") {
             obj.text = Some(label);
-            obj.x = vr.x - label_offset;
+            // Clamp to ≥ 0 so the label stays on-screen on very narrow canvases.
+            obj.x = (vr.x - label_offset).max(0);
             obj.y = vr.y + (vr.h as i32 - at.font_hint as i32) / 2;
             obj.font_size = at.font_hint;
             obj.text_color = self.colors.time_label;
@@ -304,11 +301,18 @@ impl TvGuideState {
         }
 
         // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
-        for (i, pct) in [0u32, 25, 50, 75, 100].iter().enumerate() {
+        // The 100% tick is drawn at `vr.w - 1` so it stays inside the bar's
+        // right edge instead of one pixel past it.
+        let last_tick_idx = VOLUME_TICK_POSITIONS.len().saturating_sub(1);
+        for (i, pct) in VOLUME_TICK_POSITIONS.iter().enumerate() {
             let tick_name = format!("tv_vol_tick_{i}");
             ensure_obj(sdi, &tick_name);
             if let Ok(obj) = sdi.get_mut(&tick_name) {
-                let tx = vr.x + ((*pct as i32) * vr.w as i32 / 100);
+                let tx = if i == last_tick_idx {
+                    vr.x + vr.w as i32 - 1
+                } else {
+                    vr.x + ((*pct as i32) * vr.w as i32 / 100)
+                };
                 obj.x = tx;
                 obj.y = vr.y + vr.h as i32 + 1;
                 obj.w = 1;
@@ -557,9 +561,7 @@ impl TvGuideState {
             obj.x = preview_x + preview_w as i32 - 39;
             obj.y = preview_y - 1;
             obj.font_size = at.font_hint;
-            // White on red badge — independent of selected_text (which is
-            // dark warm for the amber-on-row context).
-            obj.text_color = Color::rgba(255, 255, 255, 255);
+            obj.text_color = self.colors.live_badge_text;
             obj.visible = is_live;
             obj.z = 106;
         }
@@ -1258,23 +1260,25 @@ impl TvGuideState {
         backend.fill_rect(bx + vr.w as i32 - 1, by, 1, vr.h, self.colors.grid_line)?;
 
         // Label "VOLUME: X%" (or short "VOL X%" on tight layouts).
-        let (label, label_offset) = if vr.w >= 140 {
-            (format!("VOLUME: {}%", self.volume), 75)
-        } else {
-            (format!("VOL {}%", self.volume), 45)
-        };
+        let (label, label_offset) = volume_bar_label(vr.w, self.volume);
         backend.draw_text(
             &label,
-            bx - label_offset,
+            (bx - label_offset).max(0),
             by + (vr.h as i32 - at.font_hint as i32) / 2,
             at.font_hint,
             self.colors.time_label,
         )?;
 
         // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
-        if vr.w >= 140 {
-            for pct in [0u32, 25, 50, 75, 100] {
-                let tx = bx + ((pct as i32) * vr.w as i32 / 100);
+        // The 100% tick uses `vr.w - 1` so it stays inside the right edge.
+        if vr.w >= VOLUME_BAR_WIDE_THRESHOLD {
+            let last_tick_idx = VOLUME_TICK_POSITIONS.len().saturating_sub(1);
+            for (i, pct) in VOLUME_TICK_POSITIONS.iter().enumerate() {
+                let tx = if i == last_tick_idx {
+                    bx + vr.w as i32 - 1
+                } else {
+                    bx + ((*pct as i32) * vr.w as i32 / 100)
+                };
                 backend.fill_rect(tx, by + vr.h as i32 + 1, 1, 3, self.colors.dim_text)?;
             }
         }
@@ -1323,7 +1327,7 @@ impl TvGuideState {
                 obj.visible = false;
             }
         }
-        for i in 0..5 {
+        for i in 0..VOLUME_TICK_POSITIONS.len() {
             let name = format!("tv_vol_tick_{i}");
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;

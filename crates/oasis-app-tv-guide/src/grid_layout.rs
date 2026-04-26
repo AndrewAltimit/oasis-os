@@ -14,6 +14,28 @@ pub(crate) const VISIBLE_ROWS: usize = 5;
 /// Maximum number of program cells per row.
 pub(crate) const MAX_CELLS: usize = 8;
 
+/// Tick mark positions for the volume bar (percentages).
+pub(crate) const VOLUME_TICK_POSITIONS: &[u32] = &[0, 25, 50, 75, 100];
+
+/// Width threshold (in pixels) at which the volume bar shows the long
+/// "VOLUME: X%" label and the per-25%-tick marks. Below this threshold
+/// the short "VOL X%" label is used and ticks are hidden.
+pub(crate) const VOLUME_BAR_WIDE_THRESHOLD: u32 = 140;
+
+/// Compute the volume bar's text label and the x-offset (in pixels)
+/// from the bar's left edge at which the label should be drawn.
+///
+/// Returns the long form ("VOLUME: X%", offset 75) when the bar is at
+/// least `VOLUME_BAR_WIDE_THRESHOLD` wide, otherwise the short form
+/// ("VOL X%", offset 45). Shared between SDI and windowed render paths.
+pub(crate) fn volume_bar_label(bar_w: u32, volume: u8) -> (String, i32) {
+    if bar_w >= VOLUME_BAR_WIDE_THRESHOLD {
+        (format!("VOLUME: {volume}%"), 75)
+    } else {
+        (format!("VOL {volume}%"), 45)
+    }
+}
+
 /// TV Guide color palette, populated from the active theme.
 ///
 /// Defaults match the retro cable-TV blue/amber EPG aesthetic. Skins can
@@ -38,6 +60,10 @@ pub struct TvGuideColors {
     pub cell_bg: Color,
     pub cell_border: Color,
     pub live_badge: Color,
+    /// Text color drawn on top of the LIVE badge. Defaults to white;
+    /// kept independent of `selected_text` (which is dark warm for the
+    /// amber-on-row context).
+    pub live_badge_text: Color,
     pub date_text: Color,
     pub footer_bg: Color,
     pub time_label: Color,
@@ -70,6 +96,7 @@ impl TvGuideColors {
             cell_bg: c("cell_bg", d.cell_bg),
             cell_border: c("cell_border", d.cell_border),
             live_badge: c("live_badge", d.live_badge),
+            live_badge_text: c("live_badge_text", d.live_badge_text),
             date_text: c("date_text", d.date_text),
             footer_bg: c("footer_bg", d.footer_bg),
             time_label: c("time_label", d.time_label),
@@ -98,6 +125,7 @@ impl TvGuideColors {
             cell_bg: Color::rgba(16, 28, 55, 255),
             cell_border: Color::rgba(45, 90, 160, 255),
             live_badge: Color::rgba(255, 40, 40, 255),
+            live_badge_text: Color::rgba(255, 255, 255, 255),
             date_text: Color::rgba(100, 130, 170, 255),
             footer_bg: Color::rgba(8, 14, 30, 255),
             time_label: Color::rgba(255, 176, 50, 255),
@@ -150,25 +178,28 @@ pub(crate) struct VolumeBarRect {
 /// The bar sits at the right side of the overlay strip shown when tuned.
 /// Sized to match the retro cable-TV look: wide enough for tick marks
 /// when the screen is large, but clamped down on small (PSP) layouts.
+/// `x`/`y` are clamped to ≥ 0 so very small canvases (e.g. cw < 92) do
+/// not produce a negative origin that pushes the bar off-screen.
 pub(crate) fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect {
     let bar_w = (cw / 3).clamp(80, 220);
     let bar_h = 12u32;
     let overlay_h = 20u32;
-    let overlay_y = ch as i32 - overlay_h as i32;
+    let overlay_y = (ch as i32 - overlay_h as i32).max(0);
+    let x = (cw as i32 - bar_w as i32 - 12).max(0);
     if expanded {
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 12,
-            y: overlay_y + (overlay_h as i32 - bar_h as i32) / 2,
+            x,
+            y: (overlay_y + (overlay_h as i32 - bar_h as i32) / 2).max(0),
             w: bar_w,
             h: bar_h,
         }
     } else {
         // PIP mode: put in the footer bar area.
         let footer_h = (ch * 5 / 100).max(14);
-        let ftr_y = ch as i32 - footer_h as i32;
+        let ftr_y = (ch as i32 - footer_h as i32).max(0);
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 12,
-            y: ftr_y + (footer_h as i32 - bar_h as i32) / 2,
+            x,
+            y: (ftr_y + (footer_h as i32 - bar_h as i32) / 2).max(0),
             w: bar_w,
             h: bar_h,
         }
@@ -291,6 +322,47 @@ mod tests {
         let r = volume_bar_rect(100, 10, false);
         assert!(r.w >= 80);
         assert_eq!(r.h, 12);
+    }
+
+    #[test]
+    fn volume_bar_rect_narrow_canvas_clamps_x() {
+        // cw < 92 would otherwise produce a negative x; the rect must
+        // clamp x ≥ 0 so the bar stays on-screen.
+        let r = volume_bar_rect(80, 100, true);
+        assert_eq!(r.w, 80);
+        assert!(r.x >= 0, "x must be non-negative on tiny canvases");
+        assert!(r.y >= 0, "y must be non-negative on tiny canvases");
+    }
+
+    #[test]
+    fn volume_bar_rect_tiny_canvas_clamps_y() {
+        // ch smaller than overlay/footer height would produce negative y.
+        let r = volume_bar_rect(200, 5, true);
+        assert!(r.y >= 0, "y must be non-negative");
+    }
+
+    // -- volume_bar_label --
+
+    #[test]
+    fn volume_bar_label_long_form_at_threshold() {
+        let (label, offset) = volume_bar_label(VOLUME_BAR_WIDE_THRESHOLD, 50);
+        assert_eq!(label, "VOLUME: 50%");
+        assert_eq!(offset, 75);
+    }
+
+    #[test]
+    fn volume_bar_label_short_form_below_threshold() {
+        let (label, offset) = volume_bar_label(VOLUME_BAR_WIDE_THRESHOLD - 1, 75);
+        assert_eq!(label, "VOL 75%");
+        assert_eq!(offset, 45);
+    }
+
+    #[test]
+    fn volume_tick_positions_endpoints() {
+        // The constant must start at 0 and end at 100 — the tick rendering
+        // logic relies on this for the off-by-one fix on the 100% tick.
+        assert_eq!(VOLUME_TICK_POSITIONS.first(), Some(&0));
+        assert_eq!(VOLUME_TICK_POSITIONS.last(), Some(&100));
     }
 
     // -- TvGuideColors --
