@@ -14,10 +14,32 @@ pub(crate) const VISIBLE_ROWS: usize = 5;
 /// Maximum number of program cells per row.
 pub(crate) const MAX_CELLS: usize = 8;
 
+/// Tick mark positions for the volume bar (percentages).
+pub(crate) const VOLUME_TICK_POSITIONS: &[u32] = &[0, 25, 50, 75, 100];
+
+/// Width threshold (in pixels) at which the volume bar shows the long
+/// "VOLUME: X%" label and the per-25%-tick marks. Below this threshold
+/// the short "VOL X%" label is used and ticks are hidden.
+pub(crate) const VOLUME_BAR_WIDE_THRESHOLD: u32 = 140;
+
+/// Compute the volume bar's text label and the x-offset (in pixels)
+/// from the bar's left edge at which the label should be drawn.
+///
+/// Returns the long form ("VOLUME: X%", offset 75) when the bar is at
+/// least `VOLUME_BAR_WIDE_THRESHOLD` wide, otherwise the short form
+/// ("VOL X%", offset 45). Shared between SDI and windowed render paths.
+pub(crate) fn volume_bar_label(bar_w: u32, volume: u8) -> (String, i32) {
+    if bar_w >= VOLUME_BAR_WIDE_THRESHOLD {
+        (format!("VOLUME: {volume}%"), 75)
+    } else {
+        (format!("VOL {volume}%"), 45)
+    }
+}
+
 /// TV Guide color palette, populated from the active theme.
 ///
-/// Defaults match the original retro CRT aesthetic. Skins can override
-/// any color via `[app_themes.tv_guide]` in theme.toml.
+/// Defaults match the retro cable-TV blue/amber EPG aesthetic. Skins can
+/// override any color via `[app_themes.tv_guide]` in theme.toml.
 #[derive(Debug, Clone)]
 pub struct TvGuideColors {
     pub bg: Color,
@@ -30,11 +52,18 @@ pub struct TvGuideColors {
     pub program_text: Color,
     pub selected_bg: Color,
     pub selected_text: Color,
+    /// Bright amber highlight drawn on the top/bottom edges of the
+    /// selected row to create a glowing-bar effect.
+    pub selected_glow: Color,
     pub dim_text: Color,
     pub playing_text: Color,
     pub cell_bg: Color,
     pub cell_border: Color,
     pub live_badge: Color,
+    /// Text color drawn on top of the LIVE badge. Defaults to white;
+    /// kept independent of `selected_text` (which is dark warm for the
+    /// amber-on-row context).
+    pub live_badge_text: Color,
     pub date_text: Color,
     pub footer_bg: Color,
     pub time_label: Color,
@@ -49,55 +78,60 @@ impl TvGuideColors {
         let c = |key: &str, default: Color| -> Color {
             at.app_color("tv_guide", key).unwrap_or(default)
         };
+        let d = Self::defaults();
         Self {
-            bg: c("bg", Color::rgba(10, 22, 40, 255)),
-            grid_line: c("grid_line", Color::rgba(26, 58, 92, 255)),
-            header_bg: c("header_bg", Color::rgba(12, 25, 50, 255)),
-            header_dark: c("header_dark", Color::rgba(8, 18, 38, 255)),
-            time_header_bg: c("time_header_bg", Color::rgba(15, 35, 65, 255)),
-            time_header: c("time_header", Color::rgba(0, 204, 255, 255)),
-            channel_label: c("channel_label", Color::rgba(200, 220, 240, 255)),
-            program_text: c("program_text", Color::rgba(192, 216, 232, 255)),
-            selected_bg: c("selected_bg", Color::rgba(255, 140, 0, 220)),
-            selected_text: c("selected_text", Color::rgba(255, 255, 255, 255)),
-            dim_text: c("dim_text", Color::rgba(100, 130, 160, 255)),
-            playing_text: c("playing_text", Color::rgba(0, 221, 255, 255)),
-            cell_bg: c("cell_bg", Color::rgba(15, 30, 55, 255)),
-            cell_border: c("cell_border", Color::rgba(26, 58, 92, 255)),
-            live_badge: c("live_badge", Color::rgba(220, 40, 40, 255)),
-            date_text: c("date_text", Color::rgba(180, 200, 220, 255)),
-            footer_bg: c("footer_bg", Color::rgba(12, 25, 45, 255)),
-            time_label: c("time_label", Color::rgba(255, 160, 0, 255)),
-            glow_border: c("glow_border", Color::rgba(60, 130, 200, 255)),
-            glow_outer: c("glow_outer", Color::rgba(30, 70, 130, 180)),
-            header_title: c("header_title", Color::rgba(220, 240, 255, 255)),
+            bg: c("bg", d.bg),
+            grid_line: c("grid_line", d.grid_line),
+            header_bg: c("header_bg", d.header_bg),
+            header_dark: c("header_dark", d.header_dark),
+            time_header_bg: c("time_header_bg", d.time_header_bg),
+            time_header: c("time_header", d.time_header),
+            channel_label: c("channel_label", d.channel_label),
+            program_text: c("program_text", d.program_text),
+            selected_bg: c("selected_bg", d.selected_bg),
+            selected_text: c("selected_text", d.selected_text),
+            selected_glow: c("selected_glow", d.selected_glow),
+            dim_text: c("dim_text", d.dim_text),
+            playing_text: c("playing_text", d.playing_text),
+            cell_bg: c("cell_bg", d.cell_bg),
+            cell_border: c("cell_border", d.cell_border),
+            live_badge: c("live_badge", d.live_badge),
+            live_badge_text: c("live_badge_text", d.live_badge_text),
+            date_text: c("date_text", d.date_text),
+            footer_bg: c("footer_bg", d.footer_bg),
+            time_label: c("time_label", d.time_label),
+            glow_border: c("glow_border", d.glow_border),
+            glow_outer: c("glow_outer", d.glow_outer),
+            header_title: c("header_title", d.header_title),
         }
     }
 
     /// Build colors with hardcoded defaults (no theme overrides).
     pub fn defaults() -> Self {
         Self {
-            bg: Color::rgba(10, 22, 40, 255),
-            grid_line: Color::rgba(26, 58, 92, 255),
-            header_bg: Color::rgba(12, 25, 50, 255),
-            header_dark: Color::rgba(8, 18, 38, 255),
-            time_header_bg: Color::rgba(15, 35, 65, 255),
-            time_header: Color::rgba(0, 204, 255, 255),
-            channel_label: Color::rgba(200, 220, 240, 255),
-            program_text: Color::rgba(192, 216, 232, 255),
-            selected_bg: Color::rgba(255, 140, 0, 220),
-            selected_text: Color::rgba(255, 255, 255, 255),
-            dim_text: Color::rgba(100, 130, 160, 255),
-            playing_text: Color::rgba(0, 221, 255, 255),
-            cell_bg: Color::rgba(15, 30, 55, 255),
-            cell_border: Color::rgba(26, 58, 92, 255),
-            live_badge: Color::rgba(220, 40, 40, 255),
-            date_text: Color::rgba(180, 200, 220, 255),
-            footer_bg: Color::rgba(12, 25, 45, 255),
-            time_label: Color::rgba(255, 160, 0, 255),
-            glow_border: Color::rgba(60, 130, 200, 255),
-            glow_outer: Color::rgba(30, 70, 130, 180),
-            header_title: Color::rgba(220, 240, 255, 255),
+            bg: Color::rgba(8, 14, 30, 255),
+            grid_line: Color::rgba(45, 90, 160, 255),
+            header_bg: Color::rgba(8, 14, 30, 255),
+            header_dark: Color::rgba(8, 14, 30, 255),
+            time_header_bg: Color::rgba(30, 50, 90, 255),
+            time_header: Color::rgba(255, 176, 50, 255),
+            channel_label: Color::rgba(80, 190, 255, 255),
+            program_text: Color::rgba(220, 230, 255, 255),
+            selected_bg: Color::rgba(240, 165, 40, 255),
+            selected_text: Color::rgba(30, 15, 0, 255),
+            selected_glow: Color::rgba(255, 200, 80, 255),
+            dim_text: Color::rgba(100, 130, 170, 255),
+            playing_text: Color::rgba(80, 190, 255, 255),
+            cell_bg: Color::rgba(16, 28, 55, 255),
+            cell_border: Color::rgba(45, 90, 160, 255),
+            live_badge: Color::rgba(255, 40, 40, 255),
+            live_badge_text: Color::rgba(255, 255, 255, 255),
+            date_text: Color::rgba(100, 130, 170, 255),
+            footer_bg: Color::rgba(8, 14, 30, 255),
+            time_label: Color::rgba(255, 176, 50, 255),
+            glow_border: Color::rgba(45, 90, 160, 255),
+            glow_outer: Color::rgba(30, 70, 130, 255),
+            header_title: Color::rgba(255, 255, 255, 255),
         }
     }
 }
@@ -142,25 +176,30 @@ pub(crate) struct VolumeBarRect {
 /// Compute the volume bar position for the bottom-right overlay area.
 ///
 /// The bar sits at the right side of the overlay strip shown when tuned.
+/// Sized to match the retro cable-TV look: wide enough for tick marks
+/// when the screen is large, but clamped down on small (PSP) layouts.
+/// `x`/`y` are clamped to ≥ 0 so very small canvases (e.g. cw < 92) do
+/// not produce a negative origin that pushes the bar off-screen.
 pub(crate) fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect {
-    let bar_w = (cw / 4).clamp(60, 160);
-    let bar_h = 10u32;
+    let bar_w = (cw / 3).clamp(80, 220);
+    let bar_h = 12u32;
     let overlay_h = 20u32;
-    let overlay_y = ch as i32 - overlay_h as i32;
+    let overlay_y = (ch as i32 - overlay_h as i32).max(0);
+    let x = (cw as i32 - bar_w as i32 - 12).max(0);
     if expanded {
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 8,
-            y: overlay_y + (overlay_h as i32 - bar_h as i32) / 2,
+            x,
+            y: (overlay_y + (overlay_h as i32 - bar_h as i32) / 2).max(0),
             w: bar_w,
             h: bar_h,
         }
     } else {
         // PIP mode: put in the footer bar area.
         let footer_h = (ch * 5 / 100).max(14);
-        let ftr_y = ch as i32 - footer_h as i32;
+        let ftr_y = (ch as i32 - footer_h as i32).max(0);
         VolumeBarRect {
-            x: cw as i32 - bar_w as i32 - 8,
-            y: ftr_y + (footer_h as i32 - bar_h as i32) / 2,
+            x,
+            y: (ftr_y + (footer_h as i32 - bar_h as i32) / 2).max(0),
             w: bar_w,
             h: bar_h,
         }
@@ -248,41 +287,82 @@ mod tests {
     #[test]
     fn volume_bar_rect_expanded_basic() {
         let r = volume_bar_rect(800, 600, true);
-        // bar_w = (800/4).clamp(60,160) = 160
-        assert_eq!(r.w, 160);
-        assert_eq!(r.h, 10);
-        // x = 800 - 160 - 8 = 632
-        assert_eq!(r.x, 632);
-        // overlay_y = 600 - 20 = 580, y = 580 + (20 - 10)/2 = 585
-        assert_eq!(r.y, 585);
+        // bar_w = (800/3).clamp(80,220) = 220
+        assert_eq!(r.w, 220);
+        assert_eq!(r.h, 12);
+        // x = 800 - 220 - 12 = 568
+        assert_eq!(r.x, 568);
+        // overlay_y = 600 - 20 = 580, y = 580 + (20 - 12)/2 = 584
+        assert_eq!(r.y, 584);
     }
 
     #[test]
     fn volume_bar_rect_collapsed_basic() {
         let r = volume_bar_rect(800, 600, false);
-        assert_eq!(r.w, 160);
-        assert_eq!(r.h, 10);
+        assert_eq!(r.w, 220);
+        assert_eq!(r.h, 12);
         // footer_h = (600*5/100).max(14) = 30
         // ftr_y = 600 - 30 = 570
-        // y = 570 + (30-10)/2 = 580
-        assert_eq!(r.y, 580);
+        // y = 570 + (30-12)/2 = 579
+        assert_eq!(r.y, 579);
     }
 
     #[test]
     fn volume_bar_rect_small_window() {
         let r = volume_bar_rect(200, 100, true);
-        // bar_w = (200/4).clamp(60,160) = 60
-        assert_eq!(r.w, 60);
-        // x = 200 - 60 - 8 = 132
-        assert_eq!(r.x, 132);
+        // bar_w = (200/3).clamp(80,220) = 80
+        assert_eq!(r.w, 80);
+        // x = 200 - 80 - 12 = 108
+        assert_eq!(r.x, 108);
     }
 
     #[test]
     fn volume_bar_rect_tiny_height() {
         // Even with tiny height, should not panic.
         let r = volume_bar_rect(100, 10, false);
-        assert!(r.w >= 60);
-        assert_eq!(r.h, 10);
+        assert!(r.w >= 80);
+        assert_eq!(r.h, 12);
+    }
+
+    #[test]
+    fn volume_bar_rect_narrow_canvas_clamps_x() {
+        // cw < 92 would otherwise produce a negative x; the rect must
+        // clamp x ≥ 0 so the bar stays on-screen.
+        let r = volume_bar_rect(80, 100, true);
+        assert_eq!(r.w, 80);
+        assert!(r.x >= 0, "x must be non-negative on tiny canvases");
+        assert!(r.y >= 0, "y must be non-negative on tiny canvases");
+    }
+
+    #[test]
+    fn volume_bar_rect_tiny_canvas_clamps_y() {
+        // ch smaller than overlay/footer height would produce negative y.
+        let r = volume_bar_rect(200, 5, true);
+        assert!(r.y >= 0, "y must be non-negative");
+    }
+
+    // -- volume_bar_label --
+
+    #[test]
+    fn volume_bar_label_long_form_at_threshold() {
+        let (label, offset) = volume_bar_label(VOLUME_BAR_WIDE_THRESHOLD, 50);
+        assert_eq!(label, "VOLUME: 50%");
+        assert_eq!(offset, 75);
+    }
+
+    #[test]
+    fn volume_bar_label_short_form_below_threshold() {
+        let (label, offset) = volume_bar_label(VOLUME_BAR_WIDE_THRESHOLD - 1, 75);
+        assert_eq!(label, "VOL 75%");
+        assert_eq!(offset, 45);
+    }
+
+    #[test]
+    fn volume_tick_positions_endpoints() {
+        // The constant must start at 0 and end at 100 — the tick rendering
+        // logic relies on this for the off-by-one fix on the 100% tick.
+        assert_eq!(VOLUME_TICK_POSITIONS.first(), Some(&0));
+        assert_eq!(VOLUME_TICK_POSITIONS.last(), Some(&100));
     }
 
     // -- TvGuideColors --

@@ -3,8 +3,8 @@ use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::Color;
 
 use crate::grid_layout::{
-    MAX_CELLS, SLOT_DURATION, VISIBLE_ROWS, VISIBLE_TIME_SLOTS, ensure_obj, truncate_title,
-    volume_bar_rect,
+    MAX_CELLS, SLOT_DURATION, VISIBLE_ROWS, VISIBLE_TIME_SLOTS, VOLUME_BAR_WIDE_THRESHOLD,
+    VOLUME_TICK_POSITIONS, ensure_obj, truncate_title, volume_bar_label, volume_bar_rect,
 };
 use crate::grid_state::TvGuideState;
 use crate::schedule;
@@ -77,6 +77,12 @@ impl TvGuideState {
             // Hide volume bar when not tuned.
             for name in &["tv_vol_bg", "tv_vol_fill", "tv_vol_label"] {
                 if let Ok(obj) = sdi.get_mut(name) {
+                    obj.visible = false;
+                }
+            }
+            for i in 0..VOLUME_TICK_POSITIONS.len() {
+                let name = format!("tv_vol_tick_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
                     obj.visible = false;
                 }
             }
@@ -195,6 +201,8 @@ impl TvGuideState {
             "tv_time_bg",
             "tv_time_label_bg",
             "tv_sel_bg",
+            "tv_sel_glow_top",
+            "tv_sel_glow_bot",
             "tv_ftr_bg",
             "tv_ftr_nav",
             "tv_ftr_page",
@@ -233,6 +241,10 @@ impl TvGuideState {
     }
 
     /// Render the volume bar as SDI objects.
+    ///
+    /// Retro cable-TV remote display: dark blue track, amber fill,
+    /// cobalt grid_line border, and tick marks at 0/25/50/75/100 when
+    /// the bar is wide enough.
     fn draw_volume_bar_sdi(
         &self,
         sdi: &mut SdiRegistry,
@@ -243,44 +255,72 @@ impl TvGuideState {
     ) {
         let vr = volume_bar_rect(cw, ch, expanded);
         let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+        let show_ticks = vr.w >= VOLUME_BAR_WIDE_THRESHOLD;
 
-        // Track background.
+        // Track (dark blue) with cobalt border via stroke.
         ensure_obj(sdi, "tv_vol_bg");
         if let Ok(obj) = sdi.get_mut("tv_vol_bg") {
             obj.x = vr.x;
             obj.y = vr.y;
             obj.w = vr.w;
             obj.h = vr.h;
-            obj.color = Color::rgba(40, 40, 50, 200);
-            obj.border_radius = Some(3);
+            obj.color = self.colors.time_header_bg;
+            obj.stroke_color = Some(self.colors.grid_line);
+            obj.stroke_width = Some(1);
+            obj.border_radius = None;
             obj.visible = true;
             obj.z = 114;
         }
 
-        // Filled portion.
+        // Filled portion (amber).
         ensure_obj(sdi, "tv_vol_fill");
         if let Ok(obj) = sdi.get_mut("tv_vol_fill") {
             obj.x = vr.x;
             obj.y = vr.y;
             obj.w = fill_w;
             obj.h = vr.h;
-            obj.color = self.colors.playing_text;
-            obj.border_radius = Some(3);
+            obj.color = self.colors.time_label;
+            obj.stroke_color = None;
+            obj.border_radius = None;
             obj.visible = fill_w > 0;
             obj.z = 115;
         }
 
-        // Label.
-        let label = format!("VOL {}%", self.volume);
+        // Label "VOLUME: X%" left of the bar (or short "VOL X%" on tight layouts).
+        let (label, label_offset) = volume_bar_label(vr.w, self.volume);
         ensure_obj(sdi, "tv_vol_label");
         if let Ok(obj) = sdi.get_mut("tv_vol_label") {
             obj.text = Some(label);
-            obj.x = vr.x - 50;
-            obj.y = vr.y;
+            // Clamp to ≥ 0 so the label stays on-screen on very narrow canvases.
+            obj.x = (vr.x - label_offset).max(0);
+            obj.y = vr.y + (vr.h as i32 - at.font_hint as i32) / 2;
             obj.font_size = at.font_hint;
-            obj.text_color = self.colors.dim_text;
+            obj.text_color = self.colors.time_label;
             obj.visible = true;
             obj.z = 116;
+        }
+
+        // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
+        // The 100% tick is drawn at `vr.w - 1` so it stays inside the bar's
+        // right edge instead of one pixel past it.
+        let last_tick_idx = VOLUME_TICK_POSITIONS.len().saturating_sub(1);
+        for (i, pct) in VOLUME_TICK_POSITIONS.iter().enumerate() {
+            let tick_name = format!("tv_vol_tick_{i}");
+            ensure_obj(sdi, &tick_name);
+            if let Ok(obj) = sdi.get_mut(&tick_name) {
+                let tx = if i == last_tick_idx {
+                    vr.x + vr.w as i32 - 1
+                } else {
+                    vr.x + ((*pct as i32) * vr.w as i32 / 100)
+                };
+                obj.x = tx;
+                obj.y = vr.y + vr.h as i32 + 1;
+                obj.w = 1;
+                obj.h = 3;
+                obj.color = self.colors.dim_text;
+                obj.visible = show_ticks;
+                obj.z = 116;
+            }
         }
     }
 
@@ -521,7 +561,7 @@ impl TvGuideState {
             obj.x = preview_x + preview_w as i32 - 39;
             obj.y = preview_y - 1;
             obj.font_size = at.font_hint;
-            obj.text_color = self.colors.selected_text;
+            obj.text_color = self.colors.live_badge_text;
             obj.visible = is_live;
             obj.z = 106;
         }
@@ -632,7 +672,8 @@ impl TvGuideState {
             let is_selected = ch_idx == self.selected_channel;
             let has_channel = ch_idx < self.channels.len();
 
-            // Row background.
+            // Row background — solid amber for the selected row, deep
+            // navy otherwise. No gradients (matches retro EPG flat fills).
             let bg_name = &self.sdi_names.row_bgs[vis_row];
             ensure_obj(sdi, bg_name);
             if let Ok(obj) = sdi.get_mut(bg_name) {
@@ -645,13 +686,8 @@ impl TvGuideState {
                 } else {
                     self.colors.bg
                 };
-                if is_selected {
-                    obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-                    obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-                } else {
-                    obj.gradient_top = None;
-                    obj.gradient_bottom = None;
-                }
+                obj.gradient_top = None;
+                obj.gradient_bottom = None;
                 obj.visible = has_channel;
                 obj.z = 101;
             }
@@ -720,7 +756,9 @@ impl TvGuideState {
                 let cell_w = (w_frac * grid_w as f64) as u32;
                 let visible = cell_w > 8;
 
-                // Cell background with border.
+                // Cell background — flat fills, with a single bright
+                // grid-line on the left edge (drawn implicitly by the
+                // adjacent cell or the channel-label column border).
                 if let Ok(obj) = sdi.get_mut(cbg_name) {
                     obj.x = cell_x;
                     obj.y = row_y + 1;
@@ -731,14 +769,9 @@ impl TvGuideState {
                     } else {
                         self.colors.cell_bg
                     };
-                    if is_selected {
-                        obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-                        obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-                    } else {
-                        obj.gradient_top = None;
-                        obj.gradient_bottom = None;
-                    }
-                    obj.stroke_color = Some(self.colors.cell_border);
+                    obj.gradient_top = None;
+                    obj.gradient_bottom = None;
+                    obj.stroke_color = Some(self.colors.grid_line);
                     obj.stroke_width = Some(1);
                     obj.visible = visible;
                     obj.z = 102;
@@ -792,6 +825,8 @@ impl TvGuideState {
     }
 
     fn draw_selection_highlight(&self, sdi: &mut SdiRegistry, grid_y: u32, sw: u32, row_h: u32) {
+        // Solid amber bar that lerps between rows. Glow lines on top/bottom
+        // are drawn separately so the highlight reads as a CRT-lit cell.
         ensure_obj(sdi, "tv_sel_bg");
         if let Ok(obj) = sdi.get_mut("tv_sel_bg") {
             let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
@@ -800,11 +835,39 @@ impl TvGuideState {
             obj.w = sw;
             obj.h = row_h;
             obj.color = self.colors.selected_bg;
-            obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-            obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-            obj.border_radius = Some(2);
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.border_radius = None;
             obj.visible = !self.channels.is_empty();
             obj.z = 101;
+        }
+
+        // Top/bottom glow stripes (light amber).
+        ensure_obj(sdi, "tv_sel_glow_top");
+        if let Ok(obj) = sdi.get_mut("tv_sel_glow_top") {
+            let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
+            obj.x = 0;
+            obj.y = sel_y as i32;
+            obj.w = sw;
+            obj.h = 2;
+            obj.color = self.colors.selected_glow;
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.visible = !self.channels.is_empty();
+            obj.z = 103;
+        }
+        ensure_obj(sdi, "tv_sel_glow_bot");
+        if let Ok(obj) = sdi.get_mut("tv_sel_glow_bot") {
+            let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
+            obj.x = 0;
+            obj.y = sel_y as i32 + row_h as i32 - 2;
+            obj.w = sw;
+            obj.h = 2;
+            obj.color = self.colors.selected_glow;
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.visible = !self.channels.is_empty();
+            obj.z = 103;
         }
     }
 
@@ -969,6 +1032,8 @@ impl TvGuideState {
         for col in 0..VISIBLE_TIME_SLOTS {
             let slot_time = grid_start + col as u64 * SLOT_DURATION;
             let col_x = cx + label_w as i32 + col as i32 * slot_w as i32;
+            // Vertical separator between time-header columns.
+            backend.fill_rect(col_x, time_y, 1, time_h, self.colors.grid_line)?;
             backend.draw_text(
                 &schedule::format_time(slot_time),
                 col_x + 4,
@@ -977,6 +1042,8 @@ impl TvGuideState {
                 self.colors.time_header,
             )?;
         }
+        // Horizontal grid line below the time header.
+        backend.fill_rect(cx, time_y + time_h as i32 - 1, cw, 1, self.colors.grid_line)?;
 
         // Channel rows.
         let grid_y = time_y + time_h as i32;
@@ -993,6 +1060,15 @@ impl TvGuideState {
 
             if is_sel {
                 backend.fill_rect(cx, row_y, cw, row_h, self.colors.selected_bg)?;
+                // Top/bottom amber glow stripes on selected row.
+                backend.fill_rect(cx, row_y, cw, 2, self.colors.selected_glow)?;
+                backend.fill_rect(
+                    cx,
+                    row_y + row_h as i32 - 2,
+                    cw,
+                    2,
+                    self.colors.selected_glow,
+                )?;
             }
 
             let chan = &self.channels[ch_idx];
@@ -1037,6 +1113,14 @@ impl TvGuideState {
                     cell_w.saturating_sub(1),
                     row_h.saturating_sub(2),
                     bg,
+                )?;
+                // Left grid-line for the cell — gives the EPG its grid look.
+                backend.fill_rect(
+                    cell_x,
+                    row_y + 1,
+                    1,
+                    row_h.saturating_sub(2),
+                    self.colors.grid_line,
                 )?;
 
                 let txt_color = if is_sel {
@@ -1143,6 +1227,10 @@ impl TvGuideState {
     }
 
     /// Draw the volume bar using the backend's direct rendering.
+    ///
+    /// Retro cable-TV remote display: dark blue track, amber fill,
+    /// cobalt grid_line border, and tick marks at 0/25/50/75/100 when
+    /// the bar is wide enough.
     #[allow(clippy::too_many_arguments)]
     fn draw_volume_bar_windowed(
         &self,
@@ -1156,27 +1244,44 @@ impl TvGuideState {
     ) -> oasis_types::error::Result<()> {
         let vr = volume_bar_rect(cw, ch, expanded);
         let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+        let bx = cx + vr.x;
+        let by = cy + vr.y;
 
-        // Track background.
-        backend.fill_rect(
-            cx + vr.x,
-            cy + vr.y,
-            vr.w,
-            vr.h,
-            Color::rgba(40, 40, 50, 200),
-        )?;
-        // Filled portion.
+        // Track (dark blue).
+        backend.fill_rect(bx, by, vr.w, vr.h, self.colors.time_header_bg)?;
+        // Filled portion (amber).
         if fill_w > 0 {
-            backend.fill_rect(cx + vr.x, cy + vr.y, fill_w, vr.h, self.colors.playing_text)?;
+            backend.fill_rect(bx, by, fill_w, vr.h, self.colors.time_label)?;
         }
-        // Label.
+        // Cobalt border around the track.
+        backend.fill_rect(bx, by, vr.w, 1, self.colors.grid_line)?;
+        backend.fill_rect(bx, by + vr.h as i32 - 1, vr.w, 1, self.colors.grid_line)?;
+        backend.fill_rect(bx, by, 1, vr.h, self.colors.grid_line)?;
+        backend.fill_rect(bx + vr.w as i32 - 1, by, 1, vr.h, self.colors.grid_line)?;
+
+        // Label "VOLUME: X%" (or short "VOL X%" on tight layouts).
+        let (label, label_offset) = volume_bar_label(vr.w, self.volume);
         backend.draw_text(
-            &format!("VOL {}%", self.volume),
-            cx + vr.x - 50,
-            cy + vr.y,
+            &label,
+            (bx - label_offset).max(0),
+            by + (vr.h as i32 - at.font_hint as i32) / 2,
             at.font_hint,
-            self.colors.dim_text,
+            self.colors.time_label,
         )?;
+
+        // Tick marks at 0/25/50/75/100 — only when bar is wide enough.
+        // The 100% tick uses `vr.w - 1` so it stays inside the right edge.
+        if vr.w >= VOLUME_BAR_WIDE_THRESHOLD {
+            let last_tick_idx = VOLUME_TICK_POSITIONS.len().saturating_sub(1);
+            for (i, pct) in VOLUME_TICK_POSITIONS.iter().enumerate() {
+                let tx = if i == last_tick_idx {
+                    bx + vr.w as i32 - 1
+                } else {
+                    bx + ((*pct as i32) * vr.w as i32 / 100)
+                };
+                backend.fill_rect(tx, by + vr.h as i32 + 1, 1, 3, self.colors.dim_text)?;
+            }
+        }
         Ok(())
     }
 
@@ -1205,6 +1310,8 @@ impl TvGuideState {
             "tv_time_bg",
             "tv_time_label_bg",
             "tv_sel_bg",
+            "tv_sel_glow_top",
+            "tv_sel_glow_bot",
             "tv_ftr_bg",
             "tv_ftr_nav",
             "tv_ftr_page",
@@ -1217,6 +1324,12 @@ impl TvGuideState {
         ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..VOLUME_TICK_POSITIONS.len() {
+            let name = format!("tv_vol_tick_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
         }
