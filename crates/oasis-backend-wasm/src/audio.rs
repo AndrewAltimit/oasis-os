@@ -83,6 +83,15 @@ struct StreamingTrack {
     /// Object URL backing the MSE `<audio>.src`; empty in direct-URL
     /// mode. Stored so it can be revoked when the track is dropped.
     object_url: String,
+    /// Latched true by this track's `<audio>` element `ended` event.
+    /// Per-track so a delayed event from a previously-detached element
+    /// can never mutate a newer track's state, even in the unlikely
+    /// case wasm-bindgen's Closure-drop invalidation races with a
+    /// queued JS callback.
+    streaming_ended: Rc<Cell<bool>>,
+    /// Latched by this track's `<audio>` element `error` event.
+    /// Per-track for the same isolation reason as `streaming_ended`.
+    streaming_error: Rc<RefCell<Option<String>>>,
     // Hold closures to prevent GC.
     #[allow(dead_code)]
     closures: Vec<Closure<dyn FnMut()>>,
@@ -114,15 +123,6 @@ pub struct WasmAudioBackend {
     /// pipeline (used by browsers that decode `audio/mpeg` through
     /// MediaSource — Chrome does, Firefox doesn't).
     pending_streaming_url: Option<String>,
-    /// Latched true by the `<audio>` element's `ended` event. The
-    /// WASM tick loop consumes this each frame to drive
-    /// `RadioManager` auto-advance without an extra event channel.
-    streaming_ended: Rc<Cell<bool>>,
-    /// Latched true by the `<audio>` element's `error` event. Carries
-    /// the failure reason so the caller can promote it to a radio
-    /// error state (which counts toward the consecutive-failure
-    /// circuit breaker).
-    streaming_error: Rc<RefCell<Option<String>>>,
 }
 
 impl WasmAudioBackend {
@@ -139,8 +139,6 @@ impl WasmAudioBackend {
             paused: false,
             streaming_track: None,
             pending_streaming_url: None,
-            streaming_ended: Rc::new(Cell::new(false)),
-            streaming_error: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -152,18 +150,25 @@ impl WasmAudioBackend {
         self.pending_streaming_url = Some(url.to_string());
     }
 
-    /// Consume the latched "audio element ended" flag. Returns true
-    /// once per `ended` event; subsequent calls return false until the
-    /// next track ends. Used by `RadioManager` driver code to advance
-    /// to the next track in an archive playlist.
+    /// Consume the latched "audio element ended" flag for the current
+    /// streaming track. Returns true once per `ended` event; subsequent
+    /// calls return false until the next track ends. Returns false if
+    /// no streaming track is loaded. Used by `RadioManager` driver
+    /// code to advance to the next track in an archive playlist.
     pub fn take_streaming_ended(&self) -> bool {
-        self.streaming_ended.replace(false)
+        self.streaming_track
+            .as_ref()
+            .map(|st| st.streaming_ended.replace(false))
+            .unwrap_or(false)
     }
 
-    /// Consume any latched audio-element error. Returns the message
-    /// once and clears the slot.
+    /// Consume any latched audio-element error from the current
+    /// streaming track. Returns the message once and clears the slot;
+    /// returns `None` if no streaming track is loaded.
     pub fn take_streaming_error(&self) -> Option<String> {
-        self.streaming_error.borrow_mut().take()
+        self.streaming_track
+            .as_ref()
+            .and_then(|st| st.streaming_error.borrow_mut().take())
     }
 
     /// Ensure the AudioContext is created and resumed.
@@ -375,7 +380,12 @@ impl AudioBackend for WasmAudioBackend {
     fn load_streaming(&mut self) -> Result<AudioTrackId> {
         use wasm_bindgen::JsCast;
 
-        // Clean up any previous streaming track.
+        // Clean up any previous streaming track. Dropping `st` also
+        // drops its closures (invalidating their JS counterparts) and
+        // its per-track `streaming_ended`/`streaming_error` Rcs — so a
+        // delayed event fired by the detached element after we've
+        // installed the new track cannot mutate the new track's
+        // latched flags.
         if let Some(st) = self.streaming_track.take() {
             st.audio_el.pause().ok();
             // Detach the previous audio element so we don't leak it
@@ -386,9 +396,6 @@ impl AudioBackend for WasmAudioBackend {
                 let _ = web_sys::Url::revoke_object_url(&st.object_url);
             }
         }
-        // Reset latched event flags before installing a new element.
-        self.streaming_ended.set(false);
-        *self.streaming_error.borrow_mut() = None;
 
         // Direct-URL mode: when `set_streaming_url` was called before
         // `load_streaming`, point a `<audio>` element straight at the
@@ -415,6 +422,11 @@ impl AudioBackend for WasmAudioBackend {
                 .map_err(js_err)?;
             attach_audio_to_body(&audio_el, "direct-URL");
             audio_el.set_volume(self.volume as f64 / 100.0);
+
+            // Per-track latched event flags. Old tracks own their own
+            // Rcs (dropped with the track); new tracks get fresh Rcs.
+            let streaming_ended: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+            let streaming_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
             let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
 
@@ -454,7 +466,7 @@ impl AudioBackend for WasmAudioBackend {
 
             // `ended` → latch flag for tick loop to advance track.
             {
-                let ended_ref = Rc::clone(&self.streaming_ended);
+                let ended_ref = Rc::clone(&streaming_ended);
                 let on_ended = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
                     ended_ref.set(true);
                 }) as Box<dyn FnMut(web_sys::Event)>);
@@ -470,8 +482,8 @@ impl AudioBackend for WasmAudioBackend {
             // already includes "audio decode failed" which is enough
             // for the user to distinguish from a network error.)
             {
-                let err_ref = Rc::clone(&self.streaming_error);
-                let ended_ref = Rc::clone(&self.streaming_ended);
+                let err_ref = Rc::clone(&streaming_error);
+                let ended_ref = Rc::clone(&streaming_ended);
                 let on_error = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
                     *err_ref.borrow_mut() = Some("audio decode/network failure".to_string());
                     ended_ref.set(true);
@@ -497,6 +509,8 @@ impl AudioBackend for WasmAudioBackend {
                 updating: Rc::new(Cell::new(false)),
                 ready: Rc::new(Cell::new(false)),
                 object_url: String::new(),
+                streaming_ended,
+                streaming_error,
                 closures: Vec::new(),
                 closures_ev,
                 update_end_closure: Rc::new(RefCell::new(None)),
@@ -606,6 +620,13 @@ impl AudioBackend for WasmAudioBackend {
         let id = self.next_id;
         self.next_id += 1;
 
+        // Per-track latched event flags; MSE mode currently doesn't
+        // attach `ended`/`error` listeners to the `<audio>` element
+        // (no auto-advance pipeline through MSE), but the fields are
+        // present so `take_streaming_*` can read them uniformly.
+        let streaming_ended: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        let streaming_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
         self.streaming_track = Some(StreamingTrack {
             audio_el,
             mode: StreamingMode::Mse,
@@ -615,6 +636,8 @@ impl AudioBackend for WasmAudioBackend {
             updating,
             ready,
             object_url,
+            streaming_ended,
+            streaming_error,
             closures,
             closures_ev,
             update_end_closure,
