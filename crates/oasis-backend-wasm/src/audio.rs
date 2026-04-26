@@ -63,6 +63,21 @@ pub struct WasmAudioBackend {
     playing: bool,
     paused: bool,
     streaming_track: Option<StreamingTrack>,
+    /// URL queued by [`set_streaming_url`]; consumed on the next
+    /// `load_streaming` call to wire `<audio>.src` directly to the
+    /// resource. When `None`, `load_streaming` falls back to the MSE
+    /// pipeline (used by browsers that decode `audio/mpeg` through
+    /// MediaSource — Chrome does, Firefox doesn't).
+    pending_streaming_url: Option<String>,
+    /// Latched true by the `<audio>` element's `ended` event. The
+    /// WASM tick loop consumes this each frame to drive
+    /// `RadioManager` auto-advance without an extra event channel.
+    streaming_ended: Rc<Cell<bool>>,
+    /// Latched true by the `<audio>` element's `error` event. Carries
+    /// the failure reason so the caller can promote it to a radio
+    /// error state (which counts toward the consecutive-failure
+    /// circuit breaker).
+    streaming_error: Rc<RefCell<Option<String>>>,
 }
 
 impl WasmAudioBackend {
@@ -78,7 +93,32 @@ impl WasmAudioBackend {
             playing: false,
             paused: false,
             streaming_track: None,
+            pending_streaming_url: None,
+            streaming_ended: Rc::new(Cell::new(false)),
+            streaming_error: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// Tell the next `load_streaming` call to point the `<audio>`
+    /// element at `url` and let the browser stream it natively, instead
+    /// of feeding MSE chunks. Required on Firefox (no `audio/mpeg` MSE
+    /// support); also a simpler path on Chrome.
+    pub fn set_streaming_url(&mut self, url: &str) {
+        self.pending_streaming_url = Some(url.to_string());
+    }
+
+    /// Consume the latched "audio element ended" flag. Returns true
+    /// once per `ended` event; subsequent calls return false until the
+    /// next track ends. Used by `RadioManager` driver code to advance
+    /// to the next track in an archive playlist.
+    pub fn take_streaming_ended(&self) -> bool {
+        self.streaming_ended.replace(false)
+    }
+
+    /// Consume any latched audio-element error. Returns the message
+    /// once and clears the slot.
+    pub fn take_streaming_error(&self) -> Option<String> {
+        self.streaming_error.borrow_mut().take()
     }
 
     /// Ensure the AudioContext is created and resumed.
@@ -160,13 +200,30 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn play(&mut self, track: AudioTrackId) -> Result<()> {
-        // If this is the streaming track, start the audio element.
+        // If this is the streaming track, kick the audio element.
         if let Some(ref st) = self.streaming_track
             && self.current_track == Some(track.0)
         {
-            let _ = st.audio_el.play().map_err(js_err)?;
             self.playing = true;
             self.paused = false;
+            // Direct-URL mode: the `canplaythrough` listener in
+            // `load_streaming` is responsible for the actual `play()`
+            // call once the browser has buffered enough to play
+            // through. We just record the playing state here so the
+            // radio manager doesn't think we're stuck.
+            if st.object_url.is_empty() {
+                return Ok(());
+            }
+            // MSE path: start playback immediately. Same muted-then-
+            // unmute trick as `video.rs::open_url` so autoplay isn't
+            // blocked by the user-gesture rules.
+            let promise = st.audio_el.play().map_err(js_err)?;
+            let audio_clone = st.audio_el.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if wasm_bindgen_futures::JsFuture::from(promise).await.is_ok() {
+                    audio_clone.set_muted(false);
+                }
+            });
             return Ok(());
         }
 
@@ -227,6 +284,7 @@ impl AudioBackend for WasmAudioBackend {
         // Stop MSE streaming track.
         if let Some(st) = self.streaming_track.take() {
             st.audio_el.pause().ok();
+            st.audio_el.remove();
             let _ = web_sys::Url::revoke_object_url(&st.object_url);
         }
         self.playing = false;
@@ -273,7 +331,131 @@ impl AudioBackend for WasmAudioBackend {
         // Clean up any previous streaming track.
         if let Some(st) = self.streaming_track.take() {
             st.audio_el.pause().ok();
+            // Detach the previous audio element so we don't leak it
+            // across station changes. `remove()` is a no-op if it's
+            // already detached.
+            st.audio_el.remove();
             let _ = web_sys::Url::revoke_object_url(&st.object_url);
+        }
+        // Reset latched event flags before installing a new element.
+        self.streaming_ended.set(false);
+        *self.streaming_error.borrow_mut() = None;
+
+        // Direct-URL mode: when `set_streaming_url` was called before
+        // `load_streaming`, point a `<audio>` element straight at the
+        // URL and let the browser stream + decode natively. Bypasses
+        // MediaSource entirely so it works on Firefox (no
+        // `audio/mpeg` SourceBuffer support).
+        if let Some(url) = self.pending_streaming_url.take() {
+            let audio_el = web_sys::HtmlAudioElement::new().map_err(js_err)?;
+            // Start muted: muted autoplay is unconditionally allowed
+            // by every browser, so `play()` resolves cleanly. Once
+            // it's playing we unmute (mirrors what
+            // `video.rs::open_url` does for TV Guide). Without this
+            // the radio audio "starts" but the browser silently
+            // refuses to route it to the speakers because the
+            // user-gesture token from the keypress doesn't propagate
+            // through the wasm tick → setTimeout chain that
+            // eventually calls `play()`.
+            audio_el.set_muted(true);
+            audio_el.set_preload("auto");
+            audio_el.set_src(&url);
+            audio_el
+                .style()
+                .set_property("display", "none")
+                .map_err(js_err)?;
+            if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                && let Some(body) = doc.body()
+            {
+                let _ = body.append_child(&audio_el);
+            }
+            audio_el.set_volume(self.volume as f64 / 100.0);
+
+            let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
+
+            // Defer the actual `play()` call until the element fires
+            // `canplaythrough` — at that point the browser believes
+            // it has enough buffered data to play to the end without
+            // re-buffering. Calling `play()` earlier (the moment the
+            // element exists) drains the tiny initial network buffer
+            // and the audio stutters as the decoder waits for more
+            // data. We still start muted so autoplay isn't blocked,
+            // and unmute once `play()`'s promise resolves.
+            {
+                let audio_clone = audio_el.clone();
+                let played = Rc::new(Cell::new(false));
+                let played_ref = Rc::clone(&played);
+                let on_canplaythrough = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                    if played_ref.get() {
+                        return;
+                    }
+                    played_ref.set(true);
+                    if let Ok(promise) = audio_clone.play() {
+                        let inner = audio_clone.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            if wasm_bindgen_futures::JsFuture::from(promise).await.is_ok() {
+                                inner.set_muted(false);
+                            }
+                        });
+                    }
+                })
+                    as Box<dyn FnMut(web_sys::Event)>);
+                let _ = audio_el.add_event_listener_with_callback(
+                    "canplaythrough",
+                    on_canplaythrough.as_ref().unchecked_ref(),
+                );
+                closures_ev.push(on_canplaythrough);
+            }
+
+            // `ended` → latch flag for tick loop to advance track.
+            {
+                let ended_ref = Rc::clone(&self.streaming_ended);
+                let on_ended = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                    ended_ref.set(true);
+                }) as Box<dyn FnMut(web_sys::Event)>);
+                let _ = audio_el
+                    .add_event_listener_with_callback("ended", on_ended.as_ref().unchecked_ref());
+                closures_ev.push(on_ended);
+            }
+            // `error` → latch a generic message; also flag ended so
+            // the outer state machine releases the source rather than
+            // wedging in Buffering forever. (We don't read
+            // `audio_el.error()` here because that requires the
+            // `MediaError` web-sys feature; the radio status text
+            // already includes "audio decode failed" which is enough
+            // for the user to distinguish from a network error.)
+            {
+                let err_ref = Rc::clone(&self.streaming_error);
+                let ended_ref = Rc::clone(&self.streaming_ended);
+                let on_error = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                    *err_ref.borrow_mut() = Some("audio decode/network failure".to_string());
+                    ended_ref.set(true);
+                }) as Box<dyn FnMut(web_sys::Event)>);
+                let _ = audio_el
+                    .add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref());
+                closures_ev.push(on_error);
+            }
+
+            let id = self.next_id;
+            self.next_id += 1;
+            self.streaming_track = Some(StreamingTrack {
+                audio_el,
+                // No MediaSource for direct-URL mode; create a placeholder
+                // so the struct shape stays the same. This MediaSource is
+                // never attached to anything.
+                media_source: web_sys::MediaSource::new().map_err(js_err)?,
+                source_buffer: Rc::new(RefCell::new(None)),
+                pending_chunks: Rc::new(RefCell::new(VecDeque::new())),
+                updating: Rc::new(Cell::new(false)),
+                ready: Rc::new(Cell::new(false)),
+                object_url: String::new(),
+                closures: Vec::new(),
+                closures_ev,
+                update_end_closure: Rc::new(RefCell::new(None)),
+            });
+            self.current_track = Some(id);
+            self.playing = true;
+            return Ok(AudioTrackId(id));
         }
 
         let media_source = web_sys::MediaSource::new().map_err(js_err)?;
@@ -282,6 +464,21 @@ impl AudioBackend for WasmAudioBackend {
 
         let audio_el = web_sys::HtmlAudioElement::new().map_err(js_err)?;
         audio_el.set_src(&object_url);
+        // Some browsers (notably Chrome) refuse to actually output sound
+        // from a detached `HTMLAudioElement` even after the user
+        // gesture has unlocked autoplay — the element has to be in the
+        // document tree. Hide it visually but keep it attached. Without
+        // this, the radio "streams" (network bytes flow, MSE buffers
+        // append) but never produces audible output.
+        audio_el
+            .style()
+            .set_property("display", "none")
+            .map_err(js_err)?;
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Some(body) = doc.body()
+        {
+            let _ = body.append_child(&audio_el);
+        }
 
         let source_buffer: Rc<RefCell<Option<web_sys::SourceBuffer>>> = Rc::new(RefCell::new(None));
         let pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::new(RefCell::new(VecDeque::new()));
@@ -386,6 +583,14 @@ impl AudioBackend for WasmAudioBackend {
 
     fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
         if let Some(ref st) = self.streaming_track {
+            // Direct-URL mode (object_url is empty when we set the
+            // `<audio>` element's src directly): the element handles
+            // its own network streaming, so any data the radio source
+            // produces here is just the synthetic primer chunk and
+            // should be discarded.
+            if st.object_url.is_empty() {
+                return Ok(());
+            }
             // Always enqueue first to maintain FIFO order — earlier chunks
             // (including those queued before `sourceopen`) must be appended first.
             {

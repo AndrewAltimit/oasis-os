@@ -298,6 +298,9 @@ impl OasisWasm {
                         {
                             let (_, _, cw, ch) = win.content_rect(self.wm.theme());
                             let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
+                            // Apply any vfs work the click queued (e.g. file
+                            // manager folder navigation via pending_navigation).
+                            runner.refresh_app(&self.vfs);
                             if action == AppAction::RequestFullscreen
                                 && self.fullscreen_app.is_none()
                             {
