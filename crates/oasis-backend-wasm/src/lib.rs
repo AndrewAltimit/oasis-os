@@ -68,6 +68,13 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format!($($t)*)))
 }
 
+/// Maximum consecutive radio failures before we stop the auto-advance
+/// loop until the user manually picks a station again. Three is enough
+/// to ride out a transient network blip but small enough that a
+/// genuinely broken station (decoder mismatch, dead collection) doesn't
+/// flood archive.org with catalog/files API hits.
+const RADIO_FAILURE_LIMIT: u32 = 3;
+
 // ---------------------------------------------------------------------------
 // Mode enum (mirrors oasis-app's AppState::Mode)
 // ---------------------------------------------------------------------------
@@ -133,6 +140,14 @@ pub struct OasisWasm {
     radio_source: Option<Box<dyn oasis_audio::radio::RadioSource>>,
     archive_catalog: Option<oasis_audio::radio::ArchiveCatalog>,
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
+    /// Circuit breaker: number of consecutive radio failures since the
+    /// last user-initiated tune. Reset on every `tune <idx>` request,
+    /// incremented on every error transition. When it reaches
+    /// [`RADIO_FAILURE_LIMIT`] we stop the auto-advance loop until the
+    /// user picks a station again — otherwise a station whose audio
+    /// can't be decoded (e.g. Firefox MSE quirks) cascades into
+    /// hundreds of catalog/track API requests in a few seconds.
+    radio_consecutive_errors: u32,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
@@ -360,6 +375,7 @@ impl OasisWasm {
             radio_source: None,
             archive_catalog: None,
             pending_catalog: None,
+            radio_consecutive_errors: 0,
             video_player,
             pending_tv_catalog: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
@@ -477,6 +493,11 @@ impl OasisWasm {
                                 .cloned()
                         };
                         if let Some(station) = station {
+                            // Reset the failure counter on every
+                            // user-initiated tune — they might be
+                            // explicitly retrying after a previous
+                            // failure tripped the circuit breaker.
+                            self.radio_consecutive_errors = 0;
                             let _ = self.radio_manager.tune(
                                 &station.name,
                                 station.bitrate,
@@ -504,6 +525,7 @@ impl OasisWasm {
                                     ));
                             }
                         } else {
+                            console_log!("radio: station not found: {target}");
                             self.radio_manager
                                 .set_error(&format!("station not found: {target}"));
                         }
@@ -529,22 +551,70 @@ impl OasisWasm {
                         if let Some(mut old) = self.radio_source.take() {
                             old.disconnect();
                         }
+                        // Hand the first track's URL to the audio
+                        // backend before the radio state machine asks
+                        // it to load streaming. The backend's
+                        // `<audio>` element streams the URL natively
+                        // (works around Firefox's lack of `audio/mpeg`
+                        // MSE support).
+                        if let Some(url) = source.streaming_url() {
+                            self.audio.set_streaming_url(url);
+                        }
                         self.archive_catalog = Some(catalog);
                         self.radio_source = Some(source);
                     },
                     Err(e) => {
+                        console_log!("radio: catalog fetch failed: {e}");
                         self.radio_manager.set_error(&e);
                     },
                 }
             }
 
-            // Drive the radio state machine.
+            // Promote `<audio>` element errors to radio errors so the
+            // failure counter advances. Without this the source/buffer
+            // state machine doesn't see the decode failure and just
+            // stays in Buffering forever.
+            if let Some(err) = self.audio.take_streaming_error() {
+                console_log!("radio: audio element error: {err}");
+                self.radio_manager.set_error(&err);
+            }
+
+            // Drive the radio state machine. Capture errors to console
+            // so users can diagnose tune failures (autoplay-blocked
+            // playback, MSE not supporting `audio/mpeg`, network
+            // hiccups, etc.) — `radio_manager.tick` itself swallows the
+            // error into `set_error` but doesn't log it.
+            let prev_state = self.radio_manager.state();
             let _ = self
                 .radio_manager
                 .tick(&mut self.radio_source, &mut self.audio);
+            if prev_state != oasis_audio::radio::RadioState::Error
+                && self.radio_manager.state() == oasis_audio::radio::RadioState::Error
+            {
+                self.radio_consecutive_errors += 1;
+                console_log!(
+                    "radio: error #{} of {RADIO_FAILURE_LIMIT}: {}",
+                    self.radio_consecutive_errors,
+                    self.radio_manager.error_msg(),
+                );
+            }
 
-            // Auto-advance to next track for archive stations.
-            if self.radio_manager.needs_next_track()
+            // The `<audio>` element fires `ended` when a track
+            // finishes; surface that to the radio source so the state
+            // machine knows to auto-advance. (RadioManager's normal
+            // path watches the source's `Ended` state.)
+            if self.audio.take_streaming_ended()
+                && let Some(ref mut src) = self.radio_source
+            {
+                src.disconnect();
+            }
+
+            // Auto-advance to next track for archive stations — but
+            // only while we're under the failure budget. Once the
+            // circuit breaker trips, sit in error state until the
+            // user picks a station again.
+            if self.radio_consecutive_errors < RADIO_FAILURE_LIMIT
+                && self.radio_manager.needs_next_track()
                 && let Some(ref mut catalog) = self.archive_catalog
                 && let Some(track) = catalog.next_track().cloned()
             {
@@ -553,8 +623,23 @@ impl OasisWasm {
                 }
                 let url = oasis_audio::radio::ArchiveCatalog::download_url(&track);
                 let source = archive::WasmArchiveSource::new(&url, &track.title, &track.creator);
+                self.audio.set_streaming_url(&url);
                 self.radio_source = Some(Box::new(source));
                 self.radio_manager.continue_playing();
+            } else if self.radio_consecutive_errors >= RADIO_FAILURE_LIMIT
+                && self.radio_manager.needs_next_track()
+            {
+                // Stop the cascade: drop the source and force-set a
+                // sticky error so the radio app surfaces it. Drop the
+                // catalog too so a stale next-track pointer doesn't
+                // immediately re-fire on the next tick.
+                if let Some(mut old) = self.radio_source.take() {
+                    old.disconnect();
+                }
+                self.archive_catalog = None;
+                self.radio_manager.set_error(&format!(
+                    "stopped after {RADIO_FAILURE_LIMIT} failed tracks — pick a station to retry",
+                ));
             }
 
             // Publish radio status periodically.
@@ -779,6 +864,13 @@ impl OasisWasm {
             let active_theme = &self.active_theme;
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
+            // The DOM iframe overlay sits above the canvas at a fixed
+            // z-index, so it can't be composed under other OASIS windows
+            // that are stacked above the browser. Only show it when the
+            // browser/video_embed is the topmost (active) window;
+            // otherwise soft-hide so its document state survives until
+            // it returns to the front.
+            let active_window_id: Option<String> = self.wm.active_window().map(|s| s.to_string());
             #[cfg(feature = "wasm-youtube")]
             let youtube_active_url = self.youtube_active_url.clone();
             let wants_vector_icons =
@@ -795,6 +887,7 @@ impl OasisWasm {
                 &mut self.backend,
                 overlay,
                 |window_id, cx, cy, cw, ch, be| {
+                    let is_topmost = active_window_id.as_deref() == Some(window_id);
                     let result = if window_id == "browser" {
                         if let Some(ref mut bw) = *browser {
                             bw.set_window(cx, cy, cw, ch);
@@ -807,7 +900,11 @@ impl OasisWasm {
                                 let status_bar_h = bw.config.status_bar_height;
                                 let content_y = cy + url_bar_h as i32;
                                 let content_h = ch.saturating_sub(url_bar_h + status_bar_h);
-                                iframe_ref.show(u, cx, content_y, cw, content_h);
+                                if is_topmost {
+                                    iframe_ref.show(u, cx, content_y, cw, content_h);
+                                } else {
+                                    iframe_ref.soft_hide();
+                                }
                                 bw.paint_chrome_only(be)
                             } else {
                                 iframe_ref.hide();
@@ -830,7 +927,11 @@ impl OasisWasm {
                             let title_h = active_theme.app.title_bar_height as i32;
                             let inner_y = cy + title_h;
                             let inner_h = ch.saturating_sub(active_theme.app.title_bar_height);
-                            iframe_ref.show(url, cx, inner_y, cw, inner_h);
+                            if is_topmost {
+                                iframe_ref.show(url, cx, inner_y, cw, inner_h);
+                            } else {
+                                iframe_ref.soft_hide();
+                            }
                         }
                         r
                     } else {

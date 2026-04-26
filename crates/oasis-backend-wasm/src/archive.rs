@@ -1,124 +1,98 @@
-//! Internet Archive source for WASM: fetch + ReadableStream for progressive download.
-//!
-//! Uses browser `fetch()` with `ReadableStream` for progressive MP3 download,
-//! bridged to the synchronous `RadioSource` trait via shared state.
+//! Internet Archive source for WASM: hands the URL to the audio
+//! backend so the `<audio>` element can stream it natively. The
+//! `RadioSource` interface is satisfied with a one-shot dummy chunk
+//! that satisfies `RadioManager`'s buffering logic; no MP3 bytes flow
+//! through Rust.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use oasis_audio::radio::BUFFER_THRESHOLD;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::icy::StreamMetadata;
 use oasis_audio::radio::source::{AudioChunk, RadioSource, SourceState};
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::Result;
+
+/// Size of each synthetic primer chunk: enough that two of them put
+/// `RadioManager`'s `audio_buf` comfortably above [`BUFFER_THRESHOLD`].
+/// Tied to that constant so the state-machine walk stays correct if the
+/// threshold ever changes.
+const PRIMER_CHUNK_BYTES: usize = BUFFER_THRESHOLD * 2;
 
 // ---------------------------------------------------------------------------
-// WasmArchiveSource -- streams a single MP3 file via fetch + ReadableStream
+// WasmArchiveSource -- direct-URL playback handed to the audio backend.
 // ---------------------------------------------------------------------------
+//
+// Earlier revisions fetched the MP3 ourselves and pushed bytes through
+// `MediaSource` / `SourceBuffer("audio/mpeg")`. Firefox doesn't decode
+// `audio/mpeg` through MSE ("Cannot play media. No decoders for
+// requested formats: audio/mpeg") and even Chrome adds latency from the
+// extra hop. We now hand the URL straight to a `<audio>` element via
+// `RadioSource::streaming_url`; the audio backend points the element at
+// `archive.org`'s download URL and lets the browser do native HTTP
+// streaming + decoding. No fetch is spawned here.
 
 struct WasmFetchState {
     source_state: SourceState,
-    audio_queue: VecDeque<Vec<u8>>,
     track_title: String,
     track_creator: String,
     metadata_sent: bool,
-    error: Option<String>,
+    /// Number of primer chunks already emitted. We need at least
+    /// **two**: the first lands while `RadioManager` is in
+    /// `Connecting` (it transitions to `Buffering` but doesn't start
+    /// playback yet), the second lands while in `Buffering` and
+    /// triggers `start_playback`. Once playback has begun the
+    /// `<audio>` element handles the real bytes — further chunks
+    /// from us would just be discarded by the audio backend's
+    /// direct-URL feed_data shortcut, so we stop emitting.
+    primers_emitted: u8,
 }
 
-/// A `RadioSource` that downloads an MP3 file from the Internet Archive
-/// using the browser's `fetch()` API with `ReadableStream` for progressive
-/// streaming.
+/// A `RadioSource` that delegates streaming to the audio backend by
+/// exposing the source URL via [`RadioSource::streaming_url`].
 pub struct WasmArchiveSource {
+    url: String,
     shared: Rc<RefCell<WasmFetchState>>,
 }
 
 impl WasmArchiveSource {
-    /// Create a new source that begins fetching the given URL immediately.
+    /// Create a source that hands `url` to the audio backend.
     pub fn new(url: &str, title: &str, creator: &str) -> Self {
         let shared = Rc::new(RefCell::new(WasmFetchState {
-            source_state: SourceState::Connecting,
-            audio_queue: VecDeque::new(),
+            // Active immediately — the `<audio>` element is responsible
+            // for the actual network connection.
+            source_state: SourceState::Active,
             track_title: title.to_string(),
             track_creator: creator.to_string(),
             metadata_sent: false,
-            error: None,
+            primers_emitted: 0,
         }));
-
-        // Spawn the async fetch task.
-        let shared_clone = Rc::clone(&shared);
-        let url = url.to_string();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = fetch_stream(&shared_clone, &url).await {
-                let mut state = shared_clone.borrow_mut();
-                state.error = Some(format!("{e:?}"));
-                state.source_state = SourceState::Error;
-            }
-        });
-
-        Self { shared }
-    }
-}
-
-async fn fetch_stream(
-    shared: &Rc<RefCell<WasmFetchState>>,
-    url: &str,
-) -> std::result::Result<(), JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-    let resp_val = JsFuture::from(window.fetch_with_str(url)).await?;
-    let resp: web_sys::Response = resp_val.dyn_into()?;
-
-    if !resp.ok() {
-        let status = resp.status();
-        let mut state = shared.borrow_mut();
-        state.error = Some(format!("HTTP {status}"));
-        state.source_state = SourceState::Error;
-        return Ok(());
-    }
-
-    {
-        shared.borrow_mut().source_state = SourceState::Active;
-    }
-
-    let body = resp.body().ok_or_else(|| JsValue::from_str("no body"))?;
-    let reader: web_sys::ReadableStreamDefaultReader = body.get_reader().dyn_into()?;
-
-    loop {
-        // Stop fetching if the source was disconnected externally.
-        if shared.borrow().source_state == SourceState::Ended {
-            let _ = reader.cancel();
-            break;
+        Self {
+            url: url.to_string(),
+            shared,
         }
-        let result = JsFuture::from(reader.read()).await?;
-        let done = js_sys::Reflect::get(&result, &"done".into())?
-            .as_bool()
-            .unwrap_or(true);
-        if done {
-            shared.borrow_mut().source_state = SourceState::Ended;
-            break;
-        }
-        let value = js_sys::Reflect::get(&result, &"value".into())?;
-        let chunk: js_sys::Uint8Array = value.dyn_into()?;
-        let data = chunk.to_vec();
-        shared.borrow_mut().audio_queue.push_back(data);
     }
-
-    Ok(())
 }
 
 impl RadioSource for WasmArchiveSource {
     fn poll(&mut self) -> Result<Option<AudioChunk>> {
         let mut state = self.shared.borrow_mut();
 
-        if let Some(ref e) = state.error {
-            let msg = e.clone();
-            return Err(OasisError::Backend(msg.into()));
+        if state.source_state == SourceState::Ended || state.source_state == SourceState::Error {
+            return Ok(None);
         }
 
-        if let Some(data) = state.audio_queue.pop_front() {
+        // Emit synthetic primer chunks for the first two polls so
+        // `RadioManager` walks through Connecting → Buffering →
+        // Playing. The audio backend's `feed_data` ignores these
+        // bytes in direct-URL mode — actual audio comes from the
+        // `<audio>` element streaming the URL on its own.
+        if state.primers_emitted < 2 {
+            state.primers_emitted += 1;
             let metadata = if !state.metadata_sent {
                 state.metadata_sent = true;
                 let title = if state.track_creator.is_empty() {
@@ -130,10 +104,15 @@ impl RadioSource for WasmArchiveSource {
             } else {
                 None
             };
-            Ok(Some(AudioChunk { data, metadata }))
-        } else {
-            Ok(None)
+            // Each primer chunk is `PRIMER_CHUNK_BYTES` (= 2 ×
+            // `BUFFER_THRESHOLD`); two of them put the buffer well
+            // above threshold so playback can transition.
+            return Ok(Some(AudioChunk {
+                data: vec![0u8; PRIMER_CHUNK_BYTES],
+                metadata,
+            }));
         }
+        Ok(None)
     }
 
     fn disconnect(&mut self) {
@@ -146,6 +125,10 @@ impl RadioSource for WasmArchiveSource {
 
     fn source_type(&self) -> &str {
         "wasm-archive"
+    }
+
+    fn streaming_url(&self) -> Option<&str> {
+        Some(&self.url)
     }
 }
 
@@ -236,11 +219,9 @@ async fn fetch_catalog(
     let body: String = body_val.as_string().unwrap_or_default();
 
     let items = ArchiveCatalog::parse_search_response(&body);
-    if items.is_empty() {
-        return Err(JsValue::from_str("no items found"));
-    }
 
-    // 2. Fetch files for first few items.
+    // 2. Fetch files for first few items found by the collection
+    // search.
     let mut catalog = ArchiveCatalog::new(collection);
     let max_items = items.len().min(5);
     for (item_id, _title, creator) in &items[..max_items] {
@@ -256,8 +237,29 @@ async fn fetch_catalog(
         catalog.tracks.extend(tracks);
     }
 
+    // 3. Single-item fallback. Some "stations" in the registry are
+    // actually IA item ids that hold many MP3 files directly (e.g.
+    // `OTRR_This_Is_Your_FBI_Singles`, ~382 episodes). The collection
+    // search returns zero hits for those, so try treating the
+    // identifier itself as an item id and pull files from
+    // `/metadata/<id>/files`. This mirrors the SDL backend's behaviour
+    // in `oasis-app/src/main.rs::fetch_catalog_blocking`.
     if catalog.tracks.is_empty() {
-        return Err(JsValue::from_str("no MP3 files found"));
+        let files_url = format!("https://archive.org/metadata/{collection}/files");
+        let freq = JsFuture::from(window.fetch_with_str(&files_url)).await?;
+        let fresp: web_sys::Response = freq.dyn_into()?;
+        if fresp.ok() {
+            let fbody_val = JsFuture::from(fresp.text()?).await?;
+            let fbody: String = fbody_val.as_string().unwrap_or_default();
+            let tracks = ArchiveCatalog::parse_files_response(&fbody, collection, "Unknown");
+            catalog.tracks.extend(tracks);
+        }
+    }
+
+    if catalog.tracks.is_empty() {
+        return Err(JsValue::from_str(&format!(
+            "no MP3 files for '{collection}' (collection or item id)",
+        )));
     }
 
     catalog.shuffle(seed);

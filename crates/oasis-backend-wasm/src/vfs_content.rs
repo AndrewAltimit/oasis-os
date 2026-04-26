@@ -107,8 +107,17 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     let _ = vfs.mkdir("/apps/Settings");
     let _ = vfs.mkdir("/apps/Browser");
     let _ = vfs.mkdir("/apps/Music Player");
+    let _ = vfs.mkdir("/apps/Internet Radio");
     let _ = vfs.mkdir("/apps/Terminal");
     let _ = vfs.mkdir("/apps/TV Guide");
+
+    // Radio configuration directory and default station list.
+    let _ = vfs.mkdir("/etc/radio");
+    let _ = vfs.mkdir("/var/radio");
+    let default_stations = oasis_audio::radio::station::StationRegistry::defaults();
+    if let Ok(toml_data) = default_stations.to_toml() {
+        let _ = vfs.write("/etc/radio/stations.toml", toml_data.as_bytes());
+    }
 
     // TV Guide configuration.
     let _ = vfs.mkdir("/etc/tv");

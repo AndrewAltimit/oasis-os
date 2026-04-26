@@ -29,7 +29,7 @@ jobs:
   # Fork guard: block fork PRs from running on self-hosted runners with write perms
   fork-guard:
     name: Fork PR Guard
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository

@@ -96,7 +96,18 @@ impl SdiCore for SdlBackend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.canvas.set_clip_rect(Rect::new(x, y, w, h));
+        // A degenerate clip (w==0 or h==0) means "intersection collapsed
+        // to nothing". `sdl3::rect::Rect::new` would silently clamp the
+        // zero to one, leaving a 1-pixel slot that any subsequent
+        // `fill_rect` / glyph blit can sneak a sliver of pixels through —
+        // that is exactly the source of the dotted-underline leak below
+        // an old.reddit.com browser window. Use `ClippingRect::Zero` so
+        // SDL3 actually rejects every draw under this clip.
+        if w == 0 || h == 0 {
+            self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
+        } else {
+            self.canvas.set_clip_rect(Rect::new(x, y, w, h));
+        }
         Ok(())
     }
 

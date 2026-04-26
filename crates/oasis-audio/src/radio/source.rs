@@ -48,6 +48,15 @@ pub trait RadioSource {
 
     /// Human-readable source type name.
     fn source_type(&self) -> &str;
+
+    /// Optional direct stream URL for backends that want to bypass the
+    /// `poll`/`feed_data` chunk pipeline (e.g. WASM, where Firefox's
+    /// MediaSource doesn't decode `audio/mpeg` and needs to hand the URL
+    /// straight to a `<audio>` element). Default `None` means "use the
+    /// normal chunk pipeline".
+    fn streaming_url(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Radio source that streams from a pre-loaded byte buffer.

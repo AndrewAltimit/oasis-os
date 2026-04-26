@@ -95,6 +95,7 @@ fn radio_content(vfs: &dyn Vfs) -> Vec<String> {
         let mut st = "Stopped".to_string();
         let mut stn = "--".to_string();
         let mut np = "--".to_string();
+        let mut err = String::new();
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("State: ") {
                 st = v.to_string();
@@ -102,7 +103,16 @@ fn radio_content(vfs: &dyn Vfs) -> Vec<String> {
                 stn = v.to_string();
             } else if let Some(v) = line.strip_prefix("Now Playing: ") {
                 np = v.to_string();
+            } else if let Some(v) = line.strip_prefix("Error: ") {
+                err = v.to_string();
             }
+        }
+        // When the radio is in `error` state, surface the actual
+        // failure reason inline in the status row so the user can
+        // diagnose without opening dev tools (otherwise they just see
+        // the bare word "error" and have no idea what went wrong).
+        if !err.is_empty() {
+            st = format!("{st} - {err}");
         }
         (st, stn, np)
     } else {

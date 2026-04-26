@@ -495,11 +495,18 @@ impl SdiClipTransform for SdlBackend {
         let new_clip = ClipRect { x: tx, y: ty, w, h };
         match self.clip_stack.push(new_clip) {
             ClipPush::Clip(c) => {
-                self.canvas
-                    .set_clip_rect(sdl3::rect::Rect::new(c.x, c.y, c.w, c.h));
+                if c.w == 0 || c.h == 0 {
+                    // `Rect::new` would clamp 0 to 1, letting a 1-pixel
+                    // sliver through. Use `Zero` to actually reject all
+                    // subsequent draws.
+                    self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
+                } else {
+                    self.canvas
+                        .set_clip_rect(sdl3::rect::Rect::new(c.x, c.y, c.w, c.h));
+                }
             },
             ClipPush::Empty => {
-                self.canvas.set_clip_rect(sdl3::rect::Rect::new(0, 0, 0, 0));
+                self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
             },
         }
         Ok(())
@@ -508,8 +515,12 @@ impl SdiClipTransform for SdlBackend {
     fn pop_clip_rect(&mut self) -> Result<()> {
         match self.clip_stack.pop() {
             Some(prev) => {
-                self.canvas
-                    .set_clip_rect(sdl3::rect::Rect::new(prev.x, prev.y, prev.w, prev.h));
+                if prev.w == 0 || prev.h == 0 {
+                    self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
+                } else {
+                    self.canvas
+                        .set_clip_rect(sdl3::rect::Rect::new(prev.x, prev.y, prev.w, prev.h));
+                }
             },
             None => {
                 self.canvas.set_clip_rect(None);
@@ -1362,5 +1373,37 @@ mod tests {
             .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
             .unwrap();
         assert_eq!(backend.glyph_cache.len(), 2);
+    }
+
+    /// Regression: a degenerate (zero-width or zero-height) clip rect
+    /// must reject every subsequent draw. Before the fix, the SDL3 Rust
+    /// wrapper's `Rect::new` silently clamped a 0-dimension to 1, so a
+    /// `set_clip_rect(.., 0)` produced a 1-pixel slot that let the top
+    /// row of glyphs/fills through — the source of the dotted-underline
+    /// leak below the OASIS browser window on old.reddit.com. The
+    /// browser intersects nested clip rects during display-list replay;
+    /// when a child rect's bottom is at or above the parent's top the
+    /// intersection collapses to height 0, and the OASIS clip needs to
+    /// reject every subsequent draw rather than admit a 1-pixel sliver.
+    #[test]
+    #[ignore]
+    fn degenerate_clip_rejects_all_draws() {
+        use oasis_types::backend::SdiCore;
+        let backend_opt = SdlBackend::new("clip-degen", 256, 256).ok();
+        let mut backend = match backend_opt {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::rgb(255, 0, 0)).unwrap();
+        // Zero-height clip — must clip everything.
+        backend.set_clip_rect(0, 100, 256, 0).unwrap();
+        backend
+            .fill_rect(0, 100, 256, 5, Color::rgb(0, 255, 0))
+            .unwrap();
+        let pixels = backend.read_pixels(50, 100, 1, 1).unwrap();
+        assert_eq!(
+            pixels[0], 255,
+            "zero-height clip should reject all fills, got {pixels:?}",
+        );
     }
 }
