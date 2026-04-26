@@ -380,6 +380,11 @@ cursor_pad = 4
 toast_slide_in = true
 
 [app_overrides]
+# Cream content area instead of inheriting the skin's deep-blue
+# wallpaper color — keeps the File Manager / Notepad / Settings
+# windows readable. Matches `wm_theme.content_bg`.
+app_bg = "#ECE9D8"
+divider_color = "#BFB9A4"
 text_color = "#333333"
 dim_text = "#666666"
 terminal_output_color = "#000000"

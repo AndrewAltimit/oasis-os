@@ -105,6 +105,14 @@ points = [[0.55, 0.6], [0.85, 0.45], [0.9, 0.8]]
 drift_x = 1.5
 
 [app_overrides]
+# XP-style cream content area for app windows (File Manager file
+# viewer, list view, Notepad, Settings, etc.). The skin's primary blue
+# (`background = #003399`) is for the wallpaper, taskbar and titlebars
+# — it's unreadable as a window-content fill once dark text is drawn
+# over it. Match `wm_theme.content_bg` so the inner content surface
+# blends with the WM frame's content area.
+app_bg = "#ECE9D8"
+divider_color = "#BFB9A4"
 text_color = "#333333"
 dim_text = "#666666"
 terminal_output_color = "#000000"
