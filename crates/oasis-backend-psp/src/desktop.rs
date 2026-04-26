@@ -730,13 +730,14 @@ pub(crate) fn draw_tvguide_windowed(
         }
     }
 
-    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 30, 220))?;
-    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(80, 200, 255))?;
-    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+    // Retro cable-TV palette: deep navy bg, amber accents, cyan highlight.
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(8, 14, 30, 220))?;
+    be.draw_text("TV GUIDE", cx + 4, cy + 2, 8, Color::rgb(255, 176, 50))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(45, 90, 160, 255))?;
 
-    let lbl = Color::rgb(160, 160, 160);
-    let hi = Color::rgb(120, 200, 255);
-    let sel_bg = Color::rgba(80, 200, 255, 60);
+    let lbl = Color::rgb(100, 130, 170);
+    let hi = Color::rgb(30, 15, 0); // dark warm — for amber selected bg
+    let sel_bg = Color::rgba(240, 165, 40, 255);
 
     if tuned {
         let mid_x = cx + cw as i32 / 2;
@@ -805,14 +806,17 @@ pub(crate) fn draw_tvguide_windowed(
         let row = (i - scroll) as i32;
         let ry = y + row * row_h;
 
-        // Highlight selected row.
-        if i == selected {
+        // Highlight selected row — solid amber with bright glow on top/bot.
+        let is_sel = i == selected;
+        if is_sel {
             be.fill_rect(cx, ry - 1, cw, row_h as u32, sel_bg)?;
+            be.fill_rect(cx, ry - 1, cw, 1, Color::rgb(255, 200, 80))?;
+            be.fill_rect(cx, ry + row_h - 2, cw, 1, Color::rgb(255, 200, 80))?;
         }
 
         let c = &channels[i];
-        let num_col = Color::rgb(200, 200, 200);
-        let name_col = if i == selected { hi } else { Color::rgb(220, 220, 220) };
+        let num_col = if is_sel { hi } else { Color::rgb(80, 190, 255) };
+        let name_col = if is_sel { hi } else { Color::rgb(220, 230, 255) };
 
         // Channel number.
         let mut fbuf = [0u8; 64];
@@ -835,7 +839,8 @@ pub(crate) fn draw_tvguide_windowed(
             if let Some(cat) = &catalogs[i] {
                 let ep_str = stack_fmt(&mut fbuf, format_args!("{}ep", cat.episodes.len()));
                 let ep_x = cx + cw as i32 - 30;
-                be.draw_text(ep_str, ep_x, ry, 8, Color::rgb(120, 200, 120))?;
+                let ep_col = if is_sel { hi } else { Color::rgb(255, 176, 50) };
+                be.draw_text(ep_str, ep_x, ry, 8, ep_col)?;
             }
         }
     }

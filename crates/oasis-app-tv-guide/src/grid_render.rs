@@ -195,6 +195,8 @@ impl TvGuideState {
             "tv_time_bg",
             "tv_time_label_bg",
             "tv_sel_bg",
+            "tv_sel_glow_top",
+            "tv_sel_glow_bot",
             "tv_ftr_bg",
             "tv_ftr_nav",
             "tv_ftr_page",
@@ -521,7 +523,9 @@ impl TvGuideState {
             obj.x = preview_x + preview_w as i32 - 39;
             obj.y = preview_y - 1;
             obj.font_size = at.font_hint;
-            obj.text_color = self.colors.selected_text;
+            // White on red badge — independent of selected_text (which is
+            // dark warm for the amber-on-row context).
+            obj.text_color = Color::rgba(255, 255, 255, 255);
             obj.visible = is_live;
             obj.z = 106;
         }
@@ -632,7 +636,8 @@ impl TvGuideState {
             let is_selected = ch_idx == self.selected_channel;
             let has_channel = ch_idx < self.channels.len();
 
-            // Row background.
+            // Row background — solid amber for the selected row, deep
+            // navy otherwise. No gradients (matches retro EPG flat fills).
             let bg_name = &self.sdi_names.row_bgs[vis_row];
             ensure_obj(sdi, bg_name);
             if let Ok(obj) = sdi.get_mut(bg_name) {
@@ -645,13 +650,8 @@ impl TvGuideState {
                 } else {
                     self.colors.bg
                 };
-                if is_selected {
-                    obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-                    obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-                } else {
-                    obj.gradient_top = None;
-                    obj.gradient_bottom = None;
-                }
+                obj.gradient_top = None;
+                obj.gradient_bottom = None;
                 obj.visible = has_channel;
                 obj.z = 101;
             }
@@ -720,7 +720,9 @@ impl TvGuideState {
                 let cell_w = (w_frac * grid_w as f64) as u32;
                 let visible = cell_w > 8;
 
-                // Cell background with border.
+                // Cell background — flat fills, with a single bright
+                // grid-line on the left edge (drawn implicitly by the
+                // adjacent cell or the channel-label column border).
                 if let Ok(obj) = sdi.get_mut(cbg_name) {
                     obj.x = cell_x;
                     obj.y = row_y + 1;
@@ -731,14 +733,9 @@ impl TvGuideState {
                     } else {
                         self.colors.cell_bg
                     };
-                    if is_selected {
-                        obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-                        obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-                    } else {
-                        obj.gradient_top = None;
-                        obj.gradient_bottom = None;
-                    }
-                    obj.stroke_color = Some(self.colors.cell_border);
+                    obj.gradient_top = None;
+                    obj.gradient_bottom = None;
+                    obj.stroke_color = Some(self.colors.grid_line);
                     obj.stroke_width = Some(1);
                     obj.visible = visible;
                     obj.z = 102;
@@ -792,6 +789,8 @@ impl TvGuideState {
     }
 
     fn draw_selection_highlight(&self, sdi: &mut SdiRegistry, grid_y: u32, sw: u32, row_h: u32) {
+        // Solid amber bar that lerps between rows. Glow lines on top/bottom
+        // are drawn separately so the highlight reads as a CRT-lit cell.
         ensure_obj(sdi, "tv_sel_bg");
         if let Ok(obj) = sdi.get_mut("tv_sel_bg") {
             let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
@@ -800,11 +799,39 @@ impl TvGuideState {
             obj.w = sw;
             obj.h = row_h;
             obj.color = self.colors.selected_bg;
-            obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
-            obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
-            obj.border_radius = Some(2);
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.border_radius = None;
             obj.visible = !self.channels.is_empty();
             obj.z = 101;
+        }
+
+        // Top/bottom glow stripes (light amber).
+        ensure_obj(sdi, "tv_sel_glow_top");
+        if let Ok(obj) = sdi.get_mut("tv_sel_glow_top") {
+            let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
+            obj.x = 0;
+            obj.y = sel_y as i32;
+            obj.w = sw;
+            obj.h = 2;
+            obj.color = self.colors.selected_glow;
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.visible = !self.channels.is_empty();
+            obj.z = 103;
+        }
+        ensure_obj(sdi, "tv_sel_glow_bot");
+        if let Ok(obj) = sdi.get_mut("tv_sel_glow_bot") {
+            let sel_y = grid_y as f32 + self.visual_selected * row_h as f32;
+            obj.x = 0;
+            obj.y = sel_y as i32 + row_h as i32 - 2;
+            obj.w = sw;
+            obj.h = 2;
+            obj.color = self.colors.selected_glow;
+            obj.gradient_top = None;
+            obj.gradient_bottom = None;
+            obj.visible = !self.channels.is_empty();
+            obj.z = 103;
         }
     }
 
@@ -969,6 +996,8 @@ impl TvGuideState {
         for col in 0..VISIBLE_TIME_SLOTS {
             let slot_time = grid_start + col as u64 * SLOT_DURATION;
             let col_x = cx + label_w as i32 + col as i32 * slot_w as i32;
+            // Vertical separator between time-header columns.
+            backend.fill_rect(col_x, time_y, 1, time_h, self.colors.grid_line)?;
             backend.draw_text(
                 &schedule::format_time(slot_time),
                 col_x + 4,
@@ -977,6 +1006,8 @@ impl TvGuideState {
                 self.colors.time_header,
             )?;
         }
+        // Horizontal grid line below the time header.
+        backend.fill_rect(cx, time_y + time_h as i32 - 1, cw, 1, self.colors.grid_line)?;
 
         // Channel rows.
         let grid_y = time_y + time_h as i32;
@@ -993,6 +1024,15 @@ impl TvGuideState {
 
             if is_sel {
                 backend.fill_rect(cx, row_y, cw, row_h, self.colors.selected_bg)?;
+                // Top/bottom amber glow stripes on selected row.
+                backend.fill_rect(cx, row_y, cw, 2, self.colors.selected_glow)?;
+                backend.fill_rect(
+                    cx,
+                    row_y + row_h as i32 - 2,
+                    cw,
+                    2,
+                    self.colors.selected_glow,
+                )?;
             }
 
             let chan = &self.channels[ch_idx];
@@ -1037,6 +1077,14 @@ impl TvGuideState {
                     cell_w.saturating_sub(1),
                     row_h.saturating_sub(2),
                     bg,
+                )?;
+                // Left grid-line for the cell — gives the EPG its grid look.
+                backend.fill_rect(
+                    cell_x,
+                    row_y + 1,
+                    1,
+                    row_h.saturating_sub(2),
+                    self.colors.grid_line,
                 )?;
 
                 let txt_color = if is_sel {
@@ -1205,6 +1253,8 @@ impl TvGuideState {
             "tv_time_bg",
             "tv_time_label_bg",
             "tv_sel_bg",
+            "tv_sel_glow_top",
+            "tv_sel_glow_bot",
             "tv_ftr_bg",
             "tv_ftr_nav",
             "tv_ftr_page",

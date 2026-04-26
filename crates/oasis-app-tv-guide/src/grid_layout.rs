@@ -16,8 +16,8 @@ pub(crate) const MAX_CELLS: usize = 8;
 
 /// TV Guide color palette, populated from the active theme.
 ///
-/// Defaults match the original retro CRT aesthetic. Skins can override
-/// any color via `[app_themes.tv_guide]` in theme.toml.
+/// Defaults match the retro cable-TV blue/amber EPG aesthetic. Skins can
+/// override any color via `[app_themes.tv_guide]` in theme.toml.
 #[derive(Debug, Clone)]
 pub struct TvGuideColors {
     pub bg: Color,
@@ -30,6 +30,9 @@ pub struct TvGuideColors {
     pub program_text: Color,
     pub selected_bg: Color,
     pub selected_text: Color,
+    /// Bright amber highlight drawn on the top/bottom edges of the
+    /// selected row to create a glowing-bar effect.
+    pub selected_glow: Color,
     pub dim_text: Color,
     pub playing_text: Color,
     pub cell_bg: Color,
@@ -49,55 +52,58 @@ impl TvGuideColors {
         let c = |key: &str, default: Color| -> Color {
             at.app_color("tv_guide", key).unwrap_or(default)
         };
+        let d = Self::defaults();
         Self {
-            bg: c("bg", Color::rgba(10, 22, 40, 255)),
-            grid_line: c("grid_line", Color::rgba(26, 58, 92, 255)),
-            header_bg: c("header_bg", Color::rgba(12, 25, 50, 255)),
-            header_dark: c("header_dark", Color::rgba(8, 18, 38, 255)),
-            time_header_bg: c("time_header_bg", Color::rgba(15, 35, 65, 255)),
-            time_header: c("time_header", Color::rgba(0, 204, 255, 255)),
-            channel_label: c("channel_label", Color::rgba(200, 220, 240, 255)),
-            program_text: c("program_text", Color::rgba(192, 216, 232, 255)),
-            selected_bg: c("selected_bg", Color::rgba(255, 140, 0, 220)),
-            selected_text: c("selected_text", Color::rgba(255, 255, 255, 255)),
-            dim_text: c("dim_text", Color::rgba(100, 130, 160, 255)),
-            playing_text: c("playing_text", Color::rgba(0, 221, 255, 255)),
-            cell_bg: c("cell_bg", Color::rgba(15, 30, 55, 255)),
-            cell_border: c("cell_border", Color::rgba(26, 58, 92, 255)),
-            live_badge: c("live_badge", Color::rgba(220, 40, 40, 255)),
-            date_text: c("date_text", Color::rgba(180, 200, 220, 255)),
-            footer_bg: c("footer_bg", Color::rgba(12, 25, 45, 255)),
-            time_label: c("time_label", Color::rgba(255, 160, 0, 255)),
-            glow_border: c("glow_border", Color::rgba(60, 130, 200, 255)),
-            glow_outer: c("glow_outer", Color::rgba(30, 70, 130, 180)),
-            header_title: c("header_title", Color::rgba(220, 240, 255, 255)),
+            bg: c("bg", d.bg),
+            grid_line: c("grid_line", d.grid_line),
+            header_bg: c("header_bg", d.header_bg),
+            header_dark: c("header_dark", d.header_dark),
+            time_header_bg: c("time_header_bg", d.time_header_bg),
+            time_header: c("time_header", d.time_header),
+            channel_label: c("channel_label", d.channel_label),
+            program_text: c("program_text", d.program_text),
+            selected_bg: c("selected_bg", d.selected_bg),
+            selected_text: c("selected_text", d.selected_text),
+            selected_glow: c("selected_glow", d.selected_glow),
+            dim_text: c("dim_text", d.dim_text),
+            playing_text: c("playing_text", d.playing_text),
+            cell_bg: c("cell_bg", d.cell_bg),
+            cell_border: c("cell_border", d.cell_border),
+            live_badge: c("live_badge", d.live_badge),
+            date_text: c("date_text", d.date_text),
+            footer_bg: c("footer_bg", d.footer_bg),
+            time_label: c("time_label", d.time_label),
+            glow_border: c("glow_border", d.glow_border),
+            glow_outer: c("glow_outer", d.glow_outer),
+            header_title: c("header_title", d.header_title),
         }
     }
 
     /// Build colors with hardcoded defaults (no theme overrides).
     pub fn defaults() -> Self {
         Self {
-            bg: Color::rgba(10, 22, 40, 255),
-            grid_line: Color::rgba(26, 58, 92, 255),
-            header_bg: Color::rgba(12, 25, 50, 255),
-            header_dark: Color::rgba(8, 18, 38, 255),
-            time_header_bg: Color::rgba(15, 35, 65, 255),
-            time_header: Color::rgba(0, 204, 255, 255),
-            channel_label: Color::rgba(200, 220, 240, 255),
-            program_text: Color::rgba(192, 216, 232, 255),
-            selected_bg: Color::rgba(255, 140, 0, 220),
-            selected_text: Color::rgba(255, 255, 255, 255),
-            dim_text: Color::rgba(100, 130, 160, 255),
-            playing_text: Color::rgba(0, 221, 255, 255),
-            cell_bg: Color::rgba(15, 30, 55, 255),
-            cell_border: Color::rgba(26, 58, 92, 255),
-            live_badge: Color::rgba(220, 40, 40, 255),
-            date_text: Color::rgba(180, 200, 220, 255),
-            footer_bg: Color::rgba(12, 25, 45, 255),
-            time_label: Color::rgba(255, 160, 0, 255),
-            glow_border: Color::rgba(60, 130, 200, 255),
-            glow_outer: Color::rgba(30, 70, 130, 180),
-            header_title: Color::rgba(220, 240, 255, 255),
+            bg: Color::rgba(8, 14, 30, 255),
+            grid_line: Color::rgba(45, 90, 160, 255),
+            header_bg: Color::rgba(8, 14, 30, 255),
+            header_dark: Color::rgba(8, 14, 30, 255),
+            time_header_bg: Color::rgba(30, 50, 90, 255),
+            time_header: Color::rgba(255, 176, 50, 255),
+            channel_label: Color::rgba(80, 190, 255, 255),
+            program_text: Color::rgba(220, 230, 255, 255),
+            selected_bg: Color::rgba(240, 165, 40, 255),
+            selected_text: Color::rgba(30, 15, 0, 255),
+            selected_glow: Color::rgba(255, 200, 80, 255),
+            dim_text: Color::rgba(100, 130, 170, 255),
+            playing_text: Color::rgba(80, 190, 255, 255),
+            cell_bg: Color::rgba(16, 28, 55, 255),
+            cell_border: Color::rgba(45, 90, 160, 255),
+            live_badge: Color::rgba(255, 40, 40, 255),
+            date_text: Color::rgba(100, 130, 170, 255),
+            footer_bg: Color::rgba(8, 14, 30, 255),
+            time_label: Color::rgba(255, 176, 50, 255),
+            glow_border: Color::rgba(45, 90, 160, 255),
+            glow_outer: Color::rgba(30, 70, 130, 255),
+            header_title: Color::rgba(255, 255, 255, 255),
         }
     }
 }

@@ -462,7 +462,7 @@ pub(crate) fn draw_tv_playing(
 
     if downloading {
         // Download progress view.
-        draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+        draw_view_header(backend, "TV GUIDE", Color::rgb(255, 176, 50), None);
 
         let pct = (progress * 100.0) as u32;
         let status = format!("Downloading... {}%", pct);
@@ -480,10 +480,10 @@ pub(crate) fn draw_tv_playing(
         let bar_h: u32 = 8;
         let bar_x = cx - bar_w as i32 / 2;
         let bar_y = CONTENT_TOP as i32 + 80;
-        backend.fill_rect_inner(bar_x, bar_y, bar_w, bar_h, Color::rgba(40, 40, 60, 200));
+        backend.fill_rect_inner(bar_x, bar_y, bar_w, bar_h, Color::rgba(30, 50, 90, 200));
         let fill_w = (bar_w as f32 * progress) as u32;
         if fill_w > 0 {
-            backend.fill_rect_inner(bar_x, bar_y, fill_w, bar_h, Color::rgb(0, 160, 255));
+            backend.fill_rect_inner(bar_x, bar_y, fill_w, bar_h, Color::rgb(255, 176, 50));
         }
 
         // Episode title.
@@ -503,13 +503,13 @@ pub(crate) fn draw_tv_playing(
         let max_h = CONTENT_H;
         backend.blit_inner(tex, 0, CONTENT_TOP as i32, max_w, max_h);
 
-        // LIVE indicator.
+        // LIVE indicator — pure red badge with white text (retro cable TV).
         backend.fill_rect_inner(
             SCREEN_WIDTH as i32 - 48,
             CONTENT_TOP as i32 + 4,
             44,
             12,
-            Color::rgba(200, 0, 0, 200),
+            Color::rgba(255, 40, 40, 230),
         );
         backend.draw_text_inner(
             "LIVE",
@@ -532,7 +532,7 @@ pub(crate) fn draw_tv_playing(
         backend.draw_text_inner(&display, 4, title_y, 8, Color::WHITE);
     } else {
         // No video frame yet but not downloading -- audio only or ended.
-        draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+        draw_view_header(backend, "TV GUIDE", Color::rgb(255, 176, 50), None);
 
         let status = if !error_msg.is_empty() {
             error_msg
@@ -571,7 +571,7 @@ pub(crate) fn draw_tv_error(backend: &mut PspBackend, error_msg: &str) {
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+    draw_view_header(backend, "TV GUIDE", Color::rgb(255, 176, 50), None);
 
     let cx = SCREEN_WIDTH as i32 / 2;
     let cy = CONTENT_TOP as i32 + CONTENT_H as i32 / 2;
