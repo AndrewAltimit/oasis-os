@@ -571,7 +571,7 @@ pub(crate) fn draw_tv_error(backend: &mut PspBackend, error_msg: &str) {
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    draw_view_header(backend, "TV GUIDE", Color::rgb(255, 176, 50), None);
+    draw_view_header(backend, "TV GUIDE", TV_TIME_LABEL, None);
 
     let cx = SCREEN_WIDTH as i32 / 2;
     let cy = CONTENT_TOP as i32 + CONTENT_H as i32 / 2;

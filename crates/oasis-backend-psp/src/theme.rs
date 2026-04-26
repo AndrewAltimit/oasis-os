@@ -104,11 +104,18 @@ pub(crate) const FM_START_Y: i32 = CONTENT_TOP as i32 + 14;
 
 // Colors -- TV Guide retro cable-TV palette.
 //
-// Mirrors `oasis_app_tv_guide::TvGuideColors::defaults()`. PSP is
-// excluded from the workspace so it cannot import that crate; defining
-// the palette once here keeps `desktop.rs` and `views.rs` in sync.
-// On the next palette change, update both this block and
+// RGB channels mirror `oasis_app_tv_guide::TvGuideColors::defaults()`.
+// PSP is excluded from the workspace so it cannot import that crate;
+// defining the palette once here keeps `desktop.rs` and `views.rs`
+// in sync. On the next palette change, update both this block and
 // `crates/oasis-app-tv-guide/src/grid_layout.rs`.
+//
+// Alpha values for `TV_BG` (220), `TV_TIME_HEADER_BG` (200), and
+// `TV_LIVE_BADGE` (230) intentionally diverge from the desktop
+// defaults (all 255). PSP draws these on top of the desktop wallpaper
+// without a separate compositor, so a small amount of transparency
+// preserves the wallpaper texture behind the EPG; desktop renders into
+// a windowed surface that already provides framing.
 pub(crate) const TV_BG: Color = Color::rgba(8, 14, 30, 220);
 pub(crate) const TV_TIME_LABEL: Color = Color::rgb(255, 176, 50);
 pub(crate) const TV_GRID_LINE: Color = Color::rgba(45, 90, 160, 255);
