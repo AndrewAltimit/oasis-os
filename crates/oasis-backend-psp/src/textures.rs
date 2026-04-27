@@ -342,6 +342,9 @@ impl PspBackend {
                 self.video_tex = Some(id);
                 self.video_tex_w = width;
                 self.video_tex_h = height;
+                // Publish the buffer for the video thread's CSC to write
+                // into directly (zero-copy).
+                crate::video::set_video_texture_buffer(data, buf_size);
                 return Some(id);
             }
         }
@@ -351,6 +354,7 @@ impl PspBackend {
         self.video_tex = Some(id);
         self.video_tex_w = width;
         self.video_tex_h = height;
+        crate::video::set_video_texture_buffer(data, buf_size);
         Some(id)
     }
 
@@ -368,11 +372,19 @@ impl PspBackend {
         height: u32,
         rgba_data: &[u8],
     ) -> Option<TextureId> {
-        // Re-allocate if dimensions changed (rare — typically once per stream).
-        if self.video_tex.is_none()
-            || width != self.video_tex_w
-            || height != self.video_tex_h
-        {
+        // Reuse the existing texture's buffer if it can fit this frame
+        // (pre-allocated at boot at the max ≤480p size). Only re-allocate
+        // when there's no texture yet or the requested dimensions exceed
+        // the existing power-of-2 buffer.
+        let existing_buf = self.video_tex
+            .and_then(|id| self.textures.get(id.0 as usize))
+            .and_then(|slot| slot.as_ref())
+            .map(|tex| (tex.buf_w, tex.buf_h));
+        let needs_alloc = match existing_buf {
+            Some((bw, bh)) => width > bw || height > bh,
+            None => true,
+        };
+        if needs_alloc {
             return self.alloc_video_texture_and_update(width, height, rgba_data);
         }
 
@@ -386,8 +398,17 @@ impl PspBackend {
         let dst_stride = (buf_w * 4) as usize;
         let total = dst_stride * height as usize;
 
-        // When source stride matches texture stride (both 512px from CSC),
-        // do a single bulk copy. No row-by-row needed.
+        // Zero-copy fast path: the video thread's CSC wrote directly into
+        // this texture's buffer (uncached, so no cache writeback needed).
+        // The `rgba_data` slice handed in by `frame_pixels_raw` borrows the
+        // same buffer — copying it onto itself is a no-op.
+        if rgba_data.as_ptr() == data as *const u8 {
+            return Some(tex_id);
+        }
+
+        // Legacy copy path (kept for non-CSC sources like the test/PSMF
+        // pipeline). When source stride matches texture stride (both 512px
+        // from CSC), do a single bulk copy.
         if src_stride == dst_stride && rgba_data.len() >= total {
             unsafe {
                 ptr::copy_nonoverlapping(

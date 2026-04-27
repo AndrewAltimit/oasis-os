@@ -232,6 +232,7 @@ pub(crate) fn render_classic(
                 },
                 RadioStatus::Connecting => {
                     desktop::draw_loading_indicator(backend, "Connecting...");
+                    chrome::draw_button_hints(backend, &[("O", "Cancel")]);
                 },
                 RadioStatus::Buffering | RadioStatus::Playing => {
                     views::draw_radio_playing(

@@ -336,6 +336,18 @@ pub(super) fn dispatch_tv_confirm(
         tv.selected,
         tv.catalogs.len()
     ));
+    // Pre-allocate the GU video texture now, while ~7.5 MB of partition
+    // memory is still free. By the time the video thread reaches
+    // `AvcDecoder::new` it will have consumed ~6.5 MB on the persistent
+    // sceMpeg DDR workspace, leaving ~1 MB — too little for a 524 KB
+    // texture. The texture is reused for every subsequent stream (CSC
+    // stride is fixed at 512 for any ≤480p source), so this allocation
+    // happens at most once per session.
+    if backend.alloc_video_texture(512, 256).is_none() {
+        oasis_backend_psp::video::vlog_force(
+            "[TV] WARN: video texture pre-alloc failed; video will be audio-only",
+        );
+    }
     if tv.selected < tv.catalogs.len() {
         if let Some(catalog) = &tv.catalogs[tv.selected] {
             dbg_log(&format!(

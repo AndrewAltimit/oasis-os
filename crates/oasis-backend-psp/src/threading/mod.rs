@@ -55,6 +55,40 @@ static RADIO_BUFFERING: AtomicBool = AtomicBool::new(false);
 /// ICY metadata titles from audio thread -> main thread.
 static RADIO_META_QUEUE: SpscQueue<String, 4> = SpscQueue::new();
 
+/// Raw MP3 byte chunks: I/O thread pushes (after fetching from archive.org
+/// over HTTPS), audio thread pops (feeds `RadioStreamer`'s decoder).
+/// 8 slots × ~32 KB = ~256 KB ring buffer, enough to absorb HTTPS jitter
+/// while a 192 kbps MP3 plays at ~24 KB/s.
+pub(crate) static RADIO_DATA_QUEUE: SpscQueue<Vec<u8>, 8> = SpscQueue::new();
+
+/// Set by the main thread (Stop press) to signal the I/O thread to stop
+/// streaming the archive MP3. Checked between chunks.
+pub(crate) static RADIO_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Set by the I/O thread when its archive streaming exits (success, EOF,
+/// error, or cancel), so a new RadioArchive command can safely begin.
+pub(crate) static RADIO_STOPPED: AtomicBool = AtomicBool::new(true);
+
+/// Request cancellation of the current radio archive stream.
+pub fn cancel_radio_stream() {
+    RADIO_CANCEL.store(true, Ordering::Release);
+}
+
+/// Check if the I/O radio archive worker has fully stopped.
+pub fn is_radio_stopped() -> bool {
+    RADIO_STOPPED.load(Ordering::Acquire)
+}
+
+/// Set `RADIO_STREAMING` and `RADIO_BUFFERING` atomically as soon as the
+/// main thread forwards a `RadioConnected` response to the audio thread.
+/// Without this pre-set, the main loop's `if Buffering && !is_streaming →
+/// Stopped` check can race the audio thread's `AudioCmd` handler and
+/// bounce status back to Stopped before any audio plays.
+pub fn mark_radio_starting() {
+    RADIO_STREAMING.store(true, Ordering::Release);
+    RADIO_BUFFERING.store(true, Ordering::Release);
+}
+
 // ---------------------------------------------------------------------------
 // Video download cancellation flag
 // ---------------------------------------------------------------------------
@@ -218,6 +252,12 @@ pub enum IoCmd {
     /// Connect to an internet radio stream (raw TCP + HTTP).
     RadioConnect {
         url: String,
+    },
+    /// Resolve and stream an Internet Archive collection over HTTPS.
+    /// Mirrors the desktop archive flow: search → first item → first MP3 →
+    /// streaming HTTPS GET. Pushes raw MP3 bytes into `RADIO_DATA_QUEUE`.
+    RadioArchive {
+        collection: String,
     },
     /// Fetch and parse TV Guide catalogs from archive.org (I/O thread).
     /// Batched to reuse a single HttpClient for all requests.

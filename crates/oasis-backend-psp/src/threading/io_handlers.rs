@@ -23,6 +23,9 @@ pub(super) fn io_thread_fn() {
             Some(IoCmd::RadioConnect { url }) => {
                 super::radio::handle_radio_connect(url);
             },
+            Some(IoCmd::RadioArchive { collection }) => {
+                super::radio::handle_radio_archive(collection);
+            },
             Some(IoCmd::TvCatalogFetchBatch { requests }) => {
                 handle_tv_catalog_batch(requests);
             },

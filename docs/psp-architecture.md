@@ -112,12 +112,33 @@ order.
   `VIDEO_FRAME_QUEUE` (capacity 2) has space before committing to
   ~50 ms ME decode. Reduces frame drops from ~72% to ~3%. Main thread
   drains all queued frames per render, uploads only the latest.
-- **Frameskip** — texture upload (~80 ms for 322 KB copy + cache
-  flush) only runs every 3rd main loop frame, giving audio DMA
-  uninterrupted CPU time to prevent stuttering.
-- **Strided CSC** — `decode_into_strided()` writes CSC output at
-  512 px stride matching the GU texture buffer, eliminating two
-  stride-conversion copies per frame.
+- **Zero-copy CSC into the GU texture** — `decode_csc_direct` writes
+  CSC output straight into the GU video texture's pixel buffer (via
+  the uncached `0x4000_0000` mirror). Per-frame upload time drops
+  from ~57 µs (old `FRAME_BUFFERS` → texture memcpy) to ~4 µs and the
+  482 KB double-buffer is gone. Single-buffered: GE samples the same
+  buffer the ME is writing into; the race window is in microseconds
+  and tearing has not been observed in practice.
+- **Texture pre-allocation in `dispatch_tv_confirm`** — the 524 KB
+  GU texture is allocated on `X` press, while ~7.5 MB of partition
+  memory is still free. By the time `AvcDecoder::new` lands its
+  6.47 MB DDR workspace, only ~1 MB remains — too little to fit the
+  texture. Reserving up-front and reusing across channel switches
+  avoids the OOM. Cancel handler clears `tv.preview_tex` so the
+  cleanup branch in `main.rs` doesn't free the freshly pre-allocated
+  texture before the next stream starts.
+- **Persistent `AvcDecoder` reuse** — `rust-psp` skips
+  `sceMpegDelete` in `Drop` to avoid an intermittent firmware crash,
+  which leaves the sceMpeg instance leaked. On the next
+  `sceMpegCreate`, mpeg_vsh370 returns `0x80628002`
+  (`SCE_ERROR_MPEG_NO_MEMORY`) because the firmware still tracks the
+  prior instance. The OASIS video thread keeps a single
+  `PERSISTENT_DECODER` alive for the whole session: `NalDecoder::Drop`
+  parks the decoder back into that slot instead of letting
+  `AvcDecoder::Drop` run, and `try_init` reuses the parked decoder
+  on subsequent tunes. CSC stride is fixed at 512 for any ≤480p
+  source, so the same instance handles 320×240, 336×240, etc. — only
+  `is_first_frame=true` and `flush()` reset pic_num between streams.
 - **Audio buffering** — 64-slot audio command queue (~1.5 s at
   44.1 kHz / 1024 AAC frames) absorbs network I/O jitter that
   previously caused audible stuttering.
@@ -130,6 +151,49 @@ order.
   prevents reinit until reboot.
 - **WiFi retry** — TCP command server retries WiFi connection
   indefinitely instead of giving up after 2 attempts.
+
+## Internet Radio (Archive Streaming)
+
+The PSP radio app shares the canonical station list with the desktop
+and WASM backends — `oasis_audio::StationRegistry::defaults()`. The
+five entries (Old Time Radio, LibriVox Audiobooks, Netlabel Music,
+78 rpm Records, This Is Your FBI) are all `archive`-type stations
+(`source_type = "archive"`) backed by Internet Archive collections.
+
+- **Resolve flow** — pressing X queues `IoCmd::RadioArchive { collection }`.
+  The I/O thread runs the archive resolution sequence over HTTPS via
+  the same `TlsHttpReader` that TV Guide uses for video:
+  1. `https://archive.org/advancedsearch.php?q=collection:<id>+AND+mediatype:audio&rows=1&sort=random&output=json`
+     → first item identifier.
+  2. `https://archive.org/metadata/<item>/files` → first MP3 filename
+     (lightweight string-based JSON parse, capped at 32 KB to bound
+     memory and time).
+  3. `https://archive.org/download/<item>/<file>.mp3` → streaming
+     HTTPS GET. Bytes are pumped into `RADIO_DATA_QUEUE`
+     (`SpscQueue<Vec<u8>, 8>`, ~256 KB ring) for the audio thread.
+- **Queue-fed `RadioStreamer`** — when `RadioStreamer::new` is given
+  `socket_fd = -1`, `recv_data` pulls 16 KB chunks from
+  `RADIO_DATA_QUEUE` instead of calling `sceNetInetRecv`. ICY metadata
+  is bypassed (archive MP3s are vanilla files, not icecast). The same
+  `psp::audiocodec::AudiocodecDecoder` decode path then plays through
+  `AudioChannel::output_blocking`.
+- **`reinit_gu_frame()` discipline** — `dispatch_radio_confirm`
+  previously called `backend.reinit_gu_frame()` unconditionally after
+  `ensure_net_init_pub`, even on the silent GotIp early-return
+  (cmd_server pre-connected WiFi at boot). Calling `sceGuStart` a
+  second time inside an already-open display list does not crash
+  immediately, but causes the *next* frame's `sceGuSync` to hang
+  waiting for a GE that's mid-transition. The fix is to only reinit
+  GU on the error path (where a WiFi dialog actually ran). General
+  rule: only call `reinit_gu_frame()` if a PSP utility dialog
+  (OSK / connect / save) actually took over GU rendering.
+- **`mark_radio_starting()`** — `io_poll`'s `RadioConnected` handler
+  pre-sets `RADIO_STREAMING` / `RADIO_BUFFERING` atomics in addition
+  to `radio.status = Buffering`. Without that, the main loop's
+  `if Buffering && !is_radio_streaming → Stopped` reset can fire
+  before the audio thread picks up the `RadioStreamFromFd` command,
+  bouncing the UI back to the station list while audio is still
+  spinning up.
 
 ## PSP Constraints (general)
 

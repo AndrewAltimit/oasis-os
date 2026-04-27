@@ -111,6 +111,45 @@ impl RadioStreamer {
             return;
         }
 
+        // Queue-fed mode (archive.org HTTPS): the I/O thread already
+        // performed TLS decryption and pushes plain MP3 bytes into
+        // `RADIO_DATA_QUEUE`. ICY metadata never appears in archive
+        // streams, so we just copy bytes straight into the read buffer.
+        if self.socket_fd < 0 {
+            // I/O thread sends chunks up to 16 KB. Only pop when there's
+            // guaranteed room so we never have to drop a partial chunk
+            // (the SpscQueue can't push back).
+            const MAX_CHUNK: usize = 16 * 1024;
+            let io_stopped = crate::threading::is_radio_stopped();
+            let mut got_anything = false;
+            while Self::BUF_SIZE - self.buf_valid >= MAX_CHUNK {
+                let chunk = match crate::threading::RADIO_DATA_QUEUE.pop() {
+                    Some(c) => c,
+                    None => break,
+                };
+                got_anything = true;
+                let take = chunk.len();
+                // SAFETY: Manual byte copy to avoid LLVM memcpy recursion.
+                let dst = self.read_buf.as_mut_ptr();
+                for i in 0..take {
+                    unsafe { *dst.add(self.buf_valid + i) = chunk[i] };
+                }
+                self.buf_valid += take;
+            }
+            if got_anything {
+                self.recv_fail_count = 0;
+            } else {
+                self.recv_fail_count = self.recv_fail_count.saturating_add(1);
+                if io_stopped && self.buf_valid - self.buf_pos < 4 {
+                    // Producer stopped and we have nothing buffered ⇒ EOF.
+                    self.error_count = 201;
+                }
+                // Yield briefly when no data so the I/O thread can run.
+                psp::thread::sleep_ms(5);
+            }
+            return;
+        }
+
         if self.icy_metaint == 0 {
             // No ICY metadata: receive directly into read buffer.
             let chunk = room.min(4096);
