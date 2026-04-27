@@ -158,7 +158,10 @@ fn extract_json_str<'a>(obj: &'a str, key: &str) -> &'a str {
 /// `oasis_audio::radio::archive::percent_encode` (kept local so this
 /// module stays compile-light).
 fn percent_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    // Worst case is every byte expanding to "%XX" — three bytes out per
+    // byte in. Sizing for the worst case avoids reallocation in the
+    // (rare) all-non-ASCII case without hurting the common path.
+    let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
             b' ' => out.push_str("%20"),
@@ -219,9 +222,12 @@ pub(super) fn handle_radio_archive(collection: String) {
 
     // Step 1: pick a random item from the collection. The `sort=random`
     // hint asks the API to shuffle for us; rows=1 keeps the response tiny.
+    // Percent-encode `collection` so any future identifier containing
+    // `&`, `+`, `#`, or space cannot corrupt the query string.
+    let collection_enc = percent_encode(&collection);
     let search_url = format!(
         "https://archive.org/advancedsearch.php?\
-         q=collection:{collection}+AND+mediatype:audio\
+         q=collection:{collection_enc}+AND+mediatype:audio\
          &fl=identifier&sort=random&rows=1&output=json"
     );
     radio_log(&format!("[IO-RADIO] search GET: {search_url}"));

@@ -861,6 +861,21 @@ impl NalDecoder {
         let out_h = ((dec_h + 15) / 16) * 16; // CSC rounds up to 16
         let _ = (csc_stride, out_h); // referenced for diagnostic logging only
         if VIDEO_TEX_PTR.load(Ordering::Acquire).is_null() {
+            // Park the decoder back into PERSISTENT_DECODER before
+            // returning. Otherwise the local `decoder` drops here without
+            // having been wrapped in `NalDecoder` — and `NalDecoder::Drop`
+            // is the only code that re-parks. Leaking it would force the
+            // next tune to call `AvcDecoder::new` again, which fails with
+            // 0x80628002 because the firmware still tracks the previous
+            // instance.
+            // SAFETY: single-threaded access (video thread only); same
+            // pattern as the take above.
+            unsafe {
+                core::ptr::replace(
+                    core::ptr::addr_of_mut!(PERSISTENT_DECODER),
+                    Some(decoder),
+                );
+            }
             return Err(
                 "GU video texture not pre-allocated (TV Guide tune-press \
                  path is responsible for calling PspBackend::alloc_video_texture)"

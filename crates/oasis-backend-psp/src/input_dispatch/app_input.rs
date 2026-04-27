@@ -535,7 +535,24 @@ pub(crate) fn dispatch_app_input(
                                 collection: String::from(station.collection),
                             });
                         },
-                        _ => {
+                        "icecast" => {
+                            io.send(IoCmd::RadioConnect {
+                                url: String::from(station.url),
+                            });
+                        },
+                        other => {
+                            // Defensive: a typo in a station entry's
+                            // source_type would otherwise silently fall
+                            // through to icecast and connect to whatever
+                            // `station.url` happens to contain (often
+                            // empty for archive stations).
+                            psp::dprintln!(
+                                "[RADIO] unknown source_type {:?} for station {:?}; \
+                                 falling back to icecast with url={:?}",
+                                other,
+                                station.name,
+                                station.url,
+                            );
                             io.send(IoCmd::RadioConnect {
                                 url: String::from(station.url),
                             });

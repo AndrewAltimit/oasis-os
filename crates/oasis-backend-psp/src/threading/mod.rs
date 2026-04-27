@@ -57,8 +57,9 @@ static RADIO_META_QUEUE: SpscQueue<String, 4> = SpscQueue::new();
 
 /// Raw MP3 byte chunks: I/O thread pushes (after fetching from archive.org
 /// over HTTPS), audio thread pops (feeds `RadioStreamer`'s decoder).
-/// 8 slots × ~32 KB = ~256 KB ring buffer, enough to absorb HTTPS jitter
-/// while a 192 kbps MP3 plays at ~24 KB/s.
+/// 8 slots × ~16 KB (`MAX_CHUNK` in `audio/radio.rs`) = ~128 KB ring
+/// buffer, enough to absorb HTTPS jitter while a 192 kbps MP3 plays at
+/// ~24 KB/s.
 pub(crate) static RADIO_DATA_QUEUE: SpscQueue<Vec<u8>, 8> = SpscQueue::new();
 
 /// Set by the main thread (Stop press) to signal the I/O thread to stop
