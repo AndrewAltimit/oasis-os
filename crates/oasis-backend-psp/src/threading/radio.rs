@@ -211,6 +211,16 @@ pub(super) fn handle_radio_archive(collection: String) {
         radio_log("[IO-RADIO] audio thread still consuming, skipping drain");
     }
 
+    // Honor a cancel press that arrived during the audio-idle wait above
+    // (up to 1s) before we start the first TLS handshake. Without this,
+    // a quick cancel is silently swallowed and the user waits a full
+    // search round-trip before the cancel takes effect.
+    if RADIO_CANCEL.load(Ordering::Acquire) {
+        radio_log("[IO-RADIO] cancel before search phase");
+        RADIO_STOPPED.store(true, Ordering::Release);
+        return;
+    }
+
     radio_log(&format!(
         "[IO-RADIO] resolving archive collection: {collection}"
     ));
