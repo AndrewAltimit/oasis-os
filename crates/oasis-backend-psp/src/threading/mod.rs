@@ -69,6 +69,15 @@ pub(crate) static RADIO_CANCEL: AtomicBool = AtomicBool::new(false);
 /// error, or cancel), so a new RadioArchive command can safely begin.
 pub(crate) static RADIO_STOPPED: AtomicBool = AtomicBool::new(true);
 
+/// True when the audio thread is NOT currently popping `RADIO_DATA_QUEUE`.
+/// `RADIO_DATA_QUEUE` is an SPSC queue (single-consumer contract): if the
+/// I/O thread drains it for a new stream while the audio thread is still
+/// popping the previous stream, two concurrent `pop()` calls on a
+/// lock-free SPSC is UB. The I/O thread waits for this flag before
+/// draining, and the audio thread clears/sets it around its consumer
+/// lifetime.
+pub(crate) static RADIO_AUDIO_IDLE: AtomicBool = AtomicBool::new(true);
+
 /// Request cancellation of the current radio archive stream.
 pub fn cancel_radio_stream() {
     RADIO_CANCEL.store(true, Ordering::Release);

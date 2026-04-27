@@ -129,7 +129,13 @@ impl RadioStreamer {
                 };
                 got_anything = true;
                 let take = chunk.len();
-                // SAFETY: Manual byte copy to avoid LLVM memcpy recursion.
+                // SAFETY: Manual byte copy to avoid LLVM memcpy recursion
+                // on MIPS. `take <= MAX_CHUNK` (the I/O thread bounds
+                // chunks at MAX_CHUNK), and the loop entry condition
+                // `BUF_SIZE - self.buf_valid >= MAX_CHUNK` guarantees
+                // `self.buf_valid + take <= BUF_SIZE`, so every write to
+                // `dst.add(self.buf_valid + i)` stays in-bounds of
+                // `self.read_buf`.
                 let dst = self.read_buf.as_mut_ptr();
                 for i in 0..take {
                     unsafe { *dst.add(self.buf_valid + i) = chunk[i] };

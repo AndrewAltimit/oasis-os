@@ -11,7 +11,7 @@
 use core::sync::atomic::Ordering;
 
 use super::{
-    IO_RESP_QUEUE, IoResponse, RADIO_CANCEL, RADIO_DATA_QUEUE, RADIO_STOPPED,
+    IO_RESP_QUEUE, IoResponse, RADIO_AUDIO_IDLE, RADIO_CANCEL, RADIO_DATA_QUEUE, RADIO_STOPPED,
     find_header_end, parse_icy_metaint, parse_radio_url,
 };
 use super::tls_http::TlsHttpReader;
@@ -186,9 +186,26 @@ pub(super) fn handle_radio_archive(collection: String) {
     RADIO_CANCEL.store(false, Ordering::Release);
     RADIO_STOPPED.store(false, Ordering::Release);
 
-    // Drain anything left over from a previous stream so the audio thread
-    // doesn't decode stale bytes after a station change.
-    while RADIO_DATA_QUEUE.pop().is_some() {}
+    // RADIO_DATA_QUEUE is SPSC (single-consumer). Before we drain it from
+    // this I/O thread, wait until the audio thread has finished popping
+    // the previous stream — otherwise two threads can race on `pop()`,
+    // which is UB. The audio thread sets RADIO_AUDIO_IDLE=true once it
+    // processes RadioStop and drops its RadioStreamer. Cap the wait at
+    // 1s so we never deadlock if the audio thread is wedged; on timeout
+    // we skip the drain (a few KB of stale bytes will be decoded as
+    // junk by the new MP3 parser, which sync-finds the next valid frame).
+    let mut waited_ms = 0u32;
+    while !RADIO_AUDIO_IDLE.load(Ordering::Acquire) && waited_ms < 1000 {
+        psp::thread::sleep_ms(10);
+        waited_ms += 10;
+    }
+    if RADIO_AUDIO_IDLE.load(Ordering::Acquire) {
+        // Drain anything left over from a previous stream so the audio
+        // thread doesn't decode stale bytes after a station change.
+        while RADIO_DATA_QUEUE.pop().is_some() {}
+    } else {
+        radio_log("[IO-RADIO] audio thread still consuming, skipping drain");
+    }
 
     radio_log(&format!("[IO-RADIO] resolving archive collection: {collection}"));
 
@@ -244,8 +261,14 @@ pub(super) fn handle_radio_archive(collection: String) {
     };
     radio_log(&format!("[IO-RADIO] item: {item_id}"));
 
+    // Percent-encode for safe URL interpolation. Internet Archive
+    // identifiers are usually `[A-Za-z0-9_.-]+`, but we don't trust the
+    // server response — any `#`, `?`, space, or non-ASCII byte would
+    // mangle the URL.
+    let item_id_enc = percent_encode(&item_id);
+
     // Step 2: list the files for that item and pick an MP3.
-    let files_url = format!("https://archive.org/metadata/{item_id}/files");
+    let files_url = format!("https://archive.org/metadata/{item_id_enc}/files");
     radio_log(&format!("[IO-RADIO] files GET: {files_url}"));
     let mut files_reader = match TlsHttpReader::open(&files_url) {
         Ok((r, _)) => r,
@@ -289,7 +312,7 @@ pub(super) fn handle_radio_archive(collection: String) {
     // initial buffer + icy_metaint=0 so the audio thread spins up its
     // queue-fed decoder.
     let mp3_url = format!(
-        "https://archive.org/download/{item_id}/{}",
+        "https://archive.org/download/{item_id_enc}/{}",
         percent_encode(&mp3_name)
     );
     radio_log(&format!("[IO-RADIO] streaming GET: {mp3_url}"));
