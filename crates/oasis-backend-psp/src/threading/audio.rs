@@ -8,8 +8,8 @@ use crate::sfx::SfxEngine;
 
 use super::{
     AUDIO_BITRATE, AUDIO_CHANNELS, AUDIO_DURATION_MS, AUDIO_PAUSED, AUDIO_PLAYING,
-    AUDIO_POSITION_MS, AUDIO_QUEUE, AUDIO_SAMPLE_RATE, AudioCmd, RADIO_BUFFERING, RADIO_META_QUEUE,
-    RADIO_STREAMING, io_log, io_log_verbose,
+    AUDIO_POSITION_MS, AUDIO_QUEUE, AUDIO_SAMPLE_RATE, AudioCmd, RADIO_AUDIO_IDLE, RADIO_BUFFERING,
+    RADIO_META_QUEUE, RADIO_STREAMING, io_log, io_log_verbose,
 };
 
 // ---------------------------------------------------------------------------
@@ -273,6 +273,7 @@ pub(super) fn audio_thread_fn() {
                     r.stop();
                     RADIO_STREAMING.store(false, Ordering::Relaxed);
                     RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                    RADIO_AUDIO_IDLE.store(true, Ordering::Release);
                 }
                 if player.load_and_play(&path) {
                     publish_audio_state(&player);
@@ -285,6 +286,7 @@ pub(super) fn audio_thread_fn() {
                     r.stop();
                     RADIO_STREAMING.store(false, Ordering::Relaxed);
                     RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                    RADIO_AUDIO_IDLE.store(true, Ordering::Release);
                 }
                 if player.load_and_play_owned(data) {
                     publish_audio_state(&player);
@@ -313,6 +315,7 @@ pub(super) fn audio_thread_fn() {
                     r.stop();
                     RADIO_STREAMING.store(false, Ordering::Relaxed);
                     RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                    RADIO_AUDIO_IDLE.store(true, Ordering::Release);
                 }
             },
             Some(AudioCmd::SetVolume(v)) => {
@@ -346,6 +349,10 @@ pub(super) fn audio_thread_fn() {
                 }
                 RADIO_BUFFERING.store(true, Ordering::Relaxed);
                 RADIO_STREAMING.store(true, Ordering::Relaxed);
+                // Mark the audio thread as actively consuming
+                // RADIO_DATA_QUEUE before installing the streamer (next
+                // loop iteration will start popping).
+                RADIO_AUDIO_IDLE.store(false, Ordering::Release);
                 radio = Some(streamer);
             },
             Some(AudioCmd::RadioStop) => {
@@ -354,6 +361,9 @@ pub(super) fn audio_thread_fn() {
                 }
                 RADIO_STREAMING.store(false, Ordering::Relaxed);
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                // Audio thread is no longer popping RADIO_DATA_QUEUE; the
+                // I/O thread is now free to drain it for a new stream.
+                RADIO_AUDIO_IDLE.store(true, Ordering::Release);
             },
             Some(AudioCmd::VideoAudioData {
                 pcm_i16,
@@ -365,6 +375,7 @@ pub(super) fn audio_thread_fn() {
                     r.stop();
                     RADIO_STREAMING.store(false, Ordering::Relaxed);
                     RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                    RADIO_AUDIO_IDLE.store(true, Ordering::Release);
                 }
                 if player.is_playing() {
                     player.stop();
@@ -421,6 +432,7 @@ pub(super) fn audio_thread_fn() {
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
                 if let Some(mut r) = radio.take() {
                     r.stop();
+                    RADIO_AUDIO_IDLE.store(true, Ordering::Release);
                 }
                 RADIO_STREAMING.store(false, Ordering::Relaxed);
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
@@ -455,6 +467,7 @@ pub(super) fn audio_thread_fn() {
                 radio = None;
                 RADIO_STREAMING.store(false, Ordering::Relaxed);
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                RADIO_AUDIO_IDLE.store(true, Ordering::Release);
             }
         } else {
             // Sleep when idle. During AAC streaming, the `continue` above

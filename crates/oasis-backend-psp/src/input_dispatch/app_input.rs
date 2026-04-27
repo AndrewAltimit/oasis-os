@@ -505,26 +505,65 @@ pub(crate) fn dispatch_app_input(
             if radio.status == RadioStatus::Stopped || radio.status == RadioStatus::Error {
                 if radio.selected < RADIO_STATIONS.len() {
                     if !oasis_backend_psp::network::is_net_initialized() {
-                        if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
-                            radio.error_msg = format!("Net error: {e}");
-                            radio.status = RadioStatus::Error;
-                            backend.reinit_gu_frame();
-                            return DispatchResult::Continue;
+                        // Show the WiFi dialog only if needed. The dialog
+                        // takes over GU rendering, so we must reinit our GU
+                        // frame after — but only when the dialog actually
+                        // ran. Calling `reinit_gu_frame` unconditionally
+                        // (incl. on the GotIp early-return path) issues a
+                        // second `sceGuStart` inside the active display list
+                        // and hangs the next `sceGuSync` on real hardware.
+                        match oasis_backend_psp::network::ensure_net_init_pub() {
+                            Ok(()) => {
+                                // GotIp path is silent; no dialog ran, no
+                                // GU reinit needed.
+                            },
+                            Err(e) => {
+                                radio.error_msg = format!("Net error: {e}");
+                                radio.status = RadioStatus::Error;
+                                backend.reinit_gu_frame();
+                                return DispatchResult::Continue;
+                            },
                         }
-                        backend.reinit_gu_frame();
                     }
                     let station = &RADIO_STATIONS[radio.selected];
                     radio.station_name = String::from(station.name);
                     radio.now_playing.clear();
                     radio.status = RadioStatus::Connecting;
-                    io.send(IoCmd::RadioConnect {
-                        url: String::from(station.url),
-                    });
+                    match station.source_type {
+                        "archive" => {
+                            io.send(IoCmd::RadioArchive {
+                                collection: String::from(station.collection),
+                            });
+                        },
+                        "icecast" => {
+                            io.send(IoCmd::RadioConnect {
+                                url: String::from(station.url),
+                            });
+                        },
+                        other => {
+                            // Defensive: a typo in a station entry's
+                            // source_type would otherwise silently fall
+                            // through to icecast and connect to whatever
+                            // `station.url` happens to contain (often
+                            // empty for archive stations).
+                            psp::dprintln!(
+                                "[RADIO] unknown source_type {:?} for station {:?}; \
+                                 falling back to icecast with url={:?}",
+                                other,
+                                station.name,
+                                station.url,
+                            );
+                            io.send(IoCmd::RadioConnect {
+                                url: String::from(station.url),
+                            });
+                        },
+                    }
                 }
             }
         },
         InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Radio => {
             if radio.status != RadioStatus::Stopped {
+                oasis_backend_psp::threading::cancel_radio_stream();
                 audio.send(AudioCmd::RadioStop);
                 radio.status = RadioStatus::Stopped;
                 radio.now_playing.clear();
@@ -535,6 +574,7 @@ pub(crate) fn dispatch_app_input(
         },
         InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Radio => {
             if radio.status != RadioStatus::Stopped {
+                oasis_backend_psp::threading::cancel_radio_stream();
                 audio.send(AudioCmd::RadioStop);
                 radio.status = RadioStatus::Stopped;
                 radio.now_playing.clear();
@@ -569,8 +609,7 @@ pub(crate) fn dispatch_app_input(
         InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::TvGuide => {
             if tv.tuned.is_some() || tv.downloading {
                 // Signal cancellation — I/O and video threads will
-                // clean up asynchronously. Don't free the texture here;
-                // the main loop frees it when is_video_playing() goes false.
+                // clean up asynchronously.
                 oasis_backend_psp::threading::cancel_video_download();
                 oasis_backend_psp::video::send_video_cmd(oasis_backend_psp::video::VideoCmd::Stop);
                 audio.send(AudioCmd::VideoAudioStop);
@@ -578,6 +617,13 @@ pub(crate) fn dispatch_app_input(
                 tv.downloading = false;
                 tv.now_playing.clear();
                 tv.error_msg.clear();
+                // Drop the cached texture id too so the post-stream
+                // cleanup branch in `main.rs` (which is gated on
+                // `tv.tuned.is_some()`) doesn't fire on the *next*
+                // tune and free the freshly pre-allocated texture
+                // out from under the new stream. The texture itself
+                // is reused on the next `dispatch_tv_confirm`.
+                tv.preview_tex = None;
             } else {
                 close_kiosk(kiosk_app, wm, sdi);
             }

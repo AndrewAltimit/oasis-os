@@ -91,6 +91,14 @@ pub(crate) fn poll_io_responses(
                 initial_data,
             } => {
                 radio.status = RadioStatus::Buffering;
+                // Set RADIO_STREAMING / RADIO_BUFFERING immediately so the
+                // main loop's `if Buffering && !is_radio_streaming → Stopped`
+                // check doesn't race the audio thread's queue handler and
+                // bounce status straight back to Stopped before any bytes
+                // have been processed. The audio thread sets these flags
+                // again when it picks up `RadioStreamFromFd`; double-set
+                // is harmless.
+                oasis_backend_psp::threading::mark_radio_starting();
                 audio.send(AudioCmd::RadioStreamFromFd {
                     fd,
                     icy_metaint,

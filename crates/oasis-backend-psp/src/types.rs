@@ -121,58 +121,62 @@ impl KioskApp {
 pub(crate) struct RadioStation {
     pub(crate) name: &'static str,
     pub(crate) genre: &'static str,
+    /// Direct stream URL for `icecast` stations. Empty for `archive` stations,
+    /// where the I/O thread resolves the stream via the Internet Archive APIs
+    /// using `collection` instead.
     pub(crate) url: &'static str,
     pub(crate) bitrate: u32,
+    /// `"icecast"` for direct MP3 streams, `"archive"` for IA collections.
+    /// Mirrors `oasis_audio::Station::source_type` so this list stays in
+    /// sync with the desktop / WASM canonical list.
+    pub(crate) source_type: &'static str,
+    /// Internet Archive collection identifier (only for `archive` stations).
+    pub(crate) collection: &'static str,
 }
 
+/// Canonical station list shared with the desktop and WASM backends.
+/// Mirrors `oasis_audio::StationRegistry::defaults()`. Keep these two in
+/// sync — users expect the same playlist on every backend.
 pub(crate) static RADIO_STATIONS: &[RadioStation] = &[
     RadioStation {
-        name: "Drone Zone",
-        genre: "ambient",
-        url: "http://ice2.somafm.com/dronezone-128-mp3",
-        bitrate: 128,
+        name: "Old Time Radio",
+        genre: "drama",
+        url: "",
+        bitrate: 0,
+        source_type: "archive",
+        collection: "oldtimeradio",
     },
     RadioStation {
-        name: "DEF CON Radio",
-        genre: "hacker",
-        url: "http://ice2.somafm.com/defcon-128-mp3",
-        bitrate: 128,
+        name: "LibriVox Audiobooks",
+        genre: "audiobooks",
+        url: "",
+        bitrate: 0,
+        source_type: "archive",
+        collection: "librivoxaudio",
     },
     RadioStation {
-        name: "Groove Salad",
-        genre: "chill",
-        url: "http://ice2.somafm.com/groovesalad-128-mp3",
-        bitrate: 128,
+        name: "Netlabel Music",
+        genre: "music",
+        url: "",
+        bitrate: 0,
+        source_type: "archive",
+        collection: "netlabels",
     },
     RadioStation {
-        name: "Space Station",
-        genre: "space",
-        url: "http://ice2.somafm.com/spacestation-128-mp3",
-        bitrate: 128,
+        name: "78rpm Records",
+        genre: "vintage",
+        url: "",
+        bitrate: 0,
+        source_type: "archive",
+        collection: "78rpm",
     },
     RadioStation {
-        name: "Secret Agent",
-        genre: "lounge",
-        url: "http://ice2.somafm.com/secretagent-128-mp3",
-        bitrate: 128,
-    },
-    RadioStation {
-        name: "Lush",
-        genre: "female vocal",
-        url: "http://ice2.somafm.com/lush-128-mp3",
-        bitrate: 128,
-    },
-    RadioStation {
-        name: "Metal Detector",
-        genre: "metal",
-        url: "http://ice2.somafm.com/metal-128-mp3",
-        bitrate: 128,
-    },
-    RadioStation {
-        name: "Boot Liquor",
-        genre: "americana",
-        url: "http://ice2.somafm.com/bootliquor-128-mp3",
-        bitrate: 128,
+        name: "This Is Your FBI",
+        genre: "true crime",
+        url: "",
+        bitrate: 0,
+        source_type: "archive",
+        collection: "OTRR_This_Is_Your_FBI_Singles",
     },
 ];
 

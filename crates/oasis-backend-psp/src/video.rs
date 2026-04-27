@@ -208,11 +208,13 @@ pub struct StreamFrame {
 
 /// A decoded video frame ready for texture upload.
 ///
-/// Contains a reference to one of two pre-allocated static pixel buffers
-/// rather than a per-frame Vec allocation.
+/// CSC writes directly into the GU video texture buffer (see
+/// `VIDEO_TEX_PTR`); this struct just carries dimensions so the main
+/// thread can set the correct UV mapping.
 pub struct DecodedFrame {
-    /// Index into `FRAME_BUFFERS` (0 or 1). The main thread reads pixel
-    /// data directly from the static buffer.
+    /// Always 0 — single-buffered. Kept for backwards-compatible API
+    /// shape; future work could add a second slot for tear-free
+    /// double buffering when memory permits.
     pub buf_idx: u8,
     pub width: u32,
     pub height: u32,
@@ -220,13 +222,50 @@ pub struct DecodedFrame {
     pub stride: u32,
 }
 
-/// Pre-allocated double-buffer for decoded RGBA frames. Each buffer holds
-/// one frame at the maximum expected resolution (480x272x4 = 522,240 bytes).
-/// Allocated lazily at first decode. Protected by the SPSC queue contract:
-/// the video thread writes to the buffer identified by `write_buf_idx`,
-/// then pushes a DecodedFrame; the main thread reads from the buffer
-/// identified by `DecodedFrame::buf_idx` after popping.
-static mut FRAME_BUFFERS: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
+/// Pointer to the GU video texture's pixel buffer. Set by `PspBackend::
+/// alloc_video_texture` and read by `NalDecoder::decode` so CSC writes
+/// directly into the GU-bound buffer (zero-copy). When non-null, the
+/// video thread writes CSC output here instead of `FRAME_BUFFERS`,
+/// eliminating a 491 KB allocation and a per-frame memcpy. The buffer
+/// is allocated by the main thread before the channel tune begins
+/// (when ~7.5 MB of partition memory is still free) and reused for
+/// every subsequent stream — see `PERSISTENT_DECODER` for the parallel
+/// reasoning on the sceMpeg side.
+///
+/// SAFETY: stored pointer outlives the program (allocated through the
+/// texture system, freed only at app exit). Accessed read-only by the
+/// video thread and written only on the main thread before the video
+/// thread starts decoding.
+pub static VIDEO_TEX_PTR: core::sync::atomic::AtomicPtr<u8> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+/// Size in bytes of the buffer pointed to by `VIDEO_TEX_PTR`.
+pub static VIDEO_TEX_SIZE: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// Publish the texture buffer pointer + size for the video thread to
+/// use as CSC output target. Called by `PspBackend::alloc_video_texture`.
+pub fn set_video_texture_buffer(ptr: *mut u8, size: usize) {
+    VIDEO_TEX_PTR.store(ptr, Ordering::Release);
+    VIDEO_TEX_SIZE.store(size, Ordering::Release);
+}
+
+/// Borrow the GU video texture buffer as a mutable slice. Returns
+/// `None` if no texture has been allocated yet.
+///
+/// SAFETY: caller must guarantee single-writer access. The video thread
+/// is the sole writer during `NalDecoder::decode`; the main thread does
+/// not touch the buffer except via the GU (which reads via DMA).
+unsafe fn video_texture_slice() -> Option<&'static mut [u8]> {
+    let ptr = VIDEO_TEX_PTR.load(Ordering::Acquire);
+    let size = VIDEO_TEX_SIZE.load(Ordering::Acquire);
+    if ptr.is_null() || size == 0 {
+        None
+    } else {
+        // SAFETY: ptr/size point at a single texture buffer owned by
+        // the texture system for the lifetime of the program.
+        Some(unsafe { core::slice::from_raw_parts_mut(ptr, size) })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Static queues and state
@@ -454,59 +493,24 @@ pub fn poll_video_frame() -> Option<DecodedFrame> {
 
 /// Return raw frame buffer reference WITHOUT alpha fixup.
 /// Buffer uses CSC stride (512px), matching texture buf_w.
+///
+/// Zero-copy: returns a borrow of the GU video texture buffer that the
+/// video thread wrote into via `decode_csc_direct`. The main thread
+/// hands this back to `update_video_texture`, which is now a no-op
+/// (the bytes are already in the texture buffer).
 pub fn frame_pixels_raw(frame: &DecodedFrame) -> &[u8] {
     let size = (frame.stride * frame.height * 4) as usize;
-    // SAFETY: Single-threaded access from main thread (SPSC contract).
-    unsafe {
-        let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
-        core::slice::from_raw_parts(
-            (*buf_ptr)[frame.buf_idx as usize].as_ptr(),
-            size,
-        )
+    let ptr = VIDEO_TEX_PTR.load(Ordering::Acquire);
+    let buf_size = VIDEO_TEX_SIZE.load(Ordering::Acquire);
+    if ptr.is_null() || buf_size == 0 {
+        return &[];
     }
-}
-
-/// Convert RGB565 frame data to RGBA and return a reference.
-///
-/// The ME outputs Psm5650 (RGB565, 2 bpp). This function converts to
-/// RGBA (4 bpp) for the texture upload path. Uses a static conversion
-/// buffer to avoid per-frame allocation.
-static mut RGBA_CONVERT_BUF: Vec<u8> = Vec::new();
-
-pub fn frame_pixels(frame: &DecodedFrame) -> &[u8] {
-    let w = frame.width as usize;
-    let h = frame.height as usize;
-    let size = w * h * 4; // Psm8888 = 4 bpp
-
-    // SAFETY: Single-threaded access from main thread (SPSC contract).
-    // CSC outputs Psm8888 (LE bytes: R, G, B, A). GU Psm8888 reads the
-    // same byte order. Just fix alpha (CSC outputs 0x00, we need 0xFF).
-    unsafe {
-        let buf_ptr = core::ptr::addr_of_mut!(FRAME_BUFFERS);
-        let data = core::slice::from_raw_parts_mut(
-            (*buf_ptr)[frame.buf_idx as usize].as_mut_ptr(),
-            size,
-        );
-
-        // Fix alpha channel: CSC outputs 0x00, GU needs 0xFF for opaque.
-        // Use 32-bit word OR when buffer is aligned (4x fewer memory ops).
-        let ptr = data.as_mut_ptr();
-        if ptr as usize % 4 == 0 && size % 4 == 0 {
-            let words = core::slice::from_raw_parts_mut(
-                ptr as *mut u32,
-                size / 4,
-            );
-            for w in words.iter_mut() {
-                *w |= 0xFF00_0000;
-            }
-        } else {
-            for i in (3..size).step_by(4) {
-                data[i] = 0xFF;
-            }
-        }
-
-        core::slice::from_raw_parts(data.as_ptr(), size)
-    }
+    let take = size.min(buf_size);
+    // SAFETY: VIDEO_TEX_PTR is a stable pointer set once when the
+    // texture is allocated and never reassigned. Single-threaded read
+    // from the main thread; the video thread is the only writer and
+    // we observe its writes via the atomic Acquire load above.
+    unsafe { core::slice::from_raw_parts(ptr, take) }
 }
 
 /// Check if video is currently playing.
@@ -730,13 +734,14 @@ impl Drop for PspFileReader {
 /// Adds OASIS-specific logging and SPS/PPS extraction on top of the
 /// reusable rust-psp abstraction.
 struct NalDecoder {
-    decoder: psp::mpeg::AvcDecoder,
+    /// Wrapped in `Option` so `Drop` can move the decoder back into
+    /// `PERSISTENT_DECODER` for reuse on the next channel tune. Always
+    /// `Some` for the lifetime of a valid `NalDecoder`.
+    decoder: Option<psp::mpeg::AvcDecoder>,
     sps: Vec<u8>,
     pps: Vec<u8>,
     nal_prefix_size: i32,
     first_frame: bool,
-    /// Alternates between 0 and 1 to index into FRAME_BUFFERS.
-    write_buf_idx: u8,
     /// Frames decoded since last flush/keyframe.
     frames_since_flush: u32,
     /// Maximum frames before a preventive flush.
@@ -744,6 +749,27 @@ struct NalDecoder {
     /// Timestamp of last decode call (for rate throttling).
     last_decode_us: u64,
 }
+
+/// Persistent `AvcDecoder` kept alive across channel switches.
+///
+/// `rust-psp` skips `sceMpegDelete` in `AvcDecoder::Drop` to avoid an
+/// intermittent firmware crash, which leaves the sceMpeg instance leaked.
+/// On the next `sceMpegCreate`, mpeg_vsh370 returns 0x80628002
+/// (`SCE_ERROR_MPEG_NO_MEMORY`) because the firmware still tracks the
+/// prior instance. Reusing one decoder for every tune sidesteps the
+/// Delete/Create cycle entirely.
+///
+/// On stream end, `Drop for NalDecoder` parks the decoder back here.
+/// On the next tune, `NalDecoder::try_init` takes it back. The first
+/// allocation is at the actual stream dimensions; subsequent streams
+/// with ≤480p content reuse it (CSC stride is fixed at 512 for any
+/// `width≤480`, so the same instance handles 320×240, 336×240, 480×272,
+/// etc. — only `is_first_frame=true` and `flush()` are needed to reset
+/// pic_num between streams).
+///
+/// SAFETY: Touched only on the video thread (single-producer through
+/// `try_init` / `drop`). No cross-thread access.
+static mut PERSISTENT_DECODER: Option<psp::mpeg::AvcDecoder> = None;
 
 impl NalDecoder {
     /// Initialize the NAL decoder from the first keyframe.
@@ -788,25 +814,73 @@ impl NalDecoder {
             if dpb_total > 0x20_0000 { "OVERFLOW" } else { "ok" }
         ));
 
-        let decoder = psp::mpeg::AvcDecoder::new(dec_w, dec_h)
-            .map_err(|e| format!("AvcDecoder::new: {e}"))?;
+        // Reuse the persistent decoder if available; otherwise allocate a
+        // fresh one. See `PERSISTENT_DECODER` for why we never drop.
+        // SAFETY: Single-threaded access (video thread only). Use raw
+        // pointer ops to avoid creating a `&mut` to the `static mut`,
+        // which Rust 2024 forbids (`static_mut_refs`).
+        let prev: Option<psp::mpeg::AvcDecoder> = unsafe {
+            core::ptr::replace(core::ptr::addr_of_mut!(PERSISTENT_DECODER), None)
+        };
+        let mut decoder = match prev {
+            Some(mut dec) => {
+                vlog(&format!(
+                    "[VIDEO] NAL: reusing persistent decoder ({}x{}) for {dec_w}x{dec_h} stream",
+                    dec.width(),
+                    dec.height(),
+                ));
+                // Reset stream-specific state so the ME treats this as a
+                // fresh stream start. `flush()` zeroes pic_num.
+                dec.flush();
+                dec
+            },
+            None => {
+                let dec = psp::mpeg::AvcDecoder::new(dec_w, dec_h)
+                    .map_err(|e| format!("AvcDecoder::new: {e}"))?;
+                vlog(&format!(
+                    "[VIDEO] NAL: created persistent decoder ({dec_w}x{dec_h}), ddr={:#x}",
+                    dec.ddr_top(),
+                ));
+                dec
+            },
+        };
         vlog(&format!(
             "[VIDEO] NAL: decoder ready, ddr={:#x}",
             decoder.ddr_top()
         ));
 
-        // Pre-allocate the static double-buffers for decoded frames.
-        // Use CSC stride (512px for ≤480p) so CSC can write directly here
-        // and the texture upload needs only alpha fixup + cache flush
-        // (no row-by-row stride conversion copy).
+        // CSC writes directly into the pre-allocated GU video texture
+        // (see `VIDEO_TEX_PTR` / `set_video_texture_buffer`). No
+        // FRAME_BUFFERS allocation is needed — the texture buffer is
+        // sized for the maximum ≤480p frame (512 × 256 × 4 = 524288
+        // bytes) and is reused across streams. Skipping the 982 KB
+        // double-buffer allocation here is required because by this
+        // point the persistent sceMpeg DDR workspace has already eaten
+        // ~6.5 MB of partition memory, leaving roughly 1 MB free.
         let csc_stride = decoder.stride();
         let out_h = ((dec_h + 15) / 16) * 16; // CSC rounds up to 16
-        let buf_size = (csc_stride * out_h * 4) as usize;
-        // SAFETY: Called from the video thread before any frames are
-        // pushed. No concurrent access to FRAME_BUFFERS yet.
-        unsafe {
-            FRAME_BUFFERS[0] = vec![0u8; buf_size];
-            FRAME_BUFFERS[1] = vec![0u8; buf_size];
+        let _ = (csc_stride, out_h); // referenced for diagnostic logging only
+        if VIDEO_TEX_PTR.load(Ordering::Acquire).is_null() {
+            // Park the decoder back into PERSISTENT_DECODER before
+            // returning. Otherwise the local `decoder` drops here without
+            // having been wrapped in `NalDecoder` — and `NalDecoder::Drop`
+            // is the only code that re-parks. Leaking it would force the
+            // next tune to call `AvcDecoder::new` again, which fails with
+            // 0x80628002 because the firmware still tracks the previous
+            // instance.
+            // SAFETY: single-threaded access (video thread only); same
+            // pattern as the take above.
+            unsafe {
+                core::ptr::replace(
+                    core::ptr::addr_of_mut!(PERSISTENT_DECODER),
+                    Some(decoder),
+                );
+            }
+            return Err(
+                "GU video texture not pre-allocated (TV Guide tune-press \
+                 path is responsible for calling PspBackend::alloc_video_texture)"
+                    .to_string(),
+            );
         }
 
         // Flush interval: only used for >480p content where the DPB
@@ -993,12 +1067,11 @@ impl NalDecoder {
         ));
 
         Ok(Self {
-            decoder,
+            decoder: Some(decoder),
             sps,
             pps,
             nal_prefix_size: first_frame.nal_prefix_size as i32,
             first_frame: true,
-            write_buf_idx: 0,
             frames_since_flush: 0,
             flush_interval,
             last_decode_us: 0,
@@ -1036,21 +1109,35 @@ impl NalDecoder {
             is_first_frame: is_first,
         };
 
-        // Decode into the current write buffer (alternates 0/1).
-        let buf_idx = self.write_buf_idx;
-        // SAFETY: The video thread owns the write side. The main thread
-        // only reads from the OTHER buffer (the one last pushed to the
-        // queue). The SPSC queue with capacity 2 ensures at most one
-        // frame is in-flight, so the write buffer is always free.
-        let dst = unsafe { &mut FRAME_BUFFERS[buf_idx as usize] };
+        // Zero-copy CSC: write directly into the GU video texture buffer.
+        // The texture is pre-allocated by the main thread when the user
+        // presses X to tune (`PspBackend::alloc_video_texture` →
+        // `set_video_texture_buffer`). Single-buffered to fit memory
+        // alongside the persistent sceMpeg DDR workspace.
+        // SAFETY: video thread is the sole writer; main thread reads via
+        // GU DMA, which fences on `sceGuFinish`.
+        let dst = match unsafe { video_texture_slice() } {
+            Some(s) => s,
+            None => {
+                if verbose {
+                    vlog("[VIDEO] NAL: no texture buffer registered, skipping");
+                }
+                return Err(());
+            },
+        };
 
         // Time the decode call — if it takes >2 seconds, the ME is stuck
         // and we should stop video decode entirely.
         let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
-        // Direct CSC — writes directly to FRAME_BUFFER via uncached
-        // pointer, eliminating the slow intermediate copy (~15ms vs 150ms).
-        let result = self.decoder.decode_csc_direct(&nal, dst);
+        // SAFETY: `decoder` is `Some` for the lifetime of NalDecoder; only
+        // `Drop` ever takes it.
+        let dec = self
+            .decoder
+            .as_mut()
+            .expect("decoder Some until Drop");
+        let result = dec.decode_csc_direct(&nal, dst);
+        let (out_w, out_h, out_stride) = (dec.width(), dec.height(), dec.stride());
         match result {
             Ok(true) => {
                 let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
@@ -1059,12 +1146,11 @@ impl NalDecoder {
                     vlog(&format!("[VIDEO] NAL: FRAME DECODED! ({}ms)", dt_ms));
                 }
                 self.last_decode_us = dt_ms * 1000;
-                self.write_buf_idx = 1 - buf_idx;
                 Ok(Some(DecodedFrame {
-                    buf_idx,
-                    width: self.decoder.width(),
-                    height: self.decoder.height(),
-                    stride: self.decoder.stride(),
+                    buf_idx: 0,
+                    width: out_w,
+                    height: out_h,
+                    stride: out_stride,
                 }))
             }
             Ok(false) => {
@@ -1082,41 +1168,24 @@ impl NalDecoder {
         }
     }
 
-    /// Reinitialize the decoder (destroy + recreate).
-    /// Call ONLY right after a successful decode when the ME is idle.
-    /// Consumes self, returns a new NalDecoder or None on failure.
-    fn reinit(self) -> Option<Self> {
-        let w = self.decoder.width();
-        let h = self.decoder.height();
-        let sps = self.sps;
-        let pps = self.pps;
-        let prefix = self.nal_prefix_size;
-        let wb = self.write_buf_idx;
-        let interval = self.flush_interval;
-        vlog_force(&format!("[VIDEO] NAL: reinit decoder ({w}x{h})..."));
+}
 
-        // Drop old decoder (calls sceMpegDelete + sceMpegFinish).
-        drop(self.decoder);
-
-        // Create a new decoder with the same dimensions.
-        match psp::mpeg::AvcDecoder::new(w, h) {
-            Ok(new_dec) => {
-                vlog_force("[VIDEO] NAL: reinit OK");
-                Some(NalDecoder {
-                    decoder: new_dec,
-                    sps,
-                    pps,
-                    nal_prefix_size: prefix,
-                    first_frame: true,
-                    write_buf_idx: wb,
-                    frames_since_flush: 0,
-                    flush_interval: interval,
-                    last_decode_us: 0,
-                })
-            }
-            Err(e) => {
-                vlog_force(&format!("[VIDEO] NAL: reinit FAILED: {e}"));
-                None
+impl Drop for NalDecoder {
+    fn drop(&mut self) {
+        // Park the decoder in PERSISTENT_DECODER for the next stream
+        // instead of letting `AvcDecoder::Drop` run. See PERSISTENT_DECODER
+        // for the firmware bug we're working around.
+        if let Some(dec) = self.decoder.take() {
+            // SAFETY: Video thread is the only writer of PERSISTENT_DECODER.
+            // `try_init` is the only reader, also on the video thread, and
+            // is single-threaded with this Drop. The previous value should
+            // already be `None` (taken in `try_init`); if it isn't, the
+            // returned `Option` drops it harmlessly.
+            unsafe {
+                let _ = core::ptr::replace(
+                    core::ptr::addr_of_mut!(PERSISTENT_DECODER),
+                    Some(dec),
+                );
             }
         }
     }
