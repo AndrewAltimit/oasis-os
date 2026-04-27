@@ -10,11 +10,11 @@
 
 use core::sync::atomic::Ordering;
 
+use super::tls_http::TlsHttpReader;
 use super::{
     IO_RESP_QUEUE, IoResponse, RADIO_AUDIO_IDLE, RADIO_CANCEL, RADIO_DATA_QUEUE, RADIO_STOPPED,
     find_header_end, parse_icy_metaint, parse_radio_url,
 };
-use super::tls_http::TlsHttpReader;
 
 /// Diagnostic logger that won't allocate during decode-hot paths. Mirrors
 /// `io_log` from `threading/mod.rs` but local to keep this module loosely
@@ -44,10 +44,7 @@ fn radio_log(msg: &str) {
 /// stop early as soon as we have enough to find the first MP3. Streaming
 /// reads at 2 s recv timeout per syscall means a 256 KB body could take
 /// over a minute to drain — the cap bounds that to a few seconds.
-fn read_tls_body_capped(
-    reader: &mut TlsHttpReader,
-    max_bytes: usize,
-) -> Result<String, String> {
+fn read_tls_body_capped(reader: &mut TlsHttpReader, max_bytes: usize) -> Result<String, String> {
     let mut body = Vec::with_capacity(max_bytes.min(32 * 1024));
     let mut buf = [0u8; 4096];
     while body.len() < max_bytes {
@@ -154,28 +151,32 @@ fn extract_json_str<'a>(obj: &'a str, key: &str) -> &'a str {
     ""
 }
 
-/// Percent-encode a path segment for use in an HTTP URL. Mirrors
+/// Percent-encode an HTTP URL path component. Mirrors
 /// `oasis_audio::radio::archive::percent_encode` (kept local so this
 /// module stays compile-light).
+///
+/// Encodes everything outside the RFC 3986 §2.3 unreserved set
+/// (`ALPHA / DIGIT / "-" / "." / "_" / "~"`), with one pragmatic
+/// exception: `/` is left as-is so that this can be applied to a
+/// multi-segment `mp3_name` (archive.org filenames can contain
+/// subdirectories like `subdir/file.mp3`). Sub-delims (`!`, `$`, `&`,
+/// `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`) and the remaining gen-delims
+/// (`:`, `?`, `#`, `[`, `]`, `@`) are all encoded — earlier versions
+/// missed several of these, which would have corrupted any URL whose
+/// identifier contained one.
 fn percent_encode(s: &str) -> String {
     // Worst case is every byte expanding to "%XX" — three bytes out per
     // byte in. Sizing for the worst case avoids reallocation in the
     // (rare) all-non-ASCII case without hurting the common path.
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
-        match b {
-            b' ' => out.push_str("%20"),
-            b'#' => out.push_str("%23"),
-            b'?' => out.push_str("%3F"),
-            b'&' => out.push_str("%26"),
-            b'%' => out.push_str("%25"),
-            b'+' => out.push_str("%2B"),
-            0x80.. => {
-                out.push('%');
-                out.push(char::from(HEX[(b >> 4) as usize]));
-                out.push(char::from(HEX[(b & 0xF) as usize]));
-            },
-            _ => out.push(char::from(b)),
+        let unreserved = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/');
+        if unreserved {
+            out.push(char::from(b));
+        } else {
+            out.push('%');
+            out.push(char::from(HEX[(b >> 4) as usize]));
+            out.push(char::from(HEX[(b & 0xF) as usize]));
         }
     }
     out
@@ -210,7 +211,9 @@ pub(super) fn handle_radio_archive(collection: String) {
         radio_log("[IO-RADIO] audio thread still consuming, skipping drain");
     }
 
-    radio_log(&format!("[IO-RADIO] resolving archive collection: {collection}"));
+    radio_log(&format!(
+        "[IO-RADIO] resolving archive collection: {collection}"
+    ));
 
     if !psp::net::is_connected() {
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
@@ -254,6 +257,11 @@ pub(super) fn handle_radio_archive(collection: String) {
         },
     };
     search_reader.cleanup();
+    if RADIO_CANCEL.load(Ordering::Acquire) {
+        radio_log("[IO-RADIO] cancel during search phase");
+        RADIO_STOPPED.store(true, Ordering::Release);
+        return;
+    }
     let item_id = match find_first_identifier(&search_body) {
         Some(id) => id.to_string(),
         None => {
@@ -300,6 +308,11 @@ pub(super) fn handle_radio_archive(collection: String) {
         },
     };
     files_reader.cleanup();
+    if RADIO_CANCEL.load(Ordering::Acquire) {
+        radio_log("[IO-RADIO] cancel during files phase");
+        RADIO_STOPPED.store(true, Ordering::Release);
+        return;
+    }
     let mp3_name = match find_first_mp3_filename(&files_body) {
         Some(n) => n,
         None => {

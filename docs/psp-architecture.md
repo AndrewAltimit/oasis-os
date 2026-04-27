@@ -170,7 +170,8 @@ five entries (Old Time Radio, LibriVox Audiobooks, Netlabel Music,
      memory and time).
   3. `https://archive.org/download/<item>/<file>.mp3` → streaming
      HTTPS GET. Bytes are pumped into `RADIO_DATA_QUEUE`
-     (`SpscQueue<Vec<u8>, 8>`, ~256 KB ring) for the audio thread.
+     (`SpscQueue<Vec<u8>, 8>`, 8 slots × ~16 KB chunks = ~128 KB ring)
+     for the audio thread.
 - **Queue-fed `RadioStreamer`** — when `RadioStreamer::new` is given
   `socket_fd = -1`, `recv_data` pulls 16 KB chunks from
   `RADIO_DATA_QUEUE` instead of calling `sceNetInetRecv`. ICY metadata
