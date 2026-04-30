@@ -33,7 +33,7 @@ non-empty line is `<verb> [arg1 [arg2 ...]]`:
 | `cursor <x> <y>` | PSP screen coords (480×272) | injects a `CursorMove` event |
 | `skin <key>` | `psix`, `classic`, `balatro`, `retro-cga`, `solarized`, `highcontrast`, `altimit` | applies a theme preset and persists to `config.rcfg` |
 | `wait <frames>` | u32 | pauses N frames before next command |
-| `screenshot <ms0:/path>` | path | drops a 0-byte sentinel `<path>.req`, then **blocks** until the host removes it |
+| `screenshot <ms0:/path>` | path under `ms0:/PSP/GAME/OASISOS/` | drops a 0-byte sentinel `<path>.req`, then **blocks** until the host removes it. Paths outside the OASISOS directory are rejected at parse time |
 | `log <message>` | free text | appends a line to `autorun.log` |
 | `exit [code]` | i32 (default 0) | writes `autorun.done` then `sceKernelExitGame` |
 

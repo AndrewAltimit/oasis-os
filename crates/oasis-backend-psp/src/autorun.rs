@@ -43,6 +43,9 @@ use crate::types::APPS;
 const SCRIPT_PATH: &str = "ms0:/PSP/GAME/OASISOS/AUTORUN.txt";
 const LOG_PATH: &str = "ms0:/PSP/GAME/OASISOS/autorun.log";
 const DONE_MARKER: &str = "ms0:/PSP/GAME/OASISOS/autorun.done";
+/// Screenshot/sentinel writes are constrained to this prefix so a crafted
+/// AUTORUN.txt cannot create or truncate files outside our own dir.
+const SCREENSHOT_PREFIX: &str = "ms0:/PSP/GAME/OASISOS/";
 
 /// One parsed autorun command.
 #[derive(Debug)]
@@ -248,6 +251,11 @@ fn parse_one(verb: &str, rest: &str) -> Result<Cmd, String> {
             if rest.is_empty() {
                 return Err("screenshot needs a path".into());
             }
+            if !rest.starts_with(SCREENSHOT_PREFIX) {
+                return Err(format!(
+                    "screenshot path must start with '{SCREENSHOT_PREFIX}'"
+                ));
+            }
             Ok(Cmd::Screenshot(rest.to_string()))
         },
         "log" => Ok(Cmd::Log(rest.to_string())),
@@ -364,6 +372,15 @@ fn touch_marker(path: &str, code: i32) {
 /// drive both targets — real HW gets a separate VRAM-dump path; PPSSPP
 /// uses the host capture.
 fn save_screenshot_raw(path: &str) {
+    // Belt-and-braces: parse_line already rejects paths outside our
+    // dir, but reject again here so any future internal caller can't
+    // bypass the prefix check and write to arbitrary ms0: paths.
+    if !path.starts_with(SCREENSHOT_PREFIX) {
+        append_log(&format!(
+            "[autorun] screenshot rejected (path outside {SCREENSHOT_PREFIX}): {path}"
+        ));
+        return;
+    }
     let req_path = format!("{path}.req");
     let mut path_z = req_path.as_bytes().to_vec();
     path_z.push(0);
