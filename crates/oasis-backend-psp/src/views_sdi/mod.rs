@@ -27,6 +27,7 @@ use crate::types::KioskApp;
 pub(crate) use browser::{setup_browser, update_browser};
 pub(crate) use file_manager::{setup_file_manager, update_file_manager};
 pub(crate) use helpers::hide_all;
+pub(crate) use list_view::LIST_ROWS;
 pub(crate) use music::{setup_music_browser, update_music_browser};
 pub(crate) use photo::{
     setup_photo_browser, setup_photo_view, update_photo_browser, update_photo_view,

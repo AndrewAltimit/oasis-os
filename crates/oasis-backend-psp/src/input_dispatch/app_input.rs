@@ -21,6 +21,7 @@ use crate::app_states::{
 use crate::skins;
 use crate::theme::*;
 use crate::types::*;
+use crate::views_sdi::LIST_ROWS;
 
 use super::DispatchResult;
 use super::helpers::{dispatch_terminal_confirm, dispatch_tv_confirm};
@@ -646,8 +647,8 @@ pub(crate) fn dispatch_app_input(
         InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::Settings => {
             if settings.selected + 1 < skins::PspSkinPreset::ALL.len() {
                 settings.selected += 1;
-                if settings.selected >= settings.scroll + FM_VISIBLE_ROWS {
-                    settings.scroll = settings.selected - FM_VISIBLE_ROWS + 1;
+                if settings.selected >= settings.scroll + LIST_ROWS {
+                    settings.scroll = settings.selected - LIST_ROWS + 1;
                 }
                 audio.send(AudioCmd::PlaySfx(SfxId::Click));
             }
