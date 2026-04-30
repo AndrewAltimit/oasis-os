@@ -59,7 +59,6 @@ enum Cmd {
 
 pub struct AutorunRunner {
     cmds: Vec<Cmd>,
-    pc: usize,
     wait_frames: u32,
     /// Pending button release queued by `press` — emitted next frame so the
     /// main loop sees press and release on different ticks (matches the
@@ -94,7 +93,6 @@ impl AutorunRunner {
         append_log(&format!("[autorun] loaded {} commands", cmds.len()));
         Some(Self {
             cmds,
-            pc: 0,
             wait_frames: 0,
             pending_release: None,
             waiting_for_sentinel: None,
@@ -102,9 +100,10 @@ impl AutorunRunner {
     }
 
     pub fn is_done(&self) -> bool {
-        self.pc >= self.cmds.len()
+        self.cmds.is_empty()
             && self.pending_release.is_none()
             && self.waiting_for_sentinel.is_none()
+            && self.wait_frames == 0
     }
 
     /// Run at most one command per frame. Call this from the main loop
@@ -130,10 +129,10 @@ impl AutorunRunner {
             self.wait_frames -= 1;
             return;
         }
-        if self.pc >= self.cmds.len() {
+        if self.cmds.is_empty() {
             return;
         }
-        let cmd = self.cmds.remove(0); // pc-stays-0 model; drains as we go
+        let cmd = self.cmds.remove(0);
         match cmd {
             Cmd::Launch(app_id) => self.do_launch(&app_id),
             Cmd::Press(press) => {

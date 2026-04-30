@@ -517,8 +517,32 @@ pub(crate) fn apply_skin_preset(
         "skin",
         psp::config::ConfigValue::Str(preset.key().to_string()),
     );
-    let _ = config.save(crate::theme::CONFIG_PATH);
+    if let Err(e) = config.save(crate::theme::CONFIG_PATH) {
+        log_skin_save_err(&format!("[SKIN] config save failed: {e:?}"));
+    }
     true
+}
+
+/// Append a single line to `eboot.log` on the memstick. Used to surface
+/// config-save failures from [`apply_skin_preset`] which doesn't have
+/// access to the `dbg_log` closure in `main.rs`.
+fn log_skin_save_err(msg: &str) {
+    use core::ffi::c_void;
+    // SAFETY: null-terminated path, valid byte buffer; sceIo* are scalar FFI.
+    unsafe {
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(fd, msg.as_ptr() as *const c_void, msg.len());
+            psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
+            psp::sys::sceIoClose(fd);
+        }
+    }
 }
 
 #[cfg(test)]

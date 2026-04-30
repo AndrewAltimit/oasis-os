@@ -167,7 +167,7 @@ while [[ $waited -lt $TIMEOUT_S ]]; do
         log "PPSSPP container exited"
         break
     fi
-    sleep 0.25
+    sleep 1
     waited=$((waited + 1))
 done
 

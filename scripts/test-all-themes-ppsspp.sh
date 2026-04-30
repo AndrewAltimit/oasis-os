@@ -108,7 +108,7 @@ while [[ $waited -lt $TIMEOUT_S ]]; do
     [[ -f "$OASIS_DIR/autorun.done" ]] && { log "autorun done"; break; }
     docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true \
         || { log "container exited"; break; }
-    sleep 0.25
+    sleep 1
     waited=$((waited + 1))
 done
 
