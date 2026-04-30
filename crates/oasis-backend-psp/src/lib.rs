@@ -55,7 +55,8 @@ pub use network::{PspNetworkBackend, PspNetworkService};
 pub use power::register_exception_handler;
 pub use power::{check_power_resumed, power_tick, register_power_callback, set_clock};
 pub use procedural::{
-    CURSOR_H, CURSOR_W, WALLPAPER_TEX_H, WALLPAPER_TEX_W, generate_cursor_pixels, generate_gradient,
+    CURSOR_H, CURSOR_W, GradientStops, WALLPAPER_TEX_H, WALLPAPER_TEX_W, generate_cursor_pixels,
+    generate_gradient, generate_gradient_with,
 };
 pub use sfx::SfxId;
 pub use status::{StatusBarInfo, SystemInfo};

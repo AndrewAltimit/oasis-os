@@ -8,17 +8,18 @@ use oasis_backend_psp::{
 };
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::dashboard::{DashboardConfig, DashboardState};
+use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
 use crate::app_states::{
-    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TvGuideState,
+    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, SettingsState,
+    TvGuideState,
 };
 use crate::commands;
 use crate::desktop;
 use crate::skins;
-use crate::theme::*;
 use crate::types::{APPS, KioskApp};
+use crate::views_sdi::LIST_ROWS;
 
 // ---------------------------------------------------------------------------
 // Helper: Dashboard Confirm (app launch)
@@ -43,6 +44,8 @@ pub(super) fn dispatch_dashboard_confirm(
     br: &mut BrowserState,
     radio: &mut RadioState,
     tv: &mut TvGuideState,
+    settings: &mut SettingsState,
+    current_preset: &skins::PspSkinPreset,
     backend: &mut PspBackend,
     dbg_log: &dyn Fn(&str),
 ) {
@@ -59,6 +62,21 @@ pub(super) fn dispatch_dashboard_confirm(
             fm.active_panel = 0;
             desktop::open_app_window(wm, sdi, "filemgr", "File Manager", true);
             *kiosk_app = KioskApp::FileManager;
+        },
+        "Settings" => {
+            // Position the cursor on the currently active theme so the user
+            // can see what's selected before changing it.
+            settings.selected = skins::PspSkinPreset::ALL
+                .iter()
+                .position(|p| p == current_preset)
+                .unwrap_or(0);
+            // Scroll the viewport so the selected row is visible. Today
+            // PspSkinPreset::ALL.len() < LIST_ROWS so this resolves to 0,
+            // but if the preset list ever grows past LIST_ROWS the cursor
+            // would otherwise open off-screen.
+            settings.scroll = settings.selected.saturating_sub(LIST_ROWS - 1);
+            desktop::open_app_window(wm, sdi, "settings", "Settings", true);
+            *kiosk_app = KioskApp::Settings;
         },
         "Photo Viewer" => {
             pv.viewing = false;
@@ -280,18 +298,17 @@ pub(super) fn dispatch_terminal_confirm(
         _ if cmd.trim().starts_with("skin ") => {
             let key = cmd.trim().strip_prefix("skin ").unwrap().trim();
             let preset = skins::PspSkinPreset::from_key(key);
-            if preset == *current_preset {
-                (vec![format!("Already using '{}'.", key)], false)
-            } else {
-                *current_preset = preset;
-                *active_theme = preset.to_active_theme();
-                dashboard.config = DashboardConfig::from_features(skin_features, active_theme);
-                config.set(
-                    "skin",
-                    psp::config::ConfigValue::Str(preset.key().to_string()),
-                );
-                let _ = config.save(CONFIG_PATH);
+            if skins::apply_skin_preset(
+                preset,
+                current_preset,
+                active_theme,
+                skin_features,
+                dashboard,
+                config,
+            ) {
                 (vec![format!("Skin changed to '{}'.", preset.name())], false)
+            } else {
+                (vec![format!("Already using '{}'.", key)], false)
             }
         },
         _ => {

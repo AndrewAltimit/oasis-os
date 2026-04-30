@@ -10,6 +10,7 @@ use crate::app_states::*;
 use crate::chrome;
 use crate::dashboard;
 use crate::desktop;
+use crate::skins;
 use crate::types::{KioskApp, RadioStatus};
 use crate::views;
 use crate::views_sdi;
@@ -32,6 +33,8 @@ pub(crate) fn render_classic(
     br: &mut BrowserState,
     radio: &mut RadioState,
     tv: &mut TvGuideState,
+    settings: &SettingsState,
+    current_preset: skins::PspSkinPreset,
     term: &mut TerminalState,
     audio: &oasis_backend_psp::AudioHandle,
     viz_frame: u32,
@@ -287,6 +290,21 @@ pub(crate) fn render_classic(
             } else {
                 chrome::draw_button_hints(backend, &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")]);
             }
+            backend.force_bitmap_font = false;
+        },
+        KioskApp::Settings => {
+            views_sdi::update_settings(
+                sdi,
+                settings.selected,
+                settings.scroll,
+                current_preset,
+                active_theme,
+            );
+            backend.force_bitmap_font = true;
+            chrome::draw_button_hints(
+                backend,
+                &[("X", "Apply"), ("^v", "Nav"), ("O", "Back")],
+            );
             backend.force_bitmap_font = false;
         },
     }

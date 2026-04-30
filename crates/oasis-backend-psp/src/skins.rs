@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use oasis_backend_psp::Color;
+use oasis_backend_psp::{Color, GradientStops};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::skin::SkinFeatures;
 use oasis_core::vector::background::{
@@ -250,6 +250,7 @@ impl PspSkinPreset {
         );
 
         apply_psp_overrides(&mut t);
+        self.apply_icon_palette(&mut t);
 
         // Inject shader background layer *after* PSP overrides (which
         // truncate to 4 layers) so the shader is never silently dropped.
@@ -267,6 +268,148 @@ impl PspSkinPreset {
         }
 
         t
+    }
+
+    /// Override the derived [`IconTheme`] with a preset-specific palette.
+    ///
+    /// `ActiveTheme::from_base_colors` derives `body_color` from the theme's
+    /// text color, so most themes (which all use a near-white text) end up
+    /// with near-identical white "paper" icons. Override here to give each
+    /// theme a recognisable look — body / outline / fold / label — while
+    /// the per-app accent stripe (`AppEntry::color`) keeps icons distinct
+    /// from each other.
+    fn apply_icon_palette(self, t: &mut ActiveTheme) {
+        match self {
+            Self::Psix => {
+                // PSIX original: bright paper white, blue-tint shadow.
+                t.icon.body_color = Color::rgb(250, 250, 248);
+                t.icon.outline_color = Color::rgba(255, 255, 255, 180);
+                t.icon.fold_color = Color::rgb(210, 210, 205);
+                t.icon.shadow_color = Color::rgba(0, 0, 30, 90);
+                t.icon.label_color = Color::rgba(255, 255, 255, 230);
+                t.icon.label_shadow = Some(Color::rgba(0, 0, 0, 120));
+            },
+            Self::Classic => {
+                // Slightly cooler paper for the classic theme.
+                t.icon.body_color = Color::rgb(220, 225, 240);
+                t.icon.outline_color = Color::rgba(140, 160, 200, 200);
+                t.icon.fold_color = Color::rgb(150, 160, 180);
+                t.icon.shadow_color = Color::rgba(0, 0, 20, 100);
+                t.icon.label_color = Color::rgb(220, 230, 240);
+                t.icon.label_shadow = Some(Color::rgba(0, 0, 0, 140));
+            },
+            Self::Balatro => {
+                // Cyan-tinted dark icons matching the spinning shader.
+                t.icon.body_color = Color::rgb(20, 35, 55);
+                t.icon.outline_color = Color::rgba(0, 240, 255, 220);
+                t.icon.fold_color = Color::rgb(0, 180, 200);
+                t.icon.shadow_color = Color::rgba(0, 240, 255, 60);
+                t.icon.label_color = Color::rgb(200, 240, 255);
+                t.icon.label_shadow = None;
+            },
+            Self::RetroCga => {
+                // Monitor look: black bezel + cyan/magenta phosphor.
+                t.icon.body_color = Color::rgb(0, 0, 0);
+                t.icon.outline_color = Color::rgb(85, 255, 255);
+                t.icon.fold_color = Color::rgb(255, 85, 255);
+                t.icon.shadow_color = Color::rgba(255, 85, 255, 90);
+                t.icon.label_color = Color::rgb(85, 255, 255);
+                t.icon.label_shadow = None;
+            },
+            Self::Solarized => {
+                // Solarized base02 paper, base1 outline.
+                t.icon.body_color = Color::rgb(7, 54, 66);
+                t.icon.outline_color = Color::rgb(147, 161, 161);
+                t.icon.fold_color = Color::rgb(101, 123, 131);
+                t.icon.shadow_color = Color::rgba(0, 30, 40, 120);
+                t.icon.label_color = Color::rgb(147, 161, 161);
+                t.icon.label_shadow = None;
+            },
+            Self::HighContrast => {
+                // Pure black body with a thick yellow outline.
+                t.icon.body_color = Color::rgb(0, 0, 0);
+                t.icon.outline_color = Color::rgb(255, 255, 0);
+                t.icon.fold_color = Color::rgb(255, 255, 0);
+                t.icon.shadow_color = Color::rgba(255, 255, 0, 80);
+                t.icon.label_color = Color::rgb(255, 255, 0);
+                t.icon.label_shadow = None;
+            },
+            Self::Altimit => {
+                // Deep navy body with mint accents to echo the starfield.
+                t.icon.body_color = Color::rgb(10, 18, 28);
+                t.icon.outline_color = Color::rgb(0, 204, 136);
+                t.icon.fold_color = Color::rgb(0, 150, 100);
+                t.icon.shadow_color = Color::rgba(0, 204, 136, 70);
+                t.icon.label_color = Color::rgb(180, 232, 210);
+                t.icon.label_shadow = None;
+            },
+        }
+    }
+
+    /// Five-stop palette for the static-gradient wallpaper. Used only by
+    /// non-shader presets (the others paint a `LayerKind::Shader` over the
+    /// gradient and you never see it). Colors are passed to
+    /// [`oasis_backend_psp::generate_gradient_with`] which preserves the
+    /// PSIX wave-arc shape and just recolors the sweep.
+    pub(crate) fn gradient_stops(self) -> GradientStops {
+        match self {
+            // Original PSIX orange→lime — keep as canonical reference.
+            Self::Psix => [
+                (245, 110, 15),
+                (255, 170, 15),
+                (255, 230, 30),
+                (230, 245, 40),
+                (140, 235, 50),
+            ],
+            // Cool indigo → cyan sweep so Classic stops looking like PSIX.
+            Self::Classic => [
+                (24, 32, 90),
+                (44, 72, 140),
+                (60, 120, 180),
+                (80, 170, 210),
+                (140, 220, 230),
+            ],
+            // Cyan-magenta plasma echo (still mostly hidden by Balatro shader).
+            Self::Balatro => [
+                (10, 20, 36),
+                (16, 64, 96),
+                (24, 120, 160),
+                (60, 200, 220),
+                (140, 240, 255),
+            ],
+            // Stark CGA: pure black → cyan → magenta.
+            Self::RetroCga => [
+                (0, 0, 0),
+                (0, 0, 80),
+                (0, 100, 160),
+                (170, 90, 200),
+                (255, 85, 255),
+            ],
+            // Solarized base03 → cyan accent.
+            Self::Solarized => [
+                (0, 30, 38),
+                (7, 54, 66),
+                (38, 139, 210),
+                (42, 161, 152),
+                (133, 153, 0),
+            ],
+            // Black → vivid yellow ramp for unmistakable contrast.
+            Self::HighContrast => [
+                (0, 0, 0),
+                (40, 30, 0),
+                (110, 90, 0),
+                (200, 170, 20),
+                (255, 230, 0),
+            ],
+            // Deep navy → mint, matching the Altimit accent palette.
+            Self::Altimit => [
+                (8, 10, 26),
+                (16, 30, 44),
+                (10, 80, 80),
+                (0, 160, 130),
+                (140, 230, 200),
+            ],
+        }
     }
 
     /// Build the matching [`SkinFeatures`] (grid layout for PSP).
@@ -346,6 +489,59 @@ impl PspSkinPreset {
     pub(crate) fn prev(self) -> Self {
         let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
         Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+/// Apply a skin preset at runtime: rebuild [`ActiveTheme`], refresh the
+/// dashboard config to use the new colors, and persist the choice to
+/// `config.rcfg`. Returns `true` if the preset actually changed.
+///
+/// Used by the terminal `skin NAME` command, the Settings kiosk app, and
+/// the TCP cmd_server's remote skin-change channel.
+pub(crate) fn apply_skin_preset(
+    preset: PspSkinPreset,
+    current_preset: &mut PspSkinPreset,
+    active_theme: &mut oasis_core::active_theme::ActiveTheme,
+    skin_features: &oasis_core::skin::SkinFeatures,
+    dashboard: &mut oasis_core::dashboard::DashboardState,
+    config: &mut psp::config::Config,
+) -> bool {
+    if preset == *current_preset {
+        return false;
+    }
+    *current_preset = preset;
+    *active_theme = preset.to_active_theme();
+    dashboard.config =
+        oasis_core::dashboard::DashboardConfig::from_features(skin_features, active_theme);
+    config.set(
+        "skin",
+        psp::config::ConfigValue::Str(preset.key().to_string()),
+    );
+    if let Err(e) = config.save(crate::theme::CONFIG_PATH) {
+        log_skin_save_err(&format!("[SKIN] config save failed: {e:?}"));
+    }
+    true
+}
+
+/// Append a single line to `eboot.log` on the memstick. Used to surface
+/// config-save failures from [`apply_skin_preset`] which doesn't have
+/// access to the `dbg_log` closure in `main.rs`.
+fn log_skin_save_err(msg: &str) {
+    use core::ffi::c_void;
+    // SAFETY: null-terminated path, valid byte buffer; sceIo* are scalar FFI.
+    unsafe {
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(fd, msg.as_ptr() as *const c_void, msg.len());
+            psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
+            psp::sys::sceIoClose(fd);
+        }
     }
 }
 

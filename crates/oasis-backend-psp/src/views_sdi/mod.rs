@@ -14,6 +14,7 @@ mod list_view;
 mod music;
 mod photo;
 mod radio;
+mod settings;
 mod tv_guide;
 
 use oasis_core::sdi::SdiRegistry;
@@ -26,11 +27,13 @@ use crate::types::KioskApp;
 pub(crate) use browser::{setup_browser, update_browser};
 pub(crate) use file_manager::{setup_file_manager, update_file_manager};
 pub(crate) use helpers::hide_all;
+pub(crate) use list_view::LIST_ROWS;
 pub(crate) use music::{setup_music_browser, update_music_browser};
 pub(crate) use photo::{
     setup_photo_browser, setup_photo_view, update_photo_browser, update_photo_view,
 };
 pub(crate) use radio::{setup_radio, update_radio};
+pub(crate) use settings::{setup_settings, update_settings};
 pub(crate) use tv_guide::{setup_tv_channels, update_tv_channels};
 
 /// Set up SDI objects for the given kiosk app.  Idempotent -- safe to call
@@ -49,6 +52,7 @@ pub(crate) fn setup_kiosk(sdi: &mut SdiRegistry, app: KioskApp) {
             // No SDI objects needed.
         },
         KioskApp::FileManager => setup_file_manager(sdi),
+        KioskApp::Settings => setup_settings(sdi),
         // Terminal has its own SDI setup; None = dashboard.
         KioskApp::Terminal | KioskApp::None => {},
     }

@@ -45,6 +45,12 @@ kernel-me = ["psp/kernel"]
 # Used by PPSSPP-driven offline browser perf bisection. Disabled by
 # default to keep the EBOOT lean.
 auto-browse-wiki = []
+# Boot-time script runner. Reads `ms0:/PSP/GAME/OASISOS/AUTORUN.txt`
+# and dispatches one command per frame (launch / press / cursor /
+# skin / wait / screenshot / log / exit). Used for deterministic
+# integration tests in PPSSPP and on real hardware. Disabled by
+# default — production EBOOTs don't need the parser.
+autorun-script = []
 
 [dependencies]
 psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }

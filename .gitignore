@@ -49,6 +49,8 @@ outputs/
 # Screenshot test output (generated, not committed)
 screenshots/tests/
 screenshots/psp/
+screenshots/settings-test/
+screenshots/all-themes/
 
 # WASM build output
 pkg/

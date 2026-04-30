@@ -15,12 +15,13 @@ use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
 use crate::app_states::{
-    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TerminalState,
-    TvGuideState,
+    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, SettingsState,
+    TerminalState, TvGuideState,
 };
 use crate::skins;
 use crate::theme::*;
 use crate::types::*;
+use crate::views_sdi::LIST_ROWS;
 
 use super::DispatchResult;
 use super::helpers::{dispatch_terminal_confirm, dispatch_tv_confirm};
@@ -56,6 +57,7 @@ pub(crate) fn dispatch_app_input(
     br: &mut BrowserState,
     radio: &mut RadioState,
     tv: &mut TvGuideState,
+    settings: &mut SettingsState,
     usb_storage: &mut Option<psp::usb::UsbStorageMode>,
     config: &mut psp::config::Config,
     current_preset: &mut skins::PspSkinPreset,
@@ -629,6 +631,46 @@ pub(crate) fn dispatch_app_input(
             }
         },
         InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::TvGuide => {
+            close_kiosk(kiosk_app, wm, sdi);
+        },
+
+        // -- Settings input (theme picker) --
+        InputEvent::ButtonPress(Button::Up) if *kiosk_app == KioskApp::Settings => {
+            if settings.selected > 0 {
+                settings.selected -= 1;
+                if settings.selected < settings.scroll {
+                    settings.scroll = settings.selected;
+                }
+                audio.send(AudioCmd::PlaySfx(SfxId::Click));
+            }
+        },
+        InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::Settings => {
+            if settings.selected + 1 < skins::PspSkinPreset::ALL.len() {
+                settings.selected += 1;
+                if settings.selected >= settings.scroll + LIST_ROWS {
+                    settings.scroll = settings.selected - LIST_ROWS + 1;
+                }
+                audio.send(AudioCmd::PlaySfx(SfxId::Click));
+            }
+        },
+        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::Settings => {
+            let preset = skins::PspSkinPreset::ALL[settings.selected];
+            if skins::apply_skin_preset(
+                preset,
+                current_preset,
+                active_theme,
+                skin_features,
+                dashboard,
+                config,
+            ) {
+                audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
+                dbg_log(&format!("[SETTINGS] skin -> '{}'", preset.name()));
+            }
+        },
+        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Settings => {
+            close_kiosk(kiosk_app, wm, sdi);
+        },
+        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::Settings => {
             close_kiosk(kiosk_app, wm, sdi);
         },
 

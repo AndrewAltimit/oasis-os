@@ -20,8 +20,8 @@ use oasis_core::dashboard::DashboardState;
 use oasis_core::skin::SkinFeatures;
 
 use crate::app_states::{
-    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, TerminalState,
-    TvGuideState,
+    BrowserState, FileManagerState, MusicPlayerState, PhotoViewerState, RadioState, SettingsState,
+    TerminalState, TvGuideState,
 };
 use crate::desktop;
 use crate::skins;
@@ -57,6 +57,7 @@ pub(crate) fn dispatch_unified(
     br: &mut BrowserState,
     radio: &mut RadioState,
     tv: &mut TvGuideState,
+    settings: &mut SettingsState,
     icons_hidden: &mut bool,
     usb_storage: &mut Option<psp::usb::UsbStorageMode>,
     config: &mut psp::config::Config,
@@ -170,6 +171,7 @@ pub(crate) fn dispatch_unified(
                     br,
                     radio,
                     tv,
+                    settings,
                     usb_storage,
                     config,
                     current_preset,
@@ -194,6 +196,8 @@ pub(crate) fn dispatch_unified(
                 br,
                 radio,
                 tv,
+                settings,
+                current_preset,
                 icons_hidden,
                 dbg_log,
             );
@@ -222,6 +226,8 @@ fn dispatch_dashboard(
     br: &mut BrowserState,
     radio: &mut RadioState,
     tv: &mut TvGuideState,
+    settings: &mut SettingsState,
+    current_preset: &skins::PspSkinPreset,
     _icons_hidden: &mut bool,
     dbg_log: &dyn Fn(&str),
 ) -> DispatchResult {
@@ -256,6 +262,8 @@ fn dispatch_dashboard(
                                 br,
                                 radio,
                                 tv,
+                                settings,
+                                current_preset,
                                 backend,
                                 dbg_log,
                             );
