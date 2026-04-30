@@ -82,6 +82,8 @@ impl AutorunRunner {
             Some(s) => s,
             None => {
                 append_log("[autorun] failed to read script");
+                // Drop the unreadable script so the next boot doesn't loop on it.
+                let _ = psp::io::remove_file(SCRIPT_PATH);
                 return None;
             },
         };
