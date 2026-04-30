@@ -261,6 +261,28 @@ impl RadioState {
 }
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// Settings app: theme picker. Resolution is fixed at 480x272 on PSP, so
+/// only theme switching is exposed.
+pub(crate) struct SettingsState {
+    /// Index into `PspSkinPreset::ALL`.
+    pub(crate) selected: usize,
+    /// Top row offset for scrolling.
+    pub(crate) scroll: usize,
+}
+
+impl SettingsState {
+    pub(crate) fn new() -> Self {
+        Self {
+            selected: 0,
+            scroll: 0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TV Guide
 // ---------------------------------------------------------------------------
 

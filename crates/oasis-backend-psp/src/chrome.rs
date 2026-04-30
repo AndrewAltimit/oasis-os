@@ -8,6 +8,7 @@ use crate::types::{APPS, AppEntry};
 
 use oasis_backend_psp::StatusBarInfo;
 use oasis_backend_psp::SystemInfo;
+use oasis_core::active_theme::ActiveTheme;
 
 // ---------------------------------------------------------------------------
 // Dashboard rendering
@@ -18,6 +19,7 @@ pub(crate) fn draw_dashboard(
     selected: usize,
     page: usize,
     viz_frame: u32,
+    at: &ActiveTheme,
 ) {
     let page_start = page * ICONS_PER_PAGE;
     let page_end = (page_start + ICONS_PER_PAGE).min(APPS.len());
@@ -32,14 +34,17 @@ pub(crate) fn draw_dashboard(
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
         let iy = cell_y + 1;
 
-        draw_icon(backend, app, ix, iy);
+        draw_icon(backend, app, ix, iy, at);
 
-        // Label below icon with drop shadow.
+        // Label below icon. Drop-shadow only when the theme calls for one
+        // (light text on dark bg looks better unshadowed).
         let label_y = iy + ICON_H as i32 + ICON_LABEL_PAD;
         let text_width = (app.title.len() as i32) * CHAR_W;
         let label_x = cell_x + (CELL_W - text_width) / 2;
-        backend.draw_text_inner(app.title, label_x + 1, label_y + 1, 8, LABEL_SHADOW);
-        backend.draw_text_inner(app.title, label_x, label_y, 8, LABEL_CLR);
+        if let Some(shadow) = at.icon.label_shadow {
+            backend.draw_text_inner(app.title, label_x + 1, label_y + 1, 8, shadow);
+        }
+        backend.draw_text_inner(app.title, label_x, label_y, 8, at.icon.label_color);
     }
 
     // Icon selection is now cursor-based (no grid selector box).
@@ -47,17 +52,21 @@ pub(crate) fn draw_dashboard(
 
 /// Draw a PSIX document-style icon with 6 layers:
 /// shadow, outline, body, stripe, fold, app graphic.
-fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
-    backend.fill_rect_inner(ix + 2, iy + 3, ICON_W + 2, ICON_H + 1, SHADOW_CLR);
-    backend.fill_rect_inner(ix - 1, iy - 1, ICON_W + 2, ICON_H + 2, OUTLINE_CLR);
-    backend.fill_rect_inner(ix, iy, ICON_W, ICON_H, BODY_CLR);
+///
+/// Body/outline/fold/shadow colors come from `at.icon.*` so each theme
+/// can repaint the icon paper while the per-app accent stripe stays
+/// distinct between apps.
+fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32, at: &ActiveTheme) {
+    backend.fill_rect_inner(ix + 2, iy + 3, ICON_W + 2, ICON_H + 1, at.icon.shadow_color);
+    backend.fill_rect_inner(ix - 1, iy - 1, ICON_W + 2, ICON_H + 2, at.icon.outline_color);
+    backend.fill_rect_inner(ix, iy, ICON_W, ICON_H, at.icon.body_color);
     backend.fill_rect_inner(ix, iy, ICON_W - ICON_FOLD_SIZE, ICON_STRIPE_H, app.color);
     backend.fill_rect_inner(
         ix + ICON_W as i32 - ICON_FOLD_SIZE as i32,
         iy,
         ICON_FOLD_SIZE,
         ICON_FOLD_SIZE,
-        FOLD_CLR,
+        at.icon.fold_color,
     );
 
     let gfx_w = ICON_W - 2 * ICON_GFX_PAD;

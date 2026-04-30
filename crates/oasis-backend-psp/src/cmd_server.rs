@@ -93,8 +93,10 @@ pub fn take_pending_skin() -> Option<String> {
     guard.take()
 }
 
-/// Request a skin change from the TCP server thread.
-fn request_skin_change(key: &str) {
+/// Request a skin change. Used by the TCP server thread and the autorun
+/// script runner — both pump pending changes through the same Mutex,
+/// drained by `take_pending_skin` from the main loop.
+pub fn request_skin_change(key: &str) {
     let mut guard = PENDING_SKIN.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(key.to_string());
 }

@@ -231,6 +231,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/browser-backlog.md`](docs/browser-backlog.md) -- Browser engine backlog and roadmap
 
 ### Operations
+- [`docs/psp-autorun.md`](docs/psp-autorun.md) -- Boot-time script runner for deterministic PSP/PPSSPP integration tests
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) -- Troubleshooting common issues
 - [`docs/security.md`](docs/security.md) -- Security policy and advisories
 - [`AGENTS.md`](AGENTS.md) -- Multi-agent system configuration and CI workflow

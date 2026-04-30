@@ -14,11 +14,36 @@ pub const CURSOR_H: u32 = 12;
 pub const WALLPAPER_TEX_W: u32 = 64;
 pub const WALLPAPER_TEX_H: u32 = 64;
 
-/// Generate a PSIX-style gradient wallpaper as RGBA bytes.
+/// Five RGB anchors describing a PSIX-style horizontal gradient sweep.
 ///
-/// Produces the characteristic orange-to-green sweep with wave arcs emanating
-/// from the lower-left, matching `oasis-core`'s `wallpaper::generate_gradient`.
+/// The original PSIX wallpaper interpolates orange → bright orange →
+/// yellow → yellow-green → lime → light green over the X axis. Other
+/// themes pass their own 5-stop palette to recolor the same shape
+/// (vertical brightness ramp + lower-left wave arcs are preserved).
+pub type GradientStops = [(u8, u8, u8); 5];
+
+/// PSIX original orange→lime gradient.
+pub const GRADIENT_PSIX: GradientStops = [
+    (245, 110, 15),
+    (255, 170, 15),
+    (255, 230, 30),
+    (230, 245, 40),
+    (140, 235, 50),
+];
+
+/// Generate a PSIX-style gradient wallpaper as RGBA bytes (defaults to
+/// the original orange-to-lime palette). Backwards-compat wrapper around
+/// [`generate_gradient_with`].
 pub fn generate_gradient(w: u32, h: u32) -> Vec<u8> {
+    generate_gradient_with(w, h, &GRADIENT_PSIX)
+}
+
+/// Generate a PSIX-shaped wallpaper with a custom 5-stop color palette.
+///
+/// Same horizontal sweep + vertical brightness + lower-left wave arcs as
+/// the original PSIX gradient, just colored differently. Used by the PSP
+/// theme system so each non-shader skin gets a recognisable wallpaper.
+pub fn generate_gradient_with(w: u32, h: u32, stops: &GradientStops) -> Vec<u8> {
     let mut buf = vec![0u8; (w * h * 4) as usize];
 
     for y in 0..h {
@@ -28,24 +53,26 @@ pub fn generate_gradient(w: u32, h: u32) -> Vec<u8> {
             let nx = x as f32 / w as f32;
             let ny = y as f32 / h as f32;
 
-            // Horizontal sweep: hot orange (left) -> bright lime green (right).
+            // Horizontal sweep using the caller's 5-stop palette. The PSP
+            // gradient breakpoints are the same as the original PSIX
+            // wallpaper so existing themes look unchanged when wired up.
             let t = nx * 0.88 + ny * 0.12;
 
             let (r, g, b) = if t < 0.15 {
                 let s = t / 0.15;
-                lerp_rgb((245, 110, 15), (255, 170, 15), s)
+                lerp_rgb(stops[0], stops[1], s)
             } else if t < 0.32 {
                 let s = (t - 0.15) / 0.17;
-                lerp_rgb((255, 170, 15), (255, 230, 30), s)
+                lerp_rgb(stops[1], stops[2], s)
             } else if t < 0.48 {
                 let s = (t - 0.32) / 0.16;
-                lerp_rgb((255, 230, 30), (230, 245, 40), s)
+                lerp_rgb(stops[2], stops[3], s)
             } else if t < 0.65 {
                 let s = (t - 0.48) / 0.17;
-                lerp_rgb((230, 245, 40), (140, 235, 50), s)
+                lerp_rgb(stops[3], stops[4], s)
             } else {
-                let s = (t - 0.65) / 0.35;
-                lerp_rgb((140, 235, 50), (200, 252, 130), s)
+                // Past the last anchor: hold the final color.
+                stops[4]
             };
 
             // Vertical brightness: lighter toward top, darker at bottom.

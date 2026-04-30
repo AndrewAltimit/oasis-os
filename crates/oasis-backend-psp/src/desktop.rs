@@ -8,6 +8,24 @@ use oasis_backend_psp::{
 use crate::theme::*;
 use crate::types::APPS;
 
+/// Inverse of `hit_test_dashboard_icon`: return the cursor coordinates that
+/// land squarely on icon `app_idx`. Used by the autorun script runner to
+/// synthesize a click on a named app icon.
+#[cfg(feature = "autorun-script")]
+pub(crate) fn dashboard_icon_center(app_idx: usize) -> Option<(i32, i32)> {
+    if app_idx >= APPS.len() {
+        return None;
+    }
+    let on_page = app_idx % ICONS_PER_PAGE;
+    let col = (on_page % GRID_COLS) as i32;
+    let row = (on_page / GRID_COLS) as i32;
+    let cell_x = GRID_PAD_X + col * CELL_W;
+    let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + row * CELL_H;
+    let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
+    let iy = cell_y + 1;
+    Some((ix + ICON_W as i32 / 2, iy + ICON_H as i32 / 2))
+}
+
 /// Check if coordinates are over a dashboard icon, returning the global index.
 pub(crate) fn hit_test_dashboard_icon(x: i32, y: i32, page: usize) -> Option<usize> {
     let page_start = page * ICONS_PER_PAGE;

@@ -82,6 +82,7 @@ pub(crate) enum KioskApp {
     Browser,
     Radio,
     TvGuide,
+    Settings,
 }
 
 impl KioskApp {
@@ -96,6 +97,7 @@ impl KioskApp {
             Self::Browser => Some("browser"),
             Self::Radio => Some("radio"),
             Self::TvGuide => Some("tvguide"),
+            Self::Settings => Some("settings"),
         }
     }
 
@@ -109,6 +111,7 @@ impl KioskApp {
             "browser" => Self::Browser,
             "radio" => Self::Radio,
             "tvguide" => Self::TvGuide,
+            "settings" => Self::Settings,
             _ => Self::None,
         }
     }

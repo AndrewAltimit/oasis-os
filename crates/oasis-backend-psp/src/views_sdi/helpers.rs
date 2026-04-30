@@ -46,7 +46,9 @@ pub(crate) fn hide_prefixed(sdi: &mut SdiRegistry, prefix: &str) {
 }
 
 /// All view prefixes.
-const VIEW_PREFIXES: &[&str] = &["radio_", "tv_", "photo_", "browser_", "music_", "fm_"];
+const VIEW_PREFIXES: &[&str] = &[
+    "radio_", "tv_", "photo_", "browser_", "music_", "fm_", "settings_",
+];
 
 /// Hide all view objects (called on view transition).
 pub(crate) fn hide_all(sdi: &mut SdiRegistry) {

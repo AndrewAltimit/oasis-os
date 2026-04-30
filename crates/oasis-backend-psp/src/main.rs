@@ -30,6 +30,8 @@ use oasis_core::taskbar::Taskbar;
 use oasis_core::terminal_sdi;
 
 mod app_states;
+#[cfg(feature = "autorun-script")]
+mod autorun;
 mod boot;
 mod chrome;
 mod commands;
@@ -199,7 +201,11 @@ fn psp_main() {
     // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
     // The GE scales it up to 480x272 with bilinear filtering during blit.
     use oasis_backend_psp::{WALLPAPER_TEX_H, WALLPAPER_TEX_W};
-    let wallpaper_data = oasis_backend_psp::generate_gradient(WALLPAPER_TEX_W, WALLPAPER_TEX_H);
+    let wallpaper_data = oasis_backend_psp::generate_gradient_with(
+        WALLPAPER_TEX_W,
+        WALLPAPER_TEX_H,
+        &current_preset.gradient_stops(),
+    );
     let wallpaper_tex = backend
         .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
@@ -309,6 +315,7 @@ fn psp_main() {
     // BrowserWidget is lazily initialized on first use (saves ~500KB RAM).
     let mut radio = RadioState::new();
     let mut tv = TvGuideState::new();
+    let mut settings = SettingsState::new();
 
     // USB storage mode handle (RAII: drop exits storage mode).
     let mut usb_storage: Option<psp::usb::UsbStorageMode> = None;
@@ -341,6 +348,14 @@ fn psp_main() {
     boot::show_boot_screen(&mut backend, "Ready", 100);
     // Start TCP command server for remote dev automation.
     oasis_backend_psp::cmd_server::spawn();
+
+    // Load AUTORUN.txt if present (feature-gated test scaffolding).
+    #[cfg(feature = "autorun-script")]
+    let mut autorun_runner = autorun::AutorunRunner::load();
+    #[cfg(feature = "autorun-script")]
+    if autorun_runner.is_some() {
+        dbg_log("[EBOOT] autorun script loaded");
+    }
 
     dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
@@ -443,6 +458,16 @@ fn psp_main() {
             }
         }
 
+        // -- Autorun script tick (one command per frame; injects events
+        // into cmd_server's queue, drained by poll_events_inner below). --
+        #[cfg(feature = "autorun-script")]
+        if let Some(ar) = autorun_runner.as_mut() {
+            ar.tick();
+            if ar.is_done() {
+                autorun_runner = None;
+            }
+        }
+
         // -- Input dispatch (unified) --
         let events = backend.poll_events_inner();
         let mut should_quit = false;
@@ -464,6 +489,7 @@ fn psp_main() {
                 &mut br,
                 &mut radio,
                 &mut tv,
+                &mut settings,
                 &mut icons_hidden,
                 &mut usb_storage,
                 &mut config,
@@ -598,19 +624,14 @@ fn psp_main() {
         // -- Poll remote skin change requests --
         if let Some(key) = oasis_backend_psp::cmd_server::take_pending_skin() {
             let preset = skins::PspSkinPreset::from_key(&key);
-            if preset != current_preset {
-                current_preset = preset;
-                active_theme = preset.to_active_theme();
-                dashboard_state.config = oasis_core::dashboard::DashboardConfig::from_features(
-                    &skin_features, &active_theme,
-                );
-                config.set(
-                    "skin",
-                    psp::config::ConfigValue::Str(preset.key().to_string()),
-                );
-                if let Err(e) = config.save(CONFIG_PATH) {
-                    dbg_log(&format!("[SKIN] config save failed: {:?}", e));
-                }
+            if skins::apply_skin_preset(
+                preset,
+                &mut current_preset,
+                &mut active_theme,
+                &skin_features,
+                &mut dashboard_state,
+                &mut config,
+            ) {
                 dbg_log(&format!("[SKIN] changed to '{}' via TCP", preset.name()));
             }
         }
@@ -673,13 +694,22 @@ fn psp_main() {
 
             backend.clear_inner(Color::BLACK);
 
-            // Detect skin change: update cached shader info.
+            // Detect skin change: update cached shader info AND regenerate
+            // the static gradient wallpaper so non-shader presets visibly
+            // change their background, not just the bars/icons.
             let cur_key = current_preset.key();
             if cur_key != last_skin_key {
                 last_skin_key = cur_key;
                 cached_shader =
                     oasis_core::vector_overlay::get_shader_layer(&active_theme);
                 shader_active = cached_shader.is_some();
+                let stops = current_preset.gradient_stops();
+                let pixels = oasis_backend_psp::generate_gradient_with(
+                    WALLPAPER_TEX_W,
+                    WALLPAPER_TEX_H,
+                    &stops,
+                );
+                backend.update_texture_data(wallpaper_tex, &pixels);
             }
 
             // Shader wallpaper: render animated shader to a 32x32 texture
@@ -746,6 +776,8 @@ fn psp_main() {
                 &mut br,
                 &mut radio,
                 &mut tv,
+                &settings,
+                current_preset,
                 &mut term,
                 &audio,
                 viz_frame,
@@ -763,6 +795,7 @@ fn psp_main() {
                     dashboard_state.selected,
                     dashboard_state.page,
                     viz_frame,
+                    &active_theme,
                 );
             }
 
