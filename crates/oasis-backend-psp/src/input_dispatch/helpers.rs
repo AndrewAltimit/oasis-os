@@ -19,6 +19,7 @@ use crate::commands;
 use crate::desktop;
 use crate::skins;
 use crate::types::{APPS, KioskApp};
+use crate::views_sdi::LIST_ROWS;
 
 // ---------------------------------------------------------------------------
 // Helper: Dashboard Confirm (app launch)
@@ -69,7 +70,11 @@ pub(super) fn dispatch_dashboard_confirm(
                 .iter()
                 .position(|p| p == current_preset)
                 .unwrap_or(0);
-            settings.scroll = 0;
+            // Scroll the viewport so the selected row is visible. Today
+            // PspSkinPreset::ALL.len() < LIST_ROWS so this resolves to 0,
+            // but if the preset list ever grows past LIST_ROWS the cursor
+            // would otherwise open off-screen.
+            settings.scroll = settings.selected.saturating_sub(LIST_ROWS - 1);
             desktop::open_app_window(wm, sdi, "settings", "Settings", true);
             *kiosk_app = KioskApp::Settings;
         },

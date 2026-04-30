@@ -43,7 +43,7 @@ pub(crate) fn update_settings(
 
     let total = PspSkinPreset::ALL.len();
     let end = (scroll + LIST_ROWS).min(total);
-    let visible = end - scroll;
+    let visible = end.saturating_sub(scroll);
 
     for row in 0..visible {
         let i = scroll + row;
