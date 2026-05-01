@@ -585,7 +585,9 @@ impl StartMenuState {
 
             let (ix, iy, label_x, label_y) = if is_tiles {
                 // Icon centered horizontally, near the top of the cell.
-                let ix = cell_x + (col_w - icon_size as i32) / 2;
+                // Clamp to non-negative so an icon configured larger than the
+                // tile cell does not draw left of the cell boundary.
+                let ix = cell_x + ((col_w - icon_size as i32) / 2).max(0);
                 let icon_top_pad = 10;
                 let iy = cell_y + icon_top_pad;
                 let tw = text_px(&item.label, at.font_small);
