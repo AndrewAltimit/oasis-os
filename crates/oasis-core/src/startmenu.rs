@@ -589,7 +589,10 @@ impl StartMenuState {
                 let icon_top_pad = 10;
                 let iy = cell_y + icon_top_pad;
                 let tw = text_px(&item.label, at.font_small);
-                let label_x = cell_x + (col_w - tw) / 2;
+                // Clamp to non-negative so labels wider than the tile don't
+                // draw to the left of the cell boundary (potentially into an
+                // adjacent tile or off-screen).
+                let label_x = cell_x + ((col_w - tw) / 2).max(0);
                 let label_y = iy + icon_size as i32 + 6;
                 (ix, iy, label_x, label_y)
             } else {
