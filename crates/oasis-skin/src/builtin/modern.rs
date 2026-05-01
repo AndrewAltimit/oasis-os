@@ -51,16 +51,6 @@ y = 572
 w = 658
 h = 24
 color = "#1E1E3060"
-
-[clock_display]
-x = 730
-y = 572
-w = 66
-h = 24
-color = "#00000000"
-text = "00:00"
-font_size = 10
-text_color = "#AAAACC"
 "##;
 
 const DESKTOP_FEATURES: &str = r#"
@@ -158,11 +148,12 @@ terminal = true
 file_browser = true
 browser = true
 window_manager = true
-dashboard_pages = 2
+dashboard_pages = 1
 icons_per_page = 15
 grid_cols = 5
 grid_rows = 3
 show_tabs = false
+clock_in_bottombar = true
 "#;
 
 const MODERN_THEME: &str = r##"
@@ -277,13 +268,14 @@ terminal = true
 file_browser = true
 browser = true
 window_manager = true
-dashboard_pages = 2
+dashboard_pages = 1
 icons_per_page = 15
 grid_cols = 5
 grid_rows = 3
 start_menu = true
 show_version = false
 show_tabs = false
+clock_in_bottombar = true
 transition_fade_frames = 12
 transition_slide_frames = 16
 "#;

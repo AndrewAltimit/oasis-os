@@ -106,12 +106,19 @@ pub struct SkinFeatures {
     /// Whether top tabs are shown in the status bar.
     #[serde(default)]
     pub show_tabs: bool,
-    /// Whether media category tabs are shown in the bottom bar.
-    #[serde(default = "yes")]
+    /// Whether media category tabs (AUDIO/VIDEO/IMAGE/FILE) are shown in the
+    /// bottom bar. Defaults to off — opt in per-skin for PSP-style layouts.
+    #[serde(default)]
     pub show_media_tabs: bool,
     /// Whether page dots are shown in the bottom bar.
     #[serde(default = "yes")]
     pub show_page_dots: bool,
+    /// Render the clock + date in the bottom-right of the taskbar instead of
+    /// the top-right status bar (Windows XP style). The top-right clock is
+    /// suppressed when this is set. Defaults to `true` for consistency
+    /// across skins; opt out with `clock_in_bottombar = false`.
+    #[serde(default = "yes")]
+    pub clock_in_bottombar: bool,
     /// Custom fade transition duration in frames (default 15).
     #[serde(default)]
     pub transition_fade_frames: Option<u32>,
@@ -127,7 +134,7 @@ fn yes() -> bool {
     true
 }
 fn default_pages() -> u32 {
-    3
+    1
 }
 fn default_icons_per_page() -> u32 {
     9
@@ -147,7 +154,7 @@ impl Default for SkinFeatures {
             file_browser: true,
             browser: true,
             window_manager: false,
-            dashboard_pages: 2,
+            dashboard_pages: 1,
             icons_per_page: 15,
             grid_cols: 5,
             grid_rows: 3,
@@ -158,8 +165,9 @@ impl Default for SkinFeatures {
             show_clock: true,
             show_version: true,
             show_tabs: false,
-            show_media_tabs: true,
+            show_media_tabs: false,
             show_page_dots: true,
+            clock_in_bottombar: true,
             transition_fade_frames: None,
             transition_slide_frames: None,
             reduced_motion: false,
@@ -535,10 +543,11 @@ grid_rows = 2
         let f = SkinFeatures::default();
         assert!(f.dashboard);
         assert!(f.terminal);
-        assert_eq!(f.dashboard_pages, 2);
+        assert_eq!(f.dashboard_pages, 1);
         assert_eq!(f.icons_per_page, 15);
         assert_eq!(f.grid_cols, 5);
         assert_eq!(f.grid_rows, 3);
+        assert!(f.clock_in_bottombar);
     }
 
     #[test]
@@ -742,7 +751,7 @@ window_manager = true
         // Defaults for unspecified fields:
         assert!(skin.features.terminal);
         assert!(skin.features.browser);
-        assert_eq!(skin.features.dashboard_pages, 3);
+        assert_eq!(skin.features.dashboard_pages, 1);
     }
 
     // -- Layout object partial fields --

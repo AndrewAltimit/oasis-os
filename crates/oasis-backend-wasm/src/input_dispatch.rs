@@ -342,6 +342,7 @@ impl OasisWasm {
             },
             InputEvent::CursorMove { x, y } => {
                 self.taskbar.set_hover(*x, *y);
+                self.start_menu.set_hover(*x, *y);
                 self.wm
                     .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, &mut self.sdi);
             },

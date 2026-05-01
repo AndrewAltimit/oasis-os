@@ -54,12 +54,18 @@ maximize_bottom_inset = 0
 inactive_frame_alpha = 180
 
 [bar_overrides]
-statusbar_bg = "#1E1E1E"
-bar_bg = "#1E1E1E"
-battery_color = "#FFFFFF"
+# Top panel: solid Adwaita-dark with a thin underline separator.
+statusbar_bg = "#0F0F0F"
+statusbar_gradient_top = "#1A1A1A"
+statusbar_gradient_bottom = "#0A0A0A"
+# Bottom dock: same dark, slightly lighter so the pill stands out.
+bar_bg = "#161616"
+gradient_top = "#1C1C1C"
+gradient_bottom = "#101010"
+battery_color = "#E6E6E6"
 version_color = "#929292"
 clock_color = "#FFFFFF"
-separator_color = "#404040"
+separator_color = "#3A3A3A"
 text_shadow = false
 
 [wallpaper]
@@ -70,8 +76,8 @@ angle = 90
 
 [geometry]
 tab_row_height = 0
-statusbar_height = 30
-bottombar_height = 0
+statusbar_height = 28
+bottombar_height = 36
 icon_width = 48
 icon_height = 48
 font_body = 13
@@ -114,27 +120,53 @@ icon_container = "chip"
 cursor_style = "fill"
 
 [start_menu_overrides]
-panel_bg = "#303030"
-panel_border = "#404040"
-item_text = "#FFFFFF"
+# Flat panel (no gradient) so the translucent hover highlight stays one
+# uniform shade across the cell.
+panel_bg = "#222222"
+panel_border = "#3A3A3A"
+item_text = "#E6E6E6"
 item_text_active = "#FFFFFF"
-highlight_color = "#3584E440"
+# Slightly translucent GNOME blue highlight. Because the panel above is
+# now a flat colour, the highlight stays one consistent shade across the
+# whole cell instead of picking up a top→bottom gradient.
+highlight_color = "#3584E480"
 button_bg = "#3584E4"
+button_gradient = true
+button_gradient_top = "#4A95EE"
+button_gradient_bottom = "#2D75D6"
 button_text = "#FFFFFF"
-panel_border_radius = 12
-panel_shadow_level = 1
+panel_border_radius = 16
+panel_shadow_level = 3
 button_label = "Activities"
-button_width = 78
-button_height = 24
+button_width = 92
+button_height = 26
 button_shape = "round"
-panel_width = 300
+button_x = 8
+panel_width = 360
 columns = 3
-layout_mode = "grid"
+layout_mode = "tiles"
 header_text = ""
 header_height = 0
 footer_enabled = false
-item_icon_size = 48
-item_row_height = 64
+item_icon_size = 44
+item_row_height = 88
+pad_inner = 14
+# Uniform tile color -- every item is the same GNOME blue so the
+# overview reads as a coherent grid instead of a colored mosaic.
+item_colors = [
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+    "#3584E4",
+]
 
 [browser_overrides]
 chrome_bg = "#303030"

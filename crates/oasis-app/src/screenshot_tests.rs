@@ -693,6 +693,7 @@ fn run_skin_scenario(
     let time = platform.now().ok();
     let power = platform.power_info().ok();
     status_bar.update_info(time.as_ref(), power.as_ref());
+    bottom_bar.update_info(time.as_ref());
 
     match view {
         "dashboard" => {

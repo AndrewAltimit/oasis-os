@@ -209,8 +209,10 @@ impl StatusBar {
         }
 
         // Clock + date (right side, right-aligned).  Compute first so
-        // version can check for overlap.
-        let clock_x = if features.show_clock {
+        // version can check for overlap.  When `clock_in_bottombar` is set
+        // the clock is rendered by the bottom bar (XP-style) and we hide
+        // the top-right copy here.
+        let clock_x = if features.show_clock && !features.clock_in_bottombar {
             let clock_str = if self.date_text.is_empty() {
                 self.clock_text.clone()
             } else {
@@ -476,6 +478,7 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
         let mut feat = crate::skin::SkinFeatures::default();
         feat.show_tabs = true;
+        feat.clock_in_bottombar = false;
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_top"));
         assert!(sdi.contains("bar_version"));
@@ -654,7 +657,8 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = false;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         StatusBar::hide_sdi(&mut sdi);
@@ -707,8 +711,9 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
 
-        // First enable to create objects.
+        // First enable to create objects (top-right rendering path).
         let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = false;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -751,6 +756,20 @@ mod tests {
     }
 
     #[test]
+    fn top_clock_hidden_when_clock_in_bottombar() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = true;
+        bar.update_sdi(&mut sdi, &at, &feat);
+        // Either not created, or created and hidden.
+        if let Ok(obj) = sdi.get("bar_clock") {
+            assert!(!obj.visible);
+        }
+    }
+
+    #[test]
     fn clock_includes_date_when_present() {
         let mut bar = StatusBar::new();
         let time = SystemTime {
@@ -764,7 +783,8 @@ mod tests {
         bar.update_info(Some(&time), None);
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = false;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let clock_obj = sdi.get("bar_clock").unwrap();

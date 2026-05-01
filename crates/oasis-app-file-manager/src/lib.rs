@@ -46,17 +46,23 @@ pub struct FilePanel {
     pub scroll: usize,
     /// Cursor position (relative to visible area).
     pub cursor: usize,
+    /// Cached folder-tree entries for the left-pane (Explorer view).
+    /// Rebuilt on every navigation via [`Self::refresh`] so the tree
+    /// shows siblings of the current path at each ancestor level.
+    pub tree_entries: Vec<TreeEntry>,
 }
 
 impl FilePanel {
     /// Create a new panel rooted at the given directory.
     pub fn new(dir: &str, vfs: &dyn Vfs) -> Self {
         let lines = list_directory(vfs, dir);
+        let tree_entries = build_tree_entries(dir, vfs);
         Self {
             browse_dir: dir.to_string(),
             lines,
             scroll: 0,
             cursor: 0,
+            tree_entries,
         }
     }
 
@@ -91,24 +97,24 @@ impl FilePanel {
 
         if line == ".." {
             let parent = parent_dir(&self.browse_dir);
-            self.browse_dir = parent.clone();
-            self.lines = list_directory(vfs, &parent);
-            self.scroll = 0;
-            self.cursor = 0;
+            self.navigate_to(&parent, vfs);
         } else if line.ends_with('/') {
             let name = &line[..line.len() - 1];
             let new_dir = join_path(&self.browse_dir, name);
-            self.browse_dir = new_dir.clone();
-            self.lines = list_directory(vfs, &new_dir);
-            self.scroll = 0;
-            self.cursor = 0;
+            self.navigate_to(&new_dir, vfs);
         }
     }
 
     fn enter_selected_parent(&mut self, vfs: &dyn Vfs) {
         let parent = parent_dir(&self.browse_dir);
-        self.browse_dir = parent.clone();
-        self.lines = list_directory(vfs, &parent);
+        self.navigate_to(&parent, vfs);
+    }
+
+    /// Navigate to `dir` and rebuild the cached listing + folder tree.
+    pub fn navigate_to(&mut self, dir: &str, vfs: &dyn Vfs) {
+        self.browse_dir = dir.to_string();
+        self.lines = list_directory(vfs, dir);
+        self.tree_entries = build_tree_entries(dir, vfs);
         self.scroll = 0;
         self.cursor = 0;
     }
@@ -131,9 +137,14 @@ impl FilePanel {
     /// Refresh the panel listing from VFS.
     pub fn refresh(&mut self, vfs: &dyn Vfs) {
         self.lines = list_directory(vfs, &self.browse_dir);
+        self.tree_entries = build_tree_entries(&self.browse_dir, vfs);
         // Clamp cursor to new list size.
         let max = self.lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max);
+        // Clamp scroll so it never points past the new list end, otherwise
+        // a directory shrink leaves the main pane rendering empty until the
+        // user manually scrolls back up.
+        self.scroll = self.scroll.min(max);
     }
 }
 
@@ -894,7 +905,7 @@ impl FileManagerApp {
         outline_rect(sdi, "app_xp_tree_o", tree_box, dark, 105);
 
         // Tree contents.
-        let tree_entries = build_tree_entries(&panel.browse_dir);
+        let tree_entries = &panel.tree_entries;
         let tree_line_h = (at.font_hint as i32 + 2).max(11);
         for i in 0..MAX_TREE_LINES {
             let name = format!("app_xp_tree_l_{i}");
@@ -1133,14 +1144,9 @@ impl FileManagerApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         let panel = self.active();
-        let title = format!("File Manager  -  {}", panel.browse_dir);
-        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
-        let title_h = at.app.title_bar_height as i32;
-        backend.fill_rect(cx, cy + title_h - 4, cw, 1, at.app.divider)?;
-
-        let body_top = cy + title_h;
-        let body_h = ch.saturating_sub(title_h as u32);
-        let g = compute_explorer_geom(cx, body_top, cw, body_h);
+        // No inner title bar -- the WM titlebar already shows "File Manager"
+        // and the address bar below shows the current path.
+        let g = compute_explorer_geom(cx, cy, cw, ch);
         self.explorer_cols.set(g.cols);
         self.explorer_visible_rows.set(g.rows);
         self.cached_font_hint.set(at.font_hint);
@@ -1196,7 +1202,7 @@ impl FileManagerApp {
         // Tree pane.
         backend.fill_rect(g.tree_x, g.body_y, g.tree_w, g.body_h, Color::WHITE)?;
         draw_outline(backend, g.tree_x, g.body_y, g.tree_w, g.body_h, dark)?;
-        let tree_entries = build_tree_entries(&panel.browse_dir);
+        let tree_entries = &panel.tree_entries;
         let tree_line_h = (at.font_hint as i32 + 2).max(11);
         for (i, entry) in tree_entries.iter().enumerate() {
             let y = g.body_y + 4 + i as i32 * tree_line_h;
@@ -1326,10 +1332,14 @@ enum EntryKind {
 }
 
 /// One row in the folder tree pane.
-struct TreeEntry {
-    label: String,
-    depth: usize,
-    is_current: bool,
+/// A single row in the Explorer view's left-hand folder tree.
+#[derive(Debug, Clone)]
+pub struct TreeEntry {
+    pub label: String,
+    pub depth: usize,
+    pub is_current: bool,
+    /// Absolute path the row represents. Used directly by hit-testing.
+    pub path: String,
 }
 
 /// Geometry for the Explorer view, computed from a content rect.
@@ -1431,59 +1441,81 @@ fn truncate_label(s: &str, max_chars: usize) -> String {
     out
 }
 
-/// Build the folder-tree-pane entries from the current path. The top entry is
-/// always "Desktop", followed by each ancestor of `current` (root, then each
-/// directory component down to and including `current`). The last component
-/// is flagged `is_current`.
-fn build_tree_entries(current: &str) -> Vec<TreeEntry> {
-    let mut out = vec![TreeEntry {
+/// Build the folder-tree-pane entries for `current`. The tree shows the
+/// "Desktop" alias, root, and at every ancestor level the full set of
+/// child directories — the directory on the path-to-current is expanded
+/// inline. This makes the left pane an actual navigable tree instead of
+/// a path crumb.
+fn build_tree_entries(current: &str, vfs: &dyn Vfs) -> Vec<TreeEntry> {
+    let mut out = Vec::new();
+    out.push(TreeEntry {
         label: "Desktop".to_string(),
         depth: 0,
         is_current: false,
-    }];
+        path: "/".to_string(),
+    });
+
     let trimmed = current.trim_start_matches('/');
     out.push(TreeEntry {
         label: "/".to_string(),
         depth: 1,
         is_current: trimmed.is_empty(),
+        path: "/".to_string(),
     });
+
     let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
-    let last = parts.len();
-    for (i, part) in parts.iter().enumerate() {
-        out.push(TreeEntry {
-            label: (*part).to_string(),
-            depth: i + 2,
-            is_current: i + 1 == last,
-        });
-    }
+    expand_dir_into_tree("/", &parts, 2, &mut out, vfs);
     out
 }
 
-/// Map a tree-pane row index back to the absolute path that row represents.
-/// `idx` is the position in `build_tree_entries`'s returned vec.
-fn tree_entry_path(current: &str, idx: usize) -> Option<String> {
-    if idx == 0 {
-        // "Desktop" — alias to root.
-        return Some("/".to_string());
+/// Recursively append child directories of `dir_path` to `out`, expanding
+/// the entry that lies on the path-to-current (`remaining`) so the user
+/// sees siblings at every ancestor level. Listings are sorted
+/// case-insensitively for stable display.
+fn expand_dir_into_tree(
+    dir_path: &str,
+    remaining: &[&str],
+    depth: usize,
+    out: &mut Vec<TreeEntry>,
+    vfs: &dyn Vfs,
+) {
+    let Ok(entries) = vfs.readdir(dir_path) else {
+        return;
+    };
+    let mut dirs: Vec<&oasis_vfs::VfsEntry> = entries
+        .iter()
+        .filter(|e| e.kind == oasis_vfs::EntryKind::Directory)
+        .collect();
+    dirs.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
+
+    let next_part = remaining.first().copied();
+    for d in dirs {
+        let child_path = if dir_path == "/" {
+            format!("/{}", d.name)
+        } else {
+            format!("{}/{}", dir_path, d.name)
+        };
+        let on_path = next_part == Some(d.name.as_str());
+        let is_current = on_path && remaining.len() == 1;
+        out.push(TreeEntry {
+            label: d.name.clone(),
+            depth,
+            is_current,
+            path: child_path.clone(),
+        });
+        if on_path && remaining.len() > 1 {
+            // Ancestor on the path: keep walking down.
+            expand_dir_into_tree(&child_path, &remaining[1..], depth + 1, out, vfs);
+        } else if is_current {
+            // Reached the current directory: list its child folders so the
+            // tree can be used to step further down without leaving it.
+            expand_dir_into_tree(&child_path, &[], depth + 1, out, vfs);
+        }
     }
-    if idx == 1 {
-        return Some("/".to_string());
-    }
-    let trimmed = current.trim_start_matches('/');
-    let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
-    let want = idx - 1; // first directory part is at vec idx 2 → want = 1.
-    if want > parts.len() {
-        return None;
-    }
-    let mut path = String::new();
-    for p in &parts[..want] {
-        path.push('/');
-        path.push_str(p);
-    }
-    if path.is_empty() {
-        path.push('/');
-    }
-    Some(path)
 }
 
 /// Hit-test the folder-tree pane in Explorer view. Returns the absolute
@@ -1493,7 +1525,7 @@ fn tree_hit_test(
     g: &ExplorerGeom,
     lx: i32,
     ly: i32,
-    current: &str,
+    tree_entries: &[TreeEntry],
     font_hint: u16,
 ) -> Option<String> {
     if lx < g.tree_x || lx >= g.tree_x + g.tree_w as i32 {
@@ -1504,7 +1536,7 @@ fn tree_hit_test(
     }
     let line_h = (font_hint as i32 + 2).max(11);
     let row = ((ly - (g.body_y + 4)) / line_h) as usize;
-    tree_entry_path(current, row)
+    tree_entries.get(row).map(|e| e.path.clone())
 }
 
 /// Hit-test the icon grid. Returns the absolute index into `lines` (i.e.
@@ -2123,7 +2155,7 @@ impl App for FileManagerApp {
 
         // Tree row click: single-click navigates immediately.
         let font_hint = self.cached_font_hint.get();
-        if let Some(target) = tree_hit_test(&g, lx, ly, &self.active().browse_dir, font_hint) {
+        if let Some(target) = tree_hit_test(&g, lx, ly, &self.active().tree_entries, font_hint) {
             self.pending_navigation = Some(NavTarget::Folder(target));
             self.last_click_tile.set(None);
             return AppAction::None;
@@ -2154,11 +2186,7 @@ impl App for FileManagerApp {
         };
         match target {
             NavTarget::Folder(path) => {
-                let p = self.active_mut();
-                p.browse_dir = path.clone();
-                p.lines = list_directory(vfs, &path);
-                p.scroll = 0;
-                p.cursor = 0;
+                self.active_mut().navigate_to(&path, vfs);
                 self.content.browse_dir = Some(path);
             },
             NavTarget::File(path) => {
@@ -2676,26 +2704,68 @@ mod tests {
     }
 
     #[test]
-    fn build_tree_entries_marks_current() {
-        let entries = build_tree_entries("/home/user");
+    fn build_tree_entries_marks_current_and_lists_siblings() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        vfs.mkdir("/home/user").unwrap();
+        vfs.mkdir("/home/guest").unwrap();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/var").unwrap();
+
+        let entries = build_tree_entries("/home/user", &vfs);
         let current = entries
             .iter()
             .find(|e| e.is_current)
             .expect("must mark current");
         assert_eq!(current.label, "user");
+        assert_eq!(current.path, "/home/user");
+
         let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
+        // Path crumbs.
         assert!(labels.contains(&"Desktop"));
         assert!(labels.contains(&"/"));
         assert!(labels.contains(&"home"));
+        // Siblings of `home` at root level.
+        assert!(labels.contains(&"etc"));
+        assert!(labels.contains(&"var"));
+        // Siblings of `user` inside `home`.
+        assert!(labels.contains(&"guest"));
     }
 
     #[test]
     fn build_tree_entries_root_is_current() {
-        let entries = build_tree_entries("/");
+        let vfs = MemoryVfs::new();
+        let entries = build_tree_entries("/", &vfs);
         let current = entries
             .iter()
             .find(|e| e.is_current)
             .expect("root must be current");
         assert_eq!(current.label, "/");
+        assert_eq!(current.path, "/");
+    }
+
+    #[test]
+    fn build_tree_entries_lists_children_of_current_dir() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        vfs.mkdir("/home/user").unwrap();
+        vfs.mkdir("/home/user/documents").unwrap();
+        vfs.mkdir("/home/user/photos").unwrap();
+        vfs.mkdir("/home/user/scripts").unwrap();
+
+        let entries = build_tree_entries("/home/user", &vfs);
+        let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
+        // Children of the current directory must be navigable from the tree.
+        assert!(labels.contains(&"documents"), "got {labels:?}");
+        assert!(labels.contains(&"photos"), "got {labels:?}");
+        assert!(labels.contains(&"scripts"), "got {labels:?}");
+
+        // And those children should carry their absolute paths so a click
+        // on the row can navigate directly.
+        let docs = entries
+            .iter()
+            .find(|e| e.label == "documents")
+            .expect("documents row");
+        assert_eq!(docs.path, "/home/user/documents");
     }
 }

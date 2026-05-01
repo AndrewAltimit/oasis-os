@@ -346,7 +346,7 @@ impl OasisWasm {
             status_bar: StatusBar::new(),
             bottom_bar,
             taskbar: oasis_core::taskbar::Taskbar::new(),
-            desktops: oasis_wm::DesktopManager::new(4),
+            desktops: oasis_wm::DesktopManager::new(1),
             start_menu,
             mouse_cursor,
             cursor_texture,
@@ -407,6 +407,7 @@ impl OasisWasm {
             use oasis_core::platform::TimeService;
             let time = self.platform.now().ok();
             self.status_bar.update_info(time.as_ref(), None);
+            self.bottom_bar.update_info(time.as_ref());
         }
 
         // Process queued input events.

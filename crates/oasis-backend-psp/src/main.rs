@@ -685,6 +685,7 @@ fn psp_main() {
                     },
                 };
                 status_bar.update_info(Some(&sys_time), Some(&power));
+                bottom_bar.update_info(Some(&sys_time));
             }
 
             // Update bottom bar page tracking.

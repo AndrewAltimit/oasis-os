@@ -146,14 +146,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     let time = platform.now().ok();
     let power = platform.power_info().ok();
     status_bar.update_info(time.as_ref(), power.as_ref());
-
-    // Update desktop clock_display if the skin defines one.
-    if let Some(ref t) = time {
-        let clock_str = format!("{:02}:{:02}", t.hour, t.minute);
-        if let Ok(obj) = sdi.get_mut("clock_display") {
-            obj.text = Some(clock_str);
-        }
-    }
+    bottom_bar.update_info(time.as_ref());
 
     // Create skin-specific output directory.
     let out_dir = Path::new("screenshots").join(skin_name);
