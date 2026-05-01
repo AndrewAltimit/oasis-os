@@ -10,7 +10,15 @@ use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_border, ensure_rounded_fill, ensure_text, hide_objects};
 use crate::transition::ease_out_cubic;
+use oasis_types::bitmap_font::glyph_advance_scaled;
 use oasis_types::color::{darken, with_alpha};
+
+/// Pixel width of `s` rendered at `font_size`.
+fn text_px(s: &str, font_size: u16) -> i32 {
+    s.chars()
+        .map(|c| glyph_advance_scaled(c, font_size) as i32)
+        .sum()
+}
 
 // -- Layout constants ---------------------------------------------------------
 // BTN_X and MENU_X are now themed via at.menu.button_x / at.menu.panel_x.
@@ -57,8 +65,11 @@ pub struct StartMenuState {
     pub open: bool,
     /// Menu items displayed in the popup.
     pub items: Vec<StartMenuItem>,
-    /// Currently selected item index.
+    /// Currently selected item index (drives Enter / keyboard activation).
     pub selected: usize,
+    /// Item index currently under the mouse pointer, if any. Drives the
+    /// visual highlight; cleared when the cursor leaves the panel.
+    pub hovered: Option<usize>,
     /// Snapshot of the active theme for layout calculations.
     at: ActiveTheme,
     /// Computed menu panel height.
@@ -111,6 +122,7 @@ impl StartMenuState {
             open: false,
             items,
             selected: 0,
+            hovered: None,
             at: at.clone(),
             menu_h,
             menu_y,
@@ -184,7 +196,51 @@ impl StartMenuState {
     /// Close the menu (with animation).
     pub fn close(&mut self) {
         self.anim_target_open = false;
+        self.hovered = None;
         // Keep `open = true` so SDI still renders during close anim.
+    }
+
+    /// Update the hovered item based on cursor position. Sets `hovered` to
+    /// the item index under the cursor, or `None` if the cursor is outside
+    /// the panel or over empty space. The highlight only renders while
+    /// hovered is `Some`.
+    pub fn set_hover(&mut self, x: i32, y: i32) {
+        self.hovered = self.cell_index_at(x, y);
+    }
+
+    /// Compute the item index for a panel-relative cell hit, or `None`.
+    fn cell_index_at(&self, x: i32, y: i32) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        let menu_w = self.at.menu.panel_width as i32;
+        let menu_x = self.at.menu.panel_x;
+        if x < menu_x || x >= menu_x + menu_w || y < self.menu_y {
+            return None;
+        }
+        let pad = self.at.menu.pad_inner;
+        let items_top = self.menu_y + self.header_h as i32 + pad;
+        let rel_y = y - items_top;
+        let rel_x = x - menu_x - pad;
+        if rel_y < 0 || rel_x < 0 {
+            return None;
+        }
+        let cols = self.at.menu.columns.max(1);
+        let col_w = (menu_w - pad * 2) / cols as i32;
+        if col_w <= 0 || self.at.menu.item_row_height <= 0 {
+            return None;
+        }
+        let row = rel_y / self.at.menu.item_row_height;
+        let col = rel_x / col_w;
+        if col >= cols as i32 {
+            return None;
+        }
+        let idx = row as usize * cols + col as usize;
+        if idx < self.items.len() {
+            Some(idx)
+        } else {
+            None
+        }
     }
 
     /// Advance open/close animation by one frame.
@@ -478,33 +534,76 @@ impl StartMenuState {
             }
         }
 
-        // Selection highlight (smooth lerp position using separate row/col).
-        let hl_x = menu_x + pad + (self.visual_col * col_w as f32) as i32;
-        let hl_y = items_top + pad + (self.visual_row * item_row_h as f32) as i32;
-        ensure_rounded_fill(
-            sdi,
-            "sm_highlight",
-            hl_x,
-            hl_y,
-            (col_w as u32).saturating_sub(2),
-            (item_row_h as u32).saturating_sub(2),
-            scale_alpha(at.menu.highlight_color),
-            at.menu.panel_border_radius,
-        );
-        if let Ok(obj) = sdi.get_mut("sm_highlight") {
-            obj.z = Z_MENU + 2;
+        // Layout mode: "tiles" puts the icon on top with a centered label
+        // (Activities-overview / Launchpad style). Anything else keeps the
+        // legacy icon-left, label-right list layout (Win95 / XP style).
+        let is_tiles = at.menu.layout_mode == "tiles";
+
+        // Hover highlight: only render when the cursor is over an item.
+        // No selection-driven highlight — opening the menu shows nothing
+        // until the user actually points at something.
+        if let Some(idx) = self.hovered.filter(|i| *i < self.items.len()) {
+            let row = idx / cols;
+            let col = idx % cols;
+            let hl_inset = if is_tiles { 4 } else { 0 };
+            let hl_x = menu_x + pad + col as i32 * col_w + hl_inset;
+            let hl_y = items_top + pad + row as i32 * item_row_h + hl_inset;
+            let hl_w = (col_w as u32).saturating_sub((hl_inset * 2 + 2) as u32);
+            let hl_h = (item_row_h as u32).saturating_sub((hl_inset * 2 + 2) as u32);
+            let hl_radius = if is_tiles {
+                12
+            } else {
+                at.menu.panel_border_radius
+            };
+            ensure_rounded_fill(
+                sdi,
+                "sm_highlight",
+                hl_x,
+                hl_y,
+                hl_w,
+                hl_h,
+                scale_alpha(at.menu.highlight_color),
+                hl_radius,
+            );
+            if let Ok(obj) = sdi.get_mut("sm_highlight") {
+                obj.z = Z_MENU + 2;
+                obj.visible = true;
+            }
+        } else if let Ok(obj) = sdi.get_mut("sm_highlight") {
+            obj.visible = false;
         }
 
-        // Items: icon placeholder + label.
+        // Items: icon + label.
         for (i, item) in self.items.iter().enumerate().take(MAX_ITEMS) {
             let row = i / cols;
             let col = i % cols;
-            let ix = menu_x + pad + col as i32 * col_w + 2;
-            let iy =
-                items_top + pad + row as i32 * item_row_h + (item_row_h - icon_size as i32) / 2;
+            let cell_x = menu_x + pad + col as i32 * col_w;
+            let cell_y = items_top + pad + row as i32 * item_row_h;
 
-            // Icon placeholder (colored square).
+            let (ix, iy, label_x, label_y) = if is_tiles {
+                // Icon centered horizontally, near the top of the cell.
+                let ix = cell_x + (col_w - icon_size as i32) / 2;
+                let icon_top_pad = 10;
+                let iy = cell_y + icon_top_pad;
+                let tw = text_px(&item.label, at.font_small);
+                let label_x = cell_x + (col_w - tw) / 2;
+                let label_y = iy + icon_size as i32 + 6;
+                (ix, iy, label_x, label_y)
+            } else {
+                // Legacy: icon on the left, label on the right.
+                let ix = cell_x + 2;
+                let iy = cell_y + (item_row_h - icon_size as i32) / 2;
+                let label_x = ix + icon_size as i32 + 4;
+                let label_y = iy + (icon_size as i32 - at.font_small as i32) / 2;
+                (ix, iy, label_x, label_y)
+            };
+
+            // Icon: rounded fill. Tiles mode renders flat tiles with a
+            // generous corner radius (Adwaita-style); the legacy list
+            // layout keeps the small 2px rounding it always had.
             let icon_name = format!("sm_item_icon_{i}");
+            let icon_color = scale_alpha(item.color);
+            let icon_radius = if is_tiles { 10 } else { 2 };
             ensure_rounded_fill(
                 sdi,
                 &icon_name,
@@ -512,11 +611,15 @@ impl StartMenuState {
                 iy,
                 icon_size,
                 icon_size,
-                scale_alpha(item.color),
-                2,
+                icon_color,
+                icon_radius,
             );
             if let Ok(obj) = sdi.get_mut(&icon_name) {
                 obj.z = Z_MENU + 3;
+                // Clear any gradient left from a previous frame so the tile
+                // stays a flat single shade.
+                obj.gradient_top = None;
+                obj.gradient_bottom = None;
             }
 
             // Text label.
@@ -529,8 +632,8 @@ impl StartMenuState {
             ensure_text(
                 sdi,
                 &label_name,
-                ix + icon_size as i32 + 4,
-                iy + (icon_size as i32 - at.font_small as i32) / 2,
+                label_x,
+                label_y,
                 at.font_small,
                 text_color,
             );
@@ -780,6 +883,8 @@ mod tests {
         sm.open = true;
         sm.anim_target_open = true;
         sm.anim_progress = 1.0;
+        // Simulate hover so the highlight is rendered.
+        sm.hovered = Some(0);
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
         sm.update_sdi(&mut sdi, &at);
@@ -788,6 +893,21 @@ mod tests {
         assert!(sdi.get("sm_highlight").unwrap().visible);
         assert!(sdi.contains("sm_item_icon_0"));
         assert!(sdi.contains("sm_item_label_0"));
+    }
+
+    #[test]
+    fn highlight_hidden_without_hover() {
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
+        sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
+        // No hover set: highlight should not be visible.
+        let mut sdi = SdiRegistry::new();
+        sm.update_sdi(&mut sdi, &ActiveTheme::default());
+        // Either not created, or created and hidden.
+        if let Ok(obj) = sdi.get("sm_highlight") {
+            assert!(!obj.visible);
+        }
     }
 
     #[test]

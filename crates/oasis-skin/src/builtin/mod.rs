@@ -152,7 +152,6 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         skin.apply_layout(&mut sdi);
         assert!(sdi.contains("taskbar_bg"));
-        assert!(sdi.contains("clock_display"));
     }
 
     #[test]

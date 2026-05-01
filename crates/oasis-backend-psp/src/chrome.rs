@@ -296,17 +296,9 @@ pub(crate) fn draw_bottom_bar(
         draw_desktop_taskbar_row(backend, wm);
     } else {
         // Classic mode: transport | USB | battery bar.
-        backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
         draw_transport_controls(backend, audio);
         backend.draw_text_inner("USB", 250, BOTTOM_LOWER_Y + 4, 8, USB_CLR);
         draw_battery_bar(backend, status);
-        backend.draw_text_inner(
-            "R>",
-            SCREEN_WIDTH as i32 - R_HINT_W,
-            BOTTOM_LOWER_Y + 4,
-            8,
-            R_HINT_CLR,
-        );
     }
 }
 
@@ -509,11 +501,8 @@ pub(crate) fn draw_view_header(
 fn draw_desktop_taskbar_row(backend: &mut PspBackend, wm: &WindowManager) {
     let y = BOTTOM_LOWER_Y + 2;
 
-    // L hint.
-    backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
-
     let active_id = wm.active_window();
-    let mut tx = 24i32;
+    let mut tx = 8i32;
 
     for app in APPS {
         if wm.get_window(app.id).is_some() {
@@ -531,13 +520,4 @@ fn draw_desktop_taskbar_row(backend: &mut PspBackend, wm: &WindowManager) {
             tx += app.title.len() as i32 * 8 + 12;
         }
     }
-
-    // R hint.
-    backend.draw_text_inner(
-        "R>",
-        SCREEN_WIDTH as i32 - R_HINT_W,
-        BOTTOM_LOWER_Y + 4,
-        8,
-        R_HINT_CLR,
-    );
 }

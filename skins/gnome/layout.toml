@@ -1,9 +1,8 @@
-# GNOME layout -- top bar with Activities/clock, full content below
-# Top bar (30px) + content area (570px) = 600px. No bottom bar (GNOME-style).
+# GNOME layout -- top panel (28px) + content + dock (36px) = 600px.
 
 [content_bg]
 x = 0
-y = 30
+y = 28
 w = 800
-h = 570
+h = 536
 color = "#242424"

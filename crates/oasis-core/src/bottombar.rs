@@ -8,12 +8,29 @@ use oasis_types::bitmap_font::glyph_advance_scaled;
 use oasis_types::color::lerp_color;
 
 use crate::active_theme::ActiveTheme;
+use crate::platform::SystemTime;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
     BezelStyle, ensure_border, ensure_chrome_bezel, ensure_rounded_fill, ensure_text, hide_bezel,
     hide_objects,
 };
 use crate::theme;
+
+/// Month names for date display (matches statusbar formatting).
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
 /// Measure the pixel width of a text string using proportional glyph metrics.
 fn text_px(s: &str, font_size: u16) -> i32 {
@@ -84,6 +101,10 @@ pub struct BottomBar {
     pub r_pressed: bool,
     /// Smooth visual page position (lerps toward current_page).
     pub dot_visual_page: f32,
+    /// Cached clock string (for XP-style bottom-right clock).
+    clock_text: String,
+    /// Cached date string (for XP-style bottom-right clock).
+    date_text: String,
 }
 
 impl BottomBar {
@@ -96,6 +117,21 @@ impl BottomBar {
             l_pressed: false,
             r_pressed: false,
             dot_visual_page: 0.0,
+            clock_text: "00:00".to_string(),
+            date_text: String::new(),
+        }
+    }
+
+    /// Update cached clock/date strings used by the XP-style bottom-right clock.
+    pub fn update_info(&mut self, time: Option<&SystemTime>) {
+        if let Some(t) = time {
+            self.clock_text = format!("{:02}:{:02}", t.hour, t.minute);
+            let month_name = if t.month >= 1 && t.month <= 12 {
+                MONTHS[(t.month - 1) as usize]
+            } else {
+                "???"
+            };
+            self.date_text = format!("{month_name} {}, {}", t.day, t.year);
         }
     }
 
@@ -207,18 +243,52 @@ impl BottomBar {
             end
         };
 
-        // Media category tabs (pipe-separated).
+        // Bottom-right clock+date (XP-style, when enabled).
+        let right_edge = if features.clock_in_bottombar {
+            let clock_str = if self.date_text.is_empty() {
+                self.clock_text.clone()
+            } else {
+                format!("{} {}", self.date_text, self.clock_text)
+            };
+            let clock_w = text_px(&clock_str, font_small);
+            let cx = screen_w as i32 - clock_w - 8;
+            ensure_text(
+                sdi,
+                "bar_bottom_clock",
+                cx,
+                text_y,
+                font_small,
+                at.bar.clock_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
+                obj.text = Some(clock_str);
+                obj.visible = true;
+                if at.bar.text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
+                }
+            }
+            cx
+        } else {
+            if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
+                obj.visible = false;
+            }
+            screen_w as i32
+        };
+
+        // Media category tabs (pipe-separated). Disabled by default; opt in
+        // per-skin via `show_media_tabs = true` for PSP-style layouts.
         if features.show_media_tabs {
             let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
             let labels_w: i32 = tab_labels.iter().map(|l| text_px(l, font_small)).sum();
             let pipe_w = text_px("|", font_small);
             let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
             let total_w = labels_w + pipes_w;
-            let tabs_x = screen_w as i32 - total_w - at.r_hint_w - 8;
+            let tabs_x = right_edge - total_w - 8;
 
             // Chrome bezel around tab group.
             let tab_bx = tabs_x - 6;
-            let tab_bw = (total_w + at.r_hint_w + 14) as u32;
+            let tab_bw = (total_w + 14) as u32;
             ensure_chrome_bezel(
                 sdi,
                 "bar_tab_bezel",
@@ -262,23 +332,6 @@ impl BottomBar {
                     cx += pipe_w + at.pipe_gap;
                 }
             }
-
-            // "R>" shoulder button hint on far right.
-            ensure_text(
-                sdi,
-                "bar_r_hint",
-                screen_w as i32 - at.r_hint_w,
-                text_y,
-                font_small,
-                at.bar.r_hint_color,
-            );
-            if let Ok(obj) = sdi.get_mut("bar_r_hint") {
-                obj.text = Some("R>".to_string());
-                if at.bar.text_shadow {
-                    obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
-                }
-            }
         } else {
             // Hide media tab objects when disabled.
             for i in 0..MediaTab::TABS.len() {
@@ -289,10 +342,13 @@ impl BottomBar {
                     }
                 }
             }
-            if let Ok(obj) = sdi.get_mut("bar_r_hint") {
-                obj.visible = false;
-            }
             hide_bezel(sdi, "bar_tab_bezel");
+        }
+
+        // Legacy "R>" shoulder hint -- always hidden (kept for skins that may
+        // still reference the SDI object by name).
+        if let Ok(obj) = sdi.get_mut("bar_r_hint") {
+            obj.visible = false;
         }
 
         // USB indicator (after URL text -- hidden when URL is empty).
@@ -364,6 +420,7 @@ impl BottomBar {
             &[
                 "bar_bottom",
                 "bar_bottom_line",
+                "bar_bottom_clock",
                 "bar_url",
                 "bar_usb",
                 "bar_r_hint",
@@ -413,7 +470,8 @@ mod tests {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_media_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_bottom"));
         // bar_url is not created when bar_url_text is empty (default).
@@ -529,6 +587,7 @@ mod tests {
 
         // First enable to create objects.
         let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_media_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -536,7 +595,6 @@ mod tests {
         bar.update_sdi(&mut sdi, &at, &feat);
 
         assert!(!sdi.get("bar_btab_0").unwrap().visible);
-        assert!(!sdi.get("bar_r_hint").unwrap().visible);
     }
 
     #[test]
@@ -559,12 +617,49 @@ mod tests {
         bar.active_tab = MediaTab::Audio;
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_media_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let audio_tab = sdi.get("bar_btab_0").unwrap();
         let video_tab = sdi.get("bar_btab_1").unwrap();
         assert_ne!(audio_tab.text_color, video_tab.text_color);
+    }
+
+    #[test]
+    fn bottom_clock_renders_when_enabled() {
+        let mut bar = BottomBar::new();
+        bar.update_info(Some(&crate::platform::SystemTime {
+            year: 2026,
+            month: 5,
+            day: 1,
+            hour: 14,
+            minute: 32,
+            second: 0,
+        }));
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = true;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let clock = sdi.get("bar_bottom_clock").unwrap();
+        let text = clock.text.as_ref().unwrap();
+        assert!(text.contains("14:32"));
+        assert!(text.contains("May"));
+        assert!(clock.visible);
+    }
+
+    #[test]
+    fn bottom_clock_hidden_when_opted_out() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.clock_in_bottombar = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+        // Object is not created when the feature is opted out.
+        assert!(!sdi.contains("bar_bottom_clock"));
     }
 
     #[test]

@@ -252,7 +252,7 @@ mod tests {
             taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu: StartMenuState::new(StartMenuState::default_items(&at)),
             mouse_cursor: CursorState::default(),
-            desktops: DesktopManager::new(4),
+            desktops: DesktopManager::new(1),
         };
 
         let _terminal = TerminalLayer {

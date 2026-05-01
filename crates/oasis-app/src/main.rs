@@ -359,7 +359,7 @@ fn main() -> Result<()> {
             taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu,
             mouse_cursor,
-            desktops: oasis_core::wm::DesktopManager::new(4),
+            desktops: oasis_core::wm::DesktopManager::new(1),
         },
         terminal: TerminalLayer {
             cmd_reg,
@@ -441,6 +441,7 @@ fn main() -> Result<()> {
             .ui
             .status_bar
             .update_info(time.as_ref(), power.as_ref());
+        state.ui.bottom_bar.update_info(time.as_ref());
     }
 
     // Show a welcome toast.
@@ -594,6 +595,7 @@ fn main() -> Result<()> {
                 .ui
                 .status_bar
                 .update_info(time.as_ref(), power.as_ref());
+            state.ui.bottom_bar.update_info(time.as_ref());
         }
 
         let events = backend.poll_events();

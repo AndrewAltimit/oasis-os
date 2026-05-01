@@ -263,6 +263,7 @@ pub fn handle_desktop_input(
         },
         InputEvent::CursorMove { x, y } => {
             state.ui.taskbar.set_hover(*x, *y);
+            state.ui.start_menu.set_hover(*x, *y);
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
@@ -893,7 +894,7 @@ mod tests {
                 taskbar: oasis_core::taskbar::Taskbar::new(),
                 start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
                 mouse_cursor: CursorState::default(),
-                desktops: oasis_core::wm::DesktopManager::new(4),
+                desktops: oasis_core::wm::DesktopManager::new(1),
             },
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),
