@@ -141,6 +141,10 @@ impl FilePanel {
         // Clamp cursor to new list size.
         let max = self.lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max);
+        // Clamp scroll so it never points past the new list end, otherwise
+        // a directory shrink leaves the main pane rendering empty until the
+        // user manually scrolls back up.
+        self.scroll = self.scroll.min(max);
     }
 }
 

@@ -215,10 +215,13 @@ impl StartMenuState {
         }
         let menu_w = self.at.menu.panel_width as i32;
         let menu_x = self.at.menu.panel_x;
-        if x < menu_x || x >= menu_x + menu_w || y < self.menu_y {
+        let menu_bottom = self.menu_y + self.menu_h as i32;
+        if x < menu_x || x >= menu_x + menu_w || y < self.menu_y || y >= menu_bottom {
             return None;
         }
-        let pad = self.at.menu.pad_inner;
+        // Clamp pad to non-negative so a malformed TOML can't shift items_top
+        // above the panel and produce spurious hover indices.
+        let pad = self.at.menu.pad_inner.max(0);
         let items_top = self.menu_y + self.header_h as i32 + pad;
         let rel_y = y - items_top;
         let rel_x = x - menu_x - pad;
