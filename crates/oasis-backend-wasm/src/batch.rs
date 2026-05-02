@@ -130,9 +130,23 @@ impl SdiBatch for WasmBackend {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
-        // `italic` is intentionally unread: matches `draw_text_impl`'s
-        // batched route, which also drops it (faux-italic is rendered
-        // through the per-glyph path, not the batched draw list).
+        // Bold/italic faux-rendering matches the trait default in
+        // `oasis-types/src/backend/extensions/batch.rs`:
+        //   - The default routes through `SdiCore::draw_text(...)`,
+        //     which has no bold/italic parameters and so drops both.
+        //   - For `bold=true` it double-strikes the same non-bold
+        //     glyph at x+1 instead of looking up a true-bold cached
+        //     glyph.
+        //   - `italic` is dropped entirely (default impl marks it
+        //     `_italic` in its signature).
+        // We mirror that here. Single-text spans still go through
+        // `draw_text_styled` (via `flush_text_batch`'s len==1 branch
+        // in the browser display list), which renders TRUE bold and
+        // italic via the cached-glyph path — so single-vs-batched
+        // bold text can look slightly different. That divergence is
+        // a property of the trait contract, not this override; if it
+        // ever needs fixing it should be fixed in the trait default
+        // first so SDL/UE5 behave consistently.
         let _ = italic;
         if texts.is_empty() || font_size == 0 {
             return Ok(());
@@ -143,15 +157,11 @@ impl SdiBatch for WasmBackend {
         // JS Array holds its own reference to every canvas it receives,
         // so subsequent LRU evictions from the Rust-side `glyph_cache`
         // are harmless — a previously-pushed canvas stays alive on the
-        // JS heap. This avoids a hazard the older two-pass version had,
-        // where a batch with more unique glyph keys than
+        // JS heap. This avoids a hazard an earlier two-pass version
+        // had, where a batch with more unique glyph keys than
         // `MAX_GLYPH_CACHE_SIZE` could silently drop characters because
         // pass-1 inserts evicted earlier pass-1 inserts before pass 2
         // looked them up.
-        //
-        // Default-impl bold path: double-strike of the regular
-        // (non-bold) glyph at x+1, so the cached glyph variant we need
-        // is always (bold=false, italic=false).
         let glyphs = js_sys::Array::new();
         let mut positions: Vec<f32> = Vec::new();
         for t in texts {
