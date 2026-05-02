@@ -153,12 +153,8 @@ fn chain_signal_then_text_produces_multi() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     let __out = reg.execute("clear ; echo Done", &mut env).unwrap();
-    assert!(
-        matches!(&__out, CommandOutput::Multi(_)),
-        "expected Multi output, got {__out:?}"
-    );
     let CommandOutput::Multi(outputs) = __out else {
-        unreachable!()
+        panic!("expected Multi output, got {__out:?}");
     };
     assert_eq!(outputs.len(), 2);
     assert!(matches!(outputs[0], CommandOutput::Clear));
@@ -192,12 +188,8 @@ fn chain_text_then_signal_produces_multi() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     let __out = reg.execute("echo Hello ; clear", &mut env).unwrap();
-    assert!(
-        matches!(&__out, CommandOutput::Multi(_)),
-        "expected Multi output, got {__out:?}"
-    );
     let CommandOutput::Multi(outputs) = __out else {
-        unreachable!()
+        panic!("expected Multi output, got {__out:?}");
     };
     assert_eq!(outputs.len(), 2);
     assert!(matches!(outputs[0], CommandOutput::Text(_)));

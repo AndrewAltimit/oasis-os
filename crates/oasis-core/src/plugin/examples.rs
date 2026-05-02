@@ -331,12 +331,8 @@ mod tests {
             stderr: String::new(),
         };
         let __out = cmds.execute("hello", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert_eq!(s, "Hello, World!");
     }
@@ -359,12 +355,8 @@ mod tests {
             stderr: String::new(),
         };
         let __out = cmds.execute("hello OASIS", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert_eq!(s, "Hello, OASIS!");
     }
@@ -417,12 +409,8 @@ mod tests {
             stderr: String::new(),
         };
         let __out = cmds.execute("pclock", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("plugin active"));
     }
@@ -455,23 +443,15 @@ mod tests {
         let __out = cmds
             .execute("note write todo Fix the bug", &mut env)
             .unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("saved"));
 
         // Read it back.
         let __out = cmds.execute("note read todo", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert_eq!(s, "Fix the bug");
     }
@@ -495,12 +475,8 @@ mod tests {
         };
         // Initially empty.
         let __out = cmds.execute("note list", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("no notes"));
 
@@ -508,12 +484,8 @@ mod tests {
         cmds.execute("note write memo Remember to test", &mut env)
             .unwrap();
         let __out = cmds.execute("note list", &mut env).unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("memo"));
     }

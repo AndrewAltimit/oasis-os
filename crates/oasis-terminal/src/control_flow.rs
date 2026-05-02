@@ -407,12 +407,8 @@ mod tests {
         let result = parse_and_execute("if test 1 -eq 1; then echo yes; fi", &reg, &mut env);
         assert!(result.is_some());
         let output = result.unwrap().unwrap();
-        assert!(
-            matches!(&output, CommandOutput::Text(_)),
-            "expected Text, got {output:?}"
-        );
         let CommandOutput::Text(t) = output else {
-            unreachable!()
+            panic!("expected Text, got {output:?}");
         };
         assert_eq!(t, "yes");
     }
@@ -430,12 +426,8 @@ mod tests {
         );
         assert!(result.is_some());
         let output = result.unwrap().unwrap();
-        assert!(
-            matches!(&output, CommandOutput::Text(_)),
-            "expected Text, got {output:?}"
-        );
         let CommandOutput::Text(t) = output else {
-            unreachable!()
+            panic!("expected Text, got {output:?}");
         };
         assert_eq!(t, "no");
     }
@@ -450,12 +442,8 @@ mod tests {
         assert!(result.is_some());
         // Last iteration echoes "c".
         let output = result.unwrap().unwrap();
-        assert!(
-            matches!(&output, CommandOutput::Text(_)),
-            "expected Text, got {output:?}"
-        );
         let CommandOutput::Text(t) = output else {
-            unreachable!()
+            panic!("expected Text, got {output:?}");
         };
         assert_eq!(t, "c");
     }

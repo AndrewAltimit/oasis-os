@@ -4,8 +4,9 @@
 //! Instead of:
 //!
 //! ```ignore
-//! assert!(matches!(&result, CommandOutput::Text(_)), "expected text, got {result:?}");
-//! let CommandOutput::Text(s) = result else { unreachable!() };
+//! let CommandOutput::Text(s) = result else {
+//!     panic!("expected CommandOutput::Text, got {result:?}");
+//! };
 //! assert!(s.contains("expected"));
 //! ```
 //!
@@ -15,9 +16,6 @@
 //! let s = assert_text!(result);
 //! assert!(s.contains("expected"));
 //! ```
-//!
-//! Some match/panic patterns remain in commands.rs, interpreter tests,
-//! and control_flow.rs that could still be converted.
 
 /// Assert that a [`CommandOutput`] is `Text` and return the inner `String`.
 ///
@@ -31,12 +29,8 @@
 macro_rules! assert_text {
     ($expr:expr) => {{
         let __val = $expr;
-        assert!(
-            matches!(&__val, $crate::CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__val:?}"
-        );
         let $crate::CommandOutput::Text(s) = __val else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__val:?}");
         };
         s
     }};

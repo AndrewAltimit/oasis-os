@@ -144,12 +144,8 @@ mod tests {
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         let __out = exec(&reg, &mut vfs, "listen").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected ListenToggle, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
-            unreachable!()
+            panic!("expected ListenToggle, got {__out:?}");
         };
         assert_eq!(port, 9000);
     }
@@ -160,12 +156,8 @@ mod tests {
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         let __out = exec(&reg, &mut vfs, "listen 8080").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected ListenToggle, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
-            unreachable!()
+            panic!("expected ListenToggle, got {__out:?}");
         };
         assert_eq!(port, 8080);
     }
@@ -176,12 +168,8 @@ mod tests {
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         let __out = exec(&reg, &mut vfs, "listen stop").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected ListenToggle, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
-            unreachable!()
+            panic!("expected ListenToggle, got {__out:?}");
         };
         assert_eq!(port, 0);
     }
@@ -192,13 +180,9 @@ mod tests {
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         let __out = exec(&reg, &mut vfs, "remote 192.168.0.50:9000").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected RemoteConnect, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) = __out
         else {
-            unreachable!()
+            panic!("expected RemoteConnect, got {__out:?}");
         };
         assert_eq!(address, "192.168.0.50");
         assert_eq!(port, 9000);
@@ -223,13 +207,9 @@ psk = "secret"
         )
         .unwrap();
         let __out = exec(&reg, &mut vfs, "remote myserver").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected RemoteConnect, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) = __out
         else {
-            unreachable!()
+            panic!("expected RemoteConnect, got {__out:?}");
         };
         assert_eq!(address, "10.0.0.1");
         assert_eq!(port, 8080);

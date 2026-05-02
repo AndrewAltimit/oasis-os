@@ -283,23 +283,15 @@ mod tests {
 
         // Switch to a skin.
         let __out = exec(&reg, &mut vfs, &mut cwd, "skin modern").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected SkinSwap, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = __out else {
-            unreachable!()
+            panic!("expected SkinSwap, got {__out:?}");
         };
         assert_eq!(name, "modern");
 
         // Switch to another skin.
         let __out = exec(&reg, &mut vfs, &mut cwd, "skin classic").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected SkinSwap, got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = __out else {
-            unreachable!()
+            panic!("expected SkinSwap, got {__out:?}");
         };
         assert_eq!(name, "classic");
     }

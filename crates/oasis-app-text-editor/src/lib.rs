@@ -569,7 +569,7 @@ mod tests {
         ] {
             let obj = sdi
                 .get(name)
-                .unwrap_or_else(|_| panic!("{name} should exist after update_sdi"));
+                .unwrap_or_else(|e| panic!("{name} should exist after update_sdi: {e:?}"));
             assert!(obj.visible, "{name} should be visible");
         }
         // Menu labels present.

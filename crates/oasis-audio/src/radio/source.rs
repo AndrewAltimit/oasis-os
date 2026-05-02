@@ -1025,7 +1025,7 @@ mod tests {
                         break;
                     }
                 },
-                Err(_) => panic!("unexpected error"),
+                Err(e) => panic!("unexpected error: {e:?}"),
             }
         }
         assert_eq!(total, 100);
