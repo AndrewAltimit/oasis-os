@@ -477,7 +477,9 @@ pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
 pub unsafe fn start_send(ep1: *mut UsbEndpoint, data: &[u8]) -> i32 {
     let len = data.len().min(SEND_BUF_SIZE);
 
-    // SAFETY: src and dst point to disjoint module-static buffers sized at least `n` bytes.
+    // SAFETY: dst is SEND_BUF (module-static) sized SEND_BUF_SIZE >= len; src is `data`,
+    // a caller-supplied shared reference that cannot alias a uniquely-borrowed module-static,
+    // so copy_nonoverlapping's non-overlap requirement is satisfied.
     unsafe {
         let dst = (&raw mut SEND_BUF.0) as *mut u8;
         core::ptr::copy_nonoverlapping(data.as_ptr(), dst, len);

@@ -320,7 +320,8 @@ pub unsafe fn init_usb_data() {
 
         // Byte-cast helper
         fn as_bytes<T>(v: &T) -> &[u8] {
-            // SAFETY: input is a `Sized` value owned by this scope; len = size_of::<T>().
+            // SAFETY: v is a valid shared reference for the duration of this call;
+            // len = size_of::<T>() so the resulting slice covers exactly v's bytes.
             unsafe {
                 core::slice::from_raw_parts(v as *const T as *const u8, core::mem::size_of::<T>())
             }
