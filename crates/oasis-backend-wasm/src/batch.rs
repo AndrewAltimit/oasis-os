@@ -110,6 +110,7 @@ impl SdiBatch for WasmBackend {
             return Ok(());
         }
         let n = (data.len() / 8) as u32;
+        let ctx = self.ctx();
 
         // SAFETY: the Float32Array view aliases WASM linear memory backing
         // `data`. We do not allocate or grow any Vec between view creation
@@ -117,7 +118,7 @@ impl SdiBatch for WasmBackend {
         // duration of the call. `data` is dropped after JS returns.
         unsafe {
             let view = js_sys::Float32Array::view(&data);
-            oasis_submit_rects(self.ctx(), &view, n);
+            oasis_submit_rects(ctx, &view, n);
         }
         Ok(())
     }
@@ -165,8 +166,9 @@ impl SdiBatch for WasmBackend {
             for ch in t.text.chars() {
                 let key = GlyphCacheKey::new(ch, font_size, t.color, false, false);
                 let Some(canvas) = self.glyph_canvas(&key) else {
-                    // Should not happen — pass 1 inserted every glyph —
-                    // but skip rather than panic if eviction races.
+                    // Should not happen — pass 1 inserted every glyph and
+                    // WASM is single-threaded, so the only way this misses
+                    // is a key-mismatch bug. Skip rather than panic.
                     cx += font::glyph_advance_scaled(ch, font_size) as f32;
                     continue;
                 };
@@ -189,6 +191,7 @@ impl SdiBatch for WasmBackend {
             return Ok(());
         }
         let n = (positions.len() / 2) as u32;
+        let ctx = self.ctx();
 
         // SAFETY: same invariant as `submit_rect_batch` — no allocations
         // between view creation and the JS call. `glyphs` is a JS Array
@@ -196,7 +199,7 @@ impl SdiBatch for WasmBackend {
         // movement.
         unsafe {
             let view = js_sys::Float32Array::view(&positions);
-            oasis_submit_glyphs(self.ctx(), &glyphs, &view, n);
+            oasis_submit_glyphs(ctx, &glyphs, &view, n);
         }
         Ok(())
     }
