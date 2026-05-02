@@ -5,6 +5,7 @@
 
 pub mod archive;
 pub mod audio;
+mod batch;
 pub mod font;
 mod gradients;
 pub mod iframe;
