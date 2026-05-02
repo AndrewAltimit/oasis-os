@@ -36,6 +36,8 @@ struct SharedTlsProvider(*const dyn oasis_net::tls::TlsProvider);
 // lifetime of the BrowserWidget. The I/O thread never outlives the widget.
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 unsafe impl Send for SharedTlsProvider {}
+// SAFETY: TlsProvider is Send + Sync, and the pointer is valid for the
+// lifetime of the BrowserWidget. The I/O thread never outlives the widget.
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 unsafe impl Sync for SharedTlsProvider {}
 

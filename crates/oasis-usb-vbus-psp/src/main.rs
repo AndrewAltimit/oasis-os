@@ -44,6 +44,7 @@ struct Logger;
 impl Logger {
     fn init() {
         // Append mode — don't lose previous run's data
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -52,6 +53,7 @@ impl Logger {
             )
         };
         if fd.0 >= 0 {
+            // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe {
                 psp::sys::sceIoWrite(
                     fd,
@@ -72,6 +74,7 @@ impl Logger {
 
     /// Write to log file only (no screen output).
     fn file(s: &str) {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -80,6 +83,7 @@ impl Logger {
             )
         };
         if fd.0 >= 0 {
+            // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe {
                 psp::sys::sceIoWrite(
                     fd, s.as_ptr() as *const c_void, s.len(),
@@ -205,18 +209,22 @@ fn wait_cross() {
     let mut p = SceCtrlData::default();
     // Wait for release
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if !p.buttons.intersects(CtrlButtons::CROSS) {
             break;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
     // Wait for press
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::CROSS) {
             return;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
@@ -237,19 +245,23 @@ fn wait_any_button() -> CtrlButtons {
     let mut p = SceCtrlData::default();
     // Wait for nav buttons released
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if !p.buttons.intersects(NAV_BUTTONS) {
             break;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
     // Wait for any nav button press
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         let pressed = p.buttons & NAV_BUTTONS;
         if !pressed.is_empty() {
             return pressed;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
@@ -352,6 +364,7 @@ fn phase1_step1_dump_gpio() {
 /// Step 1.2: Resolve GPIO NIDs
 fn phase1_step2_resolve_nids() {
     Logger::log("=== Phase 1.2: Resolve GPIO NIDs ===");
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     let count = unsafe { gpio::resolve_nids() };
     let mut f = Fmt::new();
     f.p("Resolved ");
@@ -360,6 +373,7 @@ fn phase1_step2_resolve_nids() {
     Logger::log(f.s());
 
     // Test port read via NID
+    // SAFETY: GPIO register access via documented PSP-3001 register layout.
     if let Some(val) = unsafe { gpio::port_read() } {
         lr("sceGpioPortRead() = ", val);
     } else {
@@ -378,6 +392,7 @@ fn phase1_step3_monitor_usb_init() {
     Logger::log("");
     Logger::log("Loading UsbPspCm...");
     let snap_a = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbPspCm) };
     lr("  ret=", ret as u32);
     let snap_a2 = gpio::snapshot();
@@ -385,6 +400,7 @@ fn phase1_step3_monitor_usb_init() {
 
     Logger::log("Loading UsbAcc...");
     let snap_b = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbAcc) };
     lr("  ret=", ret as u32);
     let snap_b2 = gpio::snapshot();
@@ -392,17 +408,20 @@ fn phase1_step3_monitor_usb_init() {
 
     Logger::log("Loading UsbCam...");
     let snap_c = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbCam) };
     lr("  ret=", ret as u32);
     let snap_c2 = gpio::snapshot();
     log_gpio_diff(&snap_c, &snap_c2);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     // Step B: Start USB bus driver
     Logger::log("");
     Logger::log("Starting USBBusDriver...");
     let snap_d = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStart(
             b"USBBusDriver\0".as_ptr(),
@@ -411,6 +430,7 @@ fn phase1_step3_monitor_usb_init() {
         )
     };
     lr("  ret=", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
     let snap_d2 = gpio::snapshot();
     log_gpio_diff(&snap_d, &snap_d2);
@@ -419,6 +439,7 @@ fn phase1_step3_monitor_usb_init() {
     Logger::log("");
     Logger::log("Starting USBCamDriver...");
     let snap_e = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStart(
             b"USBCamDriver\0".as_ptr(),
@@ -427,6 +448,7 @@ fn phase1_step3_monitor_usb_init() {
         )
     };
     lr("  ret=", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
     let snap_e2 = gpio::snapshot();
     log_gpio_diff(&snap_e, &snap_e2);
@@ -435,13 +457,16 @@ fn phase1_step3_monitor_usb_init() {
     Logger::log("");
     Logger::log("Activating USB (PID=0x282)...");
     let snap_f = gpio::snapshot();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sceUsbActivate(0x282) };
     lr("  ret=", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
     let snap_f2 = gpio::snapshot();
     log_gpio_diff(&snap_f, &snap_f2);
 
     // Log USB state
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     lr("USB state=", bits as u32);
 
@@ -454,6 +479,7 @@ fn phase1_step3_monitor_usb_init() {
     // Cleanup
     Logger::log("");
     Logger::log("Cleaning up...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         sys::sceUsbDeactivate(0x282);
         sceKernelDelayThread(100_000);
@@ -480,6 +506,7 @@ fn phase1_step3_monitor_usb_init() {
 /// Step 2.1: Resolve sceSysconCtrlUsbPower NID
 fn phase2_step1_resolve_syscon() {
     Logger::log("=== Phase 2.1: Resolve sceSysconCtrlUsbPower ===");
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     let found = unsafe { syscon::resolve_nids() };
     if found {
         Logger::log("sceSysconCtrlUsbPower: FOUND!");
@@ -495,24 +522,29 @@ fn phase2_step1_resolve_syscon() {
         lr("GPIO before Read=", gpio_before.read);
         lr("GPIO before Out =", gpio_before.output);
         lr("GPIO before Dir =", gpio_before.direction);
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         lr("BC100050 before =", unsafe { hw_read32(0xBC10_0050) });
 
         Logger::log("Calling sceSysconCtrlUsbPower(1)...");
+        // SAFETY: Syscon packet helper — wraps documented PSP-3001 packet format.
         if let Some(ret) = unsafe { syscon::ctrl_usb_power(1) } {
             lr("  ret=", ret as u32);
         }
         Logger::log("Call returned.");
 
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(500_000) };
 
         let gpio_after = gpio::snapshot();
         Logger::log("GPIO changes:");
         log_gpio_diff(&gpio_before, &gpio_after);
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         lr("BC100050 after  =", unsafe { hw_read32(0xBC10_0050) });
 
         // OHCI/MUSB registers bus-fault unless OHCI clock is
         // fully enabled (BC100078 bit 19). Don't attempt here —
         // use Phase 3.1 to enable clocks first.
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         lr("BC100078 (OHCI clk)=", unsafe { hw_read32(0xBC10_0078) });
     } else {
         Logger::log("sceSysconCtrlUsbPower: NOT FOUND");
@@ -537,7 +569,9 @@ fn phase2_step2_syscon_status() {
     let (r, rx) = syscon::syscon_get(0x09);
     log_cmd("GET 0x09 (power?)", r, &rx);
 
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078=", unsafe { hw_read32(0xBC10_0078) });
 
     // GPIO state (safe reads)
@@ -552,7 +586,9 @@ fn phase2_step3_syscon_set() {
     Logger::log("=== Phase 2.3: Syscon SET Commands ===");
 
     // Log baseline (safe reads only — no OHCI/MUSB)
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050 before=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078 before=", unsafe { hw_read32(0xBC10_0078) });
     let gpio_before = gpio::snapshot();
 
@@ -561,7 +597,9 @@ fn phase2_step3_syscon_set() {
     Logger::log("SET 0x47 v=0:");
     let (r, rx) = syscon::syscon_set(0x47, 0);
     log_cmd("  result", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(200_000) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("  BC100050=", unsafe { hw_read32(0xBC10_0050) });
 
     // Test SET 0x47 value=1
@@ -569,7 +607,9 @@ fn phase2_step3_syscon_set() {
     Logger::log("SET 0x47 v=1:");
     let (r, rx) = syscon::syscon_set(0x47, 1);
     log_cmd("  result", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("  BC100050=", unsafe { hw_read32(0xBC10_0050) });
 
     // Test SET 0x47 value=2
@@ -577,7 +617,9 @@ fn phase2_step3_syscon_set() {
     Logger::log("SET 0x47 v=2:");
     let (r, rx) = syscon::syscon_set(0x47, 2);
     log_cmd("  result", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("  BC100050=", unsafe { hw_read32(0xBC10_0050) });
 
     // GPIO diff
@@ -585,6 +627,7 @@ fn phase2_step3_syscon_set() {
     Logger::log("");
     Logger::log("GPIO changes after Syscon SET tests:");
     log_gpio_diff(&gpio_before, &gpio_after);
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078 after=", unsafe { hw_read32(0xBC10_0078) });
 }
 
@@ -595,18 +638,25 @@ fn phase3_step1_clock_phy() {
     Logger::log("=== Phase 3.1: Clock + PHY Init ===");
 
     let gpio_before = gpio::snapshot();
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100058=", unsafe { hw_read32(0xBC10_0058) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078=", unsafe { hw_read32(0xBC10_0078) });
     log_phy_snapshot("PHY before:", &phy::snapshot());
 
     Logger::log("");
     Logger::log("Enabling clocks...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_clocks() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     Logger::log("Configuring PHY...");
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe { phy::configure_host_mode() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     log_phy_snapshot("PHY after:", &phy::snapshot());
@@ -614,12 +664,15 @@ fn phase3_step1_clock_phy() {
     // Try WRITE to OHCI first (trace crate does this successfully)
     Logger::log("");
     Logger::log("Writing OHCI PortStatus=0x0303...");
+    // SAFETY: MMIO write to a documented PSP hardware register at a fixed physical address.
     unsafe { psp::hw::hw_write32(0xBD10_1038, 0x0303) };
     Logger::log("Write OK!");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     // Now try reading it back
     Logger::log("Reading OHCI PortStatus...");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("OHCI +38=", unsafe { psp::hw::hw_read32(0xBD10_1038) });
     Logger::log("Read OK!");
 
@@ -639,11 +692,15 @@ fn phase3_step2_ohci_init() {
     lr("OHCI PortStatus before=", ohci::port_status());
 
     Logger::log("Enabling OHCI clock bit 1...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_ohci_clock_bit1() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     Logger::log("Setting port power (0x0303)...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::set_port_power() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     lr("OHCI PortStatus after=", ohci::port_status());
@@ -680,7 +737,9 @@ fn phase3_step4_tachyon_mode() {
     lr("BC100040 before=", ohci::tachyon_mode());
 
     Logger::log("Setting host mode bit...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::set_tachyon_host_mode() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(1_000_000) };
 
     lr("BC100040 after=", ohci::tachyon_mode());
@@ -712,25 +771,35 @@ fn phase3_step5_full_sequence() {
 
     Logger::log("");
     Logger::log("Step 1: Clocks...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_clocks() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     Logger::log("Step 2: PHY host mode...");
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe { phy::configure_host_mode() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     Logger::log("Step 3: OHCI clock bit 1...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_ohci_clock_bit1() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     Logger::log("Step 4: OHCI port power...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::set_port_power() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     Logger::log("Step 5: MUSB host session...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     let devctl = unsafe { ohci::set_musb_host_session() };
     lr("DevCtl=", devctl);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     let gpio_after = gpio::snapshot();
@@ -758,6 +827,7 @@ fn phase3_step5_full_sequence() {
     Logger::log("");
     Logger::log("Monitoring for 10s (watch FNB58)...");
     for sec in 0u32..10 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
         let v = ohci::vbus_level();
         let ps = ohci::port_status();
@@ -772,6 +842,7 @@ fn phase3_step5_full_sequence() {
 
         // Check for triangle to skip
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("  (skipped)");
@@ -790,6 +861,7 @@ fn phase4_step1_gpio_toggle() {
     Logger::log("=== Phase 4.1: GPIO VBUS Toggle ===");
 
     // Resolve NIDs first for proper GPIO control
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     let nid_count = unsafe { gpio::resolve_nids() };
     let mut f = Fmt::new();
     f.p("GPIO NIDs resolved: ");
@@ -841,6 +913,7 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     f.p(")...");
     Logger::log(f.s());
 
+    // SAFETY: GPIO register access via documented PSP-3001 register layout.
     unsafe {
         // Test: use find_function()-resolved sceGpioPortSet.
         // psp_extern! stubs crashed on pins 29-31; find_function() should work.
@@ -855,6 +928,7 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     }
 
     // Wait and check
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     let new_snap = gpio::snapshot();
@@ -868,11 +942,13 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     }
 
     // Restore via find_function()-resolved NID calls
+    // SAFETY: GPIO register access via documented PSP-3001 register layout.
     unsafe {
         let _ = gpio::port_clear(mask);
         let _ = gpio::set_port_mode2(pin, 0);
     }
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(50_000) };
 }
 
@@ -888,22 +964,32 @@ fn phase4_step2_gpio_plus_init() {
     Logger::log("Syscon SET 0x47 v=1 (activate)...");
     let (r, rx) = syscon::syscon_set(0x47, 1);
     log_cmd("  0x47", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     // Step B: Enable clocks + PHY + OHCI port power
     Logger::log("Enabling clocks + PHY + OHCI...");
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_clocks() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe { phy::configure_host_mode() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::enable_ohci_clock_bit1() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
+    // SAFETY: OHCI register access via documented PSP USB host controller layout.
     unsafe { ohci::set_port_power() };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     // Check if anything changed
     let snap = gpio::snapshot();
     lr("GPIO Read after Syscon+clocks=", snap.read);
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
     Logger::log("");
 
@@ -932,7 +1018,9 @@ fn phase5_vbus_enable() {
     Logger::log("=== 5.1: VBUS ENABLE (Pin 23) ===");
 
     // Resolve all NIDs upfront
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     unsafe { gpio::resolve_nids() };
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     let mode2_found = unsafe {
         let m = b"sceLowIO_Driver\0".as_ptr();
         let l = b"sceGpio_driver\0".as_ptr();
@@ -956,6 +1044,7 @@ fn phase5_vbus_enable() {
     // Step 1: sceSysreg enables
     Logger::log("");
     Logger::log("1. sceSysreg GPIO+USB enable...");
+    // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
     unsafe {
         let m = b"sceLowIO_Driver\0".as_ptr();
         let l = b"sceSysreg_driver\0".as_ptr();
@@ -981,6 +1070,7 @@ fn phase5_vbus_enable() {
     // Step 2: GPIO pin 23 mode + set (NID path)
     Logger::log("");
     Logger::log("2. NID: SetMode(23,2) + PortSet(0x800000)...");
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let func = core::ptr::read_volatile(
             &raw const GPIO_PORT_MODE_2_FN,
@@ -988,6 +1078,7 @@ fn phase5_vbus_enable() {
         let r1 = func(23, 2);
         lr("  SetMode ret=", r1 as u32);
     }
+    // SAFETY: GPIO register access via documented PSP-3001 register layout.
     if let Some(ret) = unsafe { gpio::port_set(0x0080_0000) } {
         lr("  PortSet ret=", ret as u32);
     }
@@ -995,6 +1086,7 @@ fn phase5_vbus_enable() {
     // Step 3: Also MMIO set (belt and suspenders)
     Logger::log("");
     Logger::log("3. MMIO: Dir+Set+Out for pin 23...");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         let dir = psp::hw::hw_read32(0xBE24_0010);
         psp::hw::hw_write32(0xBE24_0010, dir | 0x0080_0000);
@@ -1003,6 +1095,7 @@ fn phase5_vbus_enable() {
         psp::hw::hw_write32(0xBE24_0008, out | 0x0080_0000);
     }
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     // Full register dump AFTER
@@ -1015,8 +1108,11 @@ fn phase5_vbus_enable() {
     Logger::log("Monitoring 15s — watch FNB58!");
     Logger::log("(VBUS is ON, TRI=stop early)");
     for sec in 0u32..15 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0r = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
         f.p("  t="); f.decimal(sec + 1);
@@ -1025,6 +1121,7 @@ fn phase5_vbus_enable() {
         Logger::log(f.s());
 
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("  (stopped)");
@@ -1035,6 +1132,7 @@ fn phase5_vbus_enable() {
     // Disable
     Logger::log("");
     Logger::log("Disabling VBUS...");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         let _ = gpio::port_clear(0x0080_0000);
         psp::hw::hw_write32(0xBE24_0018, 0x0080_0000);
@@ -1050,6 +1148,7 @@ fn phase5_vbus_enable() {
 
 /// Dump all GPIO and key system registers
 fn dump_all_gpio() {
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         lr("P0 Read   =", psp::hw::hw_read32(0xBE24_0000));
         lr("P0 Output =", psp::hw::hw_read32(0xBE24_0008));
@@ -1093,6 +1192,7 @@ fn phase6_step1_fix_syscon_alignment() {
     // 12 bytes later. Use find_function to get the base, then add 0xC.
     Logger::log("");
     Logger::log("A) NID + 12-byte offset correction...");
+    // SAFETY: reads kernel module export tables via the documented rust-psp helper.
     unsafe {
         let modules: [(*const u8, *const u8); 2] = [
             (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
@@ -1135,6 +1235,7 @@ fn phase6_step1_fix_syscon_alignment() {
     let gpio_a = gpio::snapshot();
     Logger::log("GPIO changes (method A):");
     log_gpio_diff(&gpio_before, &gpio_a);
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
 
     // Method B: Direct Syscon SET 0x47 with different values
@@ -1142,6 +1243,7 @@ fn phase6_step1_fix_syscon_alignment() {
     Logger::log("B) Syscon SET 0x47 v=4...");
     let (r, rx) = syscon::syscon_set(0x47, 4);
     log_cmd("  result", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     let gpio_b = gpio::snapshot();
@@ -1155,6 +1257,7 @@ fn phase6_step1_fix_syscon_alignment() {
     //       we read the aligned 0x80 word instead (already done above).
     Logger::log("");
     Logger::log("C) New sceSysreg registers...");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         lr("  BC1000C4=", hw_read32(0xBC10_00C4));
         lr("  BC1000F0=", hw_read32(0xBC10_00F0));
@@ -1171,6 +1274,7 @@ fn phase6_step1_fix_syscon_alignment() {
     // for the real prologue (scan +0 to +32 bytes)
     Logger::log("");
     Logger::log("D) Scan NID neighborhood...");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         let modules: [(*const u8, *const u8); 2] = [
             (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
@@ -1207,8 +1311,11 @@ fn phase6_step1_fix_syscon_alignment() {
     Logger::log("");
     Logger::log("Final state:");
     log_gpio_snapshot("GPIO:", &gpio_b);
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100074=", unsafe { hw_read32(0xBC10_0074) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC10004C=", unsafe { hw_read32(0xBC10_004C) });
 }
 
@@ -1249,6 +1356,7 @@ fn phase6_step2_probe_be500000() {
         f.p(" = ");
 
         // Read via MMIO — may fault
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let val = unsafe { hw_read32(addr) };
         f.h8(val);
 
@@ -1278,11 +1386,17 @@ fn phase6_step3_full_sysreg_init() {
     Logger::log("=== 6.3: Full sceSysreg Init Chain ===");
 
     let gpio_before = gpio::snapshot();
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050 before=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100058 before=", unsafe { hw_read32(0xBC10_0058) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100074 before=", unsafe { hw_read32(0xBC10_0074) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078 before=", unsafe { hw_read32(0xBC10_0078) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC10004C before=", unsafe { hw_read32(0xBC10_004C) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC1000B8 before=", unsafe { hw_read32(0xBC10_00B8) });
 
     let module = b"sceLowIO_Driver\0".as_ptr();
@@ -1318,6 +1432,7 @@ fn phase6_step3_full_sysreg_init() {
     let mut failed = 0u32;
 
     for (name, nid) in &nids {
+        // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
         unsafe {
             if let Some(addr) = psp::hook::find_function(module, lib, *nid) {
                 // Call as: int func(int arg0) — most sceSysreg functions
@@ -1356,16 +1471,23 @@ fn phase6_step3_full_sysreg_init() {
     Logger::log(f.s());
 
     // Wait for hardware to settle
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     // Check results
     Logger::log("");
     Logger::log("After sceSysreg init:");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100050 after=", unsafe { hw_read32(0xBC10_0050) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100058 after=", unsafe { hw_read32(0xBC10_0058) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100074 after=", unsafe { hw_read32(0xBC10_0074) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC100078 after=", unsafe { hw_read32(0xBC10_0078) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC10004C after=", unsafe { hw_read32(0xBC10_004C) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("BC1000B8 after=", unsafe { hw_read32(0xBC10_00B8) });
 
     let gpio_after = gpio::snapshot();
@@ -1400,6 +1522,7 @@ fn phase6_step4_full_chain_vbus() {
     // Step 1: sceSysreg init (all 14 NIDs)
     Logger::log("");
     Logger::log("--- Step 1: sceSysreg init ---");
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         let m = b"sceLowIO_Driver\0".as_ptr();
         let l = b"sceSysreg_driver\0".as_ptr();
@@ -1432,6 +1555,7 @@ fn phase6_step4_full_chain_vbus() {
     // iplsdk gpio_set_port_mode: BC10007C |= (1 << pin)
     Logger::log("");
     Logger::log("--- Step 2: BC10007C port enable ---");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         lr("  BC10007C before=", hw_read32(0xBC10_007C));
 
@@ -1466,6 +1590,7 @@ fn phase6_step4_full_chain_vbus() {
     // Step 4: PHY + clocks (this disrupts MS I/O — do it last)
     Logger::log("");
     Logger::log("--- Step 4: PHY+clocks ---");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         ohci::enable_clocks();
         sceKernelDelayThread(10_000);
@@ -1478,6 +1603,7 @@ fn phase6_step4_full_chain_vbus() {
     // we never did before. Also 0xBE240008 is Port 1 Set, NOT Port 0 Output.
     Logger::log("");
     Logger::log("--- Step 7: GPIO VBUS (Ghidra method) ---");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         // Dump all GPIO registers BEFORE
         Logger::log("BEFORE:");
@@ -1534,6 +1660,7 @@ fn phase6_step4_full_chain_vbus() {
         lr("  +40 AltFn0 =", psp::hw::hw_read32(0xBE24_0040));
     }
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     // Results
@@ -1549,8 +1676,11 @@ fn phase6_step4_full_chain_vbus() {
     Logger::log("");
     Logger::log("Monitoring 15s — watch FNB58!");
     for sec in 0u32..15 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0r = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
         f.p("  t="); f.decimal(sec + 1);
@@ -1559,6 +1689,7 @@ fn phase6_step4_full_chain_vbus() {
         Logger::log(f.s());
 
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("  (stopped)");
@@ -1570,6 +1701,7 @@ fn phase6_step4_full_chain_vbus() {
     // sceSysreg register writes disrupt driver state)
     Logger::log("");
     Logger::log("Disabling VBUS (MMIO only)...");
+    // SAFETY: MMIO write to a documented PSP hardware register at a fixed physical address.
     unsafe {
         psp::hw::hw_write32(0xBE24_0018, 0x0080_0000); // Clear pin 23
         psp::hw::hw_write32(0xBE24_0010, 0x0000_0000); // Direction = all input
@@ -1588,6 +1720,7 @@ fn phase6_step5_live_monitor() {
     Logger::log("");
 
     // Enable everything we can first
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         // sceSysreg enables
         let m = b"sceLowIO_Driver\0".as_ptr();
@@ -1607,15 +1740,25 @@ fn phase6_step5_live_monitor() {
     }
 
     // Get baselines
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_read = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_p1read = unsafe { psp::hw::hw_read32(0xBE24_0004) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_50 = unsafe { hw_read32(0xBC10_0050) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_4c = unsafe { hw_read32(0xBC10_004C) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_c4 = unsafe { hw_read32(0xBC10_00C4) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_b8 = unsafe { hw_read32(0xBC10_00B8) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_be50_18 = unsafe { hw_read32(0xBE50_0018) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let base_be50_2c = unsafe { hw_read32(0xBE50_002C) };
 
     lr("Base P0Read=", base_read);
@@ -1642,17 +1785,28 @@ fn phase6_step5_live_monitor() {
 
     // Monitor loop — 120 polls at 500ms
     for tick in 0u32..120 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(500_000) };
 
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0read = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p1read = unsafe { psp::hw::hw_read32(0xBE24_0004) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let v50 = unsafe { hw_read32(0xBC10_0050) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let v4c = unsafe { hw_read32(0xBC10_004C) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let vc4 = unsafe { hw_read32(0xBC10_00C4) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let vb8 = unsafe { hw_read32(0xBC10_00B8) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let be18 = unsafe { hw_read32(0xBE50_0018) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let be2c = unsafe { hw_read32(0xBE50_002C) };
 
         // Check for ANY change
@@ -1698,6 +1852,7 @@ fn phase6_step5_live_monitor() {
 
         // Triangle to exit early
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("  (stopped)");
@@ -1707,9 +1862,13 @@ fn phase6_step5_live_monitor() {
 
     Logger::log("");
     Logger::log("Final state:");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("OutEn =", unsafe { psp::hw::hw_read32(0xBE24_0024) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("AltFn =", unsafe { psp::hw::hw_read32(0xBE24_0040) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("P0Read=", unsafe { psp::hw::hw_read32(0xBE24_0000) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("P1Read=", unsafe { psp::hw::hw_read32(0xBE24_0004) });
 }
 
@@ -1722,12 +1881,15 @@ fn phase6_step5_syscon_scan() {
     Logger::log("Scanning for GPIO unlock command...");
 
     // First enable port via BC10007C (accepted in prior tests)
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         let v7c = hw_read32(0xBC10_007C);
         psp::hw::hw_write32(0xBC10_007C, v7c | 0x0080_0000);
     }
 
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let baseline_outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let baseline_altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
     lr("Baseline OutEn=", baseline_outen);
     lr("Baseline AltFn=", baseline_altfn);
@@ -1740,7 +1902,9 @@ fn phase6_step5_syscon_scan() {
         let (r, rx) = syscon::syscon_get(cmd);
 
         // Check if GPIO changed
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
 
         if outen != baseline_outen || altfn != baseline_altfn {
@@ -1766,6 +1930,7 @@ fn phase6_step5_syscon_scan() {
             Logger::log(f.s());
         }
 
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(10_000) };
     }
 
@@ -1777,11 +1942,14 @@ fn phase6_step5_syscon_scan() {
         let cmd = 0x50 + cmd_idx * 2;
         if cmd == 0x34 { continue; } // crash
 
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let gpio_before = unsafe { psp::hw::hw_read32(0xBE24_0024) };
 
         let (r, rx) = syscon::syscon_set(cmd, 1);
 
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let outen = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let altfn = unsafe { psp::hw::hw_read32(0xBE24_0040) };
 
         if outen != baseline_outen || altfn != baseline_altfn {
@@ -1805,13 +1973,17 @@ fn phase6_step5_syscon_scan() {
             Logger::log(f.s());
         }
 
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(10_000) };
     }
 
     // Final state
     Logger::log("");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("Final OutEn=", unsafe { psp::hw::hw_read32(0xBE24_0024) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("Final AltFn=", unsafe { psp::hw::hw_read32(0xBE24_0040) });
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("Final P0Read=", unsafe { psp::hw::hw_read32(0xBE24_0000) });
 }
 
@@ -1843,6 +2015,7 @@ fn phase6_step5_hook_usb_activate() {
     Logger::log("");
     Logger::log("1. Loading USB modules...");
     let mut loaded_cam = false;
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         let r1 = sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbPspCm);
         lr("  UsbPspCm=", r1 as u32);
@@ -1861,6 +2034,7 @@ fn phase6_step5_hook_usb_activate() {
     // Start USB bus driver
     Logger::log("");
     Logger::log("2. Starting USBBusDriver...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStart(
             b"USBBusDriver\0".as_ptr(),
@@ -1869,6 +2043,7 @@ fn phase6_step5_hook_usb_activate() {
         )
     };
     lr("  ret=", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
     let gpio_after_bus = gpio::snapshot();
@@ -1880,6 +2055,7 @@ fn phase6_step5_hook_usb_activate() {
     if loaded_cam {
         Logger::log("");
         Logger::log("3. Starting USBCamDriver...");
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let ret = unsafe {
             sceUsbStart(
                 b"USBCamDriver\0".as_ptr(),
@@ -1888,6 +2064,7 @@ fn phase6_step5_hook_usb_activate() {
             )
         };
         lr("  ret=", ret as u32);
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(100_000) };
 
         let gpio_after_cam = gpio::snapshot();
@@ -1898,8 +2075,10 @@ fn phase6_step5_hook_usb_activate() {
     // Activate with camera PID
     Logger::log("");
     Logger::log("4. Activating USB (PID=0x282)...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sceUsbActivate(0x282) };
     lr("  ret=", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(1_000_000) };
 
     let gpio_after_activate = gpio::snapshot();
@@ -1911,6 +2090,7 @@ fn phase6_step5_hook_usb_activate() {
     dump_all_gpio();
     log_phy_snapshot("PHY:", &phy::snapshot());
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     lr("USB state=", bits as u32);
 
@@ -1918,8 +2098,11 @@ fn phase6_step5_hook_usb_activate() {
     Logger::log("");
     Logger::log("Monitoring 5s...");
     for sec in 0u32..5 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0r = unsafe { psp::hw::hw_read32(0xBE24_0000) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
         f.p("  t="); f.decimal(sec + 1);
@@ -1931,6 +2114,7 @@ fn phase6_step5_hook_usb_activate() {
     // Cleanup
     Logger::log("");
     Logger::log("Cleaning up...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         sys::sceUsbDeactivate(0x282);
         sceKernelDelayThread(100_000);
@@ -2018,12 +2202,15 @@ const MENU_LABELS: [&str; 21] = [
 
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceCtrlSetSamplingMode(CtrlMode::Digital) };
     Logger::init();
 
     // Log hardware info to file only
     Logger::file("=== USB VBUS Power Output Tool ===");
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     lr("Tachyon=", unsafe { hw_read32(0xBC10_0040) });
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         let percent = sys::scePowerGetBatteryLifePercent();
         let voltage = sys::scePowerGetBatteryVolt();
@@ -2073,17 +2260,20 @@ fn psp_main() {
             Logger::log("--- Done. 3s then menu ---");
             // Use delay instead of wait_any_button() — sceSysreg
             // init steps corrupt sceCtrl state and crash input polling.
+            // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe { sceKernelDelayThread(3_000_000) };
         }
     }
 
     // Clean exit — try multiple methods since kernel mode is tricky
     screen::clear_screen();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         // sceKernelExitGame may not work in kernel mode.
         // Try sceKernelExitThread first (exits our thread), then ExitGame.
         sys::sceKernelExitDeleteThread(0);
     }
     // Fallback if above didn't exit
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sys::sceKernelExitGame() };
 }

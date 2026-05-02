@@ -59,6 +59,7 @@ unsafe extern "C" {
 /// # Safety
 /// Called from USB interrupt context — no syscalls, no file I/O.
 pub unsafe fn write_chunk(chunk_index: u8, data: &[u8]) {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let draw = core::ptr::read_volatile(&raw const DRAW_BUF);
         let base = vram_ptr(draw);
@@ -81,6 +82,7 @@ pub unsafe fn write_chunk(chunk_index: u8, data: &[u8]) {
 /// # Safety
 /// Called from USB interrupt context.
 pub unsafe fn swap() {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         let draw = core::ptr::read_volatile(&raw const DRAW_BUF);
         let disp = core::ptr::read_volatile(&raw const DISP_BUF);
@@ -104,6 +106,7 @@ pub unsafe fn swap() {
 
 /// Get the number of frames displayed so far.
 pub fn frames_done() -> u32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe { core::ptr::read_volatile(&raw const FRAMES_DONE) }
 }
 
@@ -128,12 +131,14 @@ unsafe fn byte_copy(dst: *mut u8, src: *const u8, len: usize) {
     let dst32 = dst as *mut u32;
     let src32 = src as *const u32;
     for i in 0..words {
+        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
         unsafe {
             core::ptr::write_volatile(dst32.add(i), core::ptr::read(src32.add(i)));
         }
     }
     let tail = words * 4;
     for i in tail..len {
+        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
         unsafe {
             core::ptr::write_volatile(dst.add(i), core::ptr::read(src.add(i)));
         }

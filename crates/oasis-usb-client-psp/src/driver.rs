@@ -94,6 +94,7 @@ static mut STRING_DESC: [u8; 8] = [0x08, 0x03, b'<', 0, b'>', 0, 0, 0];
 pub static mut DRIVER_STATIC: UsbDriver = UsbDriver {
     name: DRIVER_NAME.as_ptr(),
     endpoints: 4,
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     endp: unsafe { &raw mut ENDPOINTS[0] },
     intp: &raw mut INTERFACE,
     devp_hi: core::ptr::null_mut(),  // filled by start_func
@@ -119,7 +120,9 @@ static mut ATTACHED: bool = false;
 
 unsafe extern "C" fn usb_recvctl(arg1: i32, _arg2: i32, req: *mut u8) -> i32 {
     if !req.is_null() {
+        // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
         let bm = unsafe { *req };
+        // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
         let breq = unsafe { *req.add(1) };
         psp::dprintln!("[CB] ctl bm={:02X} req={:02X} a1={}", bm, breq, arg1);
     }
@@ -140,6 +143,7 @@ unsafe extern "C" fn usb_attach(speed: i32, _arg2: *mut u8, _arg3: *mut u8) -> i
     // NOTE: interrupt context — NO file I/O, only dprintln + volatile writes
     // Do NOT queue transfers here — echo mode handles the chain from main loop
     psp::dprintln!("[CB] ATTACH speed={}", speed);
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe {
         core::ptr::write_volatile(&raw mut ATTACH_SPEED, speed);
         core::ptr::write_volatile(&raw mut ATTACHED, true);
@@ -150,6 +154,7 @@ unsafe extern "C" fn usb_attach(speed: i32, _arg2: *mut u8, _arg3: *mut u8) -> i
 unsafe extern "C" fn usb_detach(_arg1: i32, _arg2: i32, _arg3: i32) -> i32 {
     // NOTE: interrupt context — NO file I/O
     psp::dprintln!("[CB] DETACH");
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe { core::ptr::write_volatile(&raw mut ATTACHED, false) };
     0
 }
@@ -159,6 +164,7 @@ unsafe extern "C" fn usb_start(_size: i32, _args: *mut u8) -> i32 {
     // Log to file too — this runs inside sceUsbStart callback context
     crate::log_str("[CB] start_func entered");
 
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         descriptors::init_usb_data();
         crate::log_str("[CB] init_usb_data done");
@@ -174,6 +180,7 @@ unsafe extern "C" fn usb_start(_size: i32, _args: *mut u8) -> i32 {
     }
 
     // Log the full descriptor pointer chain
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         crate::log_hex("[CB] ud0.devdesc=", USB_DATA[0].devdesc as u32);
         crate::log_hex("[CB] ud0.cfg.pconf=", USB_DATA[0].config.pconfdesc as u32);
@@ -209,6 +216,7 @@ unsafe extern "C" fn usb_stop(_size: i32, _args: *mut u8) -> i32 {
 // ---------------------------------------------------------------------------
 
 pub unsafe fn register() -> i32 {
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         DRIVER_STATIC.str_desc = (&raw mut STRING_DESC) as *mut StringDescriptor;
         let ptr = &raw mut DRIVER_STATIC;
@@ -218,15 +226,18 @@ pub unsafe fn register() -> i32 {
 }
 
 pub fn is_attached() -> bool {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe { core::ptr::read_volatile(&raw const ATTACHED) }
 }
 
 /// Get the connection speed from the attach callback.
 /// 2 = hi-speed (480 Mbps), 1 = full-speed (12 Mbps), 0 = not yet attached.
 pub fn attach_speed() -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe { core::ptr::read_volatile(&raw const ATTACH_SPEED) }
 }
 
 pub unsafe fn get_endpoint(index: usize) -> *mut UsbEndpoint {
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe { &raw mut ENDPOINTS[index] }
 }

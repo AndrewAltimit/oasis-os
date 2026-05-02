@@ -857,8 +857,10 @@ impl Drop for FfmpegDecoder {
         self.scaler.take();
         self.resampler.take();
 
-        // SAFETY: Close the format context. This also frees the AVIO context.
         if !self.format_ctx.is_null() {
+            // SAFETY: Close the format context. This also frees the AVIO
+            // context. `format_ctx` was set by `avformat_open_input` and
+            // not yet freed (we just null-checked above).
             unsafe {
                 ffi::avformat_close_input(&mut self.format_ctx);
             }

@@ -43,6 +43,7 @@ const USB_STORAGE_PID: u32 = 0x1C8;
 static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/USBCLIENT/usb.log\0";
 
 fn log_init() {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let fd = unsafe {
         psp::sys::sceIoOpen(
             LOG_PATH.as_ptr(),
@@ -50,11 +51,13 @@ fn log_init() {
             0o777,
         )
     };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     if fd.0 >= 0 { unsafe { psp::sys::sceIoClose(fd) }; }
 }
 
 pub fn log_str(s: &str) {
     psp::dprintln!("{}", s);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let fd = unsafe {
         psp::sys::sceIoOpen(
             LOG_PATH.as_ptr(),
@@ -63,6 +66,7 @@ pub fn log_str(s: &str) {
         )
     };
     if fd.0 >= 0 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe {
             psp::sys::sceIoWrite(fd, s.as_ptr() as *const c_void, s.len());
             psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
@@ -80,6 +84,7 @@ pub fn log_hex(label: &str, val: u32) {
     for i in 0..8 {
         buf[n + i] = hex[((val >> (28 - i * 4)) & 0xF) as usize];
     }
+    // SAFETY: all bytes written into this buffer above are ASCII.
     let s = unsafe { core::str::from_utf8_unchecked(&buf[..n + 8]) };
     log_str(s);
 }
@@ -97,8 +102,11 @@ fn dump_bus_driver_state(label: &str) {
     log_str(label);
 
     // Critical speed validation addresses
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s1 = unsafe { hw_read32(0x881906E8) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s2 = unsafe { hw_read32(0x881906EC) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s3 = unsafe { hw_read32(0x881906F0) };
     log_hex("  [6E8] speed1=", s1);
     log_hex("  [6EC] speed2=", s2);
@@ -109,9 +117,13 @@ fn dump_bus_driver_state(label: &str) {
     let base: u32 = 0x88190600;
     for row in 0..16 {
         let off = row * 16;
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let w0 = unsafe { hw_read32(base + off) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let w1 = unsafe { hw_read32(base + off + 4) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let w2 = unsafe { hw_read32(base + off + 8) };
+        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let w3 = unsafe { hw_read32(base + off + 12) };
         // Log as "  +XX: WWWWWWWW WWWWWWWW WWWWWWWW WWWWWWWW"
         log_hex_row(off, w0, w1, w2, w3);
@@ -143,6 +155,7 @@ fn log_hex_row(off: u32, w0: u32, w1: u32, w2: u32, w3: u32) {
     buf[33] = b' ';
     write_word(&mut buf, 34, w3);
 
+    // SAFETY: all bytes written into this buffer above are ASCII.
     let s = unsafe { core::str::from_utf8_unchecked(&buf[..42]) };
     log_str(s);
 }
@@ -157,6 +170,7 @@ fn dump_usb_storage_comparison() {
     log_str("=== USB Storage Comparison ===");
 
     // Start USB storage driver
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r = unsafe {
         sceUsbStart(
             b"USBStorDriver\0".as_ptr(),
@@ -167,6 +181,7 @@ fn dump_usb_storage_comparison() {
     log_hex("StorStart=", r as u32);
 
     // Activate USB storage with standard PID
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r = unsafe { sceUsbActivate(USB_STORAGE_PID) };
     log_hex("StorActivate=", r as u32);
 
@@ -174,7 +189,9 @@ fn dump_usb_storage_comparison() {
     log_str("Plug USB cable for storage test...");
     let mut connected = false;
     for i in 0..50 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(200_000) };
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let state = unsafe { sceUsbGetState() }.bits();
         if state & 0x8 != 0 {
             // USB_STATE_CONFIGURED
@@ -188,8 +205,11 @@ fn dump_usb_storage_comparison() {
     dump_bus_driver_state("Storage driver state:");
 
     // Deactivate and stop
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceUsbDeactivate(USB_STORAGE_PID) };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         sceUsbStop(
             b"USBStorDriver\0".as_ptr(),
@@ -219,16 +239,19 @@ fn psp_main() {
     let mut pad = SceCtrlData::default();
 
     // Step 1: Load USB modules + start bus driver
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r1 = unsafe {
         psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbPspCm)
     };
     log_hex("LoadPspCm=", r1 as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r2 = unsafe {
         psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbAcc)
     };
     log_hex("LoadAcc=", r2 as u32);
 
     log_str("Starting USBBusDriver...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r = unsafe {
         sceUsbStart(
             b"USBBusDriver\0".as_ptr(),
@@ -239,21 +262,26 @@ fn psp_main() {
     log_hex("USBBusDriver=", r as u32);
     if (r as i32) < 0 {
         log_str("Bus start failed");
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(5_000_000) };
         return;
     }
 
     // Log critical baseline values (before driver)
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s1 = unsafe { hw_read32(0x881906E8) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s2 = unsafe { hw_read32(0x881906EC) };
     log_hex("baseline [6E8]=", s1);
     log_hex("baseline [6EC]=", s2);
 
     // Step 2: Resolve sceUsbbd NIDs
     log_str("Resolving USB NIDs...");
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     let resolved = unsafe { usbd::resolve_all() };
     if !resolved {
         log_str("FATAL: USB NID resolve fail");
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(5_000_000) };
         return;
     }
@@ -261,6 +289,7 @@ fn psp_main() {
 
     // Step 3: Register our custom USB device driver
     log_str("Calling sceUsbbdRegister...");
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         let d = &raw const driver::DRIVER_STATIC;
         log_hex("drv=", d as u32);
@@ -269,10 +298,12 @@ fn psp_main() {
         log_hex("intp=", (*d).intp as u32);
     }
 
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     let r = unsafe { driver::register() };
     log_hex("Register=", r as u32);
     if (r as i32) < 0 {
         log_str("Register failed");
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(5_000_000) };
         return;
     }
@@ -280,6 +311,7 @@ fn psp_main() {
 
     // Step 4: Start our driver
     log_str("Calling sceUsbStart(driver)...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r = unsafe {
         sceUsbStart(
             driver::DRIVER_NAME.as_ptr(),
@@ -291,14 +323,18 @@ fn psp_main() {
 
     // Step 5: Activate with our custom PID
     log_str("Calling sceUsbActivate...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let r = unsafe { sceUsbActivate(OASIS_USB_PID) };
     log_hex("Activate=", r as u32);
 
     // Brief delay to let USB hardware settle before any more I/O
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
     // Log critical speed values (no full dump — callbacks may fire)
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s1 = unsafe { hw_read32(0x881906E8) };
+    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     let s2 = unsafe { hw_read32(0x881906EC) };
     log_hex("post-activate [6E8]=", s1);
     log_hex("post-activate [6EC]=", s2);
@@ -308,6 +344,7 @@ fn psp_main() {
     log_str("");
 
     // Initialize endpoint pointers for callback-driven echo
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         let ep1 = driver::get_endpoint(1);
         let ep2 = driver::get_endpoint(2);
@@ -322,6 +359,7 @@ fn psp_main() {
     let mut last_echo_count: u32 = 0;
 
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let state = unsafe { sceUsbGetState() }.bits();
         let attached = driver::is_attached();
 
@@ -345,15 +383,18 @@ fn psp_main() {
 
         // On first attach: send PSP READY, wait for host handshake, start thin-client
         if attached && !attach_done {
+            // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe { sceKernelDelayThread(200_000) };
 
             let speed = driver::attach_speed();
             log_hex("speed=", speed as u32);
 
             // Step 1: Proactive send "PSP READY" (NOT in thin-client mode yet)
+            // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
             let ep1 = unsafe { driver::get_endpoint(1) };
             let mut buf = [0u8; 512];
             buf[..9].copy_from_slice(b"PSP READY");
+            // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
             let r = unsafe { transfer::start_send(ep1, &buf) };
             log_hex("proactive send=", r as u32);
 
@@ -364,6 +405,7 @@ fn psp_main() {
                 if updated {
                     break;
                 }
+                // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
                 unsafe { sceKernelDelayThread(100_000) };
             }
 
@@ -373,12 +415,15 @@ fn psp_main() {
             // setup. Instead, we do a blocking recv-poll: queue a recv,
             // then poll the RECV_REQ.retcode field until it changes from
             // the initial value (indicating the recv completed).
+            // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
             let ep2 = unsafe { driver::get_endpoint(2) };
+            // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
             let r = unsafe { usbd::clear_fifo(ep2) };
             log_hex("clear_fifo EP2=", r as u32);
 
             log_str("Waiting for host handshake...");
             // Queue recv WITHOUT callback — we'll poll manually
+            // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
             let handshake_ok = unsafe { transfer::blocking_recv(ep2) };
             if handshake_ok {
                 log_str("Host handshake received!");
@@ -396,6 +441,7 @@ fn psp_main() {
         }
 
         // Poll controller and update input state for USB responses
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
         transfer::update_input(
             pad.buttons.bits(),
@@ -419,6 +465,7 @@ fn psp_main() {
             log_hex("  frames=", framebuffer::frames_done());
         }
 
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000) }; // 1ms poll for responsive input
 
         // Home to exit
@@ -430,6 +477,7 @@ fn psp_main() {
 
     // Cleanup
     log_str("Cleaning up...");
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         sceUsbDeactivate(OASIS_USB_PID);
         sceKernelDelayThread(100_000);

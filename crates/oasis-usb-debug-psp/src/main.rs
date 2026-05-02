@@ -48,6 +48,7 @@ fn log_open() {
     path_buf[..bytes.len()].copy_from_slice(bytes);
     path_buf[bytes.len()] = 0;
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         LOG_FD = psp::sys::sceIoOpen(
             path_buf.as_ptr(),
@@ -59,6 +60,7 @@ fn log_open() {
 
 /// Write a line to the log file.
 fn log_write(msg: &str) {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         if LOG_FD.0 > 0 {
             psp::sys::sceIoWrite(
@@ -77,6 +79,7 @@ fn log_write(msg: &str) {
 
 /// Close the log file.
 fn log_close() {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         if LOG_FD.0 > 0 {
             psp::sys::sceIoClose(LOG_FD);
@@ -159,19 +162,23 @@ fn wait_button_press(mask: CtrlButtons) {
 
     // Wait for button to be released first
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
         if !pad.buttons.intersects(mask) {
             break;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 
     // Wait for button to be pressed
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
         if pad.buttons.intersects(mask) {
             return;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
@@ -179,6 +186,7 @@ fn wait_button_press(mask: CtrlButtons) {
 /// Check if a button is currently pressed (no edge detection).
 fn is_pressed(buttons: CtrlButtons) -> bool {
     let mut pad = SceCtrlData::default();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceCtrlPeekBufferPositive(&mut pad, 1) };
     pad.buttons.intersects(buttons)
 }
@@ -186,6 +194,7 @@ fn is_pressed(buttons: CtrlButtons) -> bool {
 // ── Battery info ────────────────────────────────────────────────────────
 
 fn print_battery_status() {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         let charging = sys::scePowerIsBatteryCharging();
         let percent = sys::scePowerGetBatteryLifePercent();
@@ -209,18 +218,22 @@ fn step_load_modules() {
     log_println!("--- Step 1: Load USB modules ---");
 
     // Load USBPspCm (base USB communication)
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbPspCm) };
     log_println!("  LoadUsbModule(PspCm)  = 0x{:08X}", ret as u32);
 
     // Load USBAcc (accessory framework, required before camera)
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbAcc) };
     log_println!("  LoadUsbModule(Acc)    = 0x{:08X}", ret as u32);
 
     // Load USBCam (camera driver — triggers host mode init)
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbCam) };
     log_println!("  LoadUsbModule(Cam)    = 0x{:08X}", ret as u32);
 
     // Small delay for module initialization
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 }
 
@@ -228,6 +241,7 @@ fn step_load_modules() {
 fn step_start_bus() -> i32 {
     log_println!("--- Step 2: Start USB bus driver ---");
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStart(
             b"USBBusDriver\0".as_ptr(),
@@ -238,10 +252,12 @@ fn step_start_bus() -> i32 {
     log_println!("  sceUsbStart(USBBusDriver) = 0x{:08X}", ret as u32);
 
     // Check driver state
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let drv_state = unsafe { sceUsbGetDrvState(b"USBBusDriver\0".as_ptr()) };
     log_println!("  USBBusDriver state       = 0x{:08X}", drv_state as u32);
 
     // Check USB state after bus start
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     log_println!(
         "  USB state: 0x{:03X} [{}]",
@@ -249,6 +265,7 @@ fn step_start_bus() -> i32 {
         format_usb_state(bits),
     );
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
     ret
 }
@@ -257,6 +274,7 @@ fn step_start_bus() -> i32 {
 fn step_start_cam() -> i32 {
     log_println!("--- Step 3: Start USB camera driver ---");
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStart(
             b"USBCamDriver\0".as_ptr(),
@@ -267,6 +285,7 @@ fn step_start_cam() -> i32 {
     log_println!("  sceUsbStart(USBCamDriver) = 0x{:08X}", ret as u32);
 
     // Also try starting camera mic driver
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret_mic = unsafe {
         sceUsbStart(
             b"USBCamMicDriver\0".as_ptr(),
@@ -277,9 +296,11 @@ fn step_start_cam() -> i32 {
     log_println!("  sceUsbStart(CamMicDriver) = 0x{:08X}", ret_mic as u32);
 
     // Check driver states
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let drv_state = unsafe { sceUsbGetDrvState(b"USBCamDriver\0".as_ptr()) };
     log_println!("  USBCamDriver state        = 0x{:08X}", drv_state as u32);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     log_println!(
         "  USB state: 0x{:03X} [{}]",
@@ -287,6 +308,7 @@ fn step_start_cam() -> i32 {
         format_usb_state(bits),
     );
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
     ret
 }
@@ -295,12 +317,15 @@ fn step_start_cam() -> i32 {
 fn step_activate() -> i32 {
     log_println!("--- Step 4: Activate USB (PID=0x282) ---");
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sceUsbActivate(0x282) };
     log_println!("  sceUsbActivate(0x282) = 0x{:08X}", ret as u32);
 
     // Wait a moment for activation
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     log_println!(
         "  USB state: 0x{:03X} [{}]",
@@ -322,11 +347,14 @@ fn step_activate() -> i32 {
 fn step_cleanup() {
     log_println!("--- Cleanup: Stopping USB ---");
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sceUsbDeactivate(0x282) };
     log_println!("  sceUsbDeactivate(0x282) = 0x{:08X}", ret as u32);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStop(
             b"USBCamMicDriver\0".as_ptr(),
@@ -336,6 +364,7 @@ fn step_cleanup() {
     };
     log_println!("  sceUsbStop(CamMicDriver) = 0x{:08X}", ret as u32);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStop(
             b"USBCamDriver\0".as_ptr(),
@@ -345,6 +374,7 @@ fn step_cleanup() {
     };
     log_println!("  sceUsbStop(USBCamDriver) = 0x{:08X}", ret as u32);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe {
         sceUsbStop(
             b"USBBusDriver\0".as_ptr(),
@@ -355,13 +385,17 @@ fn step_cleanup() {
     log_println!("  sceUsbStop(USBBusDriver) = 0x{:08X}", ret as u32);
 
     // Unload modules in reverse order
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbCam) };
     log_println!("  UnloadUsbModule(Cam)  = 0x{:08X}", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbAcc) };
     log_println!("  UnloadUsbModule(Acc)  = 0x{:08X}", ret as u32);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let ret = unsafe { sys::sceUtilityUnloadUsbModule(sys::UsbModule::UsbPspCm) };
     log_println!("  UnloadUsbModule(PspCm)= 0x{:08X}", ret as u32);
 
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     log_println!(
         "  USB state: 0x{:03X} [{}]",
@@ -385,6 +419,7 @@ fn poll_loop() {
     let mut poll_count: u32 = 0;
 
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let bits = unsafe { sceUsbGetState() }.bits();
 
         // Only log when state changes (avoid flooding the log)
@@ -404,6 +439,7 @@ fn poll_loop() {
             prev_state_bits = -1; // Force re-log after cleanup
             // Wait for button release
             while is_pressed(CtrlButtons::TRIANGLE) {
+                // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
                 unsafe { sceKernelDelayThread(16_000) };
             }
         }
@@ -415,6 +451,7 @@ fn poll_loop() {
         }
 
         poll_count += 1;
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(500_000) }; // Poll every 500ms
     }
 }
@@ -425,6 +462,7 @@ fn psp_main() {
     psp::callback::setup_exit_callback().unwrap();
 
     // Set analog stick to digital mode
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceCtrlSetSamplingMode(CtrlMode::Digital) };
 
     // Open log file
@@ -442,6 +480,7 @@ fn psp_main() {
     log_println!("");
 
     // Show initial USB state
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
     log_println!(
         "Initial USB state: 0x{:03X} [{}]",
@@ -471,10 +510,12 @@ fn psp_main() {
             log_close();
             return;
         }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 
     // Debounce
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(200_000) };
 
     if auto_mode {
@@ -524,5 +565,6 @@ fn psp_main() {
     log_close();
 
     // Brief pause so user can read final message
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(2_000_000) };
 }
