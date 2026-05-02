@@ -106,7 +106,13 @@ unsafe fn try_direct_addresses() -> bool {
         return false;
     }
 
-    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
+    // SAFETY: each `core::mem::transmute` casts a hard-coded usbbd kernel-export
+    // address to the documented `fn(...) -> i32` prototype for that NID — addresses
+    // were verified by the prologue sanity check above (and cross-referenced
+    // against PSPSDK NIDs + Ghidra disassembly) and the prototype matches the
+    // pspsdk-documented signature, so the resulting fn pointers are sound on
+    // PSP-3001 6.61 ARK-4. Volatile writes target *_FN module-statics that are
+    // only mutated by this initialization path under exclusive control.
     unsafe {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));

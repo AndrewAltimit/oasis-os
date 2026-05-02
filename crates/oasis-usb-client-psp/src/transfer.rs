@@ -381,7 +381,12 @@ pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
 /// Used for the initial handshake before enabling callback-driven mode.
 /// Returns true if data was received, false on timeout.
 pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
+    // SAFETY: volatile writes/reads of HANDSHAKE_DONE/HANDSHAKE_CANCELLED module-statics
+    // are serialized — only this caller mutates them on the main thread; the USB IRQ
+    // callback (`blocking_recv_complete`) only writes them while we are blocked in
+    // `sceKernelDelayThread`. `queue_blocking_recv` is the unsafe firmware-callback
+    // setup helper, and `sceKernelDelayThread` is a kernel-mode PSP syscall whose
+    // signature is documented in pspsdk.
     unsafe {
         core::ptr::write_volatile(&raw mut HANDSHAKE_DONE, false);
         core::ptr::write_volatile(&raw mut HANDSHAKE_CANCELLED, false);
