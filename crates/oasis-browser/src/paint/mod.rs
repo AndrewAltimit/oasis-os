@@ -15,6 +15,7 @@
 
 mod background;
 mod borders;
+mod clip_path;
 #[allow(dead_code)]
 pub(crate) mod display_list;
 #[allow(dead_code)]
@@ -27,18 +28,24 @@ pub(crate) mod record;
 pub(crate) mod render_target_pool;
 mod replaced;
 mod shadow;
+mod stacking;
 mod text;
 #[allow(dead_code)]
 pub(crate) mod tiling;
+mod transforms;
+
+pub(crate) use clip_path::{intersect_rects, resolve_clip_path_rect};
+pub(crate) use stacking::{creates_compositing_layer, creates_stacking_context, is_positioned};
+pub(crate) use transforms::{
+    compute_transform_offsets, resolve_perspective_origin, resolve_transform_origin,
+    transforms_have_3d,
+};
 
 use std::collections::HashMap;
 
-use crate::css::values::types::{
-    BackfaceVisibility, PerspectiveOrigin, TransformOrigin, TransformStyle,
-};
+use crate::css::values::types::{BackfaceVisibility, TransformStyle};
 use crate::css::values::{
-    BackgroundImage, ClipLength, ClipPath, Dimension, Overflow, Position, TextOverflow,
-    TransformFunction, Visibility, WhiteSpace,
+    BackgroundImage, Dimension, Overflow, Position, TextOverflow, Visibility, WhiteSpace,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
@@ -971,27 +978,6 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     }
 }
 
-/// Returns `true` if the transform list contains any 3D function.
-/// Used to gate the perspective projection path: the orthographic
-/// flatten is the right choice for pure 2D transforms even when an
-/// ancestor has `perspective`.
-pub(crate) fn transforms_have_3d(transforms: &[TransformFunction]) -> bool {
-    transforms.iter().any(|t| {
-        matches!(
-            t,
-            TransformFunction::Translate3d(..)
-                | TransformFunction::TranslateZ(_)
-                | TransformFunction::Scale3d(..)
-                | TransformFunction::ScaleZ(_)
-                | TransformFunction::RotateX(_)
-                | TransformFunction::RotateY(_)
-                | TransformFunction::Rotate3d(..)
-                | TransformFunction::Matrix3d(_)
-                | TransformFunction::Perspective(_)
-        )
-    })
-}
-
 /// Sort key for `transform-style: preserve-3d` child ordering.
 ///
 /// Returns the Z coordinate (after any perspective divide carried by
@@ -1031,304 +1017,6 @@ fn preserve3d_child_z(
     let composed = parent_screen_matrix.multiply(&child_local);
     let (_, _, z) = composed.apply_point_3d(ccx, ccy, 0.0);
     z
-}
-
-/// Resolve a CSS `transform-origin` against an element's content box.
-///
-/// Returns absolute pixel offsets `(ox, oy, oz)` from the content
-/// box's top-left corner. When `origin` is `None`, defaults to the
-/// spec's `50% 50% 0` (box center, Z = 0).
-pub(crate) fn resolve_transform_origin(
-    origin: Option<&TransformOrigin>,
-    content: &Rect,
-) -> (f32, f32, f32) {
-    match origin {
-        None => (content.width / 2.0, content.height / 2.0, 0.0),
-        Some(o) => {
-            let ox = o.x_pct.map(|p| content.width * p).unwrap_or(o.x);
-            let oy = o.y_pct.map(|p| content.height * p).unwrap_or(o.y);
-            (ox, oy, o.z)
-        },
-    }
-}
-
-/// Resolve a CSS `perspective-origin` against an element's border box.
-///
-/// Defaults to the spec's `50% 50%` when `origin` is `None`.
-pub(crate) fn resolve_perspective_origin(
-    origin: Option<&PerspectiveOrigin>,
-    container: &Rect,
-) -> (f32, f32) {
-    match origin {
-        None => (container.width / 2.0, container.height / 2.0),
-        Some(o) => {
-            let ox = o.x_pct.map(|p| container.width * p).unwrap_or(o.x);
-            let oy = o.y_pct.map(|p| container.height * p).unwrap_or(o.y);
-            (ox, oy)
-        },
-    }
-}
-
-/// Compute the full 2D affine transform from CSS transforms.
-///
-/// Returns the composed matrix which callers use either as a simple
-/// translation offset (fast path) or for full geometry transformation.
-/// `transform_origin` defaults to `50% 50% 0` when `None`.
-pub(crate) fn compute_transform_matrix(
-    transforms: &[TransformFunction],
-    transform_origin: Option<&TransformOrigin>,
-    content: &Rect,
-) -> crate::transform::AffineTransform2D {
-    let (ox, oy, _oz) = resolve_transform_origin(transform_origin, content);
-    crate::transform::AffineTransform2D::from_css_transforms(transforms, ox, oy)
-}
-
-/// Compute offset adjustments from CSS transforms.
-///
-/// Returns the translation component of the composed transform matrix
-/// added to the base offsets. For translation-only transforms this is
-/// exact; for rotation/scale/skew the full matrix is available via
-/// [`compute_transform_matrix`].
-pub(crate) fn compute_transform_offsets(
-    transforms: &[TransformFunction],
-    transform_origin: Option<&TransformOrigin>,
-    content: &Rect,
-    base_x: i32,
-    base_y: i32,
-) -> (i32, i32) {
-    if transforms.is_empty() {
-        return (base_x, base_y);
-    }
-    let m = compute_transform_matrix(transforms, transform_origin, content);
-    (base_x + m.e as i32, base_y + m.f as i32)
-}
-
-/// Returns `true` if a layout box creates a new stacking context.
-///
-/// Per CSS 2.1, a stacking context is created by:
-/// - Positioned elements (non-static) with an explicit z-index (not `auto`)
-/// - Elements with opacity < 1.0
-/// - Elements with CSS transforms
-/// - Elements with CSS filters
-/// - Elements with will-change: transform
-///
-/// Note: positioned elements with `z-index: auto` do NOT create a stacking
-/// context -- they participate in the parent's stacking context at level 0.
-pub(crate) fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
-    let style = &layout_box.style;
-
-    // Positioned + explicit z-index (not auto).
-    if style.position != Position::Static && !style.z_index_auto {
-        return true;
-    }
-
-    // Opacity < 1.0 creates a stacking context.
-    if style.opacity < 1.0 {
-        return true;
-    }
-
-    // Non-empty transforms create a stacking context.
-    if !style.transforms.is_empty() {
-        return true;
-    }
-
-    // Filters create a stacking context.
-    if !style.filters.is_empty() {
-        return true;
-    }
-
-    // will-change: transform/opacity/filter creates a stacking context.
-    if style.will_change_promotes_layer {
-        return true;
-    }
-
-    // `isolation: isolate` forces a stacking context so descendant
-    // `mix-blend-mode` is contained (CSS Compositing and Blending L1).
-    if matches!(
-        style.isolation,
-        crate::css::values::types::Isolation::Isolate
-    ) {
-        return true;
-    }
-
-    // `mix-blend-mode` on a non-Normal value implies a stacking context
-    // so the blend applies to the entire painted subtree.
-    if !matches!(
-        style.mix_blend_mode,
-        crate::css::values::types::BlendMode::Normal
-    ) {
-        return true;
-    }
-
-    // Non-empty backdrop-filter chain implies a stacking context
-    // (the backdrop is sampled at the layer's own boundary).
-    if !style.backdrop_filters.is_empty() {
-        return true;
-    }
-
-    // `mask-image: <image>` forces a stacking context so the mask can
-    // be applied to the entire painted subtree in one destination-in
-    // pass instead of per-box.
-    if !matches!(style.mask_image, crate::css::values::BackgroundImage::None) {
-        return true;
-    }
-
-    false
-}
-
-/// Whether this layout box needs a *real* compositing layer — i.e. an
-/// offscreen render target — rather than just the cheap `PushLayer`
-/// opacity fast path.
-///
-/// True when any of `mix-blend-mode`, `backdrop-filter`, `filter`,
-/// `isolation: isolate`, or `will-change: transform/opacity/filter` is
-/// active. Plain `opacity < 1.0` stays on the fast path.
-pub(crate) fn creates_compositing_layer(layout_box: &LayoutBox) -> bool {
-    let style = &layout_box.style;
-
-    if !matches!(
-        style.mix_blend_mode,
-        crate::css::values::types::BlendMode::Normal
-    ) {
-        return true;
-    }
-
-    if !style.backdrop_filters.is_empty() {
-        return true;
-    }
-
-    if !style.filters.is_empty() {
-        return true;
-    }
-
-    if matches!(
-        style.isolation,
-        crate::css::values::types::Isolation::Isolate
-    ) {
-        return true;
-    }
-
-    if style.will_change_promotes_layer {
-        return true;
-    }
-
-    // `mask-image` needs a real offscreen layer so we can apply a
-    // destination-in pass to the full painted subtree. Without this
-    // promotion, the mask would have nothing to bite into at
-    // `PopCompositingLayer` time.
-    if !matches!(style.mask_image, crate::css::values::BackgroundImage::None) {
-        return true;
-    }
-
-    false
-}
-
-/// Returns `true` if a layout box is positioned (position != static).
-pub(crate) fn is_positioned(layout_box: &LayoutBox) -> bool {
-    !matches!(layout_box.style.position, Position::Static)
-}
-
-/// Compute the intersection of two rectangles.
-/// Resolve a [`ClipPath`] shape to a bounding rect in the layout coordinate
-/// space, anchored to the element's border box.
-///
-/// Circle/ellipse shapes are reduced to their axis-aligned bounding box —
-/// the only clipping primitive the backend trait exposes today. Returns
-/// `None` if the shape collapses to an empty rect.
-fn resolve_clip_path_rect(shape: &ClipPath, border_box: &Rect) -> Option<Rect> {
-    let bw = border_box.width;
-    let bh = border_box.height;
-    let bx = border_box.x;
-    let by = border_box.y;
-
-    let rect = match *shape {
-        ClipPath::Inset {
-            top,
-            right,
-            bottom,
-            left,
-        } => {
-            let t = top.resolve(bh);
-            let r = right.resolve(bw);
-            let b = bottom.resolve(bh);
-            let l = left.resolve(bw);
-            Rect {
-                x: bx + l,
-                y: by + t,
-                width: (bw - l - r).max(0.0),
-                height: (bh - t - b).max(0.0),
-            }
-        },
-        ClipPath::Rect {
-            top,
-            right,
-            bottom,
-            left,
-        } => {
-            let t = top.unwrap_or(0.0);
-            let l = left.unwrap_or(0.0);
-            let r = right.unwrap_or(bw);
-            let b = bottom.unwrap_or(bh);
-            Rect {
-                x: bx + l,
-                y: by + t,
-                width: (r - l).max(0.0),
-                height: (b - t).max(0.0),
-            }
-        },
-        ClipPath::Circle { cx, cy, r } => {
-            let ref_diag = ((bw * bw + bh * bh) / 2.0).sqrt();
-            let radius = match r {
-                ClipLength::Px(v) => v,
-                ClipLength::Frac(f) => f * ref_diag,
-            };
-            let cx = cx.resolve(bw);
-            let cy = cy.resolve(bh);
-            Rect {
-                x: bx + cx - radius,
-                y: by + cy - radius,
-                width: (radius * 2.0).max(0.0),
-                height: (radius * 2.0).max(0.0),
-            }
-        },
-        ClipPath::Ellipse { cx, cy, rx, ry } => {
-            let rx_px = match rx {
-                ClipLength::Px(v) => v,
-                ClipLength::Frac(f) => f * bw,
-            };
-            let ry_px = match ry {
-                ClipLength::Px(v) => v,
-                ClipLength::Frac(f) => f * bh,
-            };
-            let cx = cx.resolve(bw);
-            let cy = cy.resolve(bh);
-            Rect {
-                x: bx + cx - rx_px,
-                y: by + cy - ry_px,
-                width: (rx_px * 2.0).max(0.0),
-                height: (ry_px * 2.0).max(0.0),
-            }
-        },
-    };
-
-    if rect.width <= 0.0 || rect.height <= 0.0 {
-        None
-    } else {
-        Some(rect)
-    }
-}
-
-fn intersect_rects(a: Rect, b: Rect) -> Rect {
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    Rect {
-        x,
-        y,
-        width: (right - x).max(0.0),
-        height: (bottom - y).max(0.0),
-    }
 }
 
 // -------------------------------------------------------------------
@@ -1697,67 +1385,6 @@ mod tests {
     // ---------------------------------------------------------------
     // Test: content height reported correctly
     // ---------------------------------------------------------------
-
-    #[test]
-    fn clip_path_inset_resolves_to_shrunken_rect() {
-        use crate::css::values::{ClipLength, ClipPath};
-        let bb = Rect {
-            x: 100.0,
-            y: 100.0,
-            width: 200.0,
-            height: 100.0,
-        };
-        let shape = ClipPath::Inset {
-            top: ClipLength::Px(10.0),
-            right: ClipLength::Px(20.0),
-            bottom: ClipLength::Px(30.0),
-            left: ClipLength::Px(40.0),
-        };
-        let r = resolve_clip_path_rect(&shape, &bb).expect("non-empty");
-        assert_eq!(r.x, 140.0);
-        assert_eq!(r.y, 110.0);
-        assert_eq!(r.width, 140.0);
-        assert_eq!(r.height, 60.0);
-    }
-
-    #[test]
-    fn clip_path_circle_half_width_bounding_box() {
-        use crate::css::values::{ClipLength, ClipPath};
-        let bb = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-        };
-        let shape = ClipPath::Circle {
-            cx: ClipLength::Frac(0.5),
-            cy: ClipLength::Frac(0.5),
-            r: ClipLength::Px(40.0),
-        };
-        let r = resolve_clip_path_rect(&shape, &bb).expect("non-empty");
-        assert_eq!(r.x, 10.0);
-        assert_eq!(r.y, 10.0);
-        assert_eq!(r.width, 80.0);
-        assert_eq!(r.height, 80.0);
-    }
-
-    #[test]
-    fn clip_path_inset_fully_collapsed_returns_none() {
-        use crate::css::values::{ClipLength, ClipPath};
-        let bb = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 50.0,
-            height: 50.0,
-        };
-        let shape = ClipPath::Inset {
-            top: ClipLength::Frac(0.5),
-            right: ClipLength::Frac(0.5),
-            bottom: ClipLength::Frac(0.5),
-            left: ClipLength::Frac(0.5),
-        };
-        assert!(resolve_clip_path_rect(&shape, &bb).is_none());
-    }
 
     #[test]
     fn content_height_reported() {
