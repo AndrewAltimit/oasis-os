@@ -154,7 +154,12 @@ fn fetch_range_inner(
         .saturating_add(FETCH_RANGE_SIZE_SLACK);
     let mut response = Vec::new();
     let mut buf = [0u8; 8192];
-    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // Fixed absolute deadline matches `open_range_connection_inner`. A
+    // rolling deadline that reset on every successful read would let a
+    // server trickle one byte every 29s and never trigger the timeout;
+    // since `max_response` is already capped, 30s for the bounded body
+    // is plenty.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if let Some(flag) = cancel
             && flag.load(std::sync::atomic::Ordering::Acquire)
@@ -174,7 +179,6 @@ fn fetch_range_inner(
                          (server may be ignoring Range header)"
                     ));
                 }
-                deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             },
             Err(e) => {
                 if is_would_block(&e) {
