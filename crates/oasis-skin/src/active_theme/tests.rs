@@ -589,21 +589,31 @@ disabled_text = "#555555"
         ];
 
         // First check: the registry must list exactly the skins we
-        // pinned, in the same order. A new skin without a matching
-        // entry below should fail loudly.
-        let names: Vec<&str> = builtin_names().iter().copied().collect();
-        let pinned: Vec<&str> = expected.iter().map(|(n, _)| *n).collect();
+        // pinned -- no missing entries either way. Compared as sets so
+        // a cosmetic reordering of `builtin_names()` does not fail the
+        // palette snapshot.
+        use std::collections::BTreeSet;
+        let names: BTreeSet<&str> = builtin_names().iter().copied().collect();
+        let pinned: BTreeSet<&str> = expected.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             names, pinned,
-            "built-in skin list changed -- update cross_skin_palette_snapshot \
+            "built-in skin set changed -- update cross_skin_palette_snapshot \
              expected[] to match (and bump the date in the doc comment)"
         );
 
+        // Index expected fingerprints by skin name so the per-skin
+        // assertion is independent of registry iteration order.
+        let expected_by_name: std::collections::HashMap<&str, &str> =
+            expected.iter().copied().collect();
+
         let mut updates: Vec<String> = Vec::new();
-        for (name, expected_fingerprint) in expected {
+        for name in builtin_names().iter().copied() {
             let skin = load_builtin(name).expect("built-in skin loads");
             let at = ActiveTheme::from_skin(&skin.theme);
             let actual = palette_fingerprint(&at);
+            let expected_fingerprint = expected_by_name
+                .get(name)
+                .expect("set check above ensures coverage");
             if actual != *expected_fingerprint {
                 updates.push(format!("            (\"{name}\", \"{actual}\"),"));
             }

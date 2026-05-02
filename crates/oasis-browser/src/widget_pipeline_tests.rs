@@ -99,6 +99,7 @@ fn print_only_query_whitespace_around_print() {
 /// children of `<body>`. Returns the document plus the NodeIds for
 /// each anchor in insertion order.
 fn make_anchor_doc(anchors: &[Option<&str>]) -> (Document, Vec<usize>) {
+    const BODY_IDX: usize = 2;
     let mut nodes = vec![
         // 0: Document root
         Node {
@@ -113,9 +114,9 @@ fn make_anchor_doc(anchors: &[Option<&str>]) -> (Document, Vec<usize>) {
                 attributes: vec![],
             }),
             parent: Some(0),
-            children: vec![2],
+            children: vec![BODY_IDX],
         },
-        // 2: <body> -- children pushed below.
+        // BODY_IDX: <body> -- children pushed below.
         Node {
             kind: NodeKind::Element(ElementData {
                 tag: TagName::Body,
@@ -141,10 +142,10 @@ fn make_anchor_doc(anchors: &[Option<&str>]) -> (Document, Vec<usize>) {
                 tag: TagName::A,
                 attributes,
             }),
-            parent: Some(2),
+            parent: Some(BODY_IDX),
             children: vec![],
         });
-        nodes[2].children.push(id);
+        nodes[BODY_IDX].children.push(id);
         anchor_ids.push(id);
     }
 
@@ -195,7 +196,7 @@ fn build_link_map_ignores_non_anchor_elements() {
                 attributes: vec![],
             }),
             parent: Some(0),
-            children: vec![2],
+            children: vec![],
         },
         Node {
             kind: NodeKind::Element(ElementData {
