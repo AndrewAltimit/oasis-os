@@ -79,7 +79,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
 ├── oasis-ui         (32 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
-├── oasis-skin       (TOML skin engine, 18 skins, theme derivation)
+├── oasis-skin       (TOML skin engine, 15 built-in skins / 12 also as external TOML, theme derivation)
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, animations, hover-triggered transitions, light compositor with text batching + sticky scroll caching, form elements with select dropdown + label association, soft hyphens, bidi text, @media/@supports, cookies, CSP, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API, document.cookie, history.pushState, persistent localStorage)
@@ -92,7 +92,6 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-core   (shared app framework: AppTrait, common utilities)
 ├── oasis-app-games  (Games app)
 ├── oasis-app-paint  (Paint app)
-├── oasis-app-clock  (Clock app)
 ├── oasis-app-text-editor (Text Editor app)
 ├── oasis-app-calculator  (Calculator app)
 ├── oasis-app-media       (Music Player + Photo Viewer apps)
@@ -106,15 +105,15 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; oasis-video[video-decode])
-    ├── oasis-backend-psp  (excluded from workspace, PSP hardware; oasis-video[no-std-demux])
-    └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
+    ├── oasis-backend-psp  (in workspace `exclude` list, PSP hardware; oasis-video[no-std-demux])
+    └── oasis-plugin-psp   (standalone — not in workspace at all, kernel-mode PRX overlay)
 ```
 
 ### Backend Trait Boundary
 
-`oasis-types/src/backend.rs` defines the only abstraction between core and platform (re-exported by `oasis-core`):
+`oasis-types/src/backend/` defines the only abstraction between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- extends `SdiCore` with 39 optional accelerated primitives (shapes, gradients, text styling, vector graphics, batching)
+- `SdiBackend` -- a marker super-trait satisfied by any type implementing `SdiCore` plus all nine extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`); the extensions live under `extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and provide ~55 default-impl methods total.
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -123,11 +122,11 @@ Core code never calls platform APIs directly.
 
 ### Core Modules
 
-The repository contains 37 crates (35 in the workspace, 2 excluded PSP crates). Each module below is its own crate:
+The repository contains 45 crate directories under `crates/`: 35 workspace members (the desktop / WASM / UE5 build surface), 1 explicitly excluded crate (`oasis-backend-psp`), and 9 standalone PSP-target crates not referenced from the workspace `Cargo.toml` (plugin overlay, recovery, devloop, ME boot, PRX decrypt, USB tooling). Each module below is its own crate:
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 18 skins (14 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors to ~30 UI element colors.
+- **oasis-skin** -- Data-driven TOML skin system with 15 built-in skins; 12 of them also ship as external TOML in `skins/` (`altimit`, `balatro`, `classic`, `gnome`, `highcontrast`, `macos`, `paper`, `retro-cga`, `solarized`, `vaporwave`, `win95`, `xp`); the other 3 (`corrupted`, `desktop`, `modern`) are built-in only. Theme derivation from 9 base colors to ~30 UI element colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media`/`@supports` queries, flex/grid/table layout, `calc()`, transforms, animations, hover-triggered CSS transitions, light compositor (batched rect+text, occlusion culling, animation dirty tracking, sticky scroll caching), form elements (select dropdown, label for="" association), soft hyphens, bidi text detection, cookies, gzip, CSP (img-src relaxed), link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation, `document.cookie`, `history.pushState`/`replaceState`, persistent `localStorage`. Feature-gated (`javascript`)
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
@@ -141,7 +140,7 @@ The repository contains 37 crates (35 in the workspace, 2 excluded PSP crates). 
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), dashboard icons, and frame-driven animations
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
-- **oasis-app-*** -- 11 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-clock`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
+- **oasis-app-*** -- 9 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
 - **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
 
 ### FFI Boundary (oasis-ffi)
