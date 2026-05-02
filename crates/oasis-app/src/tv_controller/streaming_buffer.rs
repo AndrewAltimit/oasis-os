@@ -492,23 +492,6 @@ pub(crate) fn should_throttle_pure(
     }
 }
 
-/// Pure logic for linear seek interpolation within mdat.
-///
-/// Returns estimated byte offset = `mdat_offset + (seek_secs / duration) * mdat_size`.
-#[cfg(feature = "_video")]
-pub(crate) fn linear_seek_interpolation(
-    seek_secs: f64,
-    duration: f64,
-    mdat_offset: u64,
-    mdat_size: u64,
-) -> u64 {
-    if duration <= 0.0 {
-        return mdat_offset;
-    }
-    let frac = (seek_secs / duration).clamp(0.0, 1.0);
-    mdat_offset.saturating_add((frac * mdat_size as f64) as u64)
-}
-
 /// A reader cursor over a `StreamingInner` sliding-window buffer.
 ///
 /// Implements `Read + Seek` with blocking semantics. Reads block until data
@@ -874,6 +857,7 @@ impl std::io::Seek for StreamingBuffer {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use super::super::seek::linear_seek_interpolation;
     use super::*;
     use std::sync::Arc;
 

@@ -4,8 +4,10 @@
 //! fetching, video player ticking, tune/untune requests, and audio streaming.
 
 mod catalog;
+mod cdn_failover;
 mod download;
 mod player;
+mod seek;
 mod streaming_buffer;
 mod tune;
 
@@ -57,7 +59,7 @@ fn find_tv_guide_runner<'a>(
 #[cfg(test)]
 #[cfg(feature = "_video")]
 mod tests {
-    use super::download::parse_moov_duration;
+    use super::seek::{linear_seek_interpolation, parse_moov_duration};
     use super::streaming_buffer::*;
 
     // ---------------------------------------------------------------
@@ -1513,7 +1515,7 @@ mod tests {
 
     #[test]
     fn parse_tail_for_moov_finds_moov_in_tail() {
-        use super::download::parse_tail_for_moov;
+        use super::seek::parse_tail_for_moov;
         let inner = std::sync::Arc::new(StreamingInner::new());
         // Build tail data: some mdat garbage, then a moov atom.
         let mut tail = vec![0xFF; 100]; // garbage (mdat body)
@@ -1531,7 +1533,7 @@ mod tests {
 
     #[test]
     fn parse_tail_for_moov_no_moov_in_tail() {
-        use super::download::parse_tail_for_moov;
+        use super::seek::parse_tail_for_moov;
         let inner = std::sync::Arc::new(StreamingInner::new());
         let tail = vec![0xFF; 200]; // all garbage, no moov fourcc
         parse_tail_for_moov(&inner, &tail, 0, 200, 0);
@@ -1541,7 +1543,7 @@ mod tests {
 
     #[test]
     fn parse_tail_for_moov_false_positive_moov_fourcc() {
-        use super::download::parse_tail_for_moov;
+        use super::seek::parse_tail_for_moov;
         let inner = std::sync::Arc::new(StreamingInner::new());
         // Embed "moov" in data but with invalid size (doesn't fit).
         let mut tail = vec![0; 20];
@@ -1562,7 +1564,7 @@ mod tests {
 
     #[test]
     fn parse_tail_for_moov_with_seek_sets_base_offset() {
-        use super::download::parse_tail_for_moov;
+        use super::seek::parse_tail_for_moov;
         let inner = std::sync::Arc::new(StreamingInner::new());
         // Push some initial data.
         inner.push(&[0; 1024]);
@@ -1705,7 +1707,7 @@ mod tests {
 
     #[test]
     fn check_moov_at_start_no_moov_returns_none() {
-        use super::download::check_moov_at_start_restart;
+        use super::seek::check_moov_at_start_restart;
         let s = SlidingState {
             buf: vec![0; 1024],
             base_offset: 0,
@@ -1727,22 +1729,218 @@ mod tests {
 
     #[test]
     fn is_would_block_true_for_would_block_error() {
-        use super::download::is_would_block;
+        use super::cdn_failover::is_would_block;
         let err = std::io::Error::new(std::io::ErrorKind::WouldBlock, "test");
         assert!(is_would_block(&err));
     }
 
     #[test]
     fn is_would_block_false_for_other_errors() {
-        use super::download::is_would_block;
+        use super::cdn_failover::is_would_block;
         let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "test");
         assert!(!is_would_block(&err));
     }
 
     #[test]
     fn is_would_block_false_for_broken_pipe() {
-        use super::download::is_would_block;
+        use super::cdn_failover::is_would_block;
         let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test");
         assert!(!is_would_block(&err));
+    }
+
+    // ---------------------------------------------------------------
+    // Probe-mode invariant: reads return zeros AND do not advance
+    // `decoder_pos`.  Project memory ("throttle deadlock root cause"):
+    // letting decoder_pos advance during probe lets a stale value
+    // re-enter throttle math and deadlock the download.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn probe_mode_read_does_not_advance_decoder_pos() {
+        use std::io::Read;
+        use std::sync::atomic::Ordering;
+
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push real bytes so the read serves from the sliding buffer.
+        inner.push(&vec![0xCD; 4096]);
+        // probe_mode is true by default — confirm.
+        assert!(inner.probe_mode.load(Ordering::Acquire));
+
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        let mut out = [0u8; 1024];
+        let n = sb.read(&mut out).unwrap();
+        assert_eq!(n, 1024, "probe read should fill the buffer");
+        // The throttle-deadlock invariant: even when probe reads happen
+        // to land on real buffered data, decoder_pos must NOT advance --
+        // otherwise a stale probe value enters the throttle math when
+        // bytes_received later jumps to the seek-restart offset.
+        assert_eq!(
+            inner.decoder_pos.load(Ordering::Acquire),
+            0,
+            "decoder_pos must not advance during probe mode"
+        );
+    }
+
+    #[test]
+    fn probe_mode_zero_fill_does_not_advance_decoder_pos() {
+        use std::io::Read;
+        use std::sync::atomic::Ordering;
+
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // total_size set so probe-zeros has a hard EOF cap.
+        inner
+            .total_size
+            .store(1_000_000, std::sync::atomic::Ordering::SeqCst);
+
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        // Seek past the empty sliding buffer so we hit the probe-zero path.
+        sb.pos = 500_000;
+        let mut out = [0xFFu8; 1024];
+        let n = sb.read(&mut out).unwrap();
+        assert_eq!(n, 1024);
+        assert!(out.iter().all(|&b| b == 0), "probe-zero path returns zeros");
+        assert_eq!(
+            inner.decoder_pos.load(Ordering::Acquire),
+            0,
+            "probe-zero reads must not advance decoder_pos"
+        );
+    }
+
+    #[test]
+    fn non_probe_read_advances_decoder_pos() {
+        use std::io::Read;
+        use std::sync::atomic::Ordering;
+
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&vec![0xAB; 4096]);
+        inner.disable_probe_mode();
+
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        let mut out = [0u8; 2048];
+        let n = sb.read(&mut out).unwrap();
+        assert_eq!(n, 2048);
+        assert_eq!(
+            inner.decoder_pos.load(Ordering::Acquire),
+            2048,
+            "decoder_pos must advance to the end of the read"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Prebuffer gate (MIN_PREBUFFER): wait_for_buffered returns true
+    // once the threshold is crossed.  This is the gate the video
+    // player uses before handing the StreamingBuffer to symphonia.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn prebuffer_gate_passes_when_min_prebuffer_received() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push exactly MIN_PREBUFFER bytes -- the gate should pass.
+        inner.push(&vec![0u8; MIN_PREBUFFER as usize]);
+        let ok = inner.wait_for_buffered(MIN_PREBUFFER, std::time::Duration::from_millis(50));
+        assert!(ok, "prebuffer gate should pass with exactly MIN_PREBUFFER");
+    }
+
+    #[test]
+    fn prebuffer_gate_passes_when_data_arrives_late() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let inner_bg = std::sync::Arc::clone(&inner);
+        // Background pusher: data arrives after a brief delay.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            inner_bg.push(&vec![0u8; MIN_PREBUFFER as usize]);
+        });
+        let ok = inner.wait_for_buffered(MIN_PREBUFFER, std::time::Duration::from_secs(1));
+        assert!(ok, "prebuffer gate should release once threshold reached");
+    }
+
+    #[test]
+    fn prebuffer_gate_below_threshold_blocks_until_timeout() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push less than threshold and never finish.
+        inner.push(&vec![0u8; (MIN_PREBUFFER / 2) as usize]);
+        let start = std::time::Instant::now();
+        let ok = inner.wait_for_buffered(MIN_PREBUFFER, std::time::Duration::from_millis(100));
+        let elapsed = start.elapsed();
+        // Returns true because partial data is present (proceed-anyway semantics),
+        // but only AFTER the timeout elapses.
+        assert!(ok, "partial data after timeout should still proceed");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(95),
+            "should block for ~the timeout duration, got {elapsed:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Redirect URL parsing -- the unit-testable nugget extracted from
+    // the redirect chain in open_range_connection_inner.  Real network
+    // redirect chain integration is exercised by the manual TV Guide
+    // smoke test against archive.org (PR 2 acceptance).
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn split_redirect_target_https_with_path() {
+        use super::cdn_failover::split_redirect_target;
+        let t = split_redirect_target("https://ia803001.example.org/path/to/v.mp4")
+            .expect("https URL parses");
+        assert!(t.is_https);
+        assert_eq!(t.host, "ia803001.example.org");
+        assert_eq!(t.port, 443);
+        assert_eq!(t.path, "/path/to/v.mp4");
+    }
+
+    #[test]
+    fn split_redirect_target_http_no_path() {
+        use super::cdn_failover::split_redirect_target;
+        let t = split_redirect_target("http://archive.org").expect("http URL with no path parses");
+        assert!(!t.is_https);
+        assert_eq!(t.host, "archive.org");
+        assert_eq!(t.port, 80, "http default port is 80");
+        assert_eq!(t.path, "/", "missing path should default to /");
+    }
+
+    #[test]
+    fn split_redirect_target_query_string_kept_in_path() {
+        use super::cdn_failover::split_redirect_target;
+        let t = split_redirect_target("https://cdn.example.org/v.mp4?token=abc&t=42")
+            .expect("URL with query string parses");
+        assert!(t.is_https);
+        assert_eq!(t.host, "cdn.example.org");
+        assert_eq!(t.port, 443);
+        assert_eq!(t.path, "/v.mp4?token=abc&t=42");
+    }
+
+    #[test]
+    fn split_redirect_target_unsupported_scheme_returns_none() {
+        use super::cdn_failover::split_redirect_target;
+        assert!(split_redirect_target("ftp://archive.org/foo").is_none());
+        assert!(split_redirect_target("//archive.org/foo").is_none());
+        assert!(split_redirect_target("not-a-url").is_none());
+        assert!(split_redirect_target("").is_none());
+    }
+
+    #[test]
+    fn split_redirect_target_with_port() {
+        use super::cdn_failover::split_redirect_target;
+        let t =
+            split_redirect_target("https://archive.org:8443/foo").expect("URL with port parses");
+        // Port is parsed out of the host string and returned separately so
+        // the connect call gets the right `u16` and the host stays as a
+        // resolvable name.
+        assert!(t.is_https);
+        assert_eq!(t.host, "archive.org");
+        assert_eq!(t.port, 8443);
+        assert_eq!(t.path, "/foo");
+    }
+
+    #[test]
+    fn split_redirect_target_http_with_explicit_port() {
+        use super::cdn_failover::split_redirect_target;
+        let t = split_redirect_target("http://ia.example.org:8080/v.mp4")
+            .expect("URL with explicit http port parses");
+        assert!(!t.is_https);
+        assert_eq!(t.host, "ia.example.org");
+        assert_eq!(t.port, 8080);
+        assert_eq!(t.path, "/v.mp4");
     }
 }
