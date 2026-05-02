@@ -8,6 +8,7 @@
 #[cfg(feature = "_video")]
 use super::cdn_failover::{
     MAX_WOULD_BLOCK_BACKOFF_MS, fetch_range, is_would_block, open_range_connection,
+    split_redirect_target,
 };
 #[cfg(feature = "_video")]
 use super::seek::{check_moov_at_start_restart, parse_tail_for_moov};
@@ -38,14 +39,7 @@ pub(crate) fn stream_download_range(
     start_offset: u64,
     total_size: u64,
 ) -> Result<(), String> {
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| format!("unsupported URL: {url}"))?;
-    let (host, path) = stripped
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((stripped, "/".to_string()));
+    let target = split_redirect_target(url).ok_or_else(|| format!("unsupported URL: {url}"))?;
 
     let range_end = total_size.saturating_sub(1);
     let mut current_offset = start_offset;
@@ -57,24 +51,31 @@ pub(crate) fn stream_download_range(
             return Ok(());
         }
 
-        let (mut stream, leftover) =
-            match open_range_connection(host, &path, tls, current_offset, range_end) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    if reconnects < MAX_RECONNECTS {
-                        reconnects += 1;
-                        log::warn!(
-                            "TV: Range connect failed ({e}), reconnect {reconnects}/\
+        let (mut stream, leftover) = match open_range_connection(
+            target.is_https,
+            &target.host,
+            target.port,
+            &target.path,
+            tls,
+            current_offset,
+            range_end,
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                if reconnects < MAX_RECONNECTS {
+                    reconnects += 1;
+                    log::warn!(
+                        "TV: Range connect failed ({e}), reconnect {reconnects}/\
                          {MAX_RECONNECTS} from {:.1}MB",
-                            current_offset as f64 / (1024.0 * 1024.0),
-                        );
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                        continue;
-                    }
-                    buffer.finish();
-                    return Err(e);
-                },
-            };
+                        current_offset as f64 / (1024.0 * 1024.0),
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    continue;
+                }
+                buffer.finish();
+                return Err(e);
+            },
+        };
 
         if !leftover.is_empty() {
             buffer.push(&leftover);

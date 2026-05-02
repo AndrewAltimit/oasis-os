@@ -1881,28 +1881,33 @@ mod tests {
     #[test]
     fn split_redirect_target_https_with_path() {
         use super::cdn_failover::split_redirect_target;
-        let (host, path) = split_redirect_target("https://ia803001.example.org/path/to/v.mp4")
+        let t = split_redirect_target("https://ia803001.example.org/path/to/v.mp4")
             .expect("https URL parses");
-        assert_eq!(host, "ia803001.example.org");
-        assert_eq!(path, "/path/to/v.mp4");
+        assert!(t.is_https);
+        assert_eq!(t.host, "ia803001.example.org");
+        assert_eq!(t.port, 443);
+        assert_eq!(t.path, "/path/to/v.mp4");
     }
 
     #[test]
     fn split_redirect_target_http_no_path() {
         use super::cdn_failover::split_redirect_target;
-        let (host, path) =
-            split_redirect_target("http://archive.org").expect("http URL with no path parses");
-        assert_eq!(host, "archive.org");
-        assert_eq!(path, "/", "missing path should default to /");
+        let t = split_redirect_target("http://archive.org").expect("http URL with no path parses");
+        assert!(!t.is_https);
+        assert_eq!(t.host, "archive.org");
+        assert_eq!(t.port, 80, "http default port is 80");
+        assert_eq!(t.path, "/", "missing path should default to /");
     }
 
     #[test]
     fn split_redirect_target_query_string_kept_in_path() {
         use super::cdn_failover::split_redirect_target;
-        let (host, path) = split_redirect_target("https://cdn.example.org/v.mp4?token=abc&t=42")
+        let t = split_redirect_target("https://cdn.example.org/v.mp4?token=abc&t=42")
             .expect("URL with query string parses");
-        assert_eq!(host, "cdn.example.org");
-        assert_eq!(path, "/v.mp4?token=abc&t=42");
+        assert!(t.is_https);
+        assert_eq!(t.host, "cdn.example.org");
+        assert_eq!(t.port, 443);
+        assert_eq!(t.path, "/v.mp4?token=abc&t=42");
     }
 
     #[test]
@@ -1917,10 +1922,25 @@ mod tests {
     #[test]
     fn split_redirect_target_with_port() {
         use super::cdn_failover::split_redirect_target;
-        let (host, path) =
+        let t =
             split_redirect_target("https://archive.org:8443/foo").expect("URL with port parses");
-        // Port stays attached to host; the connect call interprets it.
-        assert_eq!(host, "archive.org:8443");
-        assert_eq!(path, "/foo");
+        // Port is parsed out of the host string and returned separately so
+        // the connect call gets the right `u16` and the host stays as a
+        // resolvable name.
+        assert!(t.is_https);
+        assert_eq!(t.host, "archive.org");
+        assert_eq!(t.port, 8443);
+        assert_eq!(t.path, "/foo");
+    }
+
+    #[test]
+    fn split_redirect_target_http_with_explicit_port() {
+        use super::cdn_failover::split_redirect_target;
+        let t = split_redirect_target("http://ia.example.org:8080/v.mp4")
+            .expect("URL with explicit http port parses");
+        assert!(!t.is_https);
+        assert_eq!(t.host, "ia.example.org");
+        assert_eq!(t.port, 8080);
+        assert_eq!(t.path, "/v.mp4");
     }
 }

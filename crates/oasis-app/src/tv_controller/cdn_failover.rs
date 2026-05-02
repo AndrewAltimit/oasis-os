@@ -25,6 +25,26 @@ pub(crate) const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB
 #[cfg(feature = "_video")]
 pub(crate) const MAX_WOULD_BLOCK_BACKOFF_MS: u64 = 8;
 
+/// Slack added on top of the requested Range size before we declare the
+/// server is ignoring our Range header and abort. Keeps `fetch_range` from
+/// silently buffering an entire file into memory if the server returns 200.
+#[cfg(feature = "_video")]
+pub(crate) const FETCH_RANGE_SIZE_SLACK: u64 = 64 * 1024;
+
+/// Parsed redirect target: scheme, bare host, port, and path.
+///
+/// `split_redirect_target` produces this so callers can pass the right port
+/// and choose between TLS and plain TCP. Pre-refactor the parser dropped the
+/// scheme and embedded `:port` in the host string, which broke any redirect
+/// to `http://` or to a non-default port.
+#[cfg(feature = "_video")]
+pub(crate) struct RedirectTarget {
+    pub is_https: bool,
+    pub host: String,
+    pub port: u16,
+    pub path: String,
+}
+
 /// Check if an I/O error is a WouldBlock (non-blocking socket not ready).
 #[cfg(feature = "_video")]
 pub(crate) fn is_would_block(e: &(impl std::error::Error + 'static)) -> bool {
@@ -72,23 +92,39 @@ fn fetch_range_inner(
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
-    let (host, path) =
-        split_redirect_target(url).ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let target = split_redirect_target(url).ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let RedirectTarget {
+        is_https,
+        host,
+        port,
+        path,
+    } = target;
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let tcp = net
-        .connect(&host, 443)
+        .connect(&host, port)
         .map_err(|e| format!("connect: {e}"))?;
     // This is an HTTP/1.1 client; force ALPN to http/1.1 so the shared
     // config's h2 offer doesn't put us on a frame-encoded stream we can't
-    // parse.
-    let mut stream = tls
-        .connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
-        .map_err(|e| format!("TLS: {e}"))?
-        .stream;
+    // parse. For plain http:// targets we skip TLS entirely.
+    let mut stream: Box<dyn oasis_core::backend::NetworkStream> = if is_https {
+        tls.connect_tls_with_alpn(tcp, &host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream
+    } else {
+        tcp
+    };
+
+    // Host header includes the port for non-default ports; this is what
+    // most servers (and certainly archive.org's CDN nodes) expect.
+    let host_header = if (is_https && port == 443) || (!is_https && port == 80) {
+        host.clone()
+    } else {
+        format!("{host}:{port}")
+    };
 
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+        "GET {path} HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: OASIS_OS/0.1\r\n\
          Range: bytes={start}-{}\r\nConnection: close\r\n\r\n",
         end.saturating_sub(1),
     );
@@ -108,7 +144,14 @@ fn fetch_range_inner(
         }
     }
 
-    // Read response.
+    // Read response. Cap total bytes at the requested range size plus
+    // header room and a small slack — a server that ignores the Range
+    // header and starts streaming the whole file would otherwise buffer
+    // the entire body in memory before the 30s timeout fires.
+    let max_response: u64 = end
+        .saturating_sub(start)
+        .saturating_add(MAX_HEADER_SIZE as u64)
+        .saturating_add(FETCH_RANGE_SIZE_SLACK);
     let mut response = Vec::new();
     let mut buf = [0u8; 8192];
     let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -125,6 +168,12 @@ fn fetch_range_inner(
             Ok(0) => break,
             Ok(n) => {
                 response.extend_from_slice(&buf[..n]);
+                if (response.len() as u64) > max_response {
+                    return Err(format!(
+                        "response exceeded {max_response} bytes \
+                         (server may be ignoring Range header)"
+                    ));
+                }
                 deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             },
             Err(e) => {
@@ -176,24 +225,30 @@ fn fetch_range_inner(
     Ok(body)
 }
 
-/// Open a TLS connection, send an HTTP Range request, and return the stream
-/// plus any leftover body bytes from the header read.
+/// Open a connection (TLS for `https://`, plain TCP for `http://`), send an
+/// HTTP Range request, and return the stream plus any leftover body bytes
+/// from the header read.
 ///
 /// Returns `(stream, leftover_body_bytes)` on success.
 #[cfg(feature = "_video")]
 pub(crate) fn open_range_connection(
+    is_https: bool,
     host: &str,
+    port: u16,
     path: &str,
     tls: &oasis_core::net::RustlsTlsProvider,
     range_start: u64,
     range_end: u64,
 ) -> Result<(Box<dyn oasis_core::backend::NetworkStream>, Vec<u8>), String> {
-    open_range_connection_inner(host, path, tls, range_start, range_end, 5)
+    open_range_connection_inner(is_https, host, port, path, tls, range_start, range_end, 5)
 }
 
 #[cfg(feature = "_video")]
+#[allow(clippy::too_many_arguments)]
 fn open_range_connection_inner(
+    is_https: bool,
     host: &str,
+    port: u16,
     path: &str,
     tls: &oasis_core::net::RustlsTlsProvider,
     range_start: u64,
@@ -205,16 +260,28 @@ fn open_range_connection_inner(
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let tcp = net
-        .connect(host, 443)
+        .connect(host, port)
         .map_err(|e| format!("connect: {e}"))?;
-    // Force HTTP/1.1 ALPN — see comment in fetch_range_inner.
-    let mut stream = tls
-        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
-        .map_err(|e| format!("TLS: {e}"))?
-        .stream;
+    // Force HTTP/1.1 ALPN — see comment in fetch_range_inner. Skip TLS for
+    // plain http:// targets.
+    let mut stream: Box<dyn oasis_core::backend::NetworkStream> = if is_https {
+        tls.connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream
+    } else {
+        tcp
+    };
+
+    let host_header_owned;
+    let host_header: &str = if (is_https && port == 443) || (!is_https && port == 80) {
+        host
+    } else {
+        host_header_owned = format!("{host}:{port}");
+        &host_header_owned
+    };
 
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+        "GET {path} HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: OASIS_OS/0.1\r\n\
          Range: bytes={range_start}-{range_end}\r\nConnection: close\r\n\r\n",
     );
     let req_bytes = request.as_bytes();
@@ -286,12 +353,14 @@ fn open_range_connection_inner(
             .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
         if let Some(loc) = location {
             log::info!("TV: Range redirect {status} -> {loc}");
-            let (redir_host, redir_path) =
+            let redir =
                 split_redirect_target(&loc).ok_or_else(|| format!("bad redirect: {loc}"))?;
             drop(stream);
             return open_range_connection_inner(
-                &redir_host,
-                &redir_path,
+                redir.is_https,
+                &redir.host,
+                redir.port,
+                &redir.path,
                 tls,
                 range_start,
                 range_end,
@@ -327,19 +396,47 @@ fn open_range_connection_inner(
     Ok((stream, leftover))
 }
 
-/// Parse the `Location:` header out of an HTTP response and split a redirect
-/// URL into `(host, path)`.  Pure helper extracted so the redirect chain in
-/// [`open_range_connection_inner`] is testable.
+/// Parse a redirect URL into scheme + host + port + path.  Pure helper
+/// extracted so the redirect chain in [`open_range_connection_inner`] is
+/// testable.
 ///
 /// Returns `None` if the URL has no `http`/`https` scheme prefix.
+///
+/// `host` is the bare hostname with any `:port` stripped off; `port`
+/// defaults to 443 for `https://` and 80 for `http://` when not explicit.
+/// IPv6 literals (`[::1]:8080`) aren't parsed — archive.org redirects are
+/// always DNS hostnames, and that's the only redirect target this is used
+/// for today.
 #[cfg(feature = "_video")]
-pub(crate) fn split_redirect_target(loc: &str) -> Option<(String, String)> {
-    let stripped = loc
-        .strip_prefix("https://")
-        .or_else(|| loc.strip_prefix("http://"))?;
-    let (host, path) = stripped
+pub(crate) fn split_redirect_target(loc: &str) -> Option<RedirectTarget> {
+    let (is_https, stripped) = if let Some(s) = loc.strip_prefix("https://") {
+        (true, s)
+    } else if let Some(s) = loc.strip_prefix("http://") {
+        (false, s)
+    } else {
+        return None;
+    };
+    let (host_with_port, path) = stripped
         .split_once('/')
         .map(|(h, p)| (h.to_string(), format!("/{p}")))
         .unwrap_or((stripped.to_string(), "/".to_string()));
-    Some((host, path))
+
+    let default_port: u16 = if is_https { 443 } else { 80 };
+    // Only treat the trailing `:NNNN` as a port if it actually parses as
+    // u16; otherwise it's part of the host (e.g. an IPv6 literal that we
+    // can't usefully split this way).
+    let (host, port) = match host_with_port.rsplit_once(':') {
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(port) => (h.to_string(), port),
+            Err(_) => (host_with_port, default_port),
+        },
+        None => (host_with_port, default_port),
+    };
+
+    Some(RedirectTarget {
+        is_https,
+        host,
+        port,
+        path,
+    })
 }
