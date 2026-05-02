@@ -1,5 +1,7 @@
 # PSP Overlay Plugin Guide
 
+> **Last reviewed:** 2026-05-02 — still current. Architecture, build flow, and PRX module layout match the present source.
+
 The OASIS overlay plugin is a kernel-mode PRX that stays resident in memory alongside PSP games, providing an in-game overlay UI and background MP3 playback.
 
 ## Architecture

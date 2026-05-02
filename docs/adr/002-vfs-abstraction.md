@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2025-02-12
+**Last reviewed:** 2026-05-02 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`; the `Vfs` trait surface is unchanged in spirit.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2025-06-01
+**Last reviewed:** 2026-05-02 — still current. `oasis-backend-psp` (EBOOT) and `oasis-plugin-psp` (PRX) both ship and are built independently as documented.
 
 ## Context
 
