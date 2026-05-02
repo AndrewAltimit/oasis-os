@@ -153,8 +153,21 @@ Verbs:
 | `LIST <path>` | `200 <kind> <size> <name>` lines, or `500 <error>`. `<kind>` is `d` for directory, `f` for file. |
 | `GET <path>` | `200 <bytes> bytes\n<file body>`, or `500 <error>`. |
 | `PUT <path> <content>` | `200 written <n> bytes to <path>`, or `500 <error>`. |
+| `MKDIR <path>` | `200 created <path>`, or `500 <error>`. |
+| `DELETE <path>` | `200 deleted <path>`, or `500 <error>`. |
 | `RENAME <from> <to>` | `200 renamed <from> -> <to>`, or `500 <error>`. |
-| `QUIT` | Closes the connection. |
+| `STAT <path>` | `200 <directory|file> <bytes> bytes`, or `500 <error>`. |
+| `PASS <password>` | `230 Authenticated`, `530 Authentication failed`, or `530 Too many failures` (after 3 attempts, the connection closes). Only meaningful when the server was started with `--password`. |
+| `QUIT` | `200 goodbye` and closes the connection. Always allowed even before authentication. |
+
+> **Path resolution and exposure:** path arguments are passed straight
+> through to the active `Vfs` (`process_ftp_request` in
+> `transfer/mod.rs:32`) — there is no extra chroot, allow-list, or
+> traversal check at the transfer layer. The exposed filesystem is
+> exactly whatever the host's VFS implementation exposes (typically a
+> `MemoryVfs` for headless drivers or a `RealVfs`/`GameAssetVfs` rooted
+> at a host directory). Integrators are responsible for choosing a VFS
+> root that does not escape the data they want to share.
 
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
@@ -163,9 +176,14 @@ and the main loop polls connections each frame
 `/var/ftp/status` and `/var/ftp/request` so headless drivers can inspect or
 trigger transfers via the VFS.
 
-The transfer protocol does **not** speak PSK or TLS today. Treat it as
-trusted-LAN-only. If you need authenticated file transfer, tunnel it through
-the remote terminal session.
+Authentication is optional and password-based: `ftp start <port> --password
+<pass>` arms `FtpServer::with_password` (`transfer/mod.rs:203`). Without
+`--password` every accepted connection is immediately authenticated. The
+protocol does **not** speak TLS, so the password and all subsequent traffic
+travel in plaintext — treat the service as trusted-LAN-only and never reuse
+a remote-terminal PSK as the FTP password. For authenticated, encrypted
+file transfer over an untrusted network, tunnel through the TLS-protected
+remote terminal session instead.
 
 ## Threading model
 
