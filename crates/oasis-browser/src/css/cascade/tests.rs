@@ -1912,14 +1912,8 @@ fn attribute_dash_match_selector() {
 #[test]
 fn universal_selector_matches_every_element() {
     let doc = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
-    let sel = Selector {
-        parts: vec![(
-            CompoundSelector {
-                parts: vec![SimpleSelector::Universal],
-            },
-            None,
-        )],
-    };
+    // Route through parse_selector to also exercise the `*` parser path.
+    let sel = parse_selector("*");
     // Every Element node matches; the Document root (node 0) does not
     // because matches_simple requires ElementData.
     assert!(matching::matches_selector(&doc, 1, &sel, &ctx()), "html");
