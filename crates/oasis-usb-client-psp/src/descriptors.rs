@@ -308,7 +308,9 @@ pub static mut USB_DATA: [UsbData; 2] = [
 /// Initialize UsbData structures — must be called before driver registration.
 /// Copies descriptors and wires up all internal pointers.
 pub unsafe fn init_usb_data() {
-    // SAFETY: input is a `Sized` value owned by this scope; len = size_of::<T>().
+    // SAFETY: caller (per `unsafe fn` contract) guarantees this is invoked once before any
+    // driver registration, with no concurrent access to USB_DATA/DEVDESC_*/etc., so the
+    // mutations of these module-level statics observe no races.
     unsafe {
         // Helper: copy bytes
         fn copy(dst: &mut [u8], src: &[u8]) {

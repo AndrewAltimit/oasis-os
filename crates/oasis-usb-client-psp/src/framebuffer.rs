@@ -131,14 +131,16 @@ unsafe fn byte_copy(dst: *mut u8, src: *const u8, len: usize) {
     let dst32 = dst as *mut u32;
     let src32 = src as *const u32;
     for i in 0..words {
-        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
+        // SAFETY: caller guarantees dst and src are valid, non-overlapping, and point to at
+        // least len bytes of accessible memory; i < words = len/4 so the 4-byte access is in range.
         unsafe {
             core::ptr::write_volatile(dst32.add(i), core::ptr::read(src32.add(i)));
         }
     }
     let tail = words * 4;
     for i in tail..len {
-        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
+        // SAFETY: caller guarantees dst and src are valid, non-overlapping, and point to at
+        // least len bytes of accessible memory; i < len so the 1-byte access is in range.
         unsafe {
             core::ptr::write_volatile(dst.add(i), core::ptr::read(src.add(i)));
         }
