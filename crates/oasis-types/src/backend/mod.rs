@@ -3,11 +3,11 @@
 //! Every platform implements these traits. The core framework dispatches all
 //! I/O through trait boundaries -- it never calls platform-specific APIs.
 //!
-//! `SdiBackend` is a marker super-trait combining `SdiCore` with eight
+//! `SdiBackend` is a marker super-trait combining `SdiCore` with nine
 //! extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`,
-//! `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`).  A blanket
-//! impl ensures any type implementing `SdiCore` + all extensions
-//! automatically satisfies `SdiBackend`.
+//! `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`,
+//! `SdiRenderTarget`).  A blanket impl ensures any type implementing
+//! `SdiCore` + all extensions automatically satisfies `SdiBackend`.
 
 mod audio;
 mod clipboard;

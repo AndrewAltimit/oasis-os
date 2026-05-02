@@ -7,7 +7,7 @@
 //!
 //! `SdiBackend` is now a marker super-trait defined as
 //! `SdiCore + SdiShapes + SdiGradients + SdiAlpha + SdiText + SdiTextures
-//!  + SdiClipTransform + SdiVector + SdiBatch`
+//!  + SdiClipTransform + SdiVector + SdiBatch + SdiRenderTarget`
 //! with a blanket impl, so any type satisfying all extension traits
 //! automatically implements `SdiBackend`.
 //!

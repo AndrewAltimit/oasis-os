@@ -3,13 +3,13 @@
 //! Implements the `App` trait for a dual-panel file manager with
 //! file viewing capabilities (text, audio metadata, image metadata).
 //!
-//! The crate is organised into focused submodules:
-//! - [`model`] — pure data types ([`FilePanel`], [`FileOp`], [`NavTarget`],
+//! The crate is organised into focused (crate-private) submodules:
+//! - `model` — pure data types ([`FilePanel`], [`FileOp`], [`NavTarget`],
 //!   [`ViewMode`], [`TreeEntry`]) and side-effect-free helpers.
-//! - [`state`] — the [`FileManagerApp`] struct definition + constructors
+//! - `state` — the [`FileManagerApp`] struct definition + constructors
 //!   + simple accessors.
-//! - [`commands`] — input handling and menu-action dispatch.
-//! - [`view`] — direct-draw + SDI rendering for both view modes.
+//! - `commands` — input handling and menu-action dispatch.
+//! - `view` — direct-draw + SDI rendering for both view modes.
 //!
 //! This file re-exports the public API and contains the `App` trait impl.
 
@@ -26,10 +26,10 @@ use oasis_types::input::Button;
 use oasis_ui::menu_bar::MenuHit;
 use oasis_vfs::Vfs;
 
-pub mod commands;
-pub mod model;
-pub mod state;
-pub mod view;
+pub(crate) mod commands;
+pub(crate) mod model;
+pub(crate) mod state;
+pub(crate) mod view;
 
 pub use model::{FileOp, FilePanel, NavTarget, TreeEntry, ViewMode};
 pub use state::FileManagerApp;

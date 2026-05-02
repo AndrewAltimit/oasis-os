@@ -113,7 +113,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 
 `oasis-types/src/backend/` defines the only abstraction between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- a marker super-trait satisfied by any type implementing `SdiCore` plus all nine extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`); the extensions live in `extensions.rs` and provide ~55 default-impl methods total.
+- `SdiBackend` -- a marker super-trait satisfied by any type implementing `SdiCore` plus all nine extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`); the extensions live under `extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and provide ~55 default-impl methods total.
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
