@@ -1010,3 +1010,11 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "widget_pipeline_tests.rs"]
+mod widget_pipeline_tests;
+
+#[cfg(test)]
+#[path = "widget_input_tests.rs"]
+mod widget_input_tests;
