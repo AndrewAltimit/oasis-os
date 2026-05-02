@@ -24,7 +24,7 @@ dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
 undocumented_unsafe_blocks = "warn"
-unwrap_used = "warn"
+unwrap_used = "deny"
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

@@ -1145,7 +1145,6 @@ mod tests {
     fn network_service_default_http_get() {
         let svc = TestNetworkService;
         let result = svc.http_get("http://example.com");
-        assert!(result.is_err());
         let Err(oasis_types::error::OasisError::Backend(msg)) = result else {
             panic!("expected Backend error, got {result:?}");
         };
