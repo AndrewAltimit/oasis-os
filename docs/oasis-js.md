@@ -101,6 +101,15 @@ the host implementation must do its own blocking I/O — typically on a separate
 worker thread, with the result handed back through a channel that the next
 `eval` / `tick_timers` call pumps.
 
+> **Hazard:** `FetchHandler::fetch` is invoked on the JS eval thread.
+> Calling blocking I/O inline from the handler stalls the **entire** JS
+> engine — every queued microtask, every other in-flight `fetch()`
+> promise, every pending timer — not just the one promise being
+> resolved. The single-threaded, non-reentrant model means there is no
+> background scheduler that can run other JS while one handler waits.
+> Always do the actual network call off-thread and return only when the
+> bytes are already in hand.
+
 The JS-visible API matches the standard `fetch(url, opts)` shape and resolves
 to a `Response` with `status`, `ok`, `headers.get(name)`, `text()`, `json()`.
 

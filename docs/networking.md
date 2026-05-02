@@ -152,7 +152,7 @@ Verbs:
 | --- | --- |
 | `LIST <path>` | `200 <kind> <size> <name>` lines, or `500 <error>`. `<kind>` is `d` for directory, `f` for file. |
 | `GET <path>` | `200 <bytes> bytes\n<file body>`, or `500 <error>`. |
-| `PUT <path> <content>` | `200 written <n> bytes to <path>`, or `500 <error>`. |
+| `PUT <path> <content>` | `200 written <n> bytes to <path>`, or `500 <error>`. Inline-only — see size limit below. |
 | `MKDIR <path>` | `200 created <path>`, or `500 <error>`. |
 | `DELETE <path>` | `200 deleted <path>`, or `500 <error>`. |
 | `RENAME <from> <to>` | `200 renamed <from> -> <to>`, or `500 <error>`. |
@@ -168,6 +168,27 @@ Verbs:
 > `MemoryVfs` for headless drivers or a `RealVfs`/`GameAssetVfs` rooted
 > at a host directory). Integrators are responsible for choosing a VFS
 > root that does not escape the data they want to share.
+
+> **`PUT` payload size and newline handling:** the protocol is strictly
+> line-based with a 1024-byte per-line cap (`MAX_FTP_LINE_LEN` in
+> `transfer/mod.rs:143`). The full request — `PUT `, the path, a single
+> space, and the entire file body — must fit on one `\n`-terminated
+> line. Effective inline payload is therefore roughly
+> `1024 - 5 - len(path)` bytes, and the body cannot contain a literal
+> `\n` (it would be parsed as the end of the request and split the
+> payload across the next command). Exceeding the cap clears the read
+> buffer and replies `500 line too long`. There is no chunked /
+> multi-line upload mode today; for files larger than ~1 KiB or files
+> containing newlines, tunnel through the TLS-protected remote terminal
+> session instead and use shell redirection on the remote side.
+
+> **`PASS` comparison is not constant-time:** the password check uses
+> a plain `==` byte-string comparison (`transfer/mod.rs:306`), unlike
+> the remote-terminal PSK path which uses an explicit constant-time XOR
+> loop. Combined with the plaintext-on-the-wire posture this surface is
+> already designed for trusted-LAN use only, so the timing channel is
+> not the limiting factor — but auditors should not assume parity with
+> the PSK comparison.
 
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
