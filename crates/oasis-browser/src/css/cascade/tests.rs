@@ -1855,18 +1855,9 @@ fn attribute_suffix_selector() {
             }],
         ),
     ]);
-    let sel = Selector {
-        parts: vec![(
-            CompoundSelector {
-                parts: vec![SimpleSelector::Attribute {
-                    name: "href".to_string(),
-                    op: AttrOp::Suffix,
-                    value: Some(".pdf".to_string()),
-                }],
-            },
-            None,
-        )],
-    };
+    // Build via the parser so this also exercises `AttrOp::Suffix` parsing
+    // (the matcher and parser would otherwise be tested independently).
+    let sel = parse_selector("[href$=\".pdf\"]");
     assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
     assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
 }
@@ -1904,18 +1895,8 @@ fn attribute_dash_match_selector() {
             }],
         ),
     ]);
-    let sel = Selector {
-        parts: vec![(
-            CompoundSelector {
-                parts: vec![SimpleSelector::Attribute {
-                    name: "lang".to_string(),
-                    op: AttrOp::DashMatch,
-                    value: Some("en".to_string()),
-                }],
-            },
-            None,
-        )],
-    };
+    // Build via the parser so this also exercises `AttrOp::DashMatch` parsing.
+    let sel = parse_selector("[lang|=\"en\"]");
     assert!(
         matching::matches_selector(&doc, 3, &sel, &ctx()),
         "exact en"
@@ -2012,18 +1993,26 @@ fn where_selector_contributes_zero_specificity() {
 fn where_loses_to_plain_class_in_cascade() {
     // End-to-end: a `:where()`-wrapped #id selector adds zero specificity,
     // so a plain `.foo` rule (specificity 0,0,1,0) should beat
-    // `:where(#a) p` (also 0,0,0,1 because :where contributes 0 and `p`
+    // `p:where(#a)` (0,0,0,1 because :where contributes 0 and `p`
     // contributes 1 type — total 0,0,0,1).
     //
-    // We pick a clear winner: `.foo` (0,0,1,0) over `p:where(#a)` (0,0,0,1).
+    // The element carries BOTH `id="a"` and `class="foo"` so that *both*
+    // rules actually match — otherwise the test would only prove that a
+    // non-matching selector loses, not that `:where()` demotes specificity.
     let css = ".foo { color: blue; } p:where(#a) { color: red; }";
     let sheet = Stylesheet::parse(css);
     let doc = make_doc(vec![(
         TagName::P,
-        vec![Attribute {
-            name: "class".to_string(),
-            value: "foo".to_string(),
-        }],
+        vec![
+            Attribute {
+                name: "id".to_string(),
+                value: "a".to_string(),
+            },
+            Attribute {
+                name: "class".to_string(),
+                value: "foo".to_string(),
+            },
+        ],
     )]);
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     assert_eq!(
