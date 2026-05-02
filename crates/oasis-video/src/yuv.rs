@@ -30,16 +30,19 @@ pub fn yuv420_to_rgba(
         let uv_row = (row / 2) * stride_uv;
         let dst_row = row * w * 4;
 
-        // SAFETY: We verify that all indices accessed in the inner loop are
-        // within bounds.  For the Y plane: y_row + pairs*2 (+ 1 if odd) <= y.len()
-        // because stride_y >= w.  For U/V: uv_row + pairs (<= (w+1)/2) <= u/v.len()
-        // because stride_uv >= ceil(w/2).  For dst: dst_row + w*4 <= rgba.len()
-        // by construction (rgba has exactly w*h*4 bytes).
+        // The asserts below verify that all indices accessed in the inner
+        // loop are within bounds. For the Y plane: y_row + pairs*2 (+ 1 if
+        // odd) <= y.len() because stride_y >= w. For U/V: uv_row + pairs
+        // (<= (w+1)/2) <= u/v.len() because stride_uv >= ceil(w/2). For dst:
+        // dst_row + w*4 <= rgba.len() by construction (rgba has exactly
+        // w*h*4 bytes).
         assert!(y_row + w <= y.len());
         assert!(uv_row + w.div_ceil(2) <= u.len());
         assert!(uv_row + w.div_ceil(2) <= v.len());
         assert!(dst_row + w * 4 <= rgba.len());
 
+        // SAFETY: the four assertions above prove every `get_unchecked` /
+        // `get_unchecked_mut` index in the inner loop is in-bounds.
         unsafe {
             for p in 0..pairs {
                 let col = p * 2;

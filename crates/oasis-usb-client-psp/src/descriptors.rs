@@ -308,6 +308,9 @@ pub static mut USB_DATA: [UsbData; 2] = [
 /// Initialize UsbData structures — must be called before driver registration.
 /// Copies descriptors and wires up all internal pointers.
 pub unsafe fn init_usb_data() {
+    // SAFETY: caller (per `unsafe fn` contract) guarantees this is invoked once before any
+    // driver registration, with no concurrent access to USB_DATA/DEVDESC_*/etc., so the
+    // mutations of these module-level statics observe no races.
     unsafe {
         // Helper: copy bytes
         fn copy(dst: &mut [u8], src: &[u8]) {
@@ -317,6 +320,8 @@ pub unsafe fn init_usb_data() {
 
         // Byte-cast helper
         fn as_bytes<T>(v: &T) -> &[u8] {
+            // SAFETY: v is a valid shared reference for the duration of this call;
+            // len = size_of::<T>() so the resulting slice covers exactly v's bytes.
             unsafe {
                 core::slice::from_raw_parts(v as *const T as *const u8, core::mem::size_of::<T>())
             }

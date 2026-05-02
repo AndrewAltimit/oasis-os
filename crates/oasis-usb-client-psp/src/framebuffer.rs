@@ -59,6 +59,7 @@ unsafe extern "C" {
 /// # Safety
 /// Called from USB interrupt context — no syscalls, no file I/O.
 pub unsafe fn write_chunk(chunk_index: u8, data: &[u8]) {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let draw = core::ptr::read_volatile(&raw const DRAW_BUF);
         let base = vram_ptr(draw);
@@ -81,6 +82,7 @@ pub unsafe fn write_chunk(chunk_index: u8, data: &[u8]) {
 /// # Safety
 /// Called from USB interrupt context.
 pub unsafe fn swap() {
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         let draw = core::ptr::read_volatile(&raw const DRAW_BUF);
         let disp = core::ptr::read_volatile(&raw const DISP_BUF);
@@ -104,6 +106,7 @@ pub unsafe fn swap() {
 
 /// Get the number of frames displayed so far.
 pub fn frames_done() -> u32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe { core::ptr::read_volatile(&raw const FRAMES_DONE) }
 }
 
@@ -121,19 +124,26 @@ fn vram_ptr(index: u32) -> *mut u8 {
 /// Copies in 4-byte words where possible for better throughput.
 ///
 /// # Safety
-/// `dst` and `src` must be valid for `len` bytes, non-overlapping.
+/// `dst` and `src` must be valid for `len` bytes, non-overlapping, and both
+/// must be 4-byte aligned (MIPS requires aligned access for the `u32` fast
+/// path; unaligned access would trap or be UB).
 #[inline(never)]
 unsafe fn byte_copy(dst: *mut u8, src: *const u8, len: usize) {
     let words = len / 4;
     let dst32 = dst as *mut u32;
     let src32 = src as *const u32;
     for i in 0..words {
+        // SAFETY: caller guarantees dst and src are valid, non-overlapping, 4-byte aligned,
+        // and cover at least len bytes; i < words = len/4 so the 4-byte access is in range.
         unsafe {
             core::ptr::write_volatile(dst32.add(i), core::ptr::read(src32.add(i)));
         }
     }
     let tail = words * 4;
     for i in tail..len {
+        // SAFETY: caller guarantees dst and src are valid, non-overlapping, and cover at
+        // least len bytes; i < len so the 1-byte access is in range. Alignment is trivial
+        // for u8 access.
         unsafe {
             core::ptr::write_volatile(dst.add(i), core::ptr::read(src.add(i)));
         }

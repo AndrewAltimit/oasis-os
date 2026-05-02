@@ -287,6 +287,9 @@ unsafe fn gl_render(
     time: f32,
     params: &ShaderParams,
 ) {
+    // SAFETY: `gl` is a live `glow::Context` and the program/fbo handles
+    // were created from the same context. All glow calls below are valid
+    // GL state mutations within a single thread.
     unsafe {
         gl.bind_framebuffer(glow::FRAMEBUFFER, fbo);
         gl.viewport(0, 0, width as i32, height as i32);
@@ -371,6 +374,10 @@ unsafe fn gl_read_pixels(
     height: u32,
     buf: &mut [u8],
 ) {
+    // SAFETY: `gl` is a live `glow::Context`, `fbo` is a framebuffer handle
+    // from the same context, and `buf` is a slice owned by the caller of
+    // length ≥ width*height*4 (RGBA). glow's `read_pixels` writes into the
+    // buffer with bounds matching the documented format.
     unsafe {
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
         gl.read_pixels(

@@ -55,7 +55,9 @@ pub unsafe extern "C" fn oasis_create(
 
     // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
     let skin_str = unsafe { c_str_to_str(skin_toml) };
+    // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
     let layout_str = unsafe { c_str_to_str(layout_toml) };
+    // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
     let features_str = unsafe { c_str_to_str(features_toml) };
 
     let mut backend = Ue5Backend::new(width, height);

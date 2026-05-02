@@ -642,10 +642,11 @@ impl SdiRenderTarget for SdlBackend {
             ));
         }
         // SAFETY: raw_tex is a valid SDL_Texture; wrap in Rust handle.
-        // Lifetime is erased to `'static` using the same pattern as
-        // regular textures on this backend; correctness relies on
-        // `render_targets.clear()` in `Drop`.
         let tex: Texture<'_> = unsafe { self.texture_creator.raw_create_texture(raw_tex) };
+        // SAFETY: Erase the lifetime to `'static` using the same pattern
+        // as regular textures on this backend. Correctness relies on
+        // `render_targets.clear()` in `Drop` ordering before the
+        // texture_creator is dropped.
         let tex: Texture<'static> = unsafe { std::mem::transmute(tex) };
         let id = self.next_render_target_id;
         self.next_render_target_id += 1;

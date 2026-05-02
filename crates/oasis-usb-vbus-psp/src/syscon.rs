@@ -16,6 +16,7 @@ static mut RESOLVED_ADDR: u32 = 0;
 
 /// Get the resolved function address (for logging).
 pub fn resolved_addr() -> u32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe { core::ptr::read_volatile(&raw const RESOLVED_ADDR) }
 }
 

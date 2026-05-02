@@ -25,6 +25,7 @@ static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/USBTRACE/phase3g.log\0";
 struct Logger;
 impl Logger {
     fn init() {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -32,10 +33,12 @@ impl Logger {
                 0o777,
             )
         };
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         if fd.0 >= 0 { unsafe { psp::sys::sceIoClose(fd) }; }
     }
     fn log(s: &str) {
         psp::dprintln!("{}", s);
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 LOG_PATH.as_ptr(),
@@ -44,6 +47,7 @@ impl Logger {
             )
         };
         if fd.0 >= 0 {
+            // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe {
                 psp::sys::sceIoWrite(fd, s.as_ptr() as *const c_void, s.len());
                 psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
@@ -57,6 +61,7 @@ struct Fmt { buf: [u8; 200], pos: usize }
 impl Fmt {
     fn new() -> Self { Self { buf: [0u8; 200], pos: 0 } }
     fn s(&self) -> &str {
+        // SAFETY: all bytes written into this buffer above are ASCII.
         unsafe { core::str::from_utf8_unchecked(&self.buf[..self.pos]) }
     }
     fn p(&mut self, s: &str) {
@@ -92,17 +97,22 @@ fn lr(label: &str, val: u32) {
 fn wait_cross() {
     let mut p = SceCtrlData::default();
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if !p.buttons.intersects(CtrlButtons::CROSS) { break; }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
     loop {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::CROSS) { return; }
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
 
+// SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
 fn hr(addr: u32) -> u32 { unsafe { hw_read32(addr) } }
 fn hw(addr: u32, val: u32) {
     // SAFETY: kernel-mode MMIO write
@@ -123,7 +133,9 @@ fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
     let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
+    // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
     let func: F = unsafe { core::mem::transmute(addr) };
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     let ret = unsafe { func(pkt.as_mut_ptr(), 0) };
 
     let mut rx = [0u8; 16];
@@ -144,7 +156,9 @@ fn syscon_get(cmd: u8) -> (i32, [u8; 16]) {
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
     let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
+    // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
     let func: F = unsafe { core::mem::transmute(addr) };
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     let ret = unsafe { func(pkt.as_mut_ptr(), 0) };
 
     let mut rx = [0u8; 16];
@@ -178,8 +192,10 @@ fn psp_main() {
     // Enable OHCI + port power first
     let v50 = hr(0xBC10_0050);
     hw(0xBC10_0050, v50 | 0x2000);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
     hw(0xBD10_1038, 0x0303);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
     lr("OHCI +38=", hr(0xBD10_1038));
 
@@ -212,6 +228,7 @@ fn psp_main() {
     Logger::log("");
 
     for sec in 0u32..60 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
 
         // Every 10 seconds, log state
@@ -233,6 +250,7 @@ fn psp_main() {
 
         // Check for triangle to skip wait
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("(skipped by user)");
@@ -245,12 +263,15 @@ fn psp_main() {
     Logger::log("Now trying 0x47 after 0x45:");
     // Re-enable OHCI
     hw(0xBC10_0050, hr(0xBC10_0050) | 0x2000);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
     hw(0xBD10_1038, 0x0303);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     let (r, rx) = syscon_set(0x47, 1);
     log_cmd("SET 0x47 v=1", r, &rx);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
     lr("OHCI +38=", hr(0xBD10_1038));
 
@@ -258,15 +279,19 @@ fn psp_main() {
     Logger::log("");
     Logger::log("Sequence: 0x45 then 0x47:");
     hw(0xBC10_0050, hr(0xBC10_0050) | 0x2000);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
     hw(0xBD10_1038, 0x0303);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(10_000) };
 
     let (r1, rx1) = syscon_set(0x45, 1);
     log_cmd("SET 0x45 v=1", r1, &rx1);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(50_000) };
     let (r2, rx2) = syscon_set(0x47, 1);
     log_cmd("SET 0x47 v=1", r2, &rx2);
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(500_000) };
     lr("OHCI +38=", hr(0xBD10_1038));
     lr("BC10+50=", hr(0xBC10_0050));
@@ -275,6 +300,7 @@ fn psp_main() {
     Logger::log("");
     Logger::log("WAITING 30s more...");
     for sec in 0u32..30 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(1_000_000) };
         if sec % 10 == 9 {
             let mut f = Fmt::new();
@@ -288,6 +314,7 @@ fn psp_main() {
             Logger::log(f.s());
         }
         let mut p = SceCtrlData::default();
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if p.buttons.intersects(CtrlButtons::TRIANGLE) {
             Logger::log("(skipped)");
@@ -306,5 +333,6 @@ fn psp_main() {
     Logger::log("");
     Logger::log("CROSS = exit");
     wait_cross();
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(1_000_000) };
 }

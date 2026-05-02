@@ -168,10 +168,13 @@ struct TomlRoot {
     sections: HashMap<String, HashMap<String, String>>,
 }
 
-/// Flatten a TOML file into dot-separated keys.
-fn parse_translations(toml_str: &str) -> TranslationMap {
+/// Flatten a TOML file into dot-separated keys. `locale_name` is only used to
+/// name the offending locale in the panic message — the embedded TOML strings
+/// are static, so a parse failure means a malformed in-tree translation file
+/// and is treated as an unrecoverable init error.
+fn parse_translations(locale_name: &str, toml_str: &str) -> TranslationMap {
     let root: TomlRoot = toml::from_str(toml_str).unwrap_or_else(|e| {
-        panic!("oasis-i18n: failed to parse translation TOML: {e}");
+        panic!("oasis-i18n: failed to parse '{locale_name}' translation TOML: {e}");
     });
     let mut map = TranslationMap::new();
     for (section, entries) in &root.sections {
@@ -188,13 +191,13 @@ struct Catalog {
 
 static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
     let mut locales = HashMap::new();
-    locales.insert(Locale::English, parse_translations(EN_TOML));
-    locales.insert(Locale::Japanese, parse_translations(JA_TOML));
-    locales.insert(Locale::Spanish, parse_translations(ES_TOML));
-    locales.insert(Locale::German, parse_translations(DE_TOML));
-    locales.insert(Locale::French, parse_translations(FR_TOML));
-    locales.insert(Locale::Chinese, parse_translations(ZH_TOML));
-    locales.insert(Locale::Korean, parse_translations(KO_TOML));
+    locales.insert(Locale::English, parse_translations("en", EN_TOML));
+    locales.insert(Locale::Japanese, parse_translations("ja", JA_TOML));
+    locales.insert(Locale::Spanish, parse_translations("es", ES_TOML));
+    locales.insert(Locale::German, parse_translations("de", DE_TOML));
+    locales.insert(Locale::French, parse_translations("fr", FR_TOML));
+    locales.insert(Locale::Chinese, parse_translations("zh", ZH_TOML));
+    locales.insert(Locale::Korean, parse_translations("ko", KO_TOML));
     Catalog { locales }
 });
 

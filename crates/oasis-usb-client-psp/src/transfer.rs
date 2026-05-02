@@ -134,6 +134,9 @@ unsafe extern "C" fn recv_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
+    // SAFETY: req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let size = (*req).recvsize;
         let status = (*req).retcode;
@@ -180,6 +183,7 @@ unsafe extern "C" fn recv_complete(
 /// # Safety
 /// Called from USB interrupt context — no syscalls, no file I/O.
 unsafe fn handle_thin_client_recv(size: usize) {
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         if size < MSG_HEADER_SIZE {
             // Too short for a header — send InputState anyway to keep chain alive
@@ -229,6 +233,10 @@ unsafe fn handle_thin_client_recv(size: usize) {
 /// # Safety
 /// Called from USB interrupt context.
 unsafe fn send_input_response() {
+    // SAFETY: writes target SEND_BUF / SEND_REQ module-statics serialized by the USB
+    // interrupt context; CURRENT_INPUT is read via volatile to observe the latest
+    // main-loop write; the trailing usbd::req_send hands SEND_REQ to firmware which
+    // owns it until send_complete fires.
     unsafe {
         let dst = (&raw mut SEND_BUF.0) as *mut u8;
 
@@ -268,6 +276,9 @@ unsafe extern "C" fn send_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
+    // SAFETY: _req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let status = (*_req).retcode;
         core::ptr::write_volatile(&raw mut LAST_SEND_STATUS, status);
@@ -305,6 +316,7 @@ unsafe fn flush_dcache() {
     unsafe extern "C" {
         fn sceKernelDcacheWritebackInvalidateAll();
     }
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDcacheWritebackInvalidateAll() };
 }
 
@@ -318,6 +330,7 @@ unsafe fn invalidate_dcache_range(ptr: *const u8, size: usize) {
     let addr = ptr as u32;
     let block = addr & !63;
     let top = (addr + size as u32 + 63) & !63;
+    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDcacheInvalidateRange(block as *const u8, top - block) };
 }
 
@@ -328,6 +341,7 @@ unsafe fn invalidate_dcache_range(ptr: *const u8, size: usize) {
 /// Initialize endpoint pointers for callback-driven transfers.
 /// Must be called before any transfers.
 pub unsafe fn init_endpoints(ep1: *mut UsbEndpoint, ep2: *mut UsbEndpoint) {
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe {
         core::ptr::write_volatile(&raw mut EP1_PTR, ep1);
         core::ptr::write_volatile(&raw mut EP2_PTR, ep2);
@@ -336,12 +350,14 @@ pub unsafe fn init_endpoints(ep1: *mut UsbEndpoint, ep2: *mut UsbEndpoint) {
 
 /// Enable callback-driven echo mode.
 pub fn enable_echo_mode() {
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe { core::ptr::write_volatile(&raw mut ECHO_MODE, true) };
 }
 
 /// Enable thin-client mode (replaces echo mode).
 /// recv_complete parses protocol messages and responds with InputState.
 pub fn enable_thin_client_mode() {
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe {
         core::ptr::write_volatile(&raw mut ECHO_MODE, false);
         core::ptr::write_volatile(&raw mut THIN_CLIENT_MODE, true);
@@ -351,6 +367,7 @@ pub fn enable_thin_client_mode() {
 /// Update the current input state from the main loop.
 /// Called every tick with fresh controller data.
 pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
+    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
     unsafe {
         core::ptr::write_volatile(&raw mut CURRENT_INPUT.buttons, buttons);
         core::ptr::write_volatile(&raw mut CURRENT_INPUT.analog_x, analog_x);
@@ -364,6 +381,12 @@ pub fn update_input(buttons: u32, analog_x: u8, analog_y: u8, battery: u8) {
 /// Used for the initial handshake before enabling callback-driven mode.
 /// Returns true if data was received, false on timeout.
 pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
+    // SAFETY: volatile writes/reads of HANDSHAKE_DONE/HANDSHAKE_CANCELLED module-statics
+    // are serialized — only this caller mutates them on the main thread; the USB IRQ
+    // callback (`blocking_recv_complete`) only writes them while we are blocked in
+    // `sceKernelDelayThread`. `queue_blocking_recv` is the unsafe firmware-callback
+    // setup helper, and `sceKernelDelayThread` is a kernel-mode PSP syscall whose
+    // signature is documented in pspsdk.
     unsafe {
         core::ptr::write_volatile(&raw mut HANDSHAKE_DONE, false);
         core::ptr::write_volatile(&raw mut HANDSHAKE_CANCELLED, false);
@@ -387,6 +410,7 @@ pub unsafe fn blocking_recv(ep2: *mut UsbEndpoint) -> bool {
 }
 
 unsafe fn queue_blocking_recv(ep2: *mut UsbEndpoint) {
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
         invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
@@ -405,6 +429,7 @@ unsafe fn queue_blocking_recv(ep2: *mut UsbEndpoint) {
 /// Process the handshake message already in RECV_BUF and send InputState response.
 /// Then queue the first callback-driven recv for the thin-client chain.
 pub fn process_and_respond() {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let size = core::ptr::read_volatile(&raw const LAST_RECV_SIZE) as usize;
         if size > 0 {
@@ -422,6 +447,9 @@ unsafe extern "C" fn blocking_recv_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
+    // SAFETY: req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let size = (*req).recvsize;
         let status = (*req).retcode;
@@ -440,6 +468,7 @@ unsafe extern "C" fn blocking_recv_complete(
 /// Start an async receive on EP2 (bulk OUT, host→PSP).
 /// Matches USBHostFS pattern: invalidate recv buffer cache, then queue.
 pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
+    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     unsafe {
         // Invalidate recv buffer cache (USBHostFS pattern — DMA will write here)
         let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
@@ -462,6 +491,9 @@ pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
 pub unsafe fn start_send(ep1: *mut UsbEndpoint, data: &[u8]) -> i32 {
     let len = data.len().min(SEND_BUF_SIZE);
 
+    // SAFETY: dst is SEND_BUF (module-static) sized SEND_BUF_SIZE >= len; src is `data`,
+    // a caller-supplied shared reference that cannot alias a uniquely-borrowed module-static,
+    // so copy_nonoverlapping's non-overlap requirement is satisfied.
     unsafe {
         let dst = (&raw mut SEND_BUF.0) as *mut u8;
         core::ptr::copy_nonoverlapping(data.as_ptr(), dst, len);
@@ -480,6 +512,7 @@ pub unsafe fn start_send(ep1: *mut UsbEndpoint, data: &[u8]) -> i32 {
 /// Check if there's a new completion. Returns (updated, count).
 /// Clears the updated flag.
 pub fn poll_echo() -> (bool, u32) {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let updated = core::ptr::read_volatile(&raw const ECHO_UPDATED);
         let count = core::ptr::read_volatile(&raw const ECHO_COUNT);
@@ -492,6 +525,7 @@ pub fn poll_echo() -> (bool, u32) {
 
 /// Get the last recv size and status (for logging).
 pub fn last_recv_info() -> (i32, i32) {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         let size = core::ptr::read_volatile(&raw const LAST_RECV_SIZE);
         let status = core::ptr::read_volatile(&raw const LAST_RECV_STATUS);

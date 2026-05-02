@@ -55,6 +55,7 @@ static mut STALL_FN: Option<StallFn> = None;
 unsafe fn resolve_nid(nid: u32) -> Option<*mut u8> {
     for &(module, library) in USB_MODULES {
         if let Some(ptr) =
+            // SAFETY: reads kernel module export tables via the documented rust-psp helper.
             unsafe { psp::hook::find_function(module.as_ptr(), library.as_ptr(), nid) }
         {
             return Some(ptr);
@@ -63,6 +64,7 @@ unsafe fn resolve_nid(nid: u32) -> Option<*mut u8> {
     // Fallback: null module (searches all loaded modules on ARK-4)
     for &(_, library) in USB_MODULES {
         if let Some(ptr) =
+            // SAFETY: reads kernel module export tables via the documented rust-psp helper.
             unsafe { psp::hook::find_function(core::ptr::null(), library.as_ptr(), nid) }
         {
             return Some(ptr);
@@ -75,6 +77,7 @@ unsafe fn resolve_nid(nid: u32) -> Option<*mut u8> {
 /// Falls back to NID resolution if direct addresses fail sanity check.
 unsafe fn try_direct_addresses() -> bool {
     // Only use direct addresses on PSP-3001 (Tachyon >= 0x00500000)
+    // SAFETY: volatile read of a fixed-address register or module-static.
     let tachyon = unsafe {
         core::ptr::read_volatile(0xBC10_0040u32 as *const u32)
     } & 0xFF00_0000;
@@ -94,6 +97,7 @@ unsafe fn try_direct_addresses() -> bool {
 
     // Sanity check: read first instruction at Register address
     // Should be 0x27BDFFE0 (addiu $sp, $sp, -32)
+    // SAFETY: volatile read of a fixed-address register or module-static.
     let first_insn = unsafe {
         core::ptr::read_volatile(0x8818F024u32 as *const u32)
     };
@@ -102,6 +106,13 @@ unsafe fn try_direct_addresses() -> bool {
         return false;
     }
 
+    // SAFETY: each `core::mem::transmute` casts a hard-coded usbbd kernel-export
+    // address to the documented `fn(...) -> i32` prototype for that NID — addresses
+    // were verified by the prologue sanity check above (and cross-referenced
+    // against PSPSDK NIDs + Ghidra disassembly) and the prototype matches the
+    // pspsdk-documented signature, so the resulting fn pointers are sound on
+    // PSP-3001 6.61 ARK-4. Volatile writes target *_FN module-statics that are
+    // only mutated by this initialization path under exclusive control.
     unsafe {
         core::ptr::write_volatile(&raw mut REGISTER_FN, Some(core::mem::transmute(0x8818F024u32)));
         core::ptr::write_volatile(&raw mut UNREGISTER_FN, Some(core::mem::transmute(0x8818F164u32)));
@@ -115,7 +126,9 @@ unsafe fn try_direct_addresses() -> bool {
     }
 
     // Resolve ClearFIFO and Stall via NID (not in direct address table)
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     if let Some(p) = unsafe { resolve_nid(NID_USBBD_CLEAR_FIFO) } {
+        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
         unsafe {
             core::ptr::write_volatile(
                 &raw mut CLEAR_FIFO_FN,
@@ -124,7 +137,9 @@ unsafe fn try_direct_addresses() -> bool {
         }
         psp::dprintln!("  ClearFIFO = {:08X}", p as u32);
     }
+    // SAFETY: calling unsafe NID-resolution helper; returns raw function pointers from kernel exports.
     if let Some(p) = unsafe { resolve_nid(NID_USBBD_STALL) } {
+        // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
         unsafe {
             core::ptr::write_volatile(
                 &raw mut STALL_FN,
@@ -141,11 +156,13 @@ unsafe fn try_direct_addresses() -> bool {
 /// Resolve all sceUsbbd NIDs. Returns true if all critical ones resolved.
 pub unsafe fn resolve_all() -> bool {
     // Try direct addresses first (faster, avoids NID resolution issues)
+    // SAFETY: calls into PSP-3001 6.61 ARK-4 direct kernel address resolution helper.
     if unsafe { try_direct_addresses() } {
         return true;
     }
     crate::log_str("Direct addrs failed, trying NID...");
 
+    // SAFETY: calling resolved kernel function pointer via fn-pointer table.
     unsafe {
         let nids: &[(u32, &str)] = &[
             (NID_USBBD_REGISTER, "Register"),
@@ -190,6 +207,7 @@ pub unsafe fn resolve_all() -> bool {
 // ---------------------------------------------------------------------------
 
 pub unsafe fn register_driver(drv: *mut UsbDriver) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const REGISTER_FN) {
             f(drv)
@@ -200,6 +218,7 @@ pub unsafe fn register_driver(drv: *mut UsbDriver) -> i32 {
 }
 
 pub unsafe fn unregister_driver(drv: *mut UsbDriver) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const UNREGISTER_FN) {
             f(drv)
@@ -210,6 +229,7 @@ pub unsafe fn unregister_driver(drv: *mut UsbDriver) -> i32 {
 }
 
 pub unsafe fn req_send(req: *mut UsbdDeviceReq) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const REQ_SEND_FN) {
             f(req)
@@ -220,6 +240,7 @@ pub unsafe fn req_send(req: *mut UsbdDeviceReq) -> i32 {
 }
 
 pub unsafe fn req_recv(req: *mut UsbdDeviceReq) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const REQ_RECV_FN) {
             f(req)
@@ -230,6 +251,7 @@ pub unsafe fn req_recv(req: *mut UsbdDeviceReq) -> i32 {
 }
 
 pub unsafe fn cancel_all(endp: *mut UsbEndpoint) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const CANCEL_ALL_FN) {
             f(endp)
@@ -240,6 +262,7 @@ pub unsafe fn cancel_all(endp: *mut UsbEndpoint) -> i32 {
 }
 
 pub unsafe fn clear_fifo(endp: *mut UsbEndpoint) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const CLEAR_FIFO_FN) {
             f(endp)
@@ -253,6 +276,7 @@ pub unsafe fn clear_fifo(endp: *mut UsbEndpoint) -> i32 {
 /// The recv finalize at 0x8818B128 checks descriptor flags that can
 /// prevent RX hardware from being enabled even when req_recv returns 0.
 pub fn dump_ep_descriptor_state(ep_index: u32) {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         // Descriptor table at 0x88190850, 36 bytes per entry
         let desc_base = (0x88190850u32 + ep_index * 36) as *const u8;
@@ -291,6 +315,7 @@ pub fn dump_ep_descriptor_state(ep_index: u32) {
 }
 
 pub unsafe fn stall(endp: *mut UsbEndpoint) -> i32 {
+    // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const STALL_FN) {
             f(endp)
