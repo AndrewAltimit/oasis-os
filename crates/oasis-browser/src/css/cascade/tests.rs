@@ -1764,6 +1764,358 @@ fn has_non_element_node_is_ignored() {
     assert!(!matching::matches_selector(&doc, 0, &sel, &ctx()));
 }
 
+// -- Coverage gaps for the selector matcher --------------------------
+
+/// Build a doc shaped like `<html><body><div><p/></div></body></html>`.
+/// Node 3 is the div (direct body child); node 4 is the p (grandchild of
+/// body). Useful for distinguishing child vs descendant combinators.
+fn make_nested_doc() -> Document {
+    let nodes = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![],
+            }),
+            parent: Some(1),
+            children: vec![3],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Div,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        },
+    ];
+    Document::from_nodes(nodes, 0)
+}
+
+#[test]
+fn child_combinator_matches_direct_child_only() {
+    let doc = make_nested_doc();
+    // `body > div` — div (node 3) is a direct child of body.
+    let sel = parse_selector("body > div");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    // `body > p` — p (node 4) is a grandchild of body, not a child.
+    let sel = parse_selector("body > p");
+    assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+    // Sanity: the descendant form does match the grandchild.
+    let descendant = parse_selector("body p");
+    assert!(matching::matches_selector(&doc, 4, &descendant, &ctx()));
+}
+
+#[test]
+fn child_combinator_chain_requires_each_step_direct() {
+    let doc = make_nested_doc();
+    // `body > div > p` — every step a direct child; matches node 4.
+    let sel = parse_selector("body > div > p");
+    assert!(matching::matches_selector(&doc, 4, &sel, &ctx()));
+    // `html > p` — p is a great-grandchild of html, not a child.
+    let sel = parse_selector("html > p");
+    assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+}
+
+#[test]
+fn attribute_suffix_selector() {
+    let doc = make_doc(vec![
+        (
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "/docs/manual.pdf".to_string(),
+            }],
+        ),
+        (
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "/docs/index.html".to_string(),
+            }],
+        ),
+    ]);
+    let sel = Selector {
+        parts: vec![(
+            CompoundSelector {
+                parts: vec![SimpleSelector::Attribute {
+                    name: "href".to_string(),
+                    op: AttrOp::Suffix,
+                    value: Some(".pdf".to_string()),
+                }],
+            },
+            None,
+        )],
+    };
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+}
+
+#[test]
+fn attribute_dash_match_selector() {
+    // `[lang|=en]` matches "en" exactly OR "en-*" (hyphen prefix).
+    let doc = make_doc(vec![
+        (
+            TagName::Span,
+            vec![Attribute {
+                name: "lang".to_string(),
+                value: "en".to_string(),
+            }],
+        ),
+        (
+            TagName::Span,
+            vec![Attribute {
+                name: "lang".to_string(),
+                value: "en-US".to_string(),
+            }],
+        ),
+        (
+            TagName::Span,
+            vec![Attribute {
+                name: "lang".to_string(),
+                value: "english".to_string(),
+            }],
+        ),
+        (
+            TagName::Span,
+            vec![Attribute {
+                name: "lang".to_string(),
+                value: "fr".to_string(),
+            }],
+        ),
+    ]);
+    let sel = Selector {
+        parts: vec![(
+            CompoundSelector {
+                parts: vec![SimpleSelector::Attribute {
+                    name: "lang".to_string(),
+                    op: AttrOp::DashMatch,
+                    value: Some("en".to_string()),
+                }],
+            },
+            None,
+        )],
+    };
+    assert!(
+        matching::matches_selector(&doc, 3, &sel, &ctx()),
+        "exact en"
+    );
+    assert!(matching::matches_selector(&doc, 4, &sel, &ctx()), "en-US");
+    assert!(
+        !matching::matches_selector(&doc, 5, &sel, &ctx()),
+        "english is not en-prefixed by hyphen rule"
+    );
+    assert!(!matching::matches_selector(&doc, 6, &sel, &ctx()), "fr");
+}
+
+#[test]
+fn universal_selector_matches_every_element() {
+    let doc = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
+    let sel = Selector {
+        parts: vec![(
+            CompoundSelector {
+                parts: vec![SimpleSelector::Universal],
+            },
+            None,
+        )],
+    };
+    // Every Element node matches; the Document root (node 0) does not
+    // because matches_simple requires ElementData.
+    assert!(matching::matches_selector(&doc, 1, &sel, &ctx()), "html");
+    assert!(matching::matches_selector(&doc, 2, &sel, &ctx()), "body");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()), "p");
+    assert!(matching::matches_selector(&doc, 4, &sel, &ctx()), "div");
+    assert!(
+        !matching::matches_selector(&doc, 0, &sel, &ctx()),
+        "Document node is not an element"
+    );
+}
+
+#[test]
+fn is_selector_matches_any_inner() {
+    // `:is(div, p)` matches an element that is either <div> or <p>.
+    let doc = make_doc(vec![
+        (TagName::Span, vec![]),
+        (TagName::P, vec![]),
+        (TagName::Div, vec![]),
+    ]);
+    let sheet = Stylesheet::parse("*:is(div, p) { color: red; }");
+    let sel = sheet.rules[0].selectors.selectors[0].clone();
+    assert!(
+        !matching::matches_selector(&doc, 3, &sel, &ctx()),
+        "<span> is excluded"
+    );
+    assert!(matching::matches_selector(&doc, 4, &sel, &ctx()), "<p>");
+    assert!(matching::matches_selector(&doc, 5, &sel, &ctx()), "<div>");
+}
+
+#[test]
+fn is_selector_specificity_takes_max() {
+    // `:is(p, #header)` should count one ID (the max of the two inner
+    // compounds), mirroring `:not()`'s spec rule.
+    let sheet = Stylesheet::parse("div:is(p, #header) { color: red; }");
+    let spec = sheet.rules[0].selectors.selectors[0].specificity();
+    // div = 1 type; #header = 1 id.
+    assert_eq!(spec.ids, 1);
+    assert_eq!(spec.classes, 0);
+    assert_eq!(spec.types, 1);
+}
+
+#[test]
+fn where_selector_matches_any_inner() {
+    // `:where(div, p)` matches identically to `:is(div, p)` — only the
+    // specificity contribution differs.
+    let doc = make_doc(vec![
+        (TagName::Span, vec![]),
+        (TagName::P, vec![]),
+        (TagName::Div, vec![]),
+    ]);
+    let sheet = Stylesheet::parse("*:where(div, p) { color: red; }");
+    let sel = sheet.rules[0].selectors.selectors[0].clone();
+    assert!(!matching::matches_selector(&doc, 3, &sel, &ctx()));
+    assert!(matching::matches_selector(&doc, 4, &sel, &ctx()));
+    assert!(matching::matches_selector(&doc, 5, &sel, &ctx()));
+}
+
+#[test]
+fn where_selector_contributes_zero_specificity() {
+    // `:where(#a, .b, p)` adds nothing to the host selector's
+    // specificity, regardless of how specific its arguments are.
+    let sheet = Stylesheet::parse("div:where(#a, .b, p) { color: red; }");
+    let spec = sheet.rules[0].selectors.selectors[0].specificity();
+    assert_eq!(spec.ids, 0);
+    assert_eq!(spec.classes, 0);
+    assert_eq!(spec.types, 1, "only the leading `div` counts");
+}
+
+#[test]
+fn where_loses_to_plain_class_in_cascade() {
+    // End-to-end: a `:where()`-wrapped #id selector adds zero specificity,
+    // so a plain `.foo` rule (specificity 0,0,1,0) should beat
+    // `:where(#a) p` (also 0,0,0,1 because :where contributes 0 and `p`
+    // contributes 1 type — total 0,0,0,1).
+    //
+    // We pick a clear winner: `.foo` (0,0,1,0) over `p:where(#a)` (0,0,0,1).
+    let css = ".foo { color: blue; } p:where(#a) { color: red; }";
+    let sheet = Stylesheet::parse(css);
+    let doc = make_doc(vec![(
+        TagName::P,
+        vec![Attribute {
+            name: "class".to_string(),
+            value: "foo".to_string(),
+        }],
+    )]);
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    assert_eq!(
+        styles[3].as_ref().unwrap().color,
+        Color::rgb(0, 0, 255),
+        ".foo (1 class) outranks p:where(#a) (1 type) → blue wins"
+    );
+}
+
+/// Build `<html><body><article><section><p/></section></article></body></html>`
+/// for testing `@scope (root) to (limit)` boundaries.
+fn make_scope_doc() -> Document {
+    let nodes = vec![
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Body,
+                attributes: vec![],
+            }),
+            parent: Some(1),
+            children: vec![3],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Article,
+                attributes: vec![],
+            }),
+            parent: Some(2),
+            children: vec![4],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Section,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![5],
+        },
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(4),
+            children: vec![],
+        },
+    ];
+    Document::from_nodes(nodes, 0)
+}
+
+#[test]
+fn scope_to_limit_excludes_subtree_under_limit() {
+    // `@scope (article) to (section)` — the p sits *inside* a section,
+    // so it must fall outside scope and the rule should not apply.
+    let css = "p { color: black; } @scope (article) to (section) { p { color: red; } }";
+    let sheet = Stylesheet::parse(css);
+    let doc = make_scope_doc();
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    assert_eq!(
+        styles[5].as_ref().unwrap().color,
+        Color::BLACK,
+        "p inside the limit subtree must not pick up the scoped color"
+    );
+}
+
+#[test]
+fn scope_to_limit_applies_when_limit_does_not_match() {
+    // `@scope (article) to (aside)` — there's no <aside> ancestor, so the
+    // limit never trips and the rule should apply.
+    let css = "p { color: black; } @scope (article) to (aside) { p { color: red; } }";
+    let sheet = Stylesheet::parse(css);
+    let doc = make_scope_doc();
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    assert_eq!(
+        styles[5].as_ref().unwrap().color,
+        Color::rgb(255, 0, 0),
+        "no limit ancestor → rule applies"
+    );
+}
+
 mod prop {
     use proptest::prelude::*;
 
