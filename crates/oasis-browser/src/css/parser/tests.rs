@@ -1,5 +1,6 @@
 //! Tests for the CSS parser.
 
+use super::containers::split_css_and;
 use super::*;
 
 // -- helper -------------------------------------------------------
