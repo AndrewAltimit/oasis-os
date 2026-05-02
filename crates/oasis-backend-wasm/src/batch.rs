@@ -130,31 +130,28 @@ impl SdiBatch for WasmBackend {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
+        // `italic` is intentionally unread: matches `draw_text_impl`'s
+        // batched route, which also drops it (faux-italic is rendered
+        // through the per-glyph path, not the batched draw list).
+        let _ = italic;
         if texts.is_empty() || font_size == 0 {
             return Ok(());
         }
 
-        // Pre-resolve every glyph the batch will draw. We touch the LRU
-        // and render-on-miss exactly as `draw_text_impl` does, then walk
-        // again to assemble the JS-side draw list. Two passes means
-        // `glyph_cache` is borrowed immutably during marshaling — the
-        // inserts only happen in pass 1.
-        for t in texts {
-            if t.text.is_empty() || t.color.a == 0 {
-                continue;
-            }
-            for ch in t.text.chars() {
-                // Default-impl bold path: double-strike of the regular
-                // (non-bold) glyph at x+1, so the cached glyph variant we
-                // need is always (bold=false, italic=false).
-                self.ensure_glyph(ch, font_size, t.color, false, false)?;
-            }
-        }
-
-        // Build the parallel arrays: a JsArray of glyph canvases (in draw
-        // order) and a Float32Array of [x, y] pairs. We emit faux-bold as
-        // a second strike at x+1 (matching the default impl) so the JS
-        // side stays a flat drawImage loop.
+        // Single-pass build: ensure each glyph is in the cache and
+        // immediately push its canvas into the JS-side draw list. The
+        // JS Array holds its own reference to every canvas it receives,
+        // so subsequent LRU evictions from the Rust-side `glyph_cache`
+        // are harmless — a previously-pushed canvas stays alive on the
+        // JS heap. This avoids a hazard the older two-pass version had,
+        // where a batch with more unique glyph keys than
+        // `MAX_GLYPH_CACHE_SIZE` could silently drop characters because
+        // pass-1 inserts evicted earlier pass-1 inserts before pass 2
+        // looked them up.
+        //
+        // Default-impl bold path: double-strike of the regular
+        // (non-bold) glyph at x+1, so the cached glyph variant we need
+        // is always (bold=false, italic=false).
         let glyphs = js_sys::Array::new();
         let mut positions: Vec<f32> = Vec::new();
         for t in texts {
@@ -164,14 +161,11 @@ impl SdiBatch for WasmBackend {
             let (tx, ty) = self.translate(t.x, t.y);
             let mut cx = tx as f32;
             for ch in t.text.chars() {
+                self.ensure_glyph(ch, font_size, t.color, false, false)?;
                 let key = GlyphCacheKey::new(ch, font_size, t.color, false, false);
-                let Some(canvas) = self.glyph_canvas(&key) else {
-                    // Should not happen — pass 1 inserted every glyph and
-                    // WASM is single-threaded, so the only way this misses
-                    // is a key-mismatch bug. Skip rather than panic.
-                    cx += font::glyph_advance_scaled(ch, font_size) as f32;
-                    continue;
-                };
+                let canvas = self
+                    .glyph_canvas(&key)
+                    .expect("ensure_glyph just inserted this key");
                 glyphs.push(canvas);
                 positions.push(cx);
                 positions.push(ty as f32);
@@ -185,9 +179,6 @@ impl SdiBatch for WasmBackend {
         }
 
         if positions.is_empty() {
-            // `italic` is intentionally unread: see `draw_text_impl`
-            // default path which also ignores it for the batched route.
-            let _ = italic;
             return Ok(());
         }
         let n = (positions.len() / 2) as u32;
