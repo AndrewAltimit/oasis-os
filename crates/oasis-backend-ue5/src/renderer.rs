@@ -10,9 +10,9 @@
 use std::rc::Rc;
 
 use oasis_core::backend::{
-    BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform,
-    SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId,
-    texture_not_found, validate_rgba_data,
+    BatchRect, BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch,
+    SdiClipTransform, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
+    TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_rasterize::SoftwareBuffer;
@@ -537,10 +537,34 @@ impl SdiClipTransform for Ue5Backend {
 }
 
 // -------------------------------------------------------------------
-// SdiBatch: No-op (use default impl)
+// SdiBatch: tighter inner loop than the default — caches the
+// translate offset (the default re-derives it per call), batches the
+// `dirty` flag flip into a single store at the end, and skips the
+// per-rect SdiCore::fill_rect dispatch. The host UE5 process polls
+// `oasis_get_dirty` once per tick so coalescing the dirty flip costs
+// nothing visible but saves a few writes per frame.
 // -------------------------------------------------------------------
 
-impl SdiBatch for Ue5Backend {}
+impl SdiBatch for Ue5Backend {
+    fn submit_rect_batch(&mut self, rects: &[BatchRect]) -> Result<()> {
+        if rects.is_empty() {
+            return Ok(());
+        }
+        let (dx, dy) = self.translate_stack.current();
+        let mut wrote_any = false;
+        for r in rects {
+            if r.w == 0 || r.h == 0 || r.color.a == 0 {
+                continue;
+            }
+            self.fb.fill_rect(r.x + dx, r.y + dy, r.w, r.h, r.color);
+            wrote_any = true;
+        }
+        if wrote_any {
+            self.dirty = true;
+        }
+        Ok(())
+    }
+}
 
 // -------------------------------------------------------------------
 // SdiRenderTarget: Offscreen compositing layers (compositor PR4)
@@ -1207,5 +1231,74 @@ mod tests {
         backend.clear(c).unwrap();
         let buf = backend.buffer();
         assert_eq!(Color::rgba(buf[0], buf[1], buf[2], buf[3]), c);
+    }
+
+    fn synthetic_rects(n: usize) -> Vec<oasis_types::backend::BatchRect> {
+        (0..n)
+            .map(|i| oasis_types::backend::BatchRect {
+                x: ((i * 13) % 470) as i32,
+                y: ((i * 7) % 262) as i32,
+                w: 8,
+                h: 8,
+                color: Color::rgba(
+                    (i * 11) as u8,
+                    (i * 17) as u8,
+                    (i * 23) as u8,
+                    if i % 5 == 0 { 200 } else { 255 },
+                ),
+            })
+            .collect()
+    }
+
+    /// Visual parity guarantee: the override must produce a pixel buffer
+    /// that's bit-identical to the default `fill_rect` loop over the same
+    /// inputs. Without this, a screenshot regression somewhere downstream
+    /// (browser display list, file-manager grid) could pass on native and
+    /// fail on WASM, or vice versa.
+    #[test]
+    fn submit_rect_batch_matches_default_loop() {
+        use oasis_types::backend::SdiBatch;
+        let rects = synthetic_rects(200);
+
+        let mut a = Ue5Backend::new(480, 272);
+        a.clear(Color::BLACK).unwrap();
+        for r in &rects {
+            a.fill_rect(r.x, r.y, r.w, r.h, r.color).unwrap();
+        }
+
+        let mut b = Ue5Backend::new(480, 272);
+        b.clear(Color::BLACK).unwrap();
+        b.submit_rect_batch(&rects).unwrap();
+
+        assert_eq!(
+            a.buffer(),
+            b.buffer(),
+            "submit_rect_batch override produced a different framebuffer \
+             than the default fill_rect loop"
+        );
+    }
+
+    /// Translate offsets must be applied per item by both paths or the
+    /// override will silently shift everything by the wrong amount.
+    #[test]
+    fn submit_rect_batch_honors_translate_stack() {
+        use oasis_types::backend::{SdiBatch, SdiClipTransform};
+        let rects = synthetic_rects(50);
+
+        let mut a = Ue5Backend::new(480, 272);
+        a.clear(Color::BLACK).unwrap();
+        a.push_translate(7, 11).unwrap();
+        for r in &rects {
+            a.fill_rect(r.x, r.y, r.w, r.h, r.color).unwrap();
+        }
+        a.pop_translate().unwrap();
+
+        let mut b = Ue5Backend::new(480, 272);
+        b.clear(Color::BLACK).unwrap();
+        b.push_translate(7, 11).unwrap();
+        b.submit_rect_batch(&rects).unwrap();
+        b.pop_translate().unwrap();
+
+        assert_eq!(a.buffer(), b.buffer(), "translate stack diverged");
     }
 }

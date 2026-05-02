@@ -25,9 +25,9 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, BlendMode, Color, DashStyle, RenderTargetId, SdiAlpha, SdiBatch,
-    SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiTextures, SdiVector, StrokeStyle,
-    TextureId,
+    ArcParams, BackendErrExt, BatchRect, BlendMode, Color, DashStyle, RenderTargetId, SdiAlpha,
+    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiTextures, SdiVector,
+    StrokeStyle, TextureId,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
@@ -549,10 +549,44 @@ impl SdiClipTransform for SdlBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiBatch: No-op (use default impl)
+// SdiBatch: collapse consecutive same-color rect runs into a single
+// `SDL_RenderFillRects` call. The win is one (set_color + draw)
+// syscall pair per color *group* instead of per rect; for typical
+// frames (file-manager grid, browser borders, skin chrome) most
+// neighbouring rects share a color so this is a meaningful drop in
+// SDL syscalls. Order is preserved — no sorting — so callers passing
+// overlapping rects keep correct paint order.
 // -------------------------------------------------------------------
 
-impl SdiBatch for SdlBackend {}
+impl SdiBatch for SdlBackend {
+    fn submit_rect_batch(&mut self, rects: &[BatchRect]) -> Result<()> {
+        if rects.is_empty() {
+            return Ok(());
+        }
+        let mut group: Vec<sdl3::render::FRect> = Vec::with_capacity(rects.len());
+        let mut group_color: Option<Color> = None;
+        for r in rects {
+            if r.w == 0 || r.h == 0 || r.color.a == 0 {
+                continue;
+            }
+            if group_color != Some(r.color) {
+                if let Some(prev) = group_color.take() {
+                    self.set_color(prev);
+                    self.canvas.fill_rects(&group).backend_err()?;
+                    group.clear();
+                }
+                group_color = Some(r.color);
+            }
+            let (tx, ty) = self.translate(r.x, r.y);
+            group.push(frect(tx, ty, r.w, r.h));
+        }
+        if let Some(color) = group_color {
+            self.set_color(color);
+            self.canvas.fill_rects(&group).backend_err()?;
+        }
+        Ok(())
+    }
+}
 
 // -------------------------------------------------------------------
 // SdiRenderTarget: Offscreen compositing layers (compositor PR4)

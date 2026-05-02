@@ -8,8 +8,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::stacks::{ClipStack, TranslateStack};
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiCore, SdiRenderTarget, SdiText,
-    SdiVector, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
+    BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
+    TextMetrics, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 
@@ -159,6 +159,47 @@ impl WasmBackend {
         self.translate_stack.translate_f64(x, y)
     }
 
+    /// Look up a glyph canvas by its cache key. Used by batched text
+    /// submission to walk pre-resolved glyphs without re-running the
+    /// LRU bookkeeping on the second pass.
+    pub(crate) fn glyph_canvas(&self, key: &GlyphCacheKey) -> Option<&HtmlCanvasElement> {
+        self.glyph_cache.get(key)
+    }
+
+    /// Ensure the glyph for `(ch, font_size, color, bold, italic)` is in
+    /// the cache, evicting LRU entries if at capacity, and touch its
+    /// access timestamp. Shared by `draw_text_impl` and the batched text
+    /// submission path so cache bookkeeping stays in one place.
+    pub(crate) fn ensure_glyph(
+        &mut self,
+        ch: char,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
+        if self.glyph_cache.contains_key(&key) {
+            self.glyph_access_counter += 1;
+            self.glyph_access.insert(key, self.glyph_access_counter);
+            return Ok(());
+        }
+        // Evict LRU entries while at capacity.
+        while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
+            if let Some((&oldest_key, _)) = self.glyph_access.iter().min_by_key(|&(_, &ts)| ts) {
+                self.glyph_cache.remove(&oldest_key);
+                self.glyph_access.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
+        let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
+        self.glyph_cache.insert(key, canvas);
+        self.glyph_access_counter += 1;
+        self.glyph_access.insert(key, self.glyph_access_counter);
+        Ok(())
+    }
+
     /// Create an offscreen `<canvas>` for texture operations.
     fn make_offscreen(&self, w: u32, h: u32) -> Result<HtmlCanvasElement> {
         let doc = web_sys::window()
@@ -291,28 +332,8 @@ impl WasmBackend {
         let mut cx = tx as i32;
 
         for ch in text.chars() {
+            self.ensure_glyph(ch, font_size, color, bold, italic)?;
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if self.glyph_cache.contains_key(&key) {
-                // Update access timestamp on cache hit.
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            } else {
-                // Evict least-recently-used entry when cache is full (O(N) scan).
-                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                    if let Some((&oldest_key, _)) =
-                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
-                    {
-                        self.glyph_cache.remove(&oldest_key);
-                        self.glyph_access.remove(&oldest_key);
-                    } else {
-                        break;
-                    }
-                }
-                let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
-                self.glyph_cache.insert(key, canvas);
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            }
             let glyph_canvas = &self.glyph_cache[&key];
             self.ctx
                 .draw_image_with_html_canvas_element(glyph_canvas, cx as f64, ty)
@@ -652,10 +673,9 @@ impl SdiText for WasmBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiBatch: No-op (use default impl)
+// SdiBatch: lives in `crate::batch` so the inline-JS helper module
+// stays self-contained next to its `submit_*` overrides.
 // -------------------------------------------------------------------
-
-impl SdiBatch for WasmBackend {}
 
 // -------------------------------------------------------------------
 // SdiRenderTarget: Offscreen compositing layers (compositor PR4)

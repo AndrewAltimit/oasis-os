@@ -9,7 +9,7 @@
 
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::{Color, SdiBackend};
+use oasis_types::backend::{BatchRect, BatchText, Color, SdiBackend};
 use oasis_ui::flex;
 use oasis_ui::menu_bar::{MenuBar, MenuEntry, MenuStyle};
 
@@ -38,9 +38,9 @@ const FM_DROPDOWN_MAX_ROWS: usize = 8;
 // Re-exported for use in `lib.rs` tests that need to mirror the renderer's
 // hit-test geometry exactly.
 pub(crate) use private::{
-    Box2d, TextStyle, compute_explorer_geom, draw_icon, draw_outline, ensure_rect, ensure_text,
-    grid_hit_test, hide_dual_panel_sdi, hide_explorer_sdi, hide_menu_sdi, outline_rect,
-    tree_hit_test, update_menu_bar_sdi, update_menu_dropdown_sdi,
+    Box2d, TextStyle, compute_explorer_geom, draw_outline, ensure_rect, ensure_text, grid_hit_test,
+    hide_dual_panel_sdi, hide_explorer_sdi, hide_menu_sdi, outline_rect, push_icon, tree_hit_test,
+    update_menu_bar_sdi, update_menu_dropdown_sdi,
 };
 
 mod private {
@@ -278,33 +278,96 @@ mod private {
         Ok(())
     }
 
-    pub(crate) fn draw_icon(
-        backend: &mut dyn SdiBackend,
+    /// Push a 1-pixel-wide rectangle outline into a batch. Mirror of
+    /// [`draw_outline`] for callers that build a `Vec<BatchRect>` and
+    /// submit it via [`SdiBatch::submit_rect_batch`].
+    pub(crate) fn push_outline(
+        batch: &mut Vec<BatchRect>,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        color: Color,
+    ) {
+        batch.push(BatchRect {
+            x,
+            y,
+            w,
+            h: 1,
+            color,
+        });
+        batch.push(BatchRect {
+            x,
+            y: y + h as i32 - 1,
+            w,
+            h: 1,
+            color,
+        });
+        batch.push(BatchRect {
+            x,
+            y,
+            w: 1,
+            h,
+            color,
+        });
+        batch.push(BatchRect {
+            x: x + w as i32 - 1,
+            y,
+            w: 1,
+            h,
+            color,
+        });
+    }
+
+    /// Push the rectangles for an Explorer-view file/folder icon into a
+    /// batch. The Explorer-view tile loop submits all per-tile geometry
+    /// via `SdiBatch::submit_rect_batch` so the WASM backend can collapse
+    /// ~336 individual `fill_rect` round-trips into a single one.
+    pub(crate) fn push_icon(
+        batch: &mut Vec<BatchRect>,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
         kind: EntryKind,
         dark: Color,
-    ) -> oasis_types::error::Result<()> {
+    ) {
         match kind {
             EntryKind::Dir | EntryKind::ParentDir => {
-                backend.fill_rect(x, y, w, h, Color::rgb(255, 207, 87))?;
-                backend.fill_rect(x, y, w / 2, 4, Color::rgb(220, 170, 50))?;
+                batch.push(BatchRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    color: Color::rgb(255, 207, 87),
+                });
+                batch.push(BatchRect {
+                    x,
+                    y,
+                    w: w / 2,
+                    h: 4,
+                    color: Color::rgb(220, 170, 50),
+                });
             },
             EntryKind::File => {
-                backend.fill_rect(x, y, w, h, Color::WHITE)?;
-                let fold = 6u32;
-                backend.fill_rect(
-                    x + w as i32 - fold as i32,
+                batch.push(BatchRect {
+                    x,
                     y,
-                    fold,
-                    fold,
-                    Color::rgb(220, 220, 220),
-                )?;
+                    w,
+                    h,
+                    color: Color::WHITE,
+                });
+                let fold = 6u32;
+                batch.push(BatchRect {
+                    x: x + w as i32 - fold as i32,
+                    y,
+                    w: fold,
+                    h: fold,
+                    color: Color::rgb(220, 220, 220),
+                });
             },
         }
-        draw_outline(backend, x, y, w, h, dark)
+        push_outline(batch, x, y, w, h, dark);
     }
 
     /// Hide all Explorer-view SDI objects.
@@ -1367,10 +1430,19 @@ impl FileManagerApp {
             )?;
         }
 
-        // Grid pane.
+        // Grid pane. The tile loop produces ~7 rects + 1 text per tile
+        // (icon body, fold, 4-side outline, optional selection, label).
+        // For the 48-tile maximum that's ~336 rects + 48 texts per frame.
+        // Collecting them into batches collapses the per-item wasm-bindgen
+        // cost into one round-trip per batch on the WASM backend; native
+        // backends fall through to the per-item default.
         backend.fill_rect(g.grid_x, g.body_y, g.grid_w, g.body_h, Color::WHITE)?;
         draw_outline(backend, g.grid_x, g.body_y, g.grid_w, g.body_h, dark)?;
         let count_visible = g.cols * g.rows;
+        let mut tile_rects: Vec<BatchRect> = Vec::with_capacity(count_visible * 7);
+        // Labels are owned `String`s held here so the `BatchText<'_>`
+        // entries can borrow them with a stable lifetime.
+        let mut tile_labels: Vec<(i32, i32, Color, String)> = Vec::with_capacity(count_visible);
         for i in 0..count_visible {
             let abs_idx = panel.scroll + i;
             let Some(line) = panel.lines.get(abs_idx) else {
@@ -1387,12 +1459,26 @@ impl FileManagerApp {
             }
             let is_selected = abs_idx == panel.scroll + panel.cursor;
             if is_selected {
-                backend.fill_rect(tx, ty, g.tile_w, g.tile_h, at.app.selected_bg)?;
+                tile_rects.push(BatchRect {
+                    x: tx,
+                    y: ty,
+                    w: g.tile_w,
+                    h: g.tile_h,
+                    color: at.app.selected_bg,
+                });
             }
             let (name, kind) = parse_entry(line);
             let icon_x = tx + (g.tile_w as i32 - g.icon_w as i32) / 2;
             let icon_y = ty + 4;
-            draw_icon(backend, icon_x, icon_y, g.icon_w, g.icon_h, kind, dark)?;
+            push_icon(
+                &mut tile_rects,
+                icon_x,
+                icon_y,
+                g.icon_w,
+                g.icon_h,
+                kind,
+                dark,
+            );
             let max_chars = (g.tile_w as usize / 7).max(4);
             let label = truncate_label(&name, max_chars);
             let label_color = if is_selected {
@@ -1400,13 +1486,22 @@ impl FileManagerApp {
             } else {
                 Color::BLACK
             };
-            backend.draw_text(
-                &label,
-                tx + 2,
-                icon_y + g.icon_h as i32 + 2,
-                at.font_hint,
-                label_color,
-            )?;
+            tile_labels.push((tx + 2, icon_y + g.icon_h as i32 + 2, label_color, label));
+        }
+        if !tile_rects.is_empty() {
+            backend.submit_rect_batch(&tile_rects)?;
+        }
+        if !tile_labels.is_empty() {
+            let text_batch: Vec<BatchText<'_>> = tile_labels
+                .iter()
+                .map(|(x, y, color, label)| BatchText {
+                    text: label.as_str(),
+                    x: *x,
+                    y: *y,
+                    color: *color,
+                })
+                .collect();
+            backend.submit_text_batch(&text_batch, at.font_hint, false, false)?;
         }
 
         // Status.
