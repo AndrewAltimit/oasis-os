@@ -13,14 +13,17 @@ The `NetworkBackend` trait itself lives in `oasis-types/src/backend/`. Backends
 ## TCP transport
 
 `StdNetworkBackend` (`oasis-net/src/std_backend.rs`) is the desktop / Pi
-implementation. It uses `std::net` with non-blocking sockets — there is no
+implementation. It uses `std::net` with poll-driven, non-blocking sockets —
+except during the initial TLS handshake (see Threading model). There is no
 async runtime, no thread pool, and no internal task spawning. Listener and
 client are designed to be polled from the host's main loop.
 
 Sockets are switched to non-blocking mode on accept (`std_backend.rs:52`,
 `67`, `82`). `connect`, `send`, `recv` all return immediately with
-`WouldBlock` translated into "no data yet". TLS handshakes spin with a 1 ms
-sleep between iterations (`tls_rustls.rs:186`).
+`WouldBlock` translated into "no data yet". TLS handshakes are the one
+exception: they spin with a 1 ms sleep between iterations
+(`tls_rustls.rs:186`), so `RemoteClient::connect` blocks the calling thread
+until the handshake completes or the 30 s deadline expires.
 
 When the `tls-rustls` Cargo feature is enabled the backend wraps outbound
 streams with rustls and listeners accept TLS connections. Without the feature
@@ -131,6 +134,11 @@ does **not** resolve DNS — the address is passed to the backend as-is, so
 either a literal IP or a name resolvable by the host OS works. The `protocol`
 field is informational today; it allows the same hosts file to describe
 remote terminal endpoints, FTP servers, and future protocols side by side.
+
+> **Security note:** `psk` values are stored as plaintext in the hosts TOML.
+> Do **not** commit this file to a public repository, and treat it like any
+> other credential material — keep it out of version control, restrict
+> filesystem permissions, and rotate the key if the file is exposed.
 
 ## File transfer (`oasis-core/src/transfer/`)
 

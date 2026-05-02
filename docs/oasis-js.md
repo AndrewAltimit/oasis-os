@@ -42,7 +42,7 @@ Key entry points (paths are `crates/oasis-js/src/engine.rs`):
 | `JsEngine::new(max_memory_bytes)` (engine.rs:43) | Allocate the QuickJS runtime, install console / storage / fetch / timer globals. |
 | `set_max_exec_ms(ms)` (engine.rs:91) | Per-eval timeout. Default 5 s. Prevents infinite loops from hanging the host. |
 | `eval(script)` (engine.rs:99) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue on success. |
-| `eval_all(&[scripts])` (engine.rs:129) | Evaluate a sequence and collect per-script results. Continues on error. |
+| `eval_all(&[scripts])` (engine.rs:129) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
 | `tick_timers(dt_ms)` (engine.rs:159) | Advance the timer queue by `dt_ms`, fire due callbacks, drain microtasks between callbacks. Call once per host frame. |
 | `console_output()` / `take_console_output()` (engine.rs:134, 139) | Snapshot or drain the buffered console. |
 | `local_storage()` (engine.rs:145) | Borrow the in-memory `localStorage` map for snapshot or restore. |
@@ -106,10 +106,20 @@ to a `Response` with `status`, `ok`, `headers.get(name)`, `text()`, `json()`.
 
 ## Storage
 
-`SharedStorage` (`storage.rs:11`) is an `Rc<RefCell<BTreeMap<String, String>>>`
-exposed as both `localStorage` and `sessionStorage`. Persistence is the host's
-job: snapshot the map on shutdown and rehydrate on startup. There is no quota
-enforcement.
+`SharedStorage` (`storage.rs:54`) is an `Rc<RefCell<LocalStorage>>` wrapping a
+`BTreeMap<String, String>`. The `oasis-js` crate itself only installs
+`localStorage`; it does **not** define `sessionStorage` at the engine level.
+Persistence of `localStorage` is the host's job: snapshot the map on shutdown
+and rehydrate on startup. There is no quota enforcement.
+
+The `oasis-browser` layer is what actually exposes `sessionStorage` to JS, and
+it does so with a **separate** backing map from `localStorage`
+(`crates/oasis-browser/src/js_dom.rs:843`–1998: `kind: 0` = localStorage,
+`kind: 1` = sessionStorage). Persistence still differs from the spec —
+`sessionStorage` is page-scoped within an `oasis-browser` instance but is not
+automatically cleared on navigation events the way a real browser would clear
+it. Treat that as an intentional simplification, not a guarantee of
+spec-compliant Web Storage semantics.
 
 ## Threading and re-entrancy
 
@@ -180,9 +190,11 @@ synchronously.
 
 ### Storage and fetch
 
-`localStorage` and `sessionStorage` mirror the standard API on top of the
-`SharedStorage` map. `fetch(url, opts)` returns a promise resolved by the
-installed `FetchHandler` and yields a `Response` with `status`, `ok`,
+`localStorage` and `sessionStorage` both mirror the standard `getItem` /
+`setItem` / `removeItem` / `clear` / `key` / `length` API, but they back onto
+**separate** maps inside `oasis-browser` — see the Storage section above for
+the spec-deviation caveats. `fetch(url, opts)` returns a promise resolved by
+the installed `FetchHandler` and yields a `Response` with `status`, `ok`,
 `headers.get`, `text`, `json`.
 
 ### Canvas 2D

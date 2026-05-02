@@ -45,10 +45,11 @@ the `music` terminal command uses, and what the WASM backend listens on.
 
 `Playlist` keeps a `Vec<TrackInfo>` in insertion order (`playlist.rs:13`).
 
-Shuffle (`playlist.rs:186`) is a deterministic Fisher-Yates variant: split the
-list in half, interleave, repeat. It is **not** cryptographically random — it
-just needs to be reproducible for tests. The shuffle order is rebuilt whenever
-you toggle shuffle on or add a new track.
+Shuffle (`playlist.rs:186`) is a deterministic riffle/interleave shuffle: it
+splits the index list into two halves and interleaves the first half with the
+reversed second half. It is **not** Fisher-Yates and **not** cryptographically
+random — it just needs to be reproducible for tests. The shuffle order is
+rebuilt whenever you toggle shuffle on or add a new track.
 
 Repeat modes:
 
@@ -68,7 +69,11 @@ desktop, `sceAudiocodec` on PSP, WebAudio on WASM, the engine mixer on UE5.
 The crate does ship two format helpers used by tests and a few backends:
 
 - `wav.rs` — PCM WAV reader. Format tag 1 only, 8-bit unsigned or 16-bit
-  little-endian signed, mono or stereo (`wav.rs:38`–73).
+  little-endian signed, mono or stereo (`wav.rs:38`–73). The reader returns
+  `Option<WavData>`; any unsupported format tag, bit depth, or channel count
+  (and any malformed RIFF / `fmt `/ `data` chunk) yields `None` rather than
+  partial or corrupted PCM. Callers must treat `None` as "fall through to the
+  next decoder".
 - `ogg.rs` — Ogg/Vorbis decoding via `symphonia` (`ogg.rs:65`). Returns
   interleaved `i16` PCM. Sample rate and channel layout come from the
   codec params; defaults to 44.1 kHz / stereo when missing.
