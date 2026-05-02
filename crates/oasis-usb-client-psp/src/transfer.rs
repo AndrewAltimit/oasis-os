@@ -134,7 +134,9 @@ unsafe extern "C" fn recv_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
-    // SAFETY: volatile read of a fixed-address register or module-static.
+    // SAFETY: req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let size = (*req).recvsize;
         let status = (*req).retcode;
@@ -231,7 +233,10 @@ unsafe fn handle_thin_client_recv(size: usize) {
 /// # Safety
 /// Called from USB interrupt context.
 unsafe fn send_input_response() {
-    // SAFETY: volatile read of a fixed-address register or module-static.
+    // SAFETY: writes target SEND_BUF / SEND_REQ module-statics serialized by the USB
+    // interrupt context; CURRENT_INPUT is read via volatile to observe the latest
+    // main-loop write; the trailing usbd::req_send hands SEND_REQ to firmware which
+    // owns it until send_complete fires.
     unsafe {
         let dst = (&raw mut SEND_BUF.0) as *mut u8;
 
@@ -271,7 +276,9 @@ unsafe extern "C" fn send_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
-    // SAFETY: volatile read of a fixed-address register or module-static.
+    // SAFETY: _req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let status = (*_req).retcode;
         core::ptr::write_volatile(&raw mut LAST_SEND_STATUS, status);
@@ -435,7 +442,9 @@ unsafe extern "C" fn blocking_recv_complete(
     _arg1: i32,
     _arg2: i32,
 ) -> i32 {
-    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
+    // SAFETY: req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
+    // firmware when invoking a registered completion callback; subsequent volatile writes
+    // target module-statics serialized by the USB interrupt context.
     unsafe {
         let size = (*req).recvsize;
         let status = (*req).retcode;
