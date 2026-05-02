@@ -151,7 +151,7 @@ Verbs:
 | Request | Response |
 | --- | --- |
 | `LIST <path>` | `200 <kind> <size> <name>` lines, or `500 <error>`. `<kind>` is `d` for directory, `f` for file. |
-| `GET <path>` | `200 <bytes> bytes\n<file body>`, or `500 <error>`. |
+| `GET <path>` | `200 <bytes> bytes\n<file body>`, or `500 <error>`. Text-only — see binary/newline note below. |
 | `PUT <path> <content>` | `200 written <n> bytes to <path>`, or `500 <error>`. Inline-only — see size limit below. |
 | `MKDIR <path>` | `200 created <path>`, or `500 <error>`. |
 | `DELETE <path>` | `200 deleted <path>`, or `500 <error>`. |
@@ -168,6 +168,30 @@ Verbs:
 > `MemoryVfs` for headless drivers or a `RealVfs`/`GameAssetVfs` rooted
 > at a host directory). Integrators are responsible for choosing a VFS
 > root that does not escape the data they want to share.
+
+> **`GET` is text-only — binary files and embedded newlines are
+> unsafe.** The server formats responses as
+> `format!("200 {} bytes\n{text}", data.len())` where `text` is
+> `String::from_utf8_lossy(&data)` (`transfer/mod.rs:65`). Two
+> consequences:
+>
+> 1. **Binary data is silently corrupted.** Any byte that is not
+>    valid UTF-8 gets replaced with the U+FFFD replacement character
+>    (`EF BF BD`, three bytes). The `<bytes>` header still reports the
+>    original `data.len()`, so the header byte count and the body
+>    length will diverge for any non-UTF-8 file.
+> 2. **Embedded newlines split the line-based parse on the client
+>    side.** A file body containing a literal `\n` looks
+>    indistinguishable from the start of a fresh response line to a
+>    naive line reader. Clients that read response-by-line will only
+>    see the first body line. Use the `<bytes>` header to read a fixed
+>    payload after the header `\n` *only* if you also know the file is
+>    valid UTF-8 — otherwise the corruption above means the read count
+>    will not match anyway.
+>
+> For binary files or files containing newlines, tunnel through the
+> TLS-protected remote terminal session and use shell redirection or
+> base64 there, mirroring the `PUT` workaround below.
 
 > **`PUT` payload size and newline handling:** the protocol is strictly
 > line-based with a 1024-byte per-line cap (`MAX_FTP_LINE_LEN` in

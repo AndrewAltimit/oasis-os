@@ -143,6 +143,14 @@ of pumping bytes through `feed_data`.
 - Handles 301 / 302 / 307 by encoding the new URL into the error string as
   `redirect:<url>` (`source.rs:456`); the manager re-issues against the new
   URL.
+- **No redirect-loop or hop-count protection.** `ArchiveSource` itself does
+  not track redirect depth, and `RadioManager::resume_from_redirect`
+  (`radio/mod.rs:143`) just clears the error and reconnects. A misconfigured
+  CDN that bounces between two URLs (`A` → `B` → `A` …) will cause the
+  manager to spin in a tight reconnect loop, repeatedly stalling the audio
+  thread. Callers that drive `resume_from_redirect` are responsible for
+  capping the number of consecutive redirects and giving up on a sensible
+  budget (3–5 hops).
 - 4xx and 5xx responses kill the source.
 - Tracks `Content-Length` (`source.rs:495`).
 - Emits metadata once on the first chunk, populated from a creator/title
