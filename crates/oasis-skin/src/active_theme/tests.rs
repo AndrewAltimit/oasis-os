@@ -473,4 +473,146 @@ disabled_text = "#555555"
         assert_eq!(filtered.len(), 1);
         assert!(matches!(filtered[0].kind, LayerKind::Grid { .. }));
     }
+
+    // -- Cross-skin derivation snapshot --------------------------------
+
+    /// Format a `Color` as a stable `#RRGGBBAA` string for snapshot output.
+    fn fmt_color(c: Color) -> String {
+        format!("#{:02X}{:02X}{:02X}{:02X}", c.r, c.g, c.b, c.a)
+    }
+
+    /// Render a one-line palette fingerprint for an `ActiveTheme`. The
+    /// 13 derived colors here are the ones the bar/icon/menu/toast
+    /// renderers actually read at paint time -- a regression in the
+    /// derivation logic shows up here as a flipped channel value.
+    fn palette_fingerprint(at: &ActiveTheme) -> String {
+        let parts = [
+            fmt_color(at.bar.statusbar_bg),
+            fmt_color(at.bar.bg),
+            fmt_color(at.bar.battery_color),
+            fmt_color(at.bar.tab_active_fill),
+            fmt_color(at.bar.version_color),
+            fmt_color(at.bar.clock_color),
+            fmt_color(at.icon.cursor_color),
+            fmt_color(at.icon.body_color),
+            fmt_color(at.menu.panel_bg),
+            fmt_color(at.menu.button_bg),
+            fmt_color(at.app.bg),
+            fmt_color(at.app.title_bar_bg),
+            fmt_color(at.toast.info_bg),
+        ];
+        parts.join("|")
+    }
+
+    /// Snapshot every built-in skin's derived `ActiveTheme` palette.
+    ///
+    /// Locks down the output of `ActiveTheme::from_skin` for all 15
+    /// shipping skins. Failure modes this catches:
+    ///   - A change to `derive.rs` that flips a channel for one skin
+    ///     while leaving others untouched.
+    ///   - A new skin that lands without a matching expected entry
+    ///     (forces a deliberate update with the new palette inline).
+    ///   - A skin whose TOML changed and now derives differently --
+    ///     the failing line shows the *new* palette so the maintainer
+    ///     can paste it in if intentional.
+    ///
+    /// To regenerate after an intentional change, run with
+    /// `RUST_TEST_THREADS=1 cargo test cross_skin_palette_snapshot`
+    /// and copy the printed `(name, "fingerprint")` lines.
+    #[test]
+    fn cross_skin_palette_snapshot() {
+        use crate::builtin::{builtin_names, load_builtin};
+
+        // Expected palette fingerprints. Pinned 2026-05-02. Regenerate
+        // by uncommenting the print below and running once.
+        let expected: &[(&str, &str)] = &[
+            (
+                "classic",
+                "#18182C50|#18182C5A|#7CABDBFF|#4488CC1E|#E0E0F0FF|#E0E0F0FF|#4488CC50|#E0E0F0FF|#141423DC|#4488CCC8|#121220FF|#21212EFF|#4488CCDC",
+            ),
+            (
+                "corrupted",
+                "#1A001A50|#1A001A5A|#FF4CFFFF|#FF00FF1E|#CC00CCFF|#CC00CCFF|#FF00FF50|#CC00CCFF|#141423DC|#FF00FFC8|#0A050AFF|#191419FF|#FF00FFDC",
+            ),
+            (
+                "desktop",
+                "#22223350|#2222335A|#6F92D8FF|#3264C81E|#FFFFFFFF|#FFFFFFFF|#3264C850|#FFFFFFFF|#141423DC|#3264C8C8|#1E1E31FF|#2C2C3DFF|#3264C8DC",
+            ),
+            (
+                "modern",
+                "#1A1A2D50|#1A1A2D5A|#988CEEFF|#6C5CE71E|#F0F0FFFF|#F0F0FFFF|#6C5CE750|#F0F0FFFF|#141423DC|#6C5CE7C8|#181822FF|#262630FF|#6C5CE7DC",
+            ),
+            (
+                "xp",
+                "#1F3E7BFF|#1F3E7BFF|#FFFFFFFF|#0033991E|#FFFFFFFF|#FFFFFFFF|#5B9BD5A0|#ECE9D8FF|#1F3E7BFF|#309E30FF|#ECE9D8FF|#1443A1FF|#003399DC",
+            ),
+            (
+                "macos",
+                "#F5F5F780|#2C2C2EFF|#1D1D1FFF|#007AFF1E|#86868BFF|#1D1D1FFF|#007AFF40|#FFFFFFFF|#F5F5F7FF|#007AFFFF|#FFFFFFFF|#E8E8E8FF|#007AFFDC",
+            ),
+            (
+                "gnome",
+                "#0F0F0FFF|#161616FF|#E6E6E6FF|#3584E41E|#929292FF|#FFFFFFFF|#3584E460|#303030FF|#222222FF|#3584E4FF|#242424FF|#303030FF|#3584E4DC",
+            ),
+            (
+                "retro-cga",
+                "#000000FF|#000000FF|#55FFFFFF|#55FFFF1E|#FF55FFFF|#FFFFFFFF|#FF55FF80|#000000FF|#000000FF|#FF55FFFF|#000000FF|#55FFFFFF|#55FFFFDC",
+            ),
+            (
+                "balatro",
+                "#08081080|#0A0A14FF|#00F0FFFF|#00F0FF1E|#FF2060FF|#FFD000FF|#00F0FF30|#12122AFF|#0E0E20FF|#FF206080|#0A0A14FF|#12122AFF|#00F0FFDC",
+            ),
+            (
+                "paper",
+                "#F0EDE4FF|#F0EDE4FF|#1A1A1AFF|#2C2C2C1E|#8C8C84FF|#1A1A1AFF|#2C2C2C20|#FFFFFFFF|#FFFFFFFF|#F0EDE4FF|#FFFFFFFF|#F0EDE4FF|#2C2C2CDC",
+            ),
+            (
+                "win95",
+                "#C0C0C0FF|#283C5A5A|#4C4CA6FF|#0000801E|#000000FF|#000000FF|#00008050|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#148A8AFF|#000080DC",
+            ),
+            (
+                "solarized",
+                "#073642FF|#283C5A5A|#67ADDFFF|#268BD21E|#839496FF|#839496FF|#268BD250|#073642FF|#073642FF|#268BD2FF|#002B36FF|#143B46FF|#268BD2DC",
+            ),
+            (
+                "vaporwave",
+                "#2D1B69FF|#283C5A5A|#FF9BDCFF|#FF71CE1E|#E0D0FFFF|#E0D0FFFF|#FF71CE50|#2D1B69FF|#2D1B69FF|#FF71CEFF|#1A0A2EFF|#2C1D3EFF|#FF71CEDC",
+            ),
+            (
+                "highcontrast",
+                "#1A1A1AFF|#283C5A5A|#FFFF4CFF|#FFFF001E|#FFFFFFFF|#FFFFFFFF|#FFFF0050|#1A1A1AFF|#1A1A1AFF|#FFFF00FF|#000000FF|#141414FF|#FFFF00DC",
+            ),
+            (
+                "altimit",
+                "#0A0A1A80|#080816FF|#00CC88FF|#00CC881E|#D0E8E0FF|#00CC88FF|#00CC8840|#0E0E22FF|#0A0A1AFF|#00CC8860|#080816FF|#0E0E22FF|#00CC88DC",
+            ),
+        ];
+
+        // First check: the registry must list exactly the skins we
+        // pinned, in the same order. A new skin without a matching
+        // entry below should fail loudly.
+        let names: Vec<&str> = builtin_names().iter().copied().collect();
+        let pinned: Vec<&str> = expected.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names, pinned,
+            "built-in skin list changed -- update cross_skin_palette_snapshot \
+             expected[] to match (and bump the date in the doc comment)"
+        );
+
+        let mut updates: Vec<String> = Vec::new();
+        for (name, expected_fingerprint) in expected {
+            let skin = load_builtin(name).expect("built-in skin loads");
+            let at = ActiveTheme::from_skin(&skin.theme);
+            let actual = palette_fingerprint(&at);
+            if actual != *expected_fingerprint {
+                updates.push(format!("            (\"{name}\", \"{actual}\"),"));
+            }
+        }
+        assert!(
+            updates.is_empty(),
+            "palette derivation drifted for {} skin(s) -- new lines:\n{}",
+            updates.len(),
+            updates.join("\n")
+        );
+    }
 }
