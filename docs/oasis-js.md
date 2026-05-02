@@ -96,10 +96,21 @@ pub trait FetchHandler {
 
 The default behaviour returns `error: no fetch handler installed`. Production
 code installs an HTTP client via `install_fetch_handler`. `MockFetchHandler`
-(`fetch.rs:80`) is provided for tests. Because the trait is synchronous,
-the host implementation must do its own blocking I/O — typically on a separate
-worker thread, with the result handed back through a channel that the next
-`eval` / `tick_timers` call pumps.
+(`fetch.rs:80`) is provided for tests.
+
+### How the bridge works
+
+There is **no asynchronous response queue.** When JS calls `fetch(url, opts)`
+the JS-side wrapper invokes `__oasis_fetch` synchronously; that calls
+`FetchHandler::fetch` and waits for it to return. The wrapper then resolves
+(or rejects) the JS-visible `Promise` immediately with the result. From the
+engine's point of view, by the time `fetch()` returns to the JS caller the
+network response is already in hand. The `Promise` exists only to match the
+standard `fetch` shape — it is not used to defer work.
+
+This is why `eval` / `tick_timers` do not poll a response queue: there is
+nothing to poll. The handler must produce the response by the time it
+returns, or fail.
 
 > **Hazard:** `FetchHandler::fetch` is invoked on the JS eval thread.
 > Calling blocking I/O inline from the handler stalls the **entire** JS

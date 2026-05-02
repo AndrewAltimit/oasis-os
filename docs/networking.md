@@ -19,11 +19,15 @@ async runtime, no thread pool, and no internal task spawning. Listener and
 client are designed to be polled from the host's main loop.
 
 Sockets are switched to non-blocking mode on accept (`std_backend.rs:52`,
-`67`, `82`). `connect`, `send`, `recv` all return immediately with
-`WouldBlock` translated into "no data yet". TLS handshakes are the one
-exception: they spin with a 1 ms sleep between iterations
-(`tls_rustls.rs:186`), so `RemoteClient::connect` blocks the calling thread
-until the handshake completes or the 30 s deadline expires.
+`67`, `82`). `send` and `recv` return immediately, with `WouldBlock`
+translated into "no data yet". `connect` is the same shape but the meaning
+of `WouldBlock` is different: it indicates that the TCP handshake is in
+progress, not that there is no data — completion is observed by
+re-attempting the operation (or polling for writability) on the next tick,
+not by reading. TLS handshakes are the one place where the backend
+actually blocks the calling thread: they spin with a 1 ms sleep between
+iterations (`tls_rustls.rs:186`), so `RemoteClient::connect` will not
+return until the handshake completes or the 30 s deadline expires.
 
 When the `tls-rustls` Cargo feature is enabled the backend wraps outbound
 streams with rustls and listeners accept TLS connections. Without the feature
@@ -256,8 +260,7 @@ remote terminal session instead.
 
 ## Threading model
 
-- All I/O is blocking on non-blocking sockets — `poll()` everywhere returns
-  immediately.
+- All I/O is non-blocking — `poll()` everywhere returns immediately.
 - No internal thread spawn, no `tokio`, no `async`/`await`.
 - The TLS handshake and the `RemoteClient::connect` path are the only places
   that block beyond a single syscall, and even those bound the wait with a
