@@ -21,6 +21,19 @@ authors = ["AndrewAltimit"]
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "1dd6f00", features = ["kernel"] }
 
+# Standalone crates have their own `[workspace]` and inherit nothing from the
+# parent. Mirror the parent policy so unsafe-block discipline tracks here too.
+[lints.clippy]
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "deny"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
 [profile.release]
 opt-level = "z"
 lto = true

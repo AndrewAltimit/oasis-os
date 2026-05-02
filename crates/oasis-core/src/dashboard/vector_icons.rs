@@ -781,12 +781,8 @@ mod tests {
         let icon = icon_for_app("altimit", &app, 0, 0, &cfg);
         // First op should use the app's color.
         let __out = &icon.ops[0];
-        assert!(
-            matches!(&__out, oasis_vector::op::VectorOp::StrokeRect { .. }),
-            "expected StrokeRect for the_world icon, got {__out:?}"
-        );
         let oasis_vector::op::VectorOp::StrokeRect { color, .. } = __out else {
-            unreachable!()
+            panic!("expected StrokeRect for the_world icon, got {__out:?}");
         };
         assert_eq!(*color, Color::rgb(255, 0, 0));
     }
@@ -923,12 +919,8 @@ mod tests {
         assert_eq!(icon.name, "the_world");
         // Inner element should be a FillPolygon (rotated rect) instead of FillRect
         let __out = &icon.ops[1];
-        assert!(
-            matches!(&__out, oasis_vector::op::VectorOp::FillPolygon { .. }),
-            "expected FillPolygon for animated the_world inner element, got {__out:?}"
-        );
         let oasis_vector::op::VectorOp::FillPolygon { points, .. } = __out else {
-            unreachable!()
+            panic!("expected FillPolygon for animated the_world inner element, got {__out:?}");
         };
         assert_eq!(points.len(), 4);
 

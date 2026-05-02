@@ -713,12 +713,8 @@ fn only_child_pseudo_class() {
     // Single child.
     let doc = make_doc(vec![(TagName::P, vec![])]);
     let __out = &doc.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(e) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(matching::match_pseudo_class(
         &doc,
@@ -731,12 +727,8 @@ fn only_child_pseudo_class() {
     // Multiple children.
     let doc2 = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
     let __out = &doc2.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(e2) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(!matching::match_pseudo_class(
         &doc2,
@@ -828,12 +820,8 @@ fn hover_matches_hovered_node() {
         global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(elem) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(matching::match_pseudo_class(&doc, 3, elem, "hover", &hctx));
     assert!(!matching::match_pseudo_class(
@@ -870,12 +858,8 @@ fn hover_matches_ancestor_of_hovered_node() {
     };
     // <div> (ancestor) should also match :hover.
     let __out = &doc.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(div_elem) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(matching::match_pseudo_class(
         &doc, 3, div_elem, "hover", &hctx
@@ -902,12 +886,8 @@ fn visited_matches_with_visited_url() {
         global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(elem) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(matching::match_pseudo_class(
         &doc, 3, elem, "visited", &vctx
@@ -934,12 +914,8 @@ fn link_matches_unvisited_anchor() {
         global_layers: None,
     };
     let __out = &doc.nodes[3].kind;
-    assert!(
-        matches!(&__out, NodeKind::Element(_)),
-        "expected NodeKind::Element, got {__out:?}"
-    );
     let NodeKind::Element(elem) = __out else {
-        unreachable!()
+        panic!("expected NodeKind::Element, got {__out:?}");
     };
     assert!(matching::match_pseudo_class(&doc, 3, elem, "link", &vctx));
     assert!(!matching::match_pseudo_class(

@@ -569,12 +569,8 @@ mod tests {
     fn element_kind_radio_button() {
         let elem = radio("color", "red", "colors", true);
         let __out = ElementKind::of(&elem);
-        assert!(
-            matches!(&__out, ElementKind::RadioButton { .. }),
-            "expected RadioButton kind, got {__out:?}"
-        );
         let ElementKind::RadioButton { group, value } = __out else {
-            unreachable!()
+            panic!("expected RadioButton kind, got {__out:?}");
         };
         assert_eq!(group, "colors");
         assert_eq!(value, "red");

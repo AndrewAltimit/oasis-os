@@ -852,12 +852,8 @@ mod tests {
     #[test]
     fn osk_result_confirmed() {
         let result = OskResult::Confirmed("test".to_string());
-        assert!(
-            matches!(&result, OskResult::Confirmed(_)),
-            "expected Confirmed, got {result:?}"
-        );
         let OskResult::Confirmed(s) = result else {
-            unreachable!()
+            panic!("expected Confirmed, got {result:?}");
         };
         assert_eq!(s, "test");
     }
@@ -887,12 +883,8 @@ mod tests {
         let result1 = OskResult::Confirmed("data".to_string());
         let result2 = result1.clone();
         let __out = (result1, result2);
-        assert!(
-            matches!(&__out, (OskResult::Confirmed(_), OskResult::Confirmed(_))),
-            "expected both to be Confirmed, got {__out:?}"
-        );
         let (OskResult::Confirmed(s1), OskResult::Confirmed(s2)) = __out else {
-            unreachable!()
+            panic!("expected both to be Confirmed, got {__out:?}");
         };
         assert_eq!(s1, s2);
     }
@@ -1033,12 +1025,8 @@ mod tests {
         let mut platform = DesktopPlatform::new();
         platform.open("Title", "init").unwrap();
         let __out = platform.poll().unwrap();
-        assert!(
-            matches!(&__out, OskResult::Confirmed(_)),
-            "expected Confirmed, got {__out:?}"
-        );
         let OskResult::Confirmed(s) = __out else {
-            unreachable!()
+            panic!("expected Confirmed, got {__out:?}");
         };
         assert_eq!(s, "init");
         platform.close().unwrap();
@@ -1157,13 +1145,8 @@ mod tests {
     fn network_service_default_http_get() {
         let svc = TestNetworkService;
         let result = svc.http_get("http://example.com");
-        assert!(result.is_err());
-        assert!(
-            matches!(&result, Err(_)),
-            "expected Backend error, got {result:?}"
-        );
         let Err(oasis_types::error::OasisError::Backend(msg)) = result else {
-            unreachable!()
+            panic!("expected Backend error, got {result:?}");
         };
         assert!(msg.to_string().contains("not supported"));
     }

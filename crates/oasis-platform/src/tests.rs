@@ -58,12 +58,8 @@ fn desktop_osk_immediate_confirm() {
     let mut platform = DesktopPlatform::new();
     platform.open("Test", "hello").unwrap();
     let __out = platform.poll().unwrap();
-    assert!(
-        matches!(&__out, OskResult::Confirmed(_)),
-        "expected Confirmed, got {__out:?}"
-    );
     let OskResult::Confirmed(s) = __out else {
-        unreachable!()
+        panic!("expected Confirmed, got {__out:?}");
     };
     assert_eq!(s, "hello");
 }

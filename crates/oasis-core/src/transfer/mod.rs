@@ -687,12 +687,8 @@ mod tests {
         // Remove the status file to test default.
         vfs.remove(FTP_STATUS_PATH).ok();
         let __out = exec(&reg, &mut vfs, "ftp status").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("inactive"));
     }
@@ -701,12 +697,8 @@ mod tests {
     fn ftp_cmd_start() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "ftp start 8021").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}");
         };
         assert_eq!(port, 8021);
         assert!(password.is_none());
@@ -716,12 +708,8 @@ mod tests {
     fn ftp_cmd_start_default_port() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "ftp start").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}");
         };
         assert_eq!(port, DEFAULT_FTP_PORT);
         assert!(password.is_none());
@@ -731,12 +719,8 @@ mod tests {
     fn ftp_cmd_stop() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "ftp stop").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}");
         };
         assert_eq!(port, 0);
         assert!(password.is_none());
@@ -752,12 +736,8 @@ mod tests {
     fn push_copies_file() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "push /home/test.txt /tmp/copy.txt").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("9 bytes"));
         let data = vfs.read("/tmp/copy.txt").unwrap();
@@ -781,12 +761,8 @@ mod tests {
     fn pull_copies_file() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "pull /home/test.txt /tmp/pulled.txt").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("9 bytes"));
     }
@@ -1045,12 +1021,8 @@ mod tests {
     fn ftp_cmd_start_with_password() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "ftp start 8021 --password secret").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}");
         };
         assert_eq!(port, 8021);
         assert_eq!(password.as_deref(), Some("secret"));
@@ -1060,12 +1032,8 @@ mod tests {
     fn ftp_cmd_start_password_default_port() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "ftp start --password mypass").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Signal(_)),
-            "expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}"
-        );
         let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle), got {__out:?}");
         };
         assert_eq!(port, DEFAULT_FTP_PORT);
         assert_eq!(password.as_deref(), Some("mypass"));

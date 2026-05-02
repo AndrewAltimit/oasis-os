@@ -489,23 +489,15 @@ mod tests {
         mgr.toggle_checkbox(0, "remember");
         // Check the internal state directly.
         let __out = &mgr.forms[0].elements[2];
-        assert!(
-            matches!(&__out, FormElement::Checkbox { .. }),
-            "expected FormElement::Checkbox, got {__out:?}"
-        );
         let FormElement::Checkbox { checked, .. } = __out else {
-            unreachable!()
+            panic!("expected FormElement::Checkbox, got {__out:?}");
         };
         assert!(*checked);
 
         mgr.toggle_checkbox(0, "remember");
         let __out = &mgr.forms[0].elements[2];
-        assert!(
-            matches!(&__out, FormElement::Checkbox { .. }),
-            "expected FormElement::Checkbox, got {__out:?}"
-        );
         let FormElement::Checkbox { checked, .. } = __out else {
-            unreachable!()
+            panic!("expected FormElement::Checkbox, got {__out:?}");
         };
         assert!(!*checked);
     }
@@ -623,12 +615,8 @@ mod tests {
 
         mgr.select_option(fid, "size", 1);
         let __out = &mgr.forms[fid].elements[0];
-        assert!(
-            matches!(&__out, FormElement::SelectBox { .. }),
-            "expected FormElement::SelectBox, got {__out:?}"
-        );
         let FormElement::SelectBox { selected_index, .. } = __out else {
-            unreachable!()
+            panic!("expected FormElement::SelectBox, got {__out:?}");
         };
         assert_eq!(*selected_index, Some(1));
     }
@@ -661,12 +649,8 @@ mod tests {
         mgr.select_option(fid, "size", 1);
         // Should remain at 0 because index 1 is disabled.
         let __out = &mgr.forms[fid].elements[0];
-        assert!(
-            matches!(&__out, FormElement::SelectBox { .. }),
-            "expected FormElement::SelectBox, got {__out:?}"
-        );
         let FormElement::SelectBox { selected_index, .. } = __out else {
-            unreachable!()
+            panic!("expected FormElement::SelectBox, got {__out:?}");
         };
         assert_eq!(*selected_index, Some(0));
     }
@@ -859,12 +843,8 @@ mod tests {
 
         let result = mgr.handle_input(FormKey::Enter);
         let __out = result;
-        assert!(
-            matches!(&__out, FormAction::Submit(_)),
-            "expected FormAction::Submit, got {__out:?}"
-        );
         let FormAction::Submit(data) = __out else {
-            unreachable!()
+            panic!("expected FormAction::Submit, got {__out:?}");
         };
         assert_eq!(data.action, "/login");
     }
@@ -1314,12 +1294,8 @@ mod tests {
 
         let result = mgr.handle_input(FormKey::Enter);
         let __out = result;
-        assert!(
-            matches!(&__out, FormAction::Submit(_)),
-            "expected FormAction::Submit, got {__out:?}"
-        );
         let FormAction::Submit(data) = __out else {
-            unreachable!()
+            panic!("expected FormAction::Submit, got {__out:?}");
         };
         assert_eq!(data.action, "/login");
         assert!(data.fields.iter().any(|(k, v)| k == "user" && v == "test"));

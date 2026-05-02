@@ -459,7 +459,7 @@ fn poll_loop() {
 // ── Main ────────────────────────────────────────────────────────────────
 
 fn psp_main() {
-    psp::callback::setup_exit_callback().unwrap();
+    psp::callback::setup_exit_callback().expect("setup_exit_callback failed");
 
     // Set analog stick to digital mode
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.

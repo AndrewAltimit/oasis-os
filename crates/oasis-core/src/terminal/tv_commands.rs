@@ -203,12 +203,8 @@ mod tests {
     fn tv_list_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
         let __out = exec(&reg, &mut vfs, "tv list").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("RETRO"), "should contain RETRO call sign");
         assert!(s.contains("TECH"), "should contain TECH call sign");
@@ -219,12 +215,8 @@ mod tests {
     fn tv_default_is_list() {
         let (reg, mut vfs) = setup_tv_env();
         let __out = exec(&reg, &mut vfs, "tv").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("TV Channels:"));
     }
@@ -233,12 +225,8 @@ mod tests {
     fn tv_now_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
         let __out = exec(&reg, &mut vfs, "tv now").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("Now Playing"));
         assert!(s.contains("RETRO"));
@@ -266,12 +254,8 @@ mod tests {
     fn tv_tune_writes_request() {
         let (reg, mut vfs) = setup_tv_env();
         let __out = exec(&reg, &mut vfs, "tv tune 2").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("Tuning"));
         assert!(s.contains("RETRO"));
@@ -283,12 +267,8 @@ mod tests {
     fn tv_guide_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
         let __out = exec(&reg, &mut vfs, "tv guide").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected CommandOutput::Text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected CommandOutput::Text, got {__out:?}");
         };
         assert!(s.contains("TV Guide"));
         assert!(s.contains("RETRO"));

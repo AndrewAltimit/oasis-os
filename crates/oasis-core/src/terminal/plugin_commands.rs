@@ -125,12 +125,8 @@ mod tests {
         register_plugin_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("not available"));
     }
@@ -144,12 +140,8 @@ mod tests {
         )
         .unwrap();
         let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("hello"));
         assert!(s.contains("clock-widget"));
@@ -160,12 +152,8 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(PLUGIN_STATUS_PATH, b"").unwrap();
         let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("no plugins"));
     }
@@ -176,12 +164,8 @@ mod tests {
         vfs.write(PLUGIN_STATUS_PATH, b"test (1.0) [active]")
             .unwrap();
         let __out = exec(&reg, &mut vfs, "plugin").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("test"));
     }
@@ -190,12 +174,8 @@ mod tests {
     fn plugin_load() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "plugin load hello").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("hello"));
         let data = vfs.read(PLUGIN_REQUEST_PATH).unwrap();
@@ -212,12 +192,8 @@ mod tests {
     fn plugin_unload() {
         let (reg, mut vfs) = setup();
         let __out = exec(&reg, &mut vfs, "plugin unload hello").unwrap();
-        assert!(
-            matches!(&__out, CommandOutput::Text(_)),
-            "expected text, got {__out:?}"
-        );
         let CommandOutput::Text(s) = __out else {
-            unreachable!()
+            panic!("expected text, got {__out:?}");
         };
         assert!(s.contains("hello"));
         let data = vfs.read(PLUGIN_REQUEST_PATH).unwrap();

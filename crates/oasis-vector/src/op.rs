@@ -355,17 +355,13 @@ mod tests {
             radius: 5,
             color: Color::WHITE,
         }]);
-        assert!(
-            matches!(&g, VectorOp::Group { .. }),
-            "expected Group, got {g:?}"
-        );
         let VectorOp::Group {
             ops,
             translate,
             opacity,
         } = g
         else {
-            unreachable!()
+            panic!("expected Group, got {g:?}");
         };
         assert_eq!(ops.len(), 1);
         assert_eq!(translate, (0, 0));
@@ -375,12 +371,8 @@ mod tests {
     #[test]
     fn test_translated() {
         let g = VectorOp::translated(10, 20, vec![]);
-        assert!(
-            matches!(&g, VectorOp::Group { .. }),
-            "expected Group, got {g:?}"
-        );
         let VectorOp::Group { translate, .. } = g else {
-            unreachable!()
+            panic!("expected Group, got {g:?}");
         };
         assert_eq!(translate, (10, 20));
     }
@@ -394,12 +386,8 @@ mod tests {
             color: Color::WHITE,
         };
         op.recolor(Color::rgb(255, 0, 0));
-        assert!(
-            matches!(&op, VectorOp::FillCircle { .. }),
-            "expected FillCircle, got {op:?}"
-        );
         let VectorOp::FillCircle { color, .. } = op else {
-            unreachable!()
+            panic!("expected FillCircle, got {op:?}");
         };
         assert_eq!(color, Color::rgb(255, 0, 0));
     }
@@ -424,12 +412,8 @@ mod tests {
         ]);
         let red = Color::rgb(255, 0, 0);
         g.recolor(red);
-        assert!(
-            matches!(&g, VectorOp::Group { .. }),
-            "expected Group, got {g:?}"
-        );
         let VectorOp::Group { ops, .. } = g else {
-            unreachable!()
+            panic!("expected Group, got {g:?}");
         };
         for op in &ops {
             match op {
@@ -451,12 +435,8 @@ mod tests {
             color: Color::rgba(255, 255, 255, 200),
         };
         op.modulate_alpha(128);
-        assert!(
-            matches!(&op, VectorOp::FillRect { .. }),
-            "expected FillRect, got {op:?}"
-        );
         let VectorOp::FillRect { color, .. } = op else {
-            unreachable!()
+            panic!("expected FillRect, got {op:?}");
         };
         // 200 * 128 / 255 = 100
         assert_eq!(color.a, 100);
