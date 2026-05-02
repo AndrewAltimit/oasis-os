@@ -1,0 +1,226 @@
+# Terminal Commands
+
+OASIS_OS ships a substantial set of built-in terminal commands grouped by
+category into focused modules. The bulk live in the `oasis-terminal` crate;
+agent / plugin / browser / TV commands sit in `oasis-core` because they
+depend on higher-layer subsystems.
+
+This catalog is generated from the actual `Command` impls in the source tree.
+Each row links to the module that defines the command. The terminal reads
+`description()` and `usage()` directly from these impls, so `man <command>` and
+the live help text stay in sync with what is documented here.
+
+For instructions on adding a new command see
+[`docs/adding-commands.md`](adding-commands.md).
+
+## Shell features
+
+The terminal in `oasis-terminal/src/` supports:
+
+- variable expansion (`$VAR`, `${VAR}`)
+- glob expansion (`*.txt`, `dir/*`)
+- aliases via `Environment`
+- pipes (`cmd1 | cmd2`)
+- output redirection (`> file`, `>> file`)
+- command history with up/down recall
+
+`Environment::profile_paths()` and `populate_profile()` honour shell-like
+startup files for site-local aliases.
+
+## Core filesystem (`oasis-terminal/src/core_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `ls` | `ls [path]` | List directory contents. |
+| `cd` | `cd <path>` | Change working directory. |
+| `pwd` | `pwd` | Print working directory. |
+| `cat` | `cat <file>` | Display file contents. |
+| `mkdir` | `mkdir <path>` | Create a directory. |
+| `rm` | `rm <path>` | Remove a file or empty directory. |
+| `echo` | `echo [text...]` | Print text. |
+| `clear` | `clear` | Clear terminal output. |
+| `status` | `status` | Show system status. |
+| `touch` | `touch <file>` | Create an empty file. |
+| `cp` | `cp <src> <dst>` | Copy a file. |
+| `mv` | `mv <src> <dst>` | Move or rename a file. |
+| `find` | `find [path] <pattern>` | Find files by name pattern. |
+
+## Text processing (`oasis-terminal/src/text_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `head` | `head [-n N] <file>` | Show first N lines. |
+| `tail` | `tail [-n N] <file>` | Show last N lines. |
+| `wc` | `wc [-l\|-w\|-c] <file>` | Count lines, words, bytes. |
+| `grep` | `grep [-i] [-n] [-v] [-c] <pattern> [file]` | Search for pattern in text. |
+| `sort` | `sort [-r] [-n] [file]` | Sort lines of text. |
+| `uniq` | `uniq [-c] [file]` | Remove adjacent duplicate lines. |
+| `tee` | `tee [-a] <file>` | Read stdin, write to file and stdout. |
+| `tr` | `tr [-d] <set1> [set2]` | Translate or delete characters. |
+| `cut` | `cut -d <delim> -f <fields> [file]` | Extract fields or columns. |
+| `diff` | `diff <file1> <file2>` | Compare two files line by line. |
+
+## File utilities (`oasis-terminal/src/file_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `write` | `write <file> <text...>` | Write text to a file. |
+| `append` | `append <file> <text...>` | Append text to a file. |
+| `tree` | `tree [path]` | Display directory tree. |
+| `du` | `du [path]` | Show disk usage. |
+| `stat` | `stat <path>` | Show file metadata. |
+| `xxd` | `xxd [-l N] <file>` | Hex dump a file. |
+| `checksum` | `checksum <file>` | Compute simple checksum. |
+
+## Developer tools (`oasis-terminal/src/dev_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `base64` | `base64 [-d] <text>` | Encode or decode base64. |
+| `json` | `json <text>` / `json validate <text>` | Pretty-print or validate JSON. |
+| `uuid` | `uuid` | Generate a pseudo-random UUID v4. |
+| `seq` | `seq [start] <end> [step]` | Print a sequence of numbers. |
+| `expr` | `expr <expression>` | Evaluate an arithmetic expression. |
+| `test` | `test <expr>` / `test -f <file>` / `test -d <dir>` / `test <a> = <b>` | Evaluate a conditional expression. |
+| `xargs` | `xargs <command>` | Build a command from stdin lines. |
+
+## System (`oasis-terminal/src/system_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `uptime` | `uptime` | Show system uptime. |
+| `df` | `df` | Show VFS filesystem usage. |
+| `whoami` | `whoami` | Print current user name. |
+| `hostname` | `hostname` | Print system hostname. |
+| `date` | `date` | Print current date and time. |
+| `sleep` | `sleep <seconds>` | Pause execution (simulated). |
+
+## Platform services (`oasis-terminal/src/platform_commands.rs`)
+
+These dispatch through the `oasis-platform` service traits; behaviour depends
+on the active backend.
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `power` | `power` | Show power and battery status. |
+| `clock` | `clock` | Show current time and uptime. |
+| `memory` | `memory` | Show memory usage. |
+| `usb` | `usb` | Show USB status. |
+
+## Networking (`oasis-terminal/src/network_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `wifi` | `wifi [status]` | Show WiFi status. |
+| `ping` | `ping <hostname>` | Test network connectivity (DNS resolve). |
+| `http` | `http <url>` | One-shot HTTP GET. |
+
+## Security and permissions (`oasis-terminal/src/security_commands.rs`)
+
+VFS metadata only — there is no real Unix permission model behind these.
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `chmod` | `chmod <mode> <file>` | Set file permissions in VFS metadata. |
+| `chown` | `chown <owner> <file>` | Set file owner in VFS metadata. |
+| `passwd` | `passwd [user]` | Change user password (simulated). |
+| `audit` | `audit [show\|clear]` | Show or clear the security audit log. |
+
+## UI and window management (`oasis-terminal/src/ui_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>]` | Window manager control. |
+| `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects. |
+| `theme` | `theme [show\|colors]` | Show the current theme. |
+| `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification. |
+| `screenshot` | `screenshot [path]` | Take a screenshot. |
+
+## Skin management (`oasis-terminal/src/skin_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `skin` | `skin [list\|current\|<name>]` | List, show, or switch skins. |
+
+## Audio (`oasis-terminal/src/audio_commands.rs`, `radio_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `music` | `music [status\|play\|pause\|resume\|stop\|next\|prev\|vol <0-100>\|list\|repeat <off\|all\|one>\|shuffle]` | Control audio playback. |
+| `radio` | `radio [status\|stations\|tune <name\|index>\|stop\|vol [0-100]\|fav <index>\|genre [name]\|info]` | Control internet radio. |
+
+## Documentation (`oasis-terminal/src/doc_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `man` | `man <command>` | Display manual page. |
+| `tutorial` | `tutorial [next\|<lesson_number>\|list]` | Interactive tutorial. |
+| `motd` | `motd` | Print the message of the day. |
+
+## Remote terminal (`oasis-terminal/src/remote_commands.rs`)
+
+These integrate with `oasis-net`. See [`docs/networking.md`](networking.md) for
+the wire protocol and PSK auth.
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `listen` | `listen [port\|stop]` | Start or stop the remote terminal listener. |
+| `remote` | `remote <host\|addr:port>` | Connect to a remote host. |
+| `hosts` | `hosts` | List saved remote hosts. |
+
+## Fun (`oasis-terminal/src/fun_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `cal` | `cal [month] [year]` | Display a calendar. |
+| `fortune` | `fortune` | Print a random fortune. |
+| `banner` | `banner <text>` | Print text in large ASCII letters. |
+| `matrix` | `matrix` | Matrix rain snapshot. |
+| `yes` | `yes [text]` | Repeat a string (capped at 20 lines). |
+| `watch` | `watch <command>` | Execute a command (one-shot). |
+| `time` | `time <command>` | Time a command (simulated). |
+
+## Browser (`oasis-core/src/terminal/browser_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `browse` | `browse <url> \| browse bookmarks \| browse history \| browse home \| browse back \| browse forward \| browse reader \| browse sandbox <url>` | Open URL in browser or manage browser state. |
+| `fetch` | `fetch <url>` / `fetch headers <url>` | Fetch URL and print raw response. |
+| `gemini` | `gemini <url>` | Open a Gemini URL in the browser. |
+| `curl` | `curl <url>` | Alias for `fetch`. |
+| `sandbox` | `sandbox on \| sandbox off` | Toggle browser sandbox mode. |
+
+## TV Guide (`oasis-core/src/terminal/tv_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `tv` | `tv [list\|now\|tune <ch>\|guide]` | Internet Archive TV Guide. |
+
+## Plugin (`oasis-core/src/terminal/plugin_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `plugin` | `plugin [list\|load <name>\|unload <name>]` | Manage plugins. |
+
+## Agent and CI (`oasis-core/src/terminal/agent_commands.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `agent` | `agent [list\|status <name>]` | List or query AI agent status. |
+| `mcp` | `mcp [list\|<server> <tool> [args...]]` | Browse and invoke MCP tools. |
+| `tamper` | `tamper [status\|arm\|disarm]` | Show tamper-detection status. |
+| `board` | `board [query\|claim <n>\|release <n>]` | Query the GitHub Projects board. |
+| `ci` | `ci run <stage>` | Trigger a CI pipeline stage. |
+| `health` | `health` | Show system health metrics. |
+
+## Where the registrations live
+
+- `register_builtins` in `oasis-terminal` registers everything from
+  `core_commands.rs` through `radio_commands.rs`.
+- `register_browser_commands`, `register_agent_commands`,
+  `register_plugin_commands`, and `register_tv_commands` in
+  `oasis-core/src/terminal/` add the higher-layer commands.
+
+`man <command>` is the canonical interactive reference; this document is the
+written-form mirror. If they diverge, the source `Command` impl is the
+truth — update both.

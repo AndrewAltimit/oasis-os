@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2025-02-12
+**Last reviewed:** 2026-05-02 — still current. The browser engine uses an arena-based DOM today (`crates/oasis-browser/src/html/dom.rs`) with `NodeId` indices, exactly as described.
 
 ## Context
 

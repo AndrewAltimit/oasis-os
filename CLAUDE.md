@@ -229,11 +229,19 @@ Key documentation files for agents and contributors. Read these for deeper conte
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
 - [`docs/adding-commands.md`](docs/adding-commands.md) -- How to add terminal commands
+- [`docs/terminal-commands.md`](docs/terminal-commands.md) -- Catalog of built-in terminal commands grouped by module
 - [`docs/skin-authoring.md`](docs/skin-authoring.md) -- Skin creation with full TOML reference
 - [`docs/plugin-development.md`](docs/plugin-development.md) -- Plugin development guide
 - [`docs/ffi-integration.md`](docs/ffi-integration.md) -- UE5 / C-ABI integration guide
 - [`docs/psp-plugin.md`](docs/psp-plugin.md) -- PSP kernel plugin (PRX) documentation
 - [`docs/browser-backlog.md`](docs/browser-backlog.md) -- Browser engine backlog and roadmap
+
+### Subsystems
+- [`docs/oasis-js.md`](docs/oasis-js.md) -- JavaScript engine desktop API + DOM bindings catalog (PSP cross-compile lives in `javascript-engine.md`)
+- [`docs/networking.md`](docs/networking.md) -- TCP transport, PSK auth, remote terminal protocol, TLS, FTP-like file transfer
+- [`docs/audio-engine.md`](docs/audio-engine.md) -- AudioManager, playlist/repeat/shuffle, radio sources, streaming back-pressure
+- [`docs/vector-graphics.md`](docs/vector-graphics.md) -- VectorOp/VectorScene, icon catalog, AnimClock, SdiVector integration
+- [`docs/shaders.md`](docs/shaders.md) -- Built-in shader wallpapers, GPU + software backends, extension guide
 
 ### Operations
 - [`docs/psp-autorun.md`](docs/psp-autorun.md) -- Boot-time script runner for deterministic PSP/PPSSPP integration tests
