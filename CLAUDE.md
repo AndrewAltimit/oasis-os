@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Built from scratch in Rust starting early 2026, inspired by PSP homebrew shells like PSIX. Fifteen skins are implemented (14 external TOML skins, 15 built-in; external skins also have built-in equivalents).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Built from scratch in Rust starting early 2026, inspired by PSP homebrew shells like PSIX. Fifteen built-in skins are implemented; 12 of them also ship as external TOML files in `skins/` (the other 3 — `corrupted`, `desktop`, `modern` — are built-in only).
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
@@ -147,9 +147,9 @@ URL for fresh 302 redirects. Full details in
 
 ### Key Abstraction: Backend Traits
 
-`oasis-types/src/backend.rs` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
+`oasis-types/src/backend/` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- extends `SdiCore` with 39 optional accelerated primitives (shapes, gradients, text styling, batching, vector graphics path operations). Also split into 8 focused extension traits: `SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`. `SdiBatch` provides `begin_batch`/`flush_batch` plus `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls)
+- `SdiBackend` -- a marker super-trait with no methods of its own. A blanket impl satisfies it for any type that implements `SdiCore` plus all nine extension traits: `SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`. The extensions live in `oasis-types/src/backend/extensions.rs` and total ~55 default-impl methods (shapes, gradients, alpha/blend, text styling, texture management, clipping/transforms, vector path ops, batched submission, offscreen render targets). `SdiBatch` in particular provides `begin_batch`/`flush_batch` plus `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls).
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -158,11 +158,16 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 37 crates (35 workspace members + 2 excluded PSP crates). Each module below is its own crate (previously all in oasis-core):
+The framework lives in 45 crate directories under `crates/`:
+- **35 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
+- **1 explicitly excluded crate** (`oasis-backend-psp`, on the `mipsel-sony-psp` target)
+- **9 standalone PSP-target crates** that are not mentioned in the workspace `Cargo.toml` at all and are built individually via `cargo +nightly psp`: `oasis-plugin-psp`, `oasis-devloop-psp`, `oasis-me-boot`, `oasis-prx-decrypt-psp`, `oasis-recovery-psp`, `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp`
+
+Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 15 skins (14 external TOML in `skins/`, 15 built-in). Theme derivation from 9 base colors.
+- **oasis-skin** -- Data-driven TOML skin system with 15 built-in skins (12 of which also ship as external TOML in `skins/`; the other 3 — `corrupted`, `desktop`, `modern` — are built-in only). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: WHATWG HTML, full CSS cascade with `@media` / `@container` / `@layer` / `@supports` / `@scope` / CSS Nesting / `:has()`, viewport-aware stylesheet parsing, 2D + 3D transforms, `@font-face` web fonts, canvas + SVG, HTTP/1.1 + HTTP/2 over rustls, cookies, CSP, reader mode, forms, bookmarks. **Feature catalogue:** [`docs/browser-engine.md`](docs/browser-engine.md). **Backlog:** [`docs/browser-backlog.md`](docs/browser-backlog.md).
 - **oasis-js** -- QuickJS-NG via `rquickjs` on every target (desktop / WASM / UE5 / PSP). DOM bindings (`getElementById`, `querySelector`, `fetch`, `setTimeout`, `localStorage`, event bubbling, …) feature-gated as `javascript`. PSP cross-compile is non-trivial (pspdev toolchain, `-msingle-float`, `psp-ld`, hand-rolled libc shim) — see [`docs/javascript-engine.md`](docs/javascript-engine.md).
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
@@ -176,7 +181,7 @@ The framework is split into 37 crates (35 workspace members + 2 excluded PSP cra
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
-- **oasis-app-*** -- 10 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
+- **oasis-app-*** -- 9 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
 - **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
 
 ### Font Rendering
