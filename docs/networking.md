@@ -182,13 +182,37 @@ Verbs:
 > containing newlines, tunnel through the TLS-protected remote terminal
 > session instead and use shell redirection on the remote side.
 
-> **`PASS` comparison is not constant-time:** the password check uses
-> a plain `==` byte-string comparison (`transfer/mod.rs:306`), unlike
-> the remote-terminal PSK path which uses an explicit constant-time XOR
-> loop. Combined with the plaintext-on-the-wire posture this surface is
-> already designed for trusted-LAN use only, so the timing channel is
-> not the limiting factor — but auditors should not assume parity with
-> the PSK comparison.
+> **`PASS` security posture:** three caveats that auditors and
+> integrators should be aware of, in addition to the plaintext-on-wire
+> warning above.
+>
+> 1. **Comparison is not constant-time.** The password check uses a
+>    plain `==` byte-string comparison (`transfer/mod.rs:306`), unlike
+>    the remote-terminal PSK path which uses an explicit constant-time
+>    XOR loop (`listener.rs:32`).
+> 2. **No cross-connection brute-force protection.** The 3-attempt
+>    limit (`MAX_AUTH_FAILURES` at `transfer/mod.rs:152`) is tracked
+>    per-connection only (`FtpConnection::failed_attempts` at
+>    `transfer/mod.rs:162`). The listener does **not** track failures
+>    by remote IP across reconnections, so the effective brute-force
+>    budget is `3 × unbounded reconnects`. This contrasts with the PSK
+>    path, which does apply per-peer exponential back-off
+>    (`listener.rs:216`). On a hostile network an attacker can drain
+>    the password space at TCP-accept rate.
+> 3. **Empty passwords are accepted.** `ftp start <port> --password ""`
+>    is parsed verbatim (`transfer/mod.rs:399`) and arms
+>    `FtpServer::with_password("")`. A client can then authenticate by
+>    sending `PASS ` with no value. `--password` without any argument
+>    errors with `--password requires a value`, but `--password ""`
+>    silently produces an empty-credential server — pass a real
+>    password, or omit the flag entirely if you intend the server to
+>    accept all peers.
+>
+> Combined, these mean the FTP service is designed for trusted-LAN use
+> only. Treat any deployment on an untrusted network as authenticated
+> by IP allow-list at most, and tunnel through the TLS-protected remote
+> terminal session if you need confidentiality, integrity, or proper
+> brute-force resistance.
 
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
