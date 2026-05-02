@@ -74,7 +74,7 @@ pub(crate) fn resolve_perspective_origin(
 /// Returns the composed matrix which callers use either as a simple
 /// translation offset (fast path) or for full geometry transformation.
 /// `transform_origin` defaults to `50% 50% 0` when `None`.
-pub(crate) fn compute_transform_matrix(
+pub(super) fn compute_transform_matrix(
     transforms: &[TransformFunction],
     transform_origin: Option<&TransformOrigin>,
     content: &Rect,
