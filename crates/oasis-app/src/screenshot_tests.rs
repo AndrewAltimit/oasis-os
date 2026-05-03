@@ -989,7 +989,7 @@ fn run_browser_scenario(
 /// until the I/O thread completes (or a 30s deadline elapses). Verifies
 /// that the final state is not an error — the underlying reason this
 /// exists is the HTTP/2 landing, which only takes effect when the
-/// `SharedTlsProvider` forwarder in `widget_pipeline.rs` forwards ALPN
+/// `SharedTlsProvider` forwarder in `widget/pipeline.rs` forwards ALPN
 /// into the real rustls provider.
 fn run_browser_live_scenario(
     backend: &mut SdlBackend,

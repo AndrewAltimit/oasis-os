@@ -37,7 +37,7 @@ use oasis_test_backend::MockSdiCore;
 type NodeId = usize;
 
 /// Walk the DOM and collect text content of `<style>` elements, parsing
-/// each into a `Stylesheet`. Mirrors `widget_pipeline::collect_style_sheets`.
+/// each into a `Stylesheet`. Mirrors `widget::pipeline::collect_style_sheets`.
 ///
 /// `viewport` is threaded into the parser so `@media (min/max-width)` and
 /// `@media (prefers-color-scheme)` evaluate against the test viewport
@@ -58,7 +58,7 @@ fn collect_style_sheets(doc: &Document, viewport: MediaViewport) -> Vec<Styleshe
 }
 
 /// Walk the DOM to collect inline `style=""` attributes. Mirrors
-/// `widget_pipeline::collect_inline_styles`.
+/// `widget::pipeline::collect_inline_styles`.
 fn collect_inline_styles(
     doc: &Document,
 ) -> Vec<(NodeId, Vec<oasis_browser::internals::ParsedDeclaration>)> {

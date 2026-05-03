@@ -1602,7 +1602,7 @@ fn record_replaced(
         // second pass during replay.
         ReplacedContent::Svg { .. } | ReplacedContent::Canvas { .. } => {
             // Fallback: these elements are painted via the immediate-mode
-            // path in widget_paint.rs. The display list records nothing
+            // path in widget/paint.rs. The display list records nothing
             // for them; the BrowserWidget paint method handles them separately.
         },
     }

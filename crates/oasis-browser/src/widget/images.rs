@@ -1,0 +1,1004 @@
+//! Image loading and texture management for [`BrowserWidget`].
+
+use std::collections::HashMap;
+
+use oasis_types::backend::{SdiBackend, TextureId};
+use oasis_vfs::Vfs;
+
+use crate::css;
+use crate::html;
+use crate::html::dom::{NodeKind, TagName};
+use crate::image;
+use crate::layout;
+#[cfg(any(target_arch = "wasm32", feature = "psp"))]
+use crate::loader::load_resource;
+use crate::loader::{self, ResourceRequest, ResourceSource};
+use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
+
+/// Parse an HTML `srcset` attribute into a list of `(url, descriptor)` pairs.
+///
+/// Supports `<url> <N>x` (pixel density) and `<url> <N>w` (width) descriptors.
+/// Entries without a descriptor default to `1.0`.
+fn parse_srcset(srcset: &str) -> Vec<(String, f32)> {
+    let mut results = Vec::new();
+    for candidate in srcset.split(',') {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let mut parts = candidate.split_whitespace();
+        let Some(url) = parts.next() else { continue };
+        if url.is_empty() {
+            continue;
+        }
+        let descriptor = parts.next().unwrap_or("1x");
+        let value = if let Some(w) = descriptor.strip_suffix('w') {
+            w.parse::<f32>().unwrap_or(1.0)
+        } else if let Some(x) = descriptor.strip_suffix('x') {
+            x.parse::<f32>().unwrap_or(1.0)
+        } else {
+            descriptor.parse::<f32>().unwrap_or(1.0)
+        };
+        results.push((url.to_string(), value));
+    }
+    results
+}
+
+/// Select the best image URL from a parsed `srcset` based on viewport width.
+///
+/// For `w` descriptors, picks the smallest image that is >= viewport width.
+/// For `x` descriptors, picks the closest to `1x`.
+/// Falls back to the first candidate if nothing matches well.
+fn select_best_src(srcset: &str, viewport_width: u32) -> Option<String> {
+    let candidates = parse_srcset(srcset);
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Heuristic: if any descriptor is >= 100, assume `w` descriptors.
+    let is_width = candidates.iter().any(|(_, v)| *v >= 100.0);
+    let vw = viewport_width as f32;
+
+    if is_width {
+        // Pick smallest width >= viewport, or largest overall.
+        let mut best: Option<&(String, f32)> = None;
+        for c in &candidates {
+            if c.1 >= vw {
+                match best {
+                    Some(b) if b.1 > c.1 => best = Some(c),
+                    None => best = Some(c),
+                    _ => {},
+                }
+            }
+        }
+        if best.is_none() {
+            // All are smaller than viewport -- pick largest.
+            best = candidates.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+        }
+        best.map(|(url, _)| url.clone())
+    } else {
+        // `x` descriptors: pick closest to 1x.
+        candidates
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.1 - 1.0).abs();
+                let db = (b.1 - 1.0).abs();
+                da.total_cmp(&db)
+            })
+            .map(|(url, _)| url.clone())
+    }
+}
+
+/// Determine the effective image source URL for an `<img>` element,
+/// preferring `srcset` (if valid) over `src`.
+fn effective_img_src(elem: &html::dom::ElementData, viewport_w: u32) -> Option<String> {
+    let srcset_url = elem
+        .get_attribute("srcset")
+        .and_then(|ss| select_best_src(ss, viewport_w))
+        .filter(|url| !url.is_empty() && !url.starts_with("data:"));
+    srcset_url.or_else(|| elem.src().map(String::from))
+}
+
+/// Update image dimensions in an existing layout tree from decoded image info.
+///
+/// Walks the layout tree recursively. For each `ReplacedContent::Image`
+/// box with a DOM `node` reference, resolves the image source URL against
+/// `base_url` and looks up intrinsic dimensions in `image_info`. If the
+/// dimensions differ from the current values, updates the box and marks
+/// it (and its ancestors) as dirty for incremental relayout.
+///
+/// Returns `true` if any image dimensions were updated.
+fn update_image_dimensions(
+    layout_box: &mut layout::box_model::LayoutBox,
+    doc: &html::dom::Document,
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
+) -> bool {
+    let mut updated = false;
+
+    // Check if this box is a replaced image with a DOM node reference.
+    if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+        ref mut width,
+        ref mut height,
+        ..
+    }) = layout_box.box_type
+        && let Some(node_id) = layout_box.node
+        && let NodeKind::Element(ref elem) = doc.get(node_id).kind
+        && elem.tag == TagName::Img
+        && let Some(src) = elem.src()
+    {
+        let resolved = match base_url {
+            Some(base) => loader::Url::parse(base)
+                .and_then(|u| u.resolve(src))
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| src.to_string()),
+            None => src.to_string(),
+        };
+        if let Some(&(iw, ih)) = image_info.get(&resolved)
+            && (*width != iw || *height != ih)
+            && (*width == 0 || *height == 0)
+        {
+            *width = iw;
+            *height = ih;
+            layout_box.dirty = true;
+            updated = true;
+        }
+    }
+
+    // Recurse into children.
+    for child in &mut layout_box.children {
+        if update_image_dimensions(child, doc, base_url, image_info) {
+            // Propagate dirty flag to ancestors.
+            layout_box.dirty = true;
+            updated = true;
+        }
+    }
+
+    updated
+}
+
+/// Find the Y position of a layout box whose image src resolves to `url`.
+///
+/// Walks the layout tree recursively. Returns `Some(y)` for the first
+/// matching `ReplacedContent::Image` node, or `None` if not found.
+fn find_image_y(layout_box: &layout::box_model::LayoutBox, _url: &str) -> Option<f32> {
+    // For images without a texture yet, their content.y tells us the
+    // approximate vertical position in the page.
+    if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+        texture: None,
+        ..
+    }) = &layout_box.box_type
+    {
+        return Some(layout_box.dimensions.content.y);
+    }
+    for child in &layout_box.children {
+        if let Some(y) = find_image_y(child, _url) {
+            return Some(y);
+        }
+    }
+    None
+}
+
+impl BrowserWidget {
+    // ---------------------------------------------------------------
+    // Image loading
+    // ---------------------------------------------------------------
+
+    /// Walk the DOM to find `<img>` elements and collect their requests
+    /// into `self.pending_images` for time-sliced loading. Does NOT
+    /// fetch or decode — that happens in `load_next_image_batch()`.
+    ///
+    /// Images with `loading="lazy"` are deferred to the end of the queue
+    /// so that eagerly-loaded images (the default) are fetched first.
+    pub(crate) fn collect_page_image_requests(&mut self) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        let mut eager_requests: Vec<(String, ResourceRequest)> = Vec::new();
+        let mut lazy_requests: Vec<(String, ResourceRequest)> = Vec::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+            {
+                let effective = effective_img_src(elem, self.window_w);
+                let effective_src = effective.as_deref();
+                let Some(src) = effective_src else { continue };
+                let resolved = Self::resolve_src(&base_url, src);
+                if self.decoded_images.contains_key(&resolved) {
+                    continue;
+                }
+                // CSP img-src enforcement is intentionally skipped.
+                // Images don't execute code, so blocking them provides no
+                // meaningful security benefit for an embedded browser. Many
+                // sites (Reddit, etc.) send strict img-src policies that
+                // reference CDN subdomains our lightweight CSP parser
+                // doesn't fully support (scheme-only sources like `https:`,
+                // `data:`, `blob:`), causing most images to be blocked.
+                let source = if self.config.features.sandbox_only {
+                    ResourceSource::Vfs
+                } else {
+                    ResourceSource::VfsThenNetwork
+                };
+                let referrer = base_url.as_deref().and_then(loader::strip_referrer);
+                let request = (
+                    resolved.clone(),
+                    ResourceRequest {
+                        url: resolved,
+                        base_url: base_url.clone(),
+                        source,
+                        method: crate::loader::HttpMethod::Get,
+                        body: None,
+                        referrer,
+                    },
+                );
+
+                // Respect the `loading` attribute: "lazy" images are
+                // deferred after all eager images have been fetched.
+                let is_lazy = elem
+                    .get_attribute("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
+                if is_lazy {
+                    lazy_requests.push(request);
+                } else {
+                    eager_requests.push(request);
+                }
+            }
+        }
+
+        // Walk computed styles for CSS URL images (background-image,
+        // mask-image). These share the same fetch/decode pipeline as
+        // `<img>` elements, just discovered via cascade instead of DOM.
+        // Both land in `decoded_images` and get resolved into textures
+        // by `ensure_image_textures` / `assign_textures_recursive`.
+        let mut style_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for style_opt in &self.styles {
+            let Some(style) = style_opt else { continue };
+            for img in [&style.background_image, &style.mask_image] {
+                if let css::values::BackgroundImage::Url(ref url) = *img {
+                    let resolved = Self::resolve_src(&base_url, url);
+                    if self.decoded_images.contains_key(&resolved)
+                        || !style_seen.insert(resolved.clone())
+                    {
+                        continue;
+                    }
+                    let source = if self.config.features.sandbox_only {
+                        ResourceSource::Vfs
+                    } else {
+                        ResourceSource::VfsThenNetwork
+                    };
+                    let referrer = base_url.as_deref().and_then(loader::strip_referrer);
+                    eager_requests.push((
+                        resolved.clone(),
+                        ResourceRequest {
+                            url: resolved,
+                            base_url: base_url.clone(),
+                            source,
+                            method: crate::loader::HttpMethod::Get,
+                            body: None,
+                            referrer,
+                        },
+                    ));
+                }
+            }
+        }
+
+        // Eager images first, lazy images appended after.
+        eager_requests.extend(lazy_requests);
+        self.pending_images = eager_requests;
+    }
+
+    /// Maximum decoded image memory budget (bytes of RGBA data).
+    pub(crate) const IMAGE_MEMORY_BUDGET: usize = 8 * 1024 * 1024; // 8MB
+
+    /// Process pending image requests within a time budget.
+    ///
+    /// Pops requests from `pending_images`, fetches and decodes each.
+    /// Returns after the time budget is exhausted or all images are done.
+    /// Each successful decode sets `layout_dirty` so the layout tree
+    /// rebuilds with correct intrinsic dimensions.
+    /// Pixels ahead of the viewport to start loading lazy images.
+    const LAZY_LOAD_MARGIN: f32 = 512.0;
+
+    /// Ensure the background image decode thread is running (non-WASM only).
+    ///
+    /// Lazily spawns a daemon thread on first call. The thread receives
+    /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pub(crate) fn ensure_decode_thread(&mut self) {
+        if self.image_decode_tx.is_some() {
+            return;
+        }
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<(String, image::DecodedImage)>();
+        std::thread::Builder::new()
+            .name("img-decode".into())
+            .spawn(move || {
+                while let Ok((url, data)) = work_rx.recv() {
+                    if let Some(decoded) = image::decode_image(&data) {
+                        if result_tx.send((url, decoded)).is_err() {
+                            break; // receiver dropped
+                        }
+                    } else if result_tx
+                        .send((url, image::DecodedImage::new(0, 0, Vec::new())))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .ok(); // If spawn fails, channels remain None → sync fallback
+        self.image_decode_tx = Some(work_tx);
+        self.image_decode_rx = Some(result_rx);
+    }
+
+    /// Collect completed image decodes from the background thread.
+    ///
+    /// Returns `true` if any new images were inserted.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn poll_decoded_images(&mut self) -> bool {
+        let rx = match &self.image_decode_rx {
+            Some(rx) => rx,
+            None => return false,
+        };
+        let mut any = false;
+        loop {
+            let (url, decoded) = match rx.try_recv() {
+                Ok(pair) => pair,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Decode thread died (panic or channel closed).
+                    // Reset in-flight counter to unstick loading state.
+                    self.image_decode_in_flight = 0;
+                    self.image_decode_tx = None;
+                    self.image_decode_rx = None;
+                    break;
+                },
+            };
+            self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+            // Replace sentinel (failed decode) with a broken-image placeholder
+            // so the user sees a visual indicator instead of nothing.
+            let decoded = if decoded.width == 0 && decoded.height == 0 {
+                self.broken_image_urls.insert(url.clone());
+                image::broken_image_placeholder(24, 24)
+            } else {
+                decoded
+            };
+            if self.decoded_images.contains_key(&url) {
+                continue;
+            }
+            let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+            // Evict oldest decoded images if over budget.
+            while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                    if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                        let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
+                        self.decoded_image_bytes -= evicted_bytes;
+                        // Drop the matching mask-image Arc from the
+                        // cache so it doesn't outlive its decoded_images
+                        // counterpart. Any LayoutBox that currently
+                        // pins the Arc via `mask_image_data` keeps it
+                        // alive for the remainder of the frame; the
+                        // next layout rebuild won't find the URL in
+                        // the cache and re-assigns `None`.
+                        self.mask_image_arcs.remove(&evict_url);
+                        self.image_info_dirty = true;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            self.decoded_image_bytes += img_bytes;
+            self.decoded_image_lru.push_front(url.clone());
+            self.decoded_images.insert(url, decoded);
+            self.image_info_dirty = true;
+            any = true;
+        }
+        any
+    }
+
+    pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
+        // Promote deferred images that have scrolled into view.
+        self.promote_deferred_images();
+
+        // On non-WASM targets, collect any completed background decodes.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        let mut any_decoded = self.poll_decoded_images();
+        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+        let mut any_decoded = false;
+
+        if self.pending_images.is_empty() {
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            {
+                let io_images_done = self.pending_io_images.is_empty();
+                if self.image_decode_in_flight == 0
+                    && io_images_done
+                    && self.pending_page_load.is_none()
+                    && self.state == LoadingState::Loading
+                {
+                    self.state = LoadingState::Idle;
+                }
+            }
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
+            if any_decoded {
+                self.layout_dirty = true;
+                self.rebuild_layout_with_images();
+            }
+            return;
+        }
+
+        // Time budgeting is skipped on PSP for legacy reasons. The
+        // earlier "std::time::Instant crashes on Allegrex" rationale
+        // was a misdiagnosis (the rust-psp std overlay was missing a
+        // target_os = "psp" arm in sys/time/mod.rs); Instant works on
+        // hardware now. Re-enabling time budgeting here is safe; left
+        // as a follow-up so the PSP image-loading path keeps its
+        // current behaviour during the JS-integration PR.
+        #[cfg(not(feature = "psp"))]
+        let start = web_time::Instant::now();
+        #[cfg(not(feature = "psp"))]
+        let budget = std::time::Duration::from_millis(budget_ms as u64);
+
+        while let Some((resolved, request)) = self.pending_images.pop() {
+            // Skip if already decoded (e.g. from cache).
+            if self.decoded_images.contains_key(&resolved) {
+                continue;
+            }
+
+            // Lazy loading: defer images far below the viewport.
+            if self.is_image_off_viewport(&resolved) {
+                self.deferred_images.push((resolved, request));
+                continue;
+            }
+
+            // On desktop, offload network image requests to the I/O thread.
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            {
+                let is_network = matches!(
+                    request.source,
+                    loader::ResourceSource::Network | loader::ResourceSource::VfsThenNetwork
+                );
+                // For VfsThenNetwork, try VFS first (fast).
+                let vfs_hit = if request.source == loader::ResourceSource::VfsThenNetwork {
+                    loader::vfs::load_from_vfs(vfs, &request).ok()
+                } else {
+                    None
+                };
+
+                if let Some(vfs_resp) = vfs_hit {
+                    // VFS hit -- decode directly.
+                    self.ensure_decode_thread();
+                    let sent = if let Some(ref tx) = self.image_decode_tx {
+                        tx.send((resolved.clone(), vfs_resp.body.clone())).is_ok()
+                    } else {
+                        false
+                    };
+                    if sent {
+                        self.image_decode_in_flight += 1;
+                    } else {
+                        // Sync fallback — use placeholder on decode failure.
+                        let decoded = match image::decode_image(&vfs_resp.body) {
+                            Some(img) => img,
+                            None => {
+                                self.broken_image_urls.insert(resolved.clone());
+                                image::broken_image_placeholder(24, 24)
+                            },
+                        };
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(resolved.clone());
+                        self.decoded_images.insert(resolved, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
+                    }
+                } else if is_network {
+                    // Network request -- submit to IO thread (non-blocking).
+                    self.submit_image_to_io_thread(resolved, request);
+                } else {
+                    // VFS-only request that failed -- skip.
+                }
+            }
+
+            // On WASM/PSP, load and decode synchronously (no threads).
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            self.diag(&format!("[BR] image fetch start: {resolved}"));
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            let load_result = load_resource(vfs, &request, self.tls.as_deref());
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            if let Ok(loaded) = load_result {
+                self.diag(&format!(
+                    "[BR] image fetch ok: {} bytes",
+                    loaded.response.body.len()
+                ));
+                if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+                    while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                        if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                            if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                let evicted_bytes =
+                                    evicted.width as usize * evicted.height as usize * 4;
+                                self.decoded_image_bytes -= evicted_bytes;
+                                // Drop the matching mask-image Arc so
+                                // the cache doesn't outlive its
+                                // decoded_images counterpart. See the
+                                // `load_next_image_batch` site for
+                                // rationale.
+                                self.mask_image_arcs.remove(&evict_url);
+                                self.image_info_dirty = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, decoded);
+                    self.image_info_dirty = true;
+                    any_decoded = true;
+                } else {
+                    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                    self.diag("[BR] image decode failed, using placeholder");
+                    // Insert a broken-image placeholder so the user
+                    // sees a visual indicator instead of a blank space.
+                    let placeholder = image::broken_image_placeholder(24, 24);
+                    let img_bytes = placeholder.width as usize * placeholder.height as usize * 4;
+                    self.decoded_image_bytes += img_bytes;
+                    self.broken_image_urls.insert(resolved.clone());
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, placeholder);
+                    self.image_info_dirty = true;
+                    any_decoded = true;
+                }
+            } else {
+                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                self.diag("[BR] image fetch err");
+            }
+
+            // Check time budget after each image (not on PSP --
+            #[cfg(not(feature = "psp"))]
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+
+        // On non-WASM, wait within the remaining budget for in-flight
+        // decodes to complete so callers that pass a generous budget
+        // (e.g. tests with 5000ms) see results immediately.
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        if self.image_decode_in_flight > 0
+            && let Some(ref rx) = self.image_decode_rx
+        {
+            while self.image_decode_in_flight > 0 {
+                let remaining = budget.saturating_sub(start.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                match rx.recv_timeout(remaining) {
+                    Ok((url, decoded)) => {
+                        self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+                        // Replace sentinel (failed decode) with placeholder.
+                        let decoded = if decoded.width == 0 && decoded.height == 0 {
+                            image::broken_image_placeholder(24, 24)
+                        } else {
+                            decoded
+                        };
+                        if self.decoded_images.contains_key(&url) {
+                            continue;
+                        }
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+                        while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                            if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                                if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                    let evicted_bytes =
+                                        evicted.width as usize * evicted.height as usize * 4;
+                                    self.decoded_image_bytes -= evicted_bytes;
+                                    // Keep `mask_image_arcs` in sync
+                                    // with `decoded_images` so mask
+                                    // cache entries never outlive
+                                    // their source.
+                                    self.mask_image_arcs.remove(&evict_url);
+                                    self.image_info_dirty = true;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(url.clone());
+                        self.decoded_images.insert(url, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
+                    },
+                    Err(_) => break, // timeout or disconnected
+                }
+            }
+        }
+
+        if any_decoded {
+            self.layout_dirty = true;
+            self.rebuild_layout_with_images();
+        }
+
+        if self.pending_images.is_empty() {
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            {
+                let io_images_done = self.pending_io_images.is_empty();
+                if self.image_decode_in_flight == 0
+                    && io_images_done
+                    && self.pending_page_load.is_none()
+                    && self.state == LoadingState::Loading
+                {
+                    self.state = LoadingState::Idle;
+                }
+            }
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
+        }
+    }
+
+    /// Re-evaluate deferred images after a scroll event.
+    ///
+    /// Moves images that are now near the viewport from `deferred_images`
+    /// back into `pending_images` for loading.
+    pub(crate) fn promote_deferred_images(&mut self) {
+        if self.deferred_images.is_empty() {
+            return;
+        }
+        // Compute viewport threshold once to avoid repeated borrows.
+        let viewport_bottom = self.scroll.scroll_y as f32 + self.window_h as f32;
+        let threshold = viewport_bottom + Self::LAZY_LOAD_MARGIN;
+
+        let layout_root = &self.layout_root;
+        let mut still_deferred = Vec::new();
+        for (resolved, request) in std::mem::take(&mut self.deferred_images) {
+            let off_viewport = layout_root
+                .as_ref()
+                .and_then(|root| find_image_y(root, &resolved))
+                .is_some_and(|y| y > threshold);
+            if off_viewport {
+                still_deferred.push((resolved, request));
+            } else {
+                self.pending_images.push((resolved, request));
+            }
+        }
+        self.deferred_images = still_deferred;
+    }
+
+    /// Check if an image with the given URL is far below the current viewport.
+    ///
+    /// Walks the layout tree to find the image's Y position. If it's
+    /// more than [`LAZY_LOAD_MARGIN`] pixels below the viewport bottom,
+    /// returns `true` (defer loading).
+    fn is_image_off_viewport(&self, resolved_url: &str) -> bool {
+        let Some(layout_root) = &self.layout_root else {
+            return false; // No layout yet — load eagerly.
+        };
+        let viewport_bottom = self.scroll.scroll_y as f32 + self.window_h as f32;
+        // Find the image's layout position.
+        if let Some(y) = find_image_y(layout_root, resolved_url) {
+            y > viewport_bottom + Self::LAZY_LOAD_MARGIN
+        } else {
+            false // Not found in layout — load eagerly.
+        }
+    }
+
+    /// Ensure the cached image info map is up to date. Call this before
+    /// accessing `self.cached_image_info` directly.
+    pub(crate) fn refresh_image_info(&mut self) {
+        if self.image_info_dirty {
+            self.cached_image_info = self
+                .decoded_images
+                .iter()
+                .map(|(url, img)| (url.clone(), (img.width, img.height)))
+                .collect();
+            self.image_info_dirty = false;
+        }
+    }
+
+    /// Upload decoded images as GPU textures and assign them to
+    /// `ReplacedContent::Image` nodes in the layout tree.
+    ///
+    /// Small images (<= 128x128) are packed into a shared texture atlas
+    /// to reduce GPU texture bind switches during rendering. Larger
+    /// images get individual textures as before.
+    pub(crate) fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        // Collect URLs that need texture creation. Use a HashSet for O(1)
+        // dedup instead of Vec::contains O(n) which was O(n^2) for pages
+        // with many images.
+        let mut pending: Vec<String> = Vec::new();
+        let mut pending_set = std::collections::HashSet::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+            {
+                let Some(src) = effective_img_src(elem, self.window_w) else {
+                    continue;
+                };
+                let resolved = Self::resolve_src(&base_url, &src);
+                if !self.image_textures.contains_key(&resolved)
+                    && !self.image_atlas.contains(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                    && pending_set.insert(resolved.clone())
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+
+        // Collect background-image URLs from styles. These always get
+        // individual textures (not atlas-packed) because background images
+        // are typically tiled/stretched to arbitrary sizes.
+        //
+        // `mask-image: url(...)` URLs ride the same collection loop.
+        // Mask URLs that land in `decoded_images` are lazily wrapped
+        // in an `Arc` inside `self.mask_image_arcs` so later layout
+        // rebuilds can hand the pointer to every layout box that
+        // needs the decoded bytes without cloning the pixel buffer.
+        let mut bg_pending: Vec<String> = Vec::new();
+        let mut bg_set = std::collections::HashSet::new();
+        for style_opt in &self.styles {
+            let Some(style) = style_opt else { continue };
+            if let css::values::BackgroundImage::Url(ref url) = style.background_image {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                    && bg_set.insert(resolved.clone())
+                {
+                    bg_pending.push(resolved);
+                }
+            }
+            if let css::values::BackgroundImage::Url(ref url) = style.mask_image {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.mask_image_arcs.contains_key(&resolved)
+                    && let Some(decoded) = self.decoded_images.get(&resolved)
+                {
+                    self.mask_image_arcs
+                        .insert(resolved, std::sync::Arc::new(decoded.clone()));
+                }
+            }
+        }
+
+        // Create textures: pack small images into the atlas, use
+        // individual textures for larger ones.
+        for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved) {
+                if crate::image_atlas::ImageAtlas::is_eligible(decoded.width, decoded.height) {
+                    // Try to pack into the atlas.
+                    self.image_atlas.insert(
+                        resolved,
+                        decoded.width,
+                        decoded.height,
+                        &decoded.pixels,
+                    );
+                } else if let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+                {
+                    self.image_textures.insert(resolved.clone(), tex);
+                }
+            }
+        }
+
+        // Create individual textures for background images (never atlas-packed).
+        for resolved in &bg_pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
+            }
+        }
+
+        // Upload any dirty atlas pages to the GPU.
+        self.image_atlas.upload_dirty(backend);
+
+        // Walk layout tree and assign textures.
+        self.refresh_image_info();
+        if let Some(layout) = &mut self.layout_root {
+            Self::assign_textures_recursive(
+                layout,
+                &self.document,
+                &base_url,
+                &self.image_textures,
+                &self.image_atlas,
+                self.window_w,
+                &self.cached_image_info,
+                &self.mask_image_arcs,
+                &self.broken_image_urls,
+            );
+        }
+    }
+
+    /// Recursively walk the layout tree and assign GPU textures to
+    /// `ReplacedContent::Image` nodes and `background-image` styles.
+    ///
+    /// For images packed into the atlas, the atlas texture ID and
+    /// source region are assigned so the paint layer can use `blit_sub`.
+    #[allow(clippy::too_many_arguments)]
+    fn assign_textures_recursive(
+        layout_box: &mut layout::box_model::LayoutBox,
+        doc: &Option<html::dom::Document>,
+        base_url: &Option<String>,
+        textures: &HashMap<String, TextureId>,
+        atlas: &crate::image_atlas::ImageAtlas,
+        viewport_w: u32,
+        image_info: &HashMap<String, (u32, u32)>,
+        mask_arcs: &HashMap<String, std::sync::Arc<image::DecodedImage>>,
+        broken_urls: &std::collections::HashSet<String>,
+    ) {
+        if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+            ref mut texture,
+            ref mut atlas_region,
+            ..
+        }) = layout_box.box_type
+            && texture.is_none()
+            && let Some(node_id) = layout_box.node
+            && let Some(doc) = doc
+        {
+            let node = doc.get(node_id);
+            if let NodeKind::Element(elem) = &node.kind
+                && let Some(src) = effective_img_src(elem, viewport_w)
+            {
+                let resolved = Self::resolve_src(base_url, &src);
+                // Check atlas first, then individual textures.
+                if let Some((atlas_tex, region)) = atlas.get(&resolved) {
+                    *texture = Some(atlas_tex);
+                    *atlas_region = Some(region);
+                } else if let Some(&tex) = textures.get(&resolved) {
+                    *texture = Some(tex);
+                }
+            }
+        }
+
+        // Assign background-image texture (not atlas-eligible since
+        // background images are typically tiled/stretched to arbitrary
+        // sizes and need their own texture).
+        //
+        // Skip URLs whose fetch or decode failed — otherwise the
+        // broken-image placeholder tiles across the element and every
+        // `background: url() repeat-x` failure (Google's button
+        // sprite, say) becomes a stripe of red X's.
+        if layout_box.background_texture.is_none()
+            && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
+        {
+            let resolved = Self::resolve_src(base_url, url);
+            if !broken_urls.contains(&resolved)
+                && let Some(&tex) = textures.get(&resolved)
+            {
+                layout_box.background_texture = Some(tex);
+                if let Some(&dims) = image_info.get(&resolved) {
+                    layout_box.background_texture_size = Some(dims);
+                }
+            }
+        }
+
+        // Assign decoded mask-image bytes. The Arc clone is cheap;
+        // the underlying pixel buffer is shared with
+        // `self.mask_image_arcs` so every layout box that references
+        // the same URL shares the same allocation.
+        if layout_box.mask_image_data.is_none()
+            && let css::values::BackgroundImage::Url(ref url) = layout_box.style.mask_image
+        {
+            let resolved = Self::resolve_src(base_url, url);
+            if let Some(arc) = mask_arcs.get(&resolved) {
+                layout_box.mask_image_data = Some(std::sync::Arc::clone(arc));
+            }
+        }
+
+        for child in &mut layout_box.children {
+            Self::assign_textures_recursive(
+                child,
+                doc,
+                base_url,
+                textures,
+                atlas,
+                viewport_w,
+                image_info,
+                mask_arcs,
+                broken_urls,
+            );
+        }
+    }
+
+    /// Rebuild the layout tree with image dimensions after images have
+    /// been decoded (second layout pass).
+    ///
+    /// When an existing layout tree is available, attempts incremental
+    /// relayout: walks the tree, updates `ReplacedContent::Image`
+    /// dimensions from `cached_image_info`, marks affected subtrees
+    /// dirty, and runs `layout_block_incremental`. Falls back to a
+    /// full rebuild when no existing layout tree is present.
+    fn rebuild_layout_with_images(&mut self) {
+        self.refresh_image_info();
+        let Some(doc) = &self.document else { return };
+        let content_h = self.config.content_height(self.window_h);
+        let base_url = self.nav.current_url().map(String::from);
+        let viewport_w = self.window_w as f32 / self.config.zoom_level;
+        let viewport_h = content_h as f32 / self.config.zoom_level;
+
+        // Try incremental relayout: update image dimensions in the
+        // existing layout tree and relayout only affected subtrees.
+        if let Some(layout_root) = &mut self.layout_root {
+            let updated = update_image_dimensions(
+                layout_root,
+                doc,
+                base_url.as_deref(),
+                &self.cached_image_info,
+            );
+            if updated {
+                let shared = std::rc::Rc::clone(&self.text_cache);
+                let measurer =
+                    layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+                let mut cache = layout::block::StyleCache::new();
+                layout::block::layout_block_incremental(
+                    layout_root,
+                    viewport_w,
+                    &measurer,
+                    &mut cache,
+                );
+                // Re-apply positioning after relayout.
+                let viewport_rect = layout::box_model::Rect::new(0.0, 0.0, viewport_w, viewport_h);
+                layout::positioning::apply_positioning(layout_root, viewport_rect);
+                self.link_map.clear();
+            }
+            return;
+        }
+
+        // Full rebuild (always used on PSP/WASM, fallback on desktop).
+        let shared = std::rc::Rc::clone(&self.text_cache);
+        let measurer =
+            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        let layout_root = layout::block::build_layout_tree(
+            doc,
+            &self.styles,
+            &measurer,
+            viewport_w,
+            viewport_h,
+            base_url.as_deref(),
+            &self.cached_image_info,
+        );
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
+
+        self.layout_root = Some(layout_root);
+        self.link_map.clear();
+    }
+
+    /// Resolve an img `src` attribute against a base URL.
+    fn resolve_src(base_url: &Option<String>, src: &str) -> String {
+        match base_url {
+            Some(base) => {
+                if let Some(base_parsed) = loader::Url::parse(base) {
+                    base_parsed
+                        .resolve(src)
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| src.to_string())
+                } else {
+                    src.to_string()
+                }
+            },
+            None => src.to_string(),
+        }
+    }
+}
