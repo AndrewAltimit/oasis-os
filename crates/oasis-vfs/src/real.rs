@@ -100,6 +100,10 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 impl Vfs for RealVfs {
+    fn vfs_type(&self) -> &'static str {
+        "RealVfs"
+    }
+
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let real_path = self.resolve(path)?;
         if !real_path.is_dir() {

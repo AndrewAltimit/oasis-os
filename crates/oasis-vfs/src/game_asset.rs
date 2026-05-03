@@ -97,6 +97,10 @@ impl Default for GameAssetVfs {
 }
 
 impl Vfs for GameAssetVfs {
+    fn vfs_type(&self) -> &'static str {
+        "GameAssetVfs"
+    }
+
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path);
         match self.effective_entry(&path) {

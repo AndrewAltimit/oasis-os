@@ -16,15 +16,17 @@ pub struct PackageManagerApp {
 }
 
 impl PackageManagerApp {
-    /// Create a new Package Manager app.
+    /// Create a new Package Manager app. The `oasis-core` and backend rows
+    /// reflect the workspace version this crate was built against.
     pub fn new(path: &str) -> Self {
+        let workspace_version = env!("CARGO_PKG_VERSION");
         let mut content = ContentState::new("Package Manager", path);
         content.lines = vec![
             "Package Manager".to_string(),
             String::new(),
             "Installed packages:".to_string(),
-            "  oasis-core      0.1.0  (system)".to_string(),
-            "  oasis-sdl       0.1.0  (backend)".to_string(),
+            format!("  oasis-core      {workspace_version}  (system)"),
+            format!("  oasis-sdl       {workspace_version}  (backend)"),
             "  classic-skin    1.0.0  (skin)".to_string(),
             String::new(),
             "No updates available.".to_string(),

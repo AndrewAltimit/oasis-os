@@ -36,11 +36,12 @@ pub(crate) const APP_REGISTRY: &[(&str, AppFactory)] = &[
     ("Browser", |path, _vfs| {
         Box::new(oasis_app_browser::BrowserApp::new(path))
     }),
-    ("System Monitor", |path, _vfs| {
+    ("System Monitor", |path, vfs| {
         Box::new(oasis_app_system_monitor::SystemMonitorApp::new(
             path,
             "Desktop (SDL3)",
             "SDL3",
+            vfs.vfs_type(),
             0,
         ))
     }),
