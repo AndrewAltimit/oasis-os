@@ -31,7 +31,7 @@ use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiCore};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
-use oasis_core::cursor::{self, CursorState};
+use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::DesktopPlatform;
@@ -511,15 +511,12 @@ fn main() -> Result<()> {
     log::info!("Wallpaper loaded");
     splash_wait!(5.2);
 
-    // Generate + upload cursor texture.
-    splash_status!("Uploading cursor texture...");
-    let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
-    let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
-    state.ui.mouse_cursor.update_sdi(&mut sdi);
-    if let Ok(obj) = sdi.get_mut("mouse_cursor") {
-        obj.texture = Some(cursor_tex);
-    }
-    log::info!("Mouse cursor loaded");
+    // The SDL build runs as a desktop application, so the host window
+    // manager already paints a hardware cursor over our window. Drawing
+    // our own software cursor on top duplicates it. We skip cursor
+    // texture upload + SDI registration here; `CursorState` is still
+    // updated from input events so its position is available for
+    // diagnostics or future re-enabling, just never rendered.
 
     // Apply auto-launch (after scene graph is fully set up).
     if let Some(ref app_name) = auto_launch_app {
