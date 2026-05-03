@@ -859,7 +859,7 @@ pub(super) fn parse_font_family_value(value: &CssValue) -> FontFamily {
 }
 
 /// Map a single keyword to a [`FontFamilyName`].
-pub(super) fn keyword_to_family_name(kw: &str) -> FontFamilyName {
+fn keyword_to_family_name(kw: &str) -> FontFamilyName {
     match kw.to_ascii_lowercase().as_str() {
         "serif" => FontFamilyName::Serif,
         "sans-serif" => FontFamilyName::SansSerif,
@@ -873,7 +873,7 @@ pub(super) fn keyword_to_family_name(kw: &str) -> FontFamilyName {
 
 /// Walk a flat list of [`CssValue`]s (from a comma-separated font-family
 /// declaration) and produce an ordered list of [`FontFamilyName`]s.
-pub(super) fn collect_font_family_names(values: &[CssValue]) -> Vec<FontFamilyName> {
+fn collect_font_family_names(values: &[CssValue]) -> Vec<FontFamilyName> {
     let mut result = Vec::new();
     let mut pending_idents: Vec<String> = Vec::new();
 
@@ -908,7 +908,7 @@ pub(super) fn collect_font_family_names(values: &[CssValue]) -> Vec<FontFamilyNa
 ///
 /// Multi-word unquoted names like `Trebuchet MS` come through as
 /// separate Keyword tokens; this joins them with spaces.
-pub(super) fn flush_pending_idents(idents: &mut Vec<String>, result: &mut Vec<FontFamilyName>) {
+fn flush_pending_idents(idents: &mut Vec<String>, result: &mut Vec<FontFamilyName>) {
     if idents.is_empty() {
         return;
     }
