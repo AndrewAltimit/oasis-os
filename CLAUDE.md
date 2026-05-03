@@ -106,7 +106,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-radio       (Internet Radio app)
 ├── oasis-app-settings    (Settings app)
 ├── oasis-app-file-manager (File Manager app)
-└── oasis-core       (coordination: dashboard, agent, plugin, script; apps extracted to oasis-app-* crates)
+└── oasis-core       (coordination: dashboard, agent, plugin, script; most apps in oasis-app-* crates; Browser/Network/Package Manager/System Monitor pending extraction)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
@@ -182,7 +182,7 @@ Each module below is its own crate (previously all in oasis-core):
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
 - **oasis-app-*** -- 9 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
-- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
+- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Most apps live in `oasis-app-*` crates. The four remaining in-core apps -- Browser, Network, Package Manager, System Monitor -- are slated for extraction to `oasis-app-*` crates in a follow-up PR (decision recorded 2026-05-03); once that lands, `oasis-core` will be coordination-only and own no app implementations.
 
 ### Font Rendering
 
