@@ -30,6 +30,10 @@ oasis-app-tv-guide = { workspace = true }
 oasis-app-radio = { workspace = true }
 oasis-app-settings = { workspace = true }
 oasis-app-file-manager = { workspace = true }
+oasis-app-browser = { workspace = true }
+oasis-app-network = { workspace = true }
+oasis-app-package-manager = { workspace = true }
+oasis-app-system-monitor = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }

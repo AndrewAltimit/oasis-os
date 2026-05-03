@@ -105,6 +105,10 @@ fn parent(path: &str) -> &str {
 }
 
 impl Vfs for MemoryVfs {
+    fn vfs_type(&self) -> &'static str {
+        "MemoryVfs"
+    }
+
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path);
         match self.nodes.get(path.as_ref()) {

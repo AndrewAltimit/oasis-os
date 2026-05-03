@@ -359,8 +359,10 @@ mod tests {
     fn scroll_down_when_content_exceeds_view() {
         use crate::apps::simple_app::SimpleApp;
         let vfs = setup_vfs();
-        let mut runner = AppRunner::launch(&make_app("Network"), &vfs);
-        // Network uses SimpleApp delegate -- add extra lines via the delegate's content.
+        // Terminal still uses the SimpleApp delegate (the four extracted
+        // info-screen apps now have their own crates with their own types,
+        // so a SimpleApp downcast against them would return None).
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
         let app = runner.delegate_as_mut::<SimpleApp>().unwrap();
         for i in 0..20 {
             app.content.lines.push(format!("Extra line {i}"));

@@ -106,7 +106,11 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-radio       (Internet Radio app)
 ├── oasis-app-settings    (Settings app)
 ├── oasis-app-file-manager (File Manager app)
-└── oasis-core       (coordination: dashboard, agent, plugin, script; apps extracted to oasis-app-* crates)
+├── oasis-app-browser     (Browser launcher placeholder)
+├── oasis-app-network     (Network status app)
+├── oasis-app-package-manager (Package Manager app)
+├── oasis-app-system-monitor  (System Monitor app)
+└── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal; all apps live in oasis-app-* crates)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
@@ -158,8 +162,8 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework lives in 45 crate directories under `crates/`:
-- **35 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
+The framework lives in 49 crate directories under `crates/`:
+- **39 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
 - **1 explicitly excluded crate** (`oasis-backend-psp`, on the `mipsel-sony-psp` target)
 - **9 standalone PSP-target crates** that are not mentioned in the workspace `Cargo.toml` at all and are built individually via `cargo +nightly psp`: `oasis-plugin-psp`, `oasis-devloop-psp`, `oasis-me-boot`, `oasis-prx-decrypt-psp`, `oasis-recovery-psp`, `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp`
 
@@ -181,8 +185,8 @@ Each module below is its own crate (previously all in oasis-core):
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
 - **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
-- **oasis-app-*** -- 9 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
-- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
+- **oasis-app-*** -- 13 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`, `oasis-app-browser`, `oasis-app-network`, `oasis-app-package-manager`, `oasis-app-system-monitor`
+- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar, in-core Terminal app. All other apps live in `oasis-app-*` crates; `oasis-core` no longer ships any app implementations beyond the Terminal delegate (which the desktop input pipeline pumps `set_lines` into) and the `SimpleApp` placeholder used by the plugin system for dynamically registered apps.
 
 ### Font Rendering
 
