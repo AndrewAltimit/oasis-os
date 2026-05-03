@@ -400,7 +400,11 @@ jobs:
         with:
           name: oasis-binaries
           path: release-binaries/*
-          retention-days: 90
+          # Short retention: this job runs on every main-ci, so artifacts
+          # accumulate quickly. The tag-gated `create-release` job consumes
+          # them immediately, so 7 days is sufficient for that handoff and
+          # for short-term debugging of recent runs.
+          retention-days: 7
 
   # -- Create GitHub Release -----------------------------------------------
   create-release:
