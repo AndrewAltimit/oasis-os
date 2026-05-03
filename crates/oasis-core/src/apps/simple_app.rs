@@ -1,9 +1,11 @@
 //! Generic simple app for static-content screens.
 //!
-//! Many apps (Settings, Network, Package Manager, Browser, System Monitor)
-//! are purely informational: they display static text lines with basic
-//! up/down scrolling and Cancel-to-exit. `SimpleApp` implements the `App`
-//! trait for all of them, avoiding near-identical implementations.
+//! Used as the delegate for the in-core Terminal app (which syncs its
+//! display lines from the desktop terminal pipeline via [`SimpleApp::set_lines`])
+//! and as the placeholder type the plugin system constructs for dynamically
+//! registered apps. The four other static-content apps (Browser, Network,
+//! Package Manager, System Monitor) live in their own `oasis-app-*` crates
+//! and no longer go through this type.
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
@@ -60,79 +62,6 @@ impl SimpleApp {
         )
     }
 
-    /// Create the Network app.
-    pub fn network(
-        path: &str,
-        listener_active: bool,
-        listener_port: u16,
-        remote_connected: bool,
-    ) -> Self {
-        let listener_status = if listener_active {
-            format!("Active (port {listener_port})")
-        } else {
-            "Not running".to_string()
-        };
-        let remote_status = if remote_connected {
-            "Connected".to_string()
-        } else {
-            "Not connected".to_string()
-        };
-        Self::new(
-            "Network",
-            path,
-            vec![
-                "Network Status".to_string(),
-                String::new(),
-                "  Interface:  lo (loopback)".to_string(),
-                "  Status:     Active".to_string(),
-                "  Address:    127.0.0.1".to_string(),
-                String::new(),
-                format!("  Remote:     {remote_status}"),
-                format!("  Listener:   {listener_status}"),
-                String::new(),
-                "Use terminal 'listen' and 'connect'".to_string(),
-                "commands for remote access.".to_string(),
-            ],
-        )
-    }
-
-    /// Create the Package Manager app.
-    pub fn package_manager(path: &str) -> Self {
-        Self::new(
-            "Package Manager",
-            path,
-            vec![
-                "Package Manager".to_string(),
-                String::new(),
-                "Installed packages:".to_string(),
-                "  oasis-core      0.1.0  (system)".to_string(),
-                "  oasis-sdl       0.1.0  (backend)".to_string(),
-                "  classic-skin    1.0.0  (skin)".to_string(),
-                String::new(),
-                "No updates available.".to_string(),
-            ],
-        )
-    }
-
-    /// Create the Browser app.
-    pub fn browser(path: &str) -> Self {
-        Self::new(
-            "Browser",
-            path,
-            vec![
-                "Browser".to_string(),
-                String::new(),
-                "Use the browser widget for web browsing.".to_string(),
-                String::new(),
-                "The browser supports HTML, CSS, and".to_string(),
-                "Gemini protocol content.".to_string(),
-                String::new(),
-                "Launch from the dashboard to open the".to_string(),
-                "full browser widget.".to_string(),
-            ],
-        )
-    }
-
     /// Create the Terminal app (windowed interactive terminal).
     ///
     /// Text input and command execution are handled by the desktop input
@@ -163,29 +92,6 @@ impl SimpleApp {
         } else {
             self.content.scroll = 0;
         }
-    }
-
-    /// Create the System Monitor app.
-    pub fn system_monitor(path: &str, platform: &str, backend: &str, uptime_secs: u64) -> Self {
-        let h = uptime_secs / 3600;
-        let m = (uptime_secs % 3600) / 60;
-        let s = uptime_secs % 60;
-        Self::new(
-            "System Monitor",
-            path,
-            vec![
-                "System Monitor".to_string(),
-                String::new(),
-                format!("  Platform:   {platform}"),
-                format!("  Backend:    {backend}"),
-                "  VFS:        MemoryVfs".to_string(),
-                format!("  Uptime:     {h}:{m:02}:{s:02}"),
-                String::new(),
-                "  CPU:        --".to_string(),
-                "  Memory:     --".to_string(),
-                "  Battery:    N/A (desktop)".to_string(),
-            ],
-        )
     }
 }
 
@@ -271,34 +177,6 @@ mod tests {
         let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert!(app.lines().iter().any(|l| l.contains("OASIS_OS Settings")));
         assert!(app.lines().iter().any(|l| l.contains("read-only")));
-    }
-
-    #[test]
-    fn network_content() {
-        let app = SimpleApp::network("/apps/network", false, 9000, false);
-        assert_eq!(app.title(), "Network");
-        assert!(app.lines().iter().any(|l| l.contains("127.0.0.1")));
-    }
-
-    #[test]
-    fn package_manager_content() {
-        let app = SimpleApp::package_manager("/apps/pkgmgr");
-        assert_eq!(app.title(), "Package Manager");
-        assert!(app.lines().iter().any(|l| l.contains("oasis-core")));
-    }
-
-    #[test]
-    fn browser_content() {
-        let app = SimpleApp::browser("/apps/browser");
-        assert_eq!(app.title(), "Browser");
-        assert!(app.lines().iter().any(|l| l.contains("HTML")));
-    }
-
-    #[test]
-    fn system_monitor_content() {
-        let app = SimpleApp::system_monitor("/apps/sysmon", "Desktop (SDL2)", "SDL2", 0);
-        assert_eq!(app.title(), "System Monitor");
-        assert!(app.lines().iter().any(|l| l.contains("CPU")));
     }
 
     #[test]

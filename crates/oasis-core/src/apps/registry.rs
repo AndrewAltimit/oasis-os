@@ -28,21 +28,19 @@ pub(crate) const APP_REGISTRY: &[(&str, AppFactory)] = &[
         ))
     }),
     ("Network", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::network(
-            path, false, 9000, false,
-        ))
+        Box::new(oasis_app_network::NetworkApp::new(path, false, 9000, false))
     }),
     ("Package Manager", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::package_manager(path))
+        Box::new(oasis_app_package_manager::PackageManagerApp::new(path))
     }),
     ("Browser", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::browser(path))
+        Box::new(oasis_app_browser::BrowserApp::new(path))
     }),
     ("System Monitor", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::system_monitor(
+        Box::new(oasis_app_system_monitor::SystemMonitorApp::new(
             path,
-            "Desktop (SDL2)",
-            "SDL2",
+            "Desktop (SDL3)",
+            "SDL3",
             0,
         ))
     }),

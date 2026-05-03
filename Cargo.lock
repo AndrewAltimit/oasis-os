@@ -985,6 +985,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-browser"
+version = "1.3.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
 name = "oasis-app-calculator"
 version = "1.3.0"
 dependencies = [
@@ -1045,6 +1056,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-network"
+version = "1.3.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-package-manager"
+version = "1.3.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
 name = "oasis-app-paint"
 version = "1.3.0"
 dependencies = [
@@ -1069,6 +1102,17 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-settings"
+version = "1.3.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-system-monitor"
 version = "1.3.0"
 dependencies = [
  "oasis-app-core",
@@ -1206,14 +1250,18 @@ version = "1.3.0"
 dependencies = [
  "js-sys",
  "log",
+ "oasis-app-browser",
  "oasis-app-calculator",
  "oasis-app-core",
  "oasis-app-file-manager",
  "oasis-app-games",
  "oasis-app-media",
+ "oasis-app-network",
+ "oasis-app-package-manager",
  "oasis-app-paint",
  "oasis-app-radio",
  "oasis-app-settings",
+ "oasis-app-system-monitor",
  "oasis-app-text-editor",
  "oasis-app-tv-guide",
  "oasis-audio",

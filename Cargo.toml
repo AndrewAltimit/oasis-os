@@ -23,6 +23,10 @@ members = [
     "crates/oasis-app-radio",
     "crates/oasis-app-settings",
     "crates/oasis-app-file-manager",
+    "crates/oasis-app-browser",
+    "crates/oasis-app-network",
+    "crates/oasis-app-package-manager",
+    "crates/oasis-app-system-monitor",
     "crates/oasis-vector",
     "crates/oasis-shader",
     "crates/oasis-core",
@@ -163,6 +167,10 @@ oasis-app-tv-guide = { path = "crates/oasis-app-tv-guide" }
 oasis-app-radio = { path = "crates/oasis-app-radio" }
 oasis-app-settings = { path = "crates/oasis-app-settings" }
 oasis-app-file-manager = { path = "crates/oasis-app-file-manager" }
+oasis-app-browser = { path = "crates/oasis-app-browser" }
+oasis-app-network = { path = "crates/oasis-app-network" }
+oasis-app-package-manager = { path = "crates/oasis-app-package-manager" }
+oasis-app-system-monitor = { path = "crates/oasis-app-system-monitor" }
 oasis-core = { path = "crates/oasis-core", default-features = false }
 oasis-vector = { path = "crates/oasis-vector" }
 oasis-shader = { path = "crates/oasis-shader", default-features = false }
