@@ -26,7 +26,7 @@ impl PackageManagerApp {
             String::new(),
             "Installed packages:".to_string(),
             format!("  oasis-core      {workspace_version}  (system)"),
-            format!("  oasis-sdl       {workspace_version}  (backend)"),
+            format!("  oasis-backend-sdl {workspace_version}  (backend)"),
             "  classic-skin    1.0.0  (skin)".to_string(),
             String::new(),
             "No updates available.".to_string(),
