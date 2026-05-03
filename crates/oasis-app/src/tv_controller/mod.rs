@@ -52,5 +52,5 @@ fn find_tv_guide_runner<'a>(
     found
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "_video"))]
 mod tests;

@@ -378,7 +378,7 @@ impl DisplayItem {
 #[derive(Debug, Clone)]
 pub struct DisplayList {
     /// The recorded items in paint order.
-    pub(super) items: Vec<DisplayItem>,
+    items: Vec<DisplayItem>,
     /// Generation counter — incremented on each rebuild so caches
     /// can detect staleness.
     generation: u64,
@@ -389,7 +389,7 @@ pub struct DisplayList {
     has_sticky: bool,
     /// The scroll Y value at the time this display list was recorded.
     /// Used by `PushSticky` to recompute sticky offsets during replay.
-    pub(super) recording_scroll_y: f32,
+    recording_scroll_y: f32,
 }
 
 impl DisplayList {

@@ -1,5 +1,4 @@
 //! Tests for TV controller streaming/seek/throttle helpers.
-#![cfg(feature = "_video")]
 #![allow(clippy::unwrap_used)]
 
 use super::seek::{linear_seek_interpolation, parse_moov_duration};
