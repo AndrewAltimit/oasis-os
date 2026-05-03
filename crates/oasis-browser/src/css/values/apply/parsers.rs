@@ -327,10 +327,12 @@ pub(super) fn parse_transform(
         let s = s.trim();
         if let Some(px) = s.strip_suffix("px") {
             px.trim().parse::<f32>().unwrap_or(0.0)
+        } else if let Some(rem) = s.strip_suffix("rem") {
+            // Check `rem` before `em` because `strip_suffix("em")` also matches
+            // `"1.5rem"` (as `"1.5r"`) and would otherwise shadow this branch.
+            rem.trim().parse::<f32>().unwrap_or(0.0) * super::super::types::current_root_font_size()
         } else if let Some(em) = s.strip_suffix("em") {
             em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
-        } else if let Some(rem) = s.strip_suffix("rem") {
-            rem.trim().parse::<f32>().unwrap_or(0.0) * super::super::types::current_root_font_size()
         } else {
             // Bare number treated as px.
             s.parse::<f32>().unwrap_or(0.0)
@@ -460,10 +462,11 @@ fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
     let s = s.trim();
     if let Some(px) = s.strip_suffix("px") {
         px.trim().parse::<f32>().unwrap_or(0.0)
+    } else if let Some(rem) = s.strip_suffix("rem") {
+        // `rem` must be checked before `em` (suffix shadowing).
+        rem.trim().parse::<f32>().unwrap_or(0.0) * super::super::types::current_root_font_size()
     } else if let Some(em) = s.strip_suffix("em") {
         em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
-    } else if let Some(rem) = s.strip_suffix("rem") {
-        rem.trim().parse::<f32>().unwrap_or(0.0) * super::super::types::current_root_font_size()
     } else {
         s.parse::<f32>().unwrap_or(0.0)
     }
@@ -608,18 +611,19 @@ pub(super) fn parse_clip_path(
                 .ok()
                 .filter(|v| *v >= 0.0)
                 .map(ClipLength::Px)
+        } else if let Some(rem) = tok.strip_suffix("rem") {
+            // `rem` must be checked before `em` (suffix shadowing).
+            rem.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)
+                .map(|v| ClipLength::Px(v * super::super::types::current_root_font_size()))
         } else if let Some(em) = tok.strip_suffix("em") {
             em.trim()
                 .parse::<f32>()
                 .ok()
                 .filter(|v| *v >= 0.0)
                 .map(|v| ClipLength::Px(v * parent_font_size))
-        } else if let Some(rem) = tok.strip_suffix("rem") {
-            rem.trim()
-                .parse::<f32>()
-                .ok()
-                .filter(|v| *v >= 0.0)
-                .map(|v| ClipLength::Px(v * super::super::types::current_root_font_size()))
         } else if tok == "0" {
             Some(ClipLength::Px(0.0))
         } else {
