@@ -456,7 +456,7 @@ pub(super) fn parse_transform_origin(
 
 /// Parse a CSS length used in transform-origin Z position. Accepts
 /// `px`, `em`, `rem`, and bare numbers (treated as px).
-pub(super) fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
+fn parse_origin_length(s: &str, parent_font_size: f32) -> f32 {
     let s = s.trim();
     if let Some(px) = s.strip_suffix("px") {
         px.trim().parse::<f32>().unwrap_or(0.0)
