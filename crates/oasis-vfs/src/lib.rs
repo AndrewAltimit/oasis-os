@@ -208,10 +208,12 @@ pub trait Vfs {
     fn set_context(&mut self, _ctx: VfsContext) {}
 
     /// A short identifier for this VFS implementation, used by diagnostic
-    /// surfaces (e.g. the System Monitor app). Defaults to `"MemoryVfs"`;
-    /// `RealVfs` and `GameAssetVfs` override it.
+    /// surfaces (e.g. the System Monitor app). Defaults to `"UnknownVfs"`
+    /// so a missing override is visible rather than silently mislabelled
+    /// as a known implementation. `MemoryVfs`, `RealVfs`, and `GameAssetVfs`
+    /// each override it with their own name.
     fn vfs_type(&self) -> &'static str {
-        "MemoryVfs"
+        "UnknownVfs"
     }
 
     /// Check whether the current context has the given access mode for
