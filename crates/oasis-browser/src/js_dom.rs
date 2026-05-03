@@ -1820,7 +1820,7 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   // Thin dispatch helpers called from Rust via `Function::call` on the
   // already-compiled JS function (see `dispatch_js_event_fast` in
-  // widget_input.rs). These wrappers exist so the hot click/mousemove/
+  // widget/input.rs). These wrappers exist so the hot click/mousemove/
   // keydown paths don't have to `format!` a JS source string and invoke
   // `engine.eval()` — which parses and compiles the snippet every time.
   // Parsing each event's fresh source string on a link-dense page (the
@@ -2941,7 +2941,7 @@ mod tests {
 
     #[test]
     fn retained_engine_fires_events_after_script_exec() {
-        // Simulate what widget_pipeline.rs does: create engine, run
+        // Simulate what widget/pipeline.rs does: create engine, run
         // scripts, then dispatch events later.
         let (engine, _doc) = setup(sample_doc());
         engine

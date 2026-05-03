@@ -77,10 +77,7 @@ pub mod canvas;
 pub mod font;
 
 pub(crate) mod image_atlas;
-mod widget_images;
-mod widget_input;
-mod widget_paint;
-mod widget_pipeline;
+mod widget;
 
 #[cfg(feature = "javascript")]
 mod js_dom;
@@ -842,10 +839,10 @@ impl BrowserWidget {
         true
     }
 
-    // Navigation/loading methods → widget_pipeline.rs
-    // Image loading methods → widget_images.rs
-    // Paint methods → widget_paint.rs
-    // Input handling methods → widget_input.rs
+    // Navigation/loading methods → widget/pipeline.rs
+    // Image loading methods → widget/images.rs
+    // Paint methods → widget/paint.rs
+    // Input handling methods → widget/input.rs
 
     // ---------------------------------------------------------------
     // Accessors
@@ -1010,11 +1007,3 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "widget_pipeline_tests.rs"]
-mod widget_pipeline_tests;
-
-#[cfg(test)]
-#[path = "widget_input_tests.rs"]
-mod widget_input_tests;

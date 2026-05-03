@@ -1,4 +1,4 @@
-//! Tests for `widget_pipeline.rs` -- pure helpers and resource dispatch.
+//! Tests for `widget/pipeline.rs` -- pure helpers and resource dispatch.
 //!
 //! The high-level navigation paths (load_html, navigate_vfs, process_response)
 //! are exercised end-to-end by `browser_tests.rs`. This module focuses on

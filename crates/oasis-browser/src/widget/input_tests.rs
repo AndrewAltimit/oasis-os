@@ -1,4 +1,4 @@
-//! Tests for `widget_input.rs` -- focus traversal, link cycling,
+//! Tests for `widget/input.rs` -- focus traversal, link cycling,
 //! URL-bar editing, and the `styles_geometry_equal` invariant that
 //! gates the hover-only-restyle optimization.
 //!
@@ -12,11 +12,11 @@ use oasis_types::backend::Color;
 use oasis_types::input::{Button, InputEvent};
 use oasis_vfs::MemoryVfs;
 
+use super::input::styles_geometry_equal;
 use crate::css::values::ComputedStyle;
 use crate::css::values::types::BoxShadow;
 use crate::layout::box_model::Rect;
 use crate::paint::LinkRegion;
-use crate::widget_input::styles_geometry_equal;
 use crate::{BrowserConfig, BrowserWidget, Focus};
 
 // -------------------------------------------------------------------
