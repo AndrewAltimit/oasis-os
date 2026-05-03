@@ -89,6 +89,30 @@ with `UnsecureProvider` (no certificate validation).
   real hardware. Fixed on branch `fix/weak-videocodec-import` in the
   rust-psp fork.
 
+## WiFi authentication (WPA / WPA2)
+
+PSP firmware natively supports only WEP and WPA-TKIP (PSK); the
+4-way handshake, key derivation, and CCMP all live below user
+space inside the kernel-mode `sceNet*` / WLAN modules and the
+WiFi firmware blob — neither an EBOOT nor a kernel PRX overlay
+sees the handshake. From OASIS_OS we just call
+`sceNetApctlConnect(config_id)` and the firmware does whatever
+auth the connection profile specifies.
+
+**Modern (WPA2-AES) networks are out of scope for OASIS_OS.**
+Patching the WLAN driver to add a WPA2 supplicant is firmware /
+CFW work, not application work. ARK-4 and similar CFWs can load
+plugins that hook the WLAN module and inject a WPA2 supplicant —
+those plugins are independent of whatever shell (XMB, PSIX,
+OASIS_OS) is running on top, so OASIS_OS automatically benefits
+from whichever WiFi auth the active CFW plugin enables.
+
+**Operator guidance:** if the deployment target is a WPA2-only
+network, run ARK-4 with a WPA2 / "Infrastructure 2"-style plugin.
+Otherwise keep a legacy WPA-TKIP SSID for the PSP. Don't add
+crypto to `oasis-net` for this — it would duplicate well-trodden
+CFW work and bloat the kernel PRX.
+
 ## Video Streaming
 
 TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O

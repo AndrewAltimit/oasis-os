@@ -167,8 +167,8 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         },
     }
 
-    // Update cursor SDI position (always on top).
-    state.ui.mouse_cursor.update_sdi(sdi);
+    // No software cursor on the SDL build — the host OS already renders
+    // its own pointer over our window, so we'd just be drawing a duplicate.
 
     // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
     // where we explicitly hide it to prevent bleed-through, and skip when a

@@ -72,7 +72,12 @@ impl App for FileManagerApp {
             return AppAction::None;
         }
         let title_h = self.content.cached_title_bar_height.max(16) as i32;
-        let menu_y = title_h;
+        // Only `update_sdi_*` (fullscreen) and `draw_windowed_dual` paint an
+        // inner title bar; `draw_windowed_explorer` reuses the WM titlebar
+        // and starts the menu at the top of the content rect. Mirror that
+        // here so hit-tests align with what's drawn.
+        let inner_title_bar = fullscreen || matches!(self.view_mode, ViewMode::Dual);
+        let menu_y = if inner_title_bar { title_h } else { 0 };
 
         // 1. Menu bar.
         match self.menu.hit_test(lx, ly, 0, menu_y, cw, FM_MENU_H) {
@@ -105,11 +110,12 @@ impl App for FileManagerApp {
             return AppAction::None;
         }
         // `compute_explorer_geom` carves out the menu strip internally
-        // (`addr_y = cy + menu_h`), so `cy` here is the top of the menu —
-        // i.e. just below the title bar. This matches `update_sdi_explorer`
-        // (`body_top = title_h`) and `draw_windowed_explorer`
-        // (`body_top = cy + title_h`).
-        let body_top = title_h;
+        // (`addr_y = cy + menu_h`), so `cy` here is the top of the menu.
+        // In fullscreen Explorer mode the menu sits below an inner title
+        // bar (`update_sdi_explorer`); in windowed Explorer mode there is
+        // no inner title bar (`draw_windowed_explorer` skips it) and the
+        // WM-relative click coords already start past the WM titlebar.
+        let body_top = menu_y;
         // In SDI/fullscreen mode `ch == screen_h` and the renderer subtracts
         // `statusbar_height + bottombar_height` before computing geometry —
         // mirror that here so hit-tests don't extend over the system bars.
@@ -604,8 +610,10 @@ mod tests {
         let first = fm.panels[0].lines[0].clone();
         let expected_name = first.trim_end_matches('/');
         let expected_path = format!("/{expected_name}");
-        // Mirror the handler: body_top = title_h (20), body_h = ch - 20.
-        let g = compute_explorer_geom(0, 20, 600, 380);
+        // Default view is Explorer + windowed (fullscreen=false), so the
+        // handler uses body_top = 0 (no inner title bar — the WM's titlebar
+        // serves that role and click coords are content-rect-relative).
+        let g = compute_explorer_geom(0, 0, 600, 400);
         let tile_x = g.grid_x + 4 + g.tile_w as i32 / 2;
         let tile_y = g.body_y + 4 + g.tile_h as i32 / 2;
         // First click selects.
@@ -630,9 +638,9 @@ mod tests {
         // First go into /home so the tree has multiple rows.
         fm.pending_navigation = Some(NavTarget::Folder("/home".to_string()));
         fm.refresh(&vfs);
-        // Tree row 1 is "/" (root). Compute its position. Mirror the handler:
-        // body_top = title_h (20), body_h = ch - 20.
-        let g = compute_explorer_geom(0, 20, 600, 380);
+        // Tree row 1 is "/" (root). Compute its position. Mirror the
+        // handler in windowed Explorer mode: body_top = 0.
+        let g = compute_explorer_geom(0, 0, 600, 400);
         // cached_font_hint defaults to 11 → (11+2).max(11) = 13.
         let tree_line_h = 13;
         let row_idx = 1; // "/" entry.
@@ -651,12 +659,12 @@ mod tests {
     fn click_on_view_label_opens_dropdown() {
         let vfs = setup_vfs();
         let mut fm = FileManagerApp::new("/apps/fm", &vfs);
-        // Title bar is 20px tall by default. Menu bar starts at y=20,
-        // 18px tall. The View label is the third entry (after File+Edit).
+        // Default view is Explorer + windowed: no inner title bar, so the
+        // menu bar starts at y=0 (height 18). View is the third entry.
         let file_w = 4 * 7 + 16; // "File"
         let edit_w = 4 * 7 + 16; // "Edit"
         let view_x = 6 + file_w + edit_w + 4;
-        let action = fm.handle_click(view_x, 28, 600, 400, false);
+        let action = fm.handle_click(view_x, 8, 600, 400, false);
         assert_eq!(action, AppAction::None);
         assert_eq!(fm.menu.open, Some(2));
     }
