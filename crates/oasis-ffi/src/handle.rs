@@ -6,10 +6,13 @@ use std::os::raw::c_char;
 
 use oasis_backend_ue5::{FfiInputBackend, Ue5AudioBackend, Ue5Backend};
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::bottombar::BottomBar;
 use oasis_core::dashboard::DashboardState;
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
+use oasis_core::startmenu::StartMenuState;
+use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::CommandRegistry;
 use oasis_core::vfs::GameAssetVfs;
 
@@ -32,6 +35,12 @@ pub struct OasisInstance {
     pub(crate) skin: Option<Skin>,
     pub(crate) active_theme: ActiveTheme,
     pub(crate) dashboard: Option<DashboardState>,
+    /// Top status bar chrome (drawn each tick when a skin is loaded).
+    pub(crate) status_bar: StatusBar,
+    /// Bottom bar / taskbar chrome (drawn each tick when a skin is loaded).
+    pub(crate) bottom_bar: BottomBar,
+    /// Start button + start menu (drawn when the skin enables `start_menu`).
+    pub(crate) start_menu: StartMenuState,
     pub(crate) cwd: String,
     #[allow(dead_code)]
     pub(crate) output_lines: Vec<String>,

@@ -2,6 +2,7 @@
 
 use oasis_core::backend::{InputBackend, SdiCore};
 use oasis_core::input::{Button, InputEvent, Trigger};
+use oasis_core::platform::{PowerService, TimeService};
 
 use crate::handle::{OasisInstance, with_instance, with_instance_ref};
 use crate::types::OASIS_CB_APP_LAUNCH;
@@ -75,6 +76,32 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     // Update SDI.
     if let Some(ref mut dashboard) = instance.dashboard {
         dashboard.update_sdi(&mut instance.sdi, &instance.active_theme);
+    }
+
+    // Draw the status bar (top), bottom bar (clock/date), and start button -- the
+    // chrome the desktop app renders around the dashboard. Without these the skin's
+    // reserved top/bottom strips stay empty. Only meaningful when a skin is loaded.
+    if let Some(ref skin) = instance.skin {
+        // Feed real wall-clock time so the bars show the live time/date instead of
+        // the "--:--" placeholders. `update_info` must run before `update_sdi`.
+        let time = instance.platform.now().ok();
+        let power = instance.platform.power_info().ok();
+        instance
+            .status_bar
+            .update_info(time.as_ref(), power.as_ref());
+        instance.bottom_bar.update_info(time.as_ref());
+
+        instance
+            .status_bar
+            .update_sdi(&mut instance.sdi, &instance.active_theme, &skin.features);
+        instance
+            .bottom_bar
+            .update_sdi(&mut instance.sdi, &instance.active_theme, &skin.features);
+        if skin.features.start_menu {
+            instance
+                .start_menu
+                .update_sdi(&mut instance.sdi, &instance.active_theme);
+        }
     }
 
     // Render.

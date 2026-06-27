@@ -1,9 +1,11 @@
-# XP Luna layout -- PSP dashboard with XP-themed bars
-# Top status bar (24px) + content area (224px) + bottom bar (24px) = 272px.
+# XP Luna layout -- PSP dashboard with XP-themed bars.
+# The desktop background spans the full screen; the opaque status bar (top) and
+# taskbar (bottom) are drawn over it. Spanning the full height keeps the desktop
+# gap-free when the layout is scaled to non-native (e.g. 4:3) resolutions.
 
 [content_bg]
 x = 0
-y = 24
+y = 0
 w = 480
-h = 224
+h = 272
 color = "#ECE9D8"
