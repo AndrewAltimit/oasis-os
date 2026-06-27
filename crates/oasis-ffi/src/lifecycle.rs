@@ -238,6 +238,8 @@ unsafe fn create_instance(
         height,
         software_shader: None,
         shader_time: 0.0,
+        shader_cache: Vec::new(),
+        last_render_time: -1000.0,
         #[cfg(feature = "_video")]
         video_state: None,
     };

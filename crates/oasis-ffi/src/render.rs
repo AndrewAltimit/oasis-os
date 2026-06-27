@@ -7,6 +7,29 @@ use oasis_core::platform::{PowerService, TimeService};
 use crate::handle::{OasisInstance, with_instance, with_instance_ref};
 use crate::types::OASIS_CB_APP_LAUNCH;
 
+/// Nearest-neighbor upscale `src` (sw x sh RGBA) into `dst` (dw x dh RGBA),
+/// resizing `dst` as needed. Used to upscale the reduced-res shader wallpaper.
+fn upscale_nearest(src: &[u8], sw: u32, sh: u32, dst: &mut Vec<u8>, dw: u32, dh: u32) {
+    let needed = (dw as usize) * (dh as usize) * 4;
+    if dst.len() != needed {
+        dst.resize(needed, 0);
+    }
+    if sw == 0 || sh == 0 {
+        return;
+    }
+    for dy in 0..dh {
+        let sy = (dy * sh / dh).min(sh - 1);
+        let src_row = (sy as usize) * (sw as usize) * 4;
+        let dst_row = (dy as usize) * (dw as usize) * 4;
+        for dx in 0..dw {
+            let sx = (dx * sw / dw).min(sw - 1);
+            let s = src_row + (sx as usize) * 4;
+            let d = dst_row + (dx as usize) * 4;
+            dst[d..d + 4].copy_from_slice(&src[s..s + 4]);
+        }
+    }
+}
+
 /// Advance the OS state by one frame.
 ///
 /// Processes queued input events and updates the scene graph.
@@ -104,20 +127,48 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
         }
     }
 
+    // --- Render scheduler ---------------------------------------------------
+    // Skip the (expensive) render entirely when nothing visible changed: no input
+    // this tick, and not yet time for either the animated-wallpaper frame or the
+    // periodic refresh that catches the clock. Skipping leaves the framebuffer
+    // untouched, so the backend stays "not dirty" and the host skips its texture
+    // upload too. Input always forces an immediate render for responsiveness.
+    let shader_layer = oasis_core::vector_overlay::get_shader_layer(&instance.active_theme);
+    let has_shader = shader_layer.is_some();
+    const SHADER_FPS: f32 = 12.0; // animated wallpaper refresh rate
+    const STATIC_FPS: f32 = 4.0; // idle desktop refresh rate (enough to catch the clock)
+    let interval = if has_shader { 1.0 / SHADER_FPS } else { 1.0 / STATIC_FPS };
+    let had_input = !events.is_empty();
+    let should_render =
+        had_input || (instance.shader_time - instance.last_render_time) >= interval;
+    if !should_render {
+        return;
+    }
+    instance.last_render_time = instance.shader_time;
+
     // Render.
     let _ = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
 
-    // Render shader wallpaper FIRST (replaces bg clear).
-    if let Some(info) = oasis_core::vector_overlay::get_shader_layer(&instance.active_theme) {
+    // Shader wallpaper FIRST (replaces bg clear). Rendered at quarter resolution
+    // and nearest-upscaled -- the dominant render cost, and quartering it only
+    // softens the background. The scheduler above already caps it to SHADER_FPS.
+    if let Some(info) = shader_layer {
+        let full_w = instance.width;
+        let full_h = instance.height;
+        let qw = (full_w / 4).max(1);
+        let qh = (full_h / 4).max(1);
         let renderer = instance.software_shader.get_or_insert_with(|| {
-            oasis_shader::software::SoftwareShaderRenderer::new(instance.width, instance.height)
+            oasis_shader::software::SoftwareShaderRenderer::new(qw, qh)
         });
-        let pixels = renderer.render_shader(&info.name, instance.shader_time, &info.params);
+        let pixels = renderer
+            .render_shader(&info.name, instance.shader_time, &info.params)
+            .to_vec();
+        upscale_nearest(&pixels, qw, qh, &mut instance.shader_cache, full_w, full_h);
         instance
             .backend
-            .blit_rgba(0, 0, instance.width, instance.height, pixels);
+            .blit_rgba(0, 0, full_w, full_h, &instance.shader_cache);
     }
 
     if instance.active_theme.icon.style == "vector"
@@ -137,6 +188,7 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     } else {
         let _ = instance.sdi.draw(&mut instance.backend);
     }
+
     let _ = instance.backend.swap_buffers();
 }
 

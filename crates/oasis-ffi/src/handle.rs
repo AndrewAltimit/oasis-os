@@ -51,6 +51,12 @@ pub struct OasisInstance {
     pub(crate) software_shader: Option<oasis_shader::software::SoftwareShaderRenderer>,
     /// Accumulated time for shader animation (seconds).
     pub(crate) shader_time: f32,
+    /// Scratch full-resolution buffer holding the upscaled shader wallpaper,
+    /// reused across renders to avoid reallocating each frame.
+    pub(crate) shader_cache: Vec<u8>,
+    /// `shader_time` at the last frame that actually rendered. Drives the render
+    /// scheduler that skips the expensive render when nothing visible changed.
+    pub(crate) last_render_time: f32,
     /// Background video decode thread state (when `video-decode` feature is enabled).
     #[cfg(feature = "_video")]
     pub(crate) video_state: Option<VideoThreadState>,
