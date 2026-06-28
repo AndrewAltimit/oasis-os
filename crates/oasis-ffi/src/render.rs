@@ -18,11 +18,12 @@ fn upscale_nearest(src: &[u8], sw: u32, sh: u32, dst: &mut Vec<u8>, dw: u32, dh:
         return;
     }
     for dy in 0..dh {
-        let sy = (dy * sh / dh).min(sh - 1);
+        // Widen to u64: `dy * sh` can overflow u32 for pathological FFI dimensions.
+        let sy = ((dy as u64 * sh as u64 / dh as u64) as u32).min(sh - 1);
         let src_row = (sy as usize) * (sw as usize) * 4;
         let dst_row = (dy as usize) * (dw as usize) * 4;
         for dx in 0..dw {
-            let sx = (dx * sw / dw).min(sw - 1);
+            let sx = ((dx as u64 * sw as u64 / dw as u64) as u32).min(sw - 1);
             let s = src_row + (sx as usize) * 4;
             let d = dst_row + (dx as usize) * 4;
             dst[d..d + 4].copy_from_slice(&src[s..s + 4]);
@@ -137,10 +138,13 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     let has_shader = shader_layer.is_some();
     const SHADER_FPS: f32 = 12.0; // animated wallpaper refresh rate
     const STATIC_FPS: f32 = 4.0; // idle desktop refresh rate (enough to catch the clock)
-    let interval = if has_shader { 1.0 / SHADER_FPS } else { 1.0 / STATIC_FPS };
+    let interval = if has_shader {
+        1.0 / SHADER_FPS
+    } else {
+        1.0 / STATIC_FPS
+    };
     let had_input = !events.is_empty();
-    let should_render =
-        had_input || (instance.shader_time - instance.last_render_time) >= interval;
+    let should_render = had_input || (instance.shader_time - instance.last_render_time) >= interval;
     if !should_render {
         return;
     }
@@ -159,9 +163,9 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
         let full_h = instance.height;
         let qw = (full_w / 4).max(1);
         let qh = (full_h / 4).max(1);
-        let renderer = instance.software_shader.get_or_insert_with(|| {
-            oasis_shader::software::SoftwareShaderRenderer::new(qw, qh)
-        });
+        let renderer = instance
+            .software_shader
+            .get_or_insert_with(|| oasis_shader::software::SoftwareShaderRenderer::new(qw, qh));
         let pixels = renderer
             .render_shader(&info.name, instance.shader_time, &info.params)
             .to_vec();
