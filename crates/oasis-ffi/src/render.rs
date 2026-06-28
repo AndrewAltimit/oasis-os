@@ -17,6 +17,9 @@ fn upscale_nearest(src: &[u8], sw: u32, sh: u32, dst: &mut Vec<u8>, dw: u32, dh:
     if sw == 0 || sh == 0 {
         return;
     }
+    // The source must hold `sw * sh` RGBA pixels; a short buffer would panic on the
+    // `src[s..s + 4]` slice below. Catch renderer/dimension mismatches in debug builds.
+    debug_assert!(src.len() >= (sw as usize) * (sh as usize) * 4);
     for dy in 0..dh {
         // Widen to u64: `dy * sh` can overflow u32 for pathological FFI dimensions.
         let sy = ((dy as u64 * sh as u64 / dh as u64) as u32).min(sh - 1);
