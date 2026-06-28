@@ -6,10 +6,13 @@ use std::os::raw::c_char;
 
 use oasis_backend_ue5::{FfiInputBackend, Ue5AudioBackend, Ue5Backend};
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::bottombar::BottomBar;
 use oasis_core::dashboard::DashboardState;
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
+use oasis_core::startmenu::StartMenuState;
+use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::CommandRegistry;
 use oasis_core::vfs::GameAssetVfs;
 
@@ -32,6 +35,12 @@ pub struct OasisInstance {
     pub(crate) skin: Option<Skin>,
     pub(crate) active_theme: ActiveTheme,
     pub(crate) dashboard: Option<DashboardState>,
+    /// Top status bar chrome (drawn each tick when a skin is loaded).
+    pub(crate) status_bar: StatusBar,
+    /// Bottom bar / taskbar chrome (drawn each tick when a skin is loaded).
+    pub(crate) bottom_bar: BottomBar,
+    /// Start button + start menu (drawn when the skin enables `start_menu`).
+    pub(crate) start_menu: StartMenuState,
     pub(crate) cwd: String,
     #[allow(dead_code)]
     pub(crate) output_lines: Vec<String>,
@@ -42,6 +51,12 @@ pub struct OasisInstance {
     pub(crate) software_shader: Option<oasis_shader::software::SoftwareShaderRenderer>,
     /// Accumulated time for shader animation (seconds).
     pub(crate) shader_time: f32,
+    /// Scratch full-resolution buffer holding the upscaled shader wallpaper,
+    /// reused across renders to avoid reallocating each frame.
+    pub(crate) shader_cache: Vec<u8>,
+    /// `shader_time` at the last frame that actually rendered. Drives the render
+    /// scheduler that skips the expensive render when nothing visible changed.
+    pub(crate) last_render_time: f32,
     /// Background video decode thread state (when `video-decode` feature is enabled).
     #[cfg(feature = "_video")]
     pub(crate) video_state: Option<VideoThreadState>,
