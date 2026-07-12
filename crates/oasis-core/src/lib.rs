@@ -23,6 +23,7 @@ pub use oasis_types::tls;
 pub use oasis_types::bitmap_font;
 pub use oasis_types::color;
 pub use oasis_types::geometry;
+pub use oasis_types::nine_patch;
 #[doc(hidden)]
 pub use oasis_types::pbp;
 pub use oasis_types::shadow;

@@ -2,12 +2,16 @@
 
 Status: **in progress** — M0 (benchmarks + validation + `skin lint`),
 M1 (asset pipeline: skin `assets/`, `texture =` layout objects, image
-wallpapers, image decal layers, D1 shader texture reuse), and M2
+wallpapers, image decal layers, D1 shader texture reuse), M2
 (desktop icons: `icon_layout = "free"` with per-icon positions +
 column auto-flow, rect hit-testing + icon drag & drop, per-skin
 position persistence, `software_cursor` + `[cursor]` theming, free-mode
-selection highlight, D3 vector icon scene cache) have landed.
-Branch: `feat/advanced-theming`.
+selection highlight, D3 vector icon scene cache), and M3 (chrome &
+motion: `[[chrome_layers]]` overlay vector chrome, tab pill texture
+slots, `nine_patch` on layout objects + WM titlebar/frame chrome,
+`[transition]` entrance = assemble/fade/none + page_style + easing,
+free-mode hover focus, D4 static-layer op caching, D7 bar update_sdi
+churn) have landed. Branch: `feat/advanced-theming`.
 
 ## Goal
 

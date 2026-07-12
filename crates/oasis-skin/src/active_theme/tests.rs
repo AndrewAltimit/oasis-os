@@ -88,6 +88,64 @@ error = "#FF0000"
     }
 
     #[test]
+    fn from_skin_parses_chrome_layers() {
+        let toml = r##"
+[[chrome_layers]]
+kind = "crosshair"
+size = 12
+color = "#FFFFFF30"
+
+[[chrome_layers]]
+kind = "image"
+source = "assets/x.png"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        // "image" is not a vector kind and is dropped by the converter.
+        assert_eq!(at.chrome_layers.len(), 1);
+        assert!(matches!(
+            at.chrome_layers[0].kind,
+            oasis_vector::background::LayerKind::Crosshair { size: 12 }
+        ));
+        // Chrome layers never leak into the background list.
+        assert!(at.background_layers.is_empty());
+    }
+
+    #[test]
+    fn transition_entrance_config_parses() {
+        let toml = r##"
+[transition]
+entrance = "assemble"
+entrance_ms = 500
+page_style = "fade"
+easing = "ease_out_bounce"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.transition_entrance, "assemble");
+        assert_eq!(at.transition_entrance_frames, 30); // 500ms at 60fps
+        assert_eq!(at.transition_page_style, "fade");
+        assert_eq!(at.transition_easing, "ease_out_bounce");
+    }
+
+    #[test]
+    fn transition_entrance_defaults() {
+        let at = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(at.transition_entrance, "fade");
+        assert_eq!(at.transition_entrance_frames, 45);
+        assert_eq!(at.transition_page_style, "slide");
+        assert!(at.transition_easing.is_empty());
+    }
+
+    #[test]
+    fn chrome_layers_default_empty() {
+        let at = ActiveTheme::default();
+        assert!(at.chrome_layers.is_empty());
+        let at = ActiveTheme::from_skin(&SkinTheme::default());
+        assert!(at.chrome_layers.is_empty());
+    }
+
+    #[test]
     fn app_color_returns_none_by_default() {
         let at = ActiveTheme::default();
         assert!(at.app_color("tv_guide", "bg").is_none());

@@ -331,13 +331,14 @@ fn main() -> Result<()> {
         skin.theme.build_wm_theme(),
     );
 
-    // Boot transition: fade in from black.
+    // Boot entrance: skin-selected ("fade" default, "assemble", "none").
     let fade_frames = skin.features.transition_fade_frames.unwrap_or(15);
-    let active_transition = Some(transition::fade_in_custom(
+    let active_transition = launch::make_entrance(
+        &active_theme,
+        fade_frames,
         config.screen_width,
         config.screen_height,
-        fade_frames,
-    ));
+    );
 
     let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
     mouse_cursor.scale = active_theme.cursor_scale;
@@ -400,6 +401,8 @@ fn main() -> Result<()> {
         pending_wallpaper_refresh: false,
         skin_layout_textures: Vec::new(),
         image_layers: Vec::new(),
+        background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+        chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
         icon_drag: None,
         cursor_texture: None,
         settings: oasis_core::settings::SettingsStore::new(),
@@ -719,6 +722,12 @@ fn main() -> Result<()> {
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
+        // Assemble entrance: slide the bars in and hide bar content while
+        // the transition runs (no-op for fade/none entrances).
+        if let Some(ref trans) = state.active_transition {
+            transition::apply_assemble(&mut sdi, &state.active_theme, trans);
+        }
+
         // Drive browser image streaming (progressive loading).
         if let Some(ref mut bw) = state.content.browser {
             bw.tick(&vfs);
@@ -789,10 +798,11 @@ fn main() -> Result<()> {
             // Shader already rendered above as wallpaper.
             sdi.draw_base_layer(&mut backend)?;
 
-            oasis_core::vector_overlay::render_vector_background(
+            oasis_core::vector_overlay::render_vector_background_cached(
                 &mut backend,
                 &state.active_theme,
                 state.frame_counter as u32,
+                &mut state.background_layer_cache,
             )?;
             state.ui.dashboard.render_vector_icons(
                 &mut backend,
@@ -802,6 +812,17 @@ fn main() -> Result<()> {
             sdi.draw_overlay_layer(&mut backend)?;
         } else {
             sdi.draw(&mut backend)?;
+        }
+
+        // Vector chrome layers paint on top of the SDI scene (bars, tabs,
+        // windows) in every mode — procedurally shaped chrome accents.
+        if !state.active_theme.chrome_layers.is_empty() {
+            oasis_core::vector_overlay::render_vector_chrome(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+                &mut state.chrome_layer_cache,
+            )?;
         }
 
         // Paint terminal scrollbar when in terminal mode.

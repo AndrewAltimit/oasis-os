@@ -379,6 +379,12 @@ fn apply_wm_overrides(theme: &mut WmTheme, ov: &WmThemeOverrides) {
     if let Some(a) = ov.inactive_frame_alpha {
         theme.inactive_frame_alpha = a;
     }
+    if let Some(ref np) = ov.titlebar_nine_patch {
+        theme.titlebar_nine_patch = Some((np.image.clone(), np.insets));
+    }
+    if let Some(ref np) = ov.frame_nine_patch {
+        theme.frame_nine_patch = Some((np.image.clone(), np.insets));
+    }
 }
 
 /// Compute the WCAG 2.0 relative luminance of a color.

@@ -343,8 +343,11 @@ impl Skin {
     ) -> Vec<TextureId> {
         let mut ids = Vec::new();
         for (name, def) in &self.layout.objects {
-            let Some(ref asset_name) = def.texture else {
-                continue;
+            // Nine-patch takes precedence over a plain texture.
+            let asset_name = match (&def.nine_patch, &def.texture) {
+                (Some(np), _) => &np.image,
+                (None, Some(tex)) => tex,
+                (None, None) => continue,
             };
             let Some(asset) = self.assets.get(asset_name) else {
                 log::warn!(
@@ -365,6 +368,17 @@ impl Skin {
             };
             if let Ok(obj) = sdi.get_mut(name) {
                 obj.texture = Some(tex);
+                obj.nine_patch = def.nine_patch.as_ref().map(|np| {
+                    let [left, top, right, bottom] = np.insets;
+                    oasis_types::nine_patch::NinePatchSlices {
+                        tex_width: asset.width,
+                        tex_height: asset.height,
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    }
+                });
                 if def.w.is_none() {
                     obj.w = asset.width;
                 }
@@ -1722,6 +1736,31 @@ h = 50
     }
 
     #[test]
+    fn validate_chrome_layer_unsupported_kind() {
+        let theme_toml = r#"
+[[chrome_layers]]
+kind = "image"
+source = "assets/x.png"
+
+[[chrome_layers]]
+kind = "crosshair"
+size = 12
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("chrome_layers[0]") && w.contains("image")),
+            "missing chrome layer kind warning: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("chrome_layers[1]")),
+            "vector kind should not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn validate_zero_screen_dimensions() {
         let manifest = "name = \"zero\"\nscreen_width = 0\nscreen_height = 0\n";
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
@@ -1838,6 +1877,69 @@ h = 10
         assert!(bar.texture.is_some());
         assert_eq!((bar.w, bar.h), (480, 24));
         assert!(sdi.get("plain").unwrap().texture.is_none());
+    }
+
+    #[test]
+    fn upload_layout_nine_patch_attaches_slices() {
+        let layout = r#"
+[panel]
+x = 0
+y = 0
+w = 200
+h = 60
+nine_patch = { image = "assets/logo.png", insets = [2, 3, 2, 3] }
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert_eq!(ids.len(), 1);
+        let panel = sdi.get("panel").unwrap();
+        assert!(panel.texture.is_some());
+        let slices = panel.nine_patch.expect("nine_patch slices attached");
+        assert_eq!((slices.tex_width, slices.tex_height), (8, 8));
+        assert_eq!(
+            (slices.left, slices.top, slices.right, slices.bottom),
+            (2, 3, 2, 3)
+        );
+        assert_eq!((panel.w, panel.h), (200, 60));
+    }
+
+    #[test]
+    fn validate_nine_patch_missing_asset_and_bad_insets() {
+        let layout = r#"
+[panel]
+x = 0
+y = 0
+w = 100
+h = 40
+nine_patch = { image = "assets/missing.png", insets = [4, 4, 4, 4] }
+
+[chunky]
+x = 0
+y = 0
+w = 100
+h = 40
+nine_patch = { image = "assets/logo.png", insets = [5, 5, 5, 5] }
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        // logo.png is 8x8, so 5+5 insets cannot fit.
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("panel") && w.contains("missing asset")),
+            "missing nine_patch asset warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("chunky") && w.contains("don't fit")),
+            "missing insets warning: {warnings:?}"
+        );
     }
 
     #[test]

@@ -67,6 +67,10 @@ pub struct BarTheme {
     pub tab_active_stroke: Color,
     /// Inactive tab pill stroke color.
     pub tab_inactive_stroke: Color,
+    /// Asset key for the active top-tab pill texture (None = pill fill).
+    pub tab_texture_active: Option<String>,
+    /// Asset key for inactive top-tab pill textures (None = pill fill).
+    pub tab_texture_inactive: Option<String>,
 }
 
 /// Dashboard icon rendering and cursor highlight theme.
@@ -385,6 +389,9 @@ pub struct ActiveTheme {
     // -- Background layers --
     /// Data-driven background decoration layers.
     pub background_layers: Vec<oasis_vector::BackgroundLayer>,
+    /// Chrome decoration layers rendered in the overlay pass (on top of
+    /// bars and windows) — procedurally shaped chrome without shipped art.
+    pub chrome_layers: Vec<oasis_vector::BackgroundLayer>,
     /// Image decal layers (`kind = "image"`), rendered between the
     /// wallpaper and the vector background pass.
     pub image_layers: Vec<ImageLayerTheme>,
@@ -514,6 +521,14 @@ pub struct ActiveTheme {
     // -- Transition --
     /// Transition fade overlay color (default: black).
     pub transition_fade_color: Color,
+    /// Entrance transition on boot / skin swap: "fade", "assemble", "none".
+    pub transition_entrance: String,
+    /// Entrance duration in frames (used by "assemble"; default 45).
+    pub transition_entrance_frames: u32,
+    /// Dashboard page change style: "slide" (default) or "fade".
+    pub transition_page_style: String,
+    /// Easing curve name for entrance transitions ("" = built-in curve).
+    pub transition_easing: String,
 
     // -- Focus ring --
     /// Focus ring/outline color for highlighted elements.

@@ -6,6 +6,19 @@
 
 use serde::Deserialize;
 
+/// A nine-patch image reference:
+/// `{ image = "assets/btn.png", insets = [4, 4, 4, 4] }`.
+///
+/// Used on layout objects (`nine_patch = ...`) and WM chrome slots
+/// (`[wm_theme] titlebar_nine_patch = ...`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct NinePatchDef {
+    /// Image asset key (e.g. `"assets/btn.png"`).
+    pub image: String,
+    /// Slice insets in texture pixels: `[left, top, right, bottom]`.
+    pub insets: [u16; 4],
+}
+
 /// Optional overrides for the window manager theme.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WmThemeOverrides {
@@ -96,6 +109,13 @@ pub struct WmThemeOverrides {
     /// Alpha applied to inactive window frames (default 180).
     #[serde(default)]
     pub inactive_frame_alpha: Option<u8>,
+    /// Nine-patch image for window titlebars (active and inactive).
+    /// Corners stay fixed while the middle stretches with the window width.
+    #[serde(default)]
+    pub titlebar_nine_patch: Option<NinePatchDef>,
+    /// Nine-patch image for the window frame (behind the content area).
+    #[serde(default)]
+    pub frame_nine_patch: Option<NinePatchDef>,
 }
 
 /// Per-element overrides for status bar and bottom bar colors.
@@ -124,6 +144,14 @@ pub struct BarOverrides {
     pub tab_active_fill: Option<String>,
     pub tab_active_alpha: Option<u8>,
     pub tab_inactive_alpha: Option<u8>,
+    /// Image asset drawn as the active top-tab pill (e.g.
+    /// `"assets/tab_active.png"`). The bitmap is alpha-blended, so shaped
+    /// tab chrome works PSIX-style. Falls back to the pill fill when unset.
+    #[serde(default)]
+    pub tab_texture_active: Option<String>,
+    /// Image asset drawn as inactive top-tab pills.
+    #[serde(default)]
+    pub tab_texture_inactive: Option<String>,
     pub media_tab_active: Option<String>,
     pub media_tab_inactive: Option<String>,
     pub pipe_color: Option<String>,
@@ -575,6 +603,24 @@ pub struct TransitionOverrides {
     /// 60 fps). `features.transition_slide_frames` takes precedence.
     #[serde(default)]
     pub slide_ms: Option<u32>,
+    /// Entrance played on boot and skin swap: "fade" (default), "assemble"
+    /// (PSIX-style: bars slide in while an iris shrinks from center), or
+    /// "none". `assemble` honors `background_performance.reduced_motion`
+    /// by falling back to a fade.
+    #[serde(default)]
+    pub entrance: Option<String>,
+    /// Entrance duration in milliseconds (default 750 for "assemble";
+    /// "fade" keeps using `fade_ms` / `transition_fade_frames`).
+    #[serde(default)]
+    pub entrance_ms: Option<u32>,
+    /// Dashboard page change style: "slide" (default) or "fade".
+    #[serde(default)]
+    pub page_style: Option<String>,
+    /// Easing curve name applied to entrance transitions (see
+    /// [`resolve_easing`] for supported names). Default: the effect's
+    /// built-in curve.
+    #[serde(default)]
+    pub easing: Option<String>,
 }
 
 /// Per-element overrides for scrollbar appearance.

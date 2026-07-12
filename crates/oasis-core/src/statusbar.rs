@@ -3,6 +3,7 @@
 //! Occupies the top 24 pixels of the 480x272 screen. Creates and updates
 //! SDI objects to display system status and top-level navigation tabs.
 
+use oasis_types::backend::TextureId;
 use oasis_types::bitmap_font::glyph_advance_scaled;
 
 use crate::active_theme::ActiveTheme;
@@ -51,6 +52,33 @@ impl TopTab {
     pub const ALL: &[TopTab] = &[TopTab::Apps, TopTab::Mods, TopTab::Net];
 }
 
+/// Pre-built SDI object names for the top tab row (D7: avoids per-frame
+/// `format!` allocations — indices match `TopTab::ALL`).
+const TAB_TEXT_NAMES: [&str; 3] = ["bar_tab_0", "bar_tab_1", "bar_tab_2"];
+const TAB_BG_NAMES: [&str; 3] = ["bar_tab_bg_0", "bar_tab_bg_1", "bar_tab_bg_2"];
+/// Legacy 4-edge tab border objects (older skins may still define them in
+/// layout.toml; kept hidden every frame).
+const TAB_EDGE_NAMES: [[&str; 4]; 3] = [
+    [
+        "bar_tab_bt_0",
+        "bar_tab_bb_0",
+        "bar_tab_bl_0",
+        "bar_tab_br_0",
+    ],
+    [
+        "bar_tab_bt_1",
+        "bar_tab_bb_1",
+        "bar_tab_bl_1",
+        "bar_tab_br_1",
+    ],
+    [
+        "bar_tab_bt_2",
+        "bar_tab_bb_2",
+        "bar_tab_bl_2",
+        "bar_tab_br_2",
+    ],
+];
+
 /// Month names for date display.
 const MONTHS: [&str; 12] = [
     "January",
@@ -80,6 +108,17 @@ pub struct StatusBar {
     battery_text: String,
     /// Cached CPU frequency string.
     cpu_text: String,
+    /// Cached merged battery+CPU display string (D7: built once per
+    /// `update_info` instead of once per frame).
+    battery_display: String,
+    /// Cached merged clock+date display string.
+    clock_display: String,
+    /// Texture drawn as the active top-tab pill (from the skin's
+    /// `bar_overrides.tab_texture_active` asset; uploaded by the shell on
+    /// skin swap). None = plain pill fill.
+    pub tab_texture_active: Option<TextureId>,
+    /// Texture drawn as inactive top-tab pills.
+    pub tab_texture_inactive: Option<TextureId>,
 }
 
 impl StatusBar {
@@ -91,6 +130,10 @@ impl StatusBar {
             date_text: String::new(),
             battery_text: String::new(),
             cpu_text: String::new(),
+            battery_display: String::new(),
+            clock_display: "00:00".to_string(),
+            tab_texture_active: None,
+            tab_texture_inactive: None,
         }
     }
 
@@ -132,6 +175,18 @@ impl StatusBar {
                 self.cpu_text.clear();
             }
         }
+        // Rebuild the merged display strings once here so the per-frame
+        // `update_sdi` path never allocates for them.
+        self.battery_display = if self.cpu_text.is_empty() {
+            self.battery_text.clone()
+        } else {
+            format!("{}  {}", self.battery_text, self.cpu_text)
+        };
+        self.clock_display = if self.date_text.is_empty() {
+            self.clock_text.clone()
+        } else {
+            format!("{} {}", self.clock_text, self.date_text)
+        };
     }
 
     /// Synchronize SDI objects to reflect current status bar state.
@@ -193,11 +248,7 @@ impl StatusBar {
                 at.bar.battery_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_battery") {
-                let mut info = self.battery_text.clone();
-                if !self.cpu_text.is_empty() {
-                    info = format!("{info}  {}", self.cpu_text);
-                }
-                obj.text = Some(info);
+                obj.set_text(&self.battery_display);
                 obj.visible = true;
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
@@ -213,16 +264,11 @@ impl StatusBar {
         // the clock is rendered by the bottom bar (XP-style) and we hide
         // the top-right copy here.
         let clock_x = if features.show_clock && !features.clock_in_bottombar {
-            let clock_str = if self.date_text.is_empty() {
-                self.clock_text.clone()
-            } else {
-                format!("{} {}", self.clock_text, self.date_text)
-            };
-            let clock_w = text_px(&clock_str, font_small);
+            let clock_w = text_px(&self.clock_display, font_small);
             let cx = screen_w as i32 - clock_w - 6;
             ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.bar.clock_color);
             if let Ok(obj) = sdi.get_mut("bar_clock") {
-                obj.text = Some(clock_str);
+                obj.set_text(&self.clock_display);
                 obj.visible = true;
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
@@ -252,7 +298,7 @@ impl StatusBar {
                     at.bar.version_color,
                 );
                 if let Ok(obj) = sdi.get_mut("bar_version") {
-                    obj.text = Some(ver.to_string());
+                    obj.set_text(ver);
                     obj.visible = true;
                     if at.bar.text_shadow {
                         obj.text_shadow_offset = Some((1, 1));
@@ -278,7 +324,7 @@ impl StatusBar {
                 at.bar.category_label_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_mso") {
-                obj.text = Some(at.bar.category_label.clone());
+                obj.set_text(&at.bar.category_label);
                 obj.visible = true;
             }
         } else if let Ok(obj) = sdi.get_mut("bar_mso") {
@@ -288,14 +334,14 @@ impl StatusBar {
         // Tab row: single pill-shaped SDI objects (replaces 4-edge borders).
         let tab_y = bar_h as i32;
         for (i, tab) in TopTab::ALL.iter().enumerate() {
-            let name = format!("bar_tab_{i}");
-            let bg_name = format!("bar_tab_bg_{i}");
+            let name = TAB_TEXT_NAMES[i];
+            let bg_name = TAB_BG_NAMES[i];
 
             if !features.show_tabs {
-                if let Ok(obj) = sdi.get_mut(&name) {
+                if let Ok(obj) = sdi.get_mut(name) {
                     obj.visible = false;
                 }
-                if let Ok(obj) = sdi.get_mut(&bg_name) {
+                if let Ok(obj) = sdi.get_mut(bg_name) {
                     obj.visible = false;
                 }
                 continue;
@@ -308,9 +354,8 @@ impl StatusBar {
             let is_active = *tab == self.active_tab;
 
             // Hide legacy 4-edge border objects.
-            for suffix in &["bt", "bb", "bl", "br"] {
-                let edge_name = format!("bar_tab_{suffix}_{i}");
-                if let Ok(obj) = sdi.get_mut(&edge_name) {
+            for edge_name in &TAB_EDGE_NAMES[i] {
+                if let Ok(obj) = sdi.get_mut(edge_name) {
                     obj.visible = false;
                 }
             }
@@ -319,7 +364,7 @@ impl StatusBar {
             if is_active {
                 ensure_pill(
                     sdi,
-                    &bg_name,
+                    bg_name,
                     x,
                     tab_y,
                     tw,
@@ -331,7 +376,7 @@ impl StatusBar {
                 // Inactive: transparent fill, dim stroke.
                 ensure_pill(
                     sdi,
-                    &bg_name,
+                    bg_name,
                     x,
                     tab_y,
                     tw,
@@ -341,19 +386,35 @@ impl StatusBar {
                 );
             }
 
+            // Tab pill texture slot (B5): shaped tab chrome from the skin's
+            // `tab_texture_active` / `tab_texture_inactive` assets. Assigned
+            // every frame so tab switches swap textures; a missing state
+            // texture clears back to the plain pill fill. Skins without
+            // either slot are left alone (a layout.toml `texture =` on the
+            // pill object must not be clobbered).
+            if (self.tab_texture_active.is_some() || self.tab_texture_inactive.is_some())
+                && let Ok(obj) = sdi.get_mut(bg_name)
+            {
+                obj.texture = if is_active {
+                    self.tab_texture_active
+                } else {
+                    self.tab_texture_inactive
+                };
+            }
+
             // Tab text (centered in tab).
             let tx = x + (at.tab_w - text_px(tab.label(), font_small)) / 2;
             let tab_text_y = tab_y + (at.tab_h - font_small as i32) / 2;
             ensure_text(
                 sdi,
-                &name,
+                name,
                 tx.max(x + 2),
                 tab_text_y,
                 font_small,
                 at.bar.media_tab_inactive,
             );
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.text = Some(tab.label().to_string());
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.set_text(tab.label());
                 obj.text_color = if is_active {
                     at.bar.media_tab_active
                 } else {
@@ -383,19 +444,8 @@ impl StatusBar {
             ],
         );
         for i in 0..TopTab::ALL.len() {
-            for prefix in &[
-                "bar_tab_",
-                "bar_tab_bg_",
-                "bar_tab_bt_",
-                "bar_tab_bb_",
-                "bar_tab_bl_",
-                "bar_tab_br_",
-            ] {
-                let name = format!("{prefix}{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
+            hide_objects(sdi, &[TAB_TEXT_NAMES[i], TAB_BG_NAMES[i]]);
+            hide_objects(sdi, &TAB_EDGE_NAMES[i]);
         }
     }
 }
@@ -753,6 +803,45 @@ mod tests {
         let apps_tab = sdi.get("bar_tab_0").unwrap();
         let mods_tab = sdi.get("bar_tab_1").unwrap();
         assert_ne!(apps_tab.text_color, mods_tab.text_color);
+    }
+
+    #[test]
+    fn tab_textures_stamped_by_state() {
+        let mut bar = StatusBar::new();
+        bar.tab_texture_active = Some(TextureId(7));
+        bar.tab_texture_inactive = Some(TextureId(8));
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_tabs = true;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert_eq!(sdi.get("bar_tab_bg_0").unwrap().texture, Some(TextureId(7)));
+        assert_eq!(sdi.get("bar_tab_bg_1").unwrap().texture, Some(TextureId(8)));
+
+        // Switching tabs swaps the textures on the pills.
+        bar.next_tab();
+        bar.update_sdi(&mut sdi, &at, &feat);
+        assert_eq!(sdi.get("bar_tab_bg_0").unwrap().texture, Some(TextureId(8)));
+        assert_eq!(sdi.get("bar_tab_bg_1").unwrap().texture, Some(TextureId(7)));
+    }
+
+    #[test]
+    fn tab_pills_untouched_without_texture_slots() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_tabs = true;
+        bar.update_sdi(&mut sdi, &at, &feat);
+        // Simulate a layout.toml `texture =` assignment on the pill.
+        sdi.get_mut("bar_tab_bg_0").unwrap().texture = Some(TextureId(42));
+        bar.update_sdi(&mut sdi, &at, &feat);
+        assert_eq!(
+            sdi.get("bar_tab_bg_0").unwrap().texture,
+            Some(TextureId(42)),
+            "pill texture from layout must survive when no tab slots are set"
+        );
     }
 
     #[test]

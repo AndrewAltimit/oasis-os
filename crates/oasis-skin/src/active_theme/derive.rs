@@ -47,6 +47,7 @@ impl ActiveTheme {
         let wallpaper_theme = Self::derive_wallpaper_theme(skin);
         let toast_theme = Self::derive_toast_theme(skin, primary, text);
         let background_layers = Self::derive_background_layers(skin);
+        let chrome_layers = Self::derive_chrome_layers(skin);
         let image_layers = Self::derive_image_layers(skin);
 
         let ico = skin.icon_overrides.as_ref();
@@ -68,6 +69,7 @@ impl ActiveTheme {
             wallpaper: wallpaper_theme,
             toast: toast_theme,
             background_layers,
+            chrome_layers,
             image_layers,
             background_max_layers: bg_perf.and_then(|p| p.max_layers).unwrap_or(8),
             background_reduced_motion: bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false),
@@ -229,6 +231,27 @@ impl ActiveTheme {
                 .and_then(|t| t.fade_color.as_ref())
                 .and_then(|s| parse_hex_color(s))
                 .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
+            transition_entrance: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.entrance.clone())
+                .unwrap_or_else(|| "fade".to_string()),
+            transition_entrance_frames: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.entrance_ms)
+                .map(|ms| (ms * 60 / 1000).max(1))
+                .unwrap_or(45),
+            transition_page_style: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.page_style.clone())
+                .unwrap_or_else(|| "slide".to_string()),
+            transition_easing: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.easing.clone())
+                .unwrap_or_default(),
             font_body: skin
                 .geometry
                 .as_ref()
@@ -495,6 +518,8 @@ impl ActiveTheme {
                 text,
                 bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
             ),
+            tab_texture_active: bar_ov.and_then(|b| b.tab_texture_active.clone()),
+            tab_texture_inactive: bar_ov.and_then(|b| b.tab_texture_inactive.clone()),
         }
     }
 
@@ -948,11 +973,27 @@ impl ActiveTheme {
 
     /// Derive background layers from skin configuration.
     fn derive_background_layers(skin: &SkinTheme) -> Vec<oasis_vector::BackgroundLayer> {
+        Self::derive_layer_list(skin, skin.background_layers.as_ref())
+    }
+
+    /// Derive chrome layers (overlay-pass vector decorations) from skin
+    /// configuration. Same conversion as background layers; `"image"` and
+    /// `"shader"` kinds fall out naturally (the converter drops "image" and
+    /// the overlay renderer emits no ops for "shader").
+    fn derive_chrome_layers(skin: &SkinTheme) -> Vec<oasis_vector::BackgroundLayer> {
+        Self::derive_layer_list(skin, skin.chrome_layers.as_ref())
+    }
+
+    /// Convert a TOML layer list to runtime layers, honoring the
+    /// `background_performance.max_layers` cap.
+    fn derive_layer_list(
+        skin: &SkinTheme,
+        layers: Option<&Vec<crate::theme::BackgroundLayerConfig>>,
+    ) -> Vec<oasis_vector::BackgroundLayer> {
         let bg_perf = skin.background_performance.as_ref();
         let bg_max_layers = bg_perf.and_then(|p| p.max_layers).unwrap_or(8);
 
-        skin.background_layers
-            .as_ref()
+        layers
             .map(|layers| {
                 layers
                     .iter()
@@ -1026,6 +1067,8 @@ impl ActiveTheme {
             url_text: String::new(),
             tab_active_stroke: with_alpha(text, 180),
             tab_inactive_stroke: with_alpha(text, 60),
+            tab_texture_active: None,
+            tab_texture_inactive: None,
         };
 
         // -- Icon theme --
@@ -1260,6 +1303,7 @@ impl ActiveTheme {
             wallpaper: wallpaper_theme,
             toast: toast_theme,
             background_layers: Vec::new(),
+            chrome_layers: Vec::new(),
             image_layers: Vec::new(),
             background_max_layers: 8,
             background_reduced_motion: false,
@@ -1316,6 +1360,10 @@ impl ActiveTheme {
             focus_ring_width: 2,
             focus_ring_offset: 2,
             transition_fade_color: darken(background, 0.3),
+            transition_entrance: "fade".to_string(),
+            transition_entrance_frames: 45,
+            transition_page_style: "slide".to_string(),
+            transition_easing: String::new(),
             font_body: 12,
             font_hint: 10,
             font_heading: 14,

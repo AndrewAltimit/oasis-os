@@ -128,6 +128,36 @@ impl Skin {
                     "layout: '{obj_name}' references missing asset \"{tex}\""
                 ));
             }
+            // Nine-patch: asset must resolve and insets must fit inside it.
+            if let Some(ref np) = def.nine_patch {
+                match self.assets.get(&np.image) {
+                    None => {
+                        warnings.push(format!(
+                            "layout: '{obj_name}' nine_patch references missing asset \"{}\"",
+                            np.image
+                        ));
+                    },
+                    Some(asset) => {
+                        let [left, top, right, bottom] = np.insets;
+                        if u32::from(left) + u32::from(right) >= asset.width
+                            || u32::from(top) + u32::from(bottom) >= asset.height
+                        {
+                            warnings.push(format!(
+                                "layout: '{obj_name}' nine_patch insets \
+                                 [{left}, {top}, {right}, {bottom}] don't fit inside \
+                                 {}x{} \"{}\"",
+                                asset.width, asset.height, np.image
+                            ));
+                        }
+                    },
+                }
+                if def.texture.is_some() {
+                    warnings.push(format!(
+                        "layout: '{obj_name}' sets both texture and nine_patch \
+                         (nine_patch wins)"
+                    ));
+                }
+            }
         }
 
         // -- Asset checks --
@@ -189,6 +219,20 @@ impl Skin {
             }
         }
 
+        // Bar tab pill textures.
+        if let Some(ref bars) = self.theme.bar_overrides {
+            for (key, src) in [
+                ("tab_texture_active", &bars.tab_texture_active),
+                ("tab_texture_inactive", &bars.tab_texture_inactive),
+            ] {
+                if let Some(src) = src
+                    && !self.assets.contains_key(src)
+                {
+                    warnings.push(format!("bar_overrides.{key}: missing asset \"{src}\""));
+                }
+            }
+        }
+
         // Software cursor texture.
         if let Some(ref cursor) = self.theme.cursor
             && let Some(ref src) = cursor.texture
@@ -213,6 +257,20 @@ impl Skin {
                         ));
                     },
                     _ => {},
+                }
+            }
+        }
+
+        // Chrome layers are vector-only: image/shader kinds are silently
+        // dropped at render time, so flag them here for the author.
+        if let Some(ref layers) = self.theme.chrome_layers {
+            for (i, layer) in layers.iter().enumerate() {
+                if matches!(layer.kind.as_str(), "image" | "shader") {
+                    warnings.push(format!(
+                        "chrome_layers[{i}]: kind \"{}\" is not supported in chrome layers \
+                         (vector kinds only)",
+                        layer.kind
+                    ));
                 }
             }
         }

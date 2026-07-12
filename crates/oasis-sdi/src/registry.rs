@@ -370,6 +370,13 @@ impl SdiRegistry {
         // through the tinted path so textures can fade/pulse (backends
         // without tint support fall back to a plain blit).
         if let Some(tex) = obj.texture {
+            // Nine-patch object: 9-slice blit (corners fixed, edges/center
+            // stretched). Alpha fade is not supported on this path.
+            if let Some(slices) = obj.nine_patch {
+                let patch = oasis_types::nine_patch::NinePatch::from_slices(tex, slices);
+                patch.draw(backend, obj.x, obj.y, obj.w, obj.h)?;
+                return Ok(());
+            }
             if obj.alpha < 255 {
                 let tint = Color::rgba(255, 255, 255, obj.alpha);
                 backend.blit_tinted(tex, obj.x, obj.y, obj.w, obj.h, tint)?;

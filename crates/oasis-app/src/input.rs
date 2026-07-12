@@ -55,6 +55,19 @@ fn launch_dashboard_icon(
     }
 }
 
+/// Overlay a fade on dashboard page changes for skins with
+/// `[transition] page_style = "fade"` (the icon slide is suppressed by
+/// `DashboardConfig::page_style`). Default "slide" skins are untouched.
+fn apply_page_change_fade(state: &mut AppState) {
+    if state.active_theme.transition_page_style == "fade" {
+        state.active_transition = Some(transition::fade_in_custom(
+            state.config.screen_width,
+            state.config.screen_height,
+            state.active_theme.page_slide_duration.max(1),
+        ));
+    }
+}
+
 /// Tear down active radio playback and any pending network work.
 ///
 /// Safe to call unconditionally: all fields are cleared idempotently.
@@ -635,6 +648,16 @@ pub fn handle_default_input(
         // Free-layout icon drag tracking (no-ops when nothing is armed).
         InputEvent::CursorMove { x, y } if state.mode == Mode::Dashboard => {
             icon_drag::on_move(state, *x, *y);
+            // Hover focus (B6): in free layout the selection follows the
+            // pointer, driving the existing focus_scale / focus_glow /
+            // selection-highlight micro-motion. Grid skins keep their
+            // click/d-pad selection unchanged.
+            if state.ui.dashboard.config.free_layout
+                && !icon_drag::active(state)
+                && let Some(idx) = state.ui.dashboard.icon_at(*x, *y)
+            {
+                state.ui.dashboard.selected = idx;
+            }
         },
         InputEvent::PointerRelease { x, y } if state.mode == Mode::Dashboard => {
             if let icon_drag::ReleaseAction::Launch(idx) = icon_drag::on_release(state, vfs, *x, *y)
@@ -708,10 +731,12 @@ pub fn handle_default_input(
             Button::Triangle if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.next_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                apply_page_change_fade(state);
             },
             Button::Square if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.prev_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                apply_page_change_fade(state);
             },
             _ => {},
         },
@@ -939,6 +964,8 @@ mod tests {
             pending_wallpaper_refresh: false,
             skin_layout_textures: Vec::new(),
             image_layers: Vec::new(),
+            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
             icon_drag: None,
             cursor_texture: None,
             settings: oasis_core::settings::SettingsStore::new(),

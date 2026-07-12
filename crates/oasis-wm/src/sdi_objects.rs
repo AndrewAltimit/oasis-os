@@ -34,6 +34,10 @@ impl WindowManager {
                 obj.stroke_width = Some(theme.border_width as u16);
                 obj.stroke_color = Some(theme.frame_color);
             }
+            if let Some((tex, slices)) = theme.frame_patch {
+                obj.texture = Some(tex);
+                obj.nine_patch = Some(slices);
+            }
         }
 
         // Titlebar.
@@ -60,6 +64,10 @@ impl WindowManager {
                             .titlebar_gradient_bottom
                             .unwrap_or(theme.titlebar_active_color),
                     );
+                }
+                if let Some((tex, slices)) = theme.titlebar_patch {
+                    obj.texture = Some(tex);
+                    obj.nine_patch = Some(slices);
                 }
             }
 
@@ -313,6 +321,39 @@ impl WindowManager {
             obj.y = cy;
             obj.w = cw;
             obj.h = ch;
+        }
+    }
+
+    /// Re-apply nine-patch chrome textures to every existing window's SDI
+    /// objects. The shell calls this after uploading (or clearing) the
+    /// theme's `titlebar_patch` / `frame_patch` on a skin swap; new windows
+    /// pick the patches up in `create_sdi_objects`.
+    pub fn apply_chrome_patches(&self, sdi: &mut SdiRegistry) {
+        for window in &self.windows {
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("titlebar")) {
+                match self.theme.titlebar_patch {
+                    Some((tex, slices)) => {
+                        obj.texture = Some(tex);
+                        obj.nine_patch = Some(slices);
+                    },
+                    None => {
+                        obj.texture = None;
+                        obj.nine_patch = None;
+                    },
+                }
+            }
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("frame")) {
+                match self.theme.frame_patch {
+                    Some((tex, slices)) => {
+                        obj.texture = Some(tex);
+                        obj.nine_patch = Some(slices);
+                    },
+                    None => {
+                        obj.texture = None;
+                        obj.nine_patch = None;
+                    },
+                }
+            }
         }
     }
 

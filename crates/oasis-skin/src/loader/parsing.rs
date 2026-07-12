@@ -8,6 +8,8 @@ use oasis_sdi::SdiRegistry;
 
 use crate::theme::parse_hex_color;
 
+pub use crate::theme::NinePatchDef;
+
 /// A single SDI object definition in a layout file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkinObjectDef {
@@ -23,6 +25,12 @@ pub struct SkinObjectDef {
     /// Uploaded by `Skin::upload_layout_textures` once a backend exists.
     #[serde(default)]
     pub texture: Option<String>,
+    /// Nine-patch (9-slice) image to render: corners stay fixed, edges and
+    /// center stretch to the object's `w`x`h` — scalable chrome (bars,
+    /// panels, buttons) from one small bitmap. Takes precedence over
+    /// `texture` when both are set.
+    #[serde(default)]
+    pub nine_patch: Option<NinePatchDef>,
     pub font_size: Option<u16>,
     pub alpha: Option<u8>,
     pub visible: Option<bool>,

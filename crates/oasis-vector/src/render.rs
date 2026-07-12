@@ -33,7 +33,10 @@ pub fn render_scene_at(
 }
 
 /// Render a slice of operations with a group-level alpha multiplier.
-fn render_ops(backend: &mut dyn SdiBackend, ops: &[VectorOp], group_alpha: u8) -> Result<()> {
+///
+/// Public so callers that cache pre-built op lists (e.g. static background
+/// or chrome layers) can render them without assembling a `VectorScene`.
+pub fn render_ops(backend: &mut dyn SdiBackend, ops: &[VectorOp], group_alpha: u8) -> Result<()> {
     for op in ops {
         render_op(backend, op, group_alpha)?;
     }

@@ -15,7 +15,7 @@ pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
     BarOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset, IconOverrides,
-    LayerAnimationConfig, LayerPositionConfig, OskOverrides, ScrollbarOverrides,
+    LayerAnimationConfig, LayerPositionConfig, NinePatchDef, OskOverrides, ScrollbarOverrides,
     StartMenuOverrides, TransitionOverrides, WallpaperConfig, WmThemeOverrides,
 };
 
@@ -131,6 +131,22 @@ pub struct SkinTheme {
     #[serde(default)]
     pub background_layers: Option<Vec<BackgroundLayerConfig>>,
 
+    /// Chrome decoration layers rendered in the overlay pass — on top of
+    /// bars, tabs, and windows — for procedurally shaped chrome accents
+    /// (notch lines, corner brackets, HUD reticles) without shipping art.
+    /// Same schema as `background_layers`; `"image"` and `"shader"` kinds
+    /// are not supported here.
+    ///
+    /// ```toml
+    /// [[chrome_layers]]
+    /// kind = "crosshair"
+    /// size = 12
+    /// color = "#FFFFFF30"
+    /// position = { anchor = "top_right", offset_x = -0.05, offset_y = 0.04 }
+    /// ```
+    #[serde(default)]
+    pub chrome_layers: Option<Vec<BackgroundLayerConfig>>,
+
     /// Performance settings for background layers.
     #[serde(default)]
     pub background_performance: Option<BackgroundPerformanceConfig>,
@@ -244,6 +260,7 @@ impl Default for SkinTheme {
             transition: None,
             scrollbar_overrides: None,
             background_layers: None,
+            chrome_layers: None,
             background_performance: None,
             app_themes: None,
             gradients: None,
@@ -359,6 +376,28 @@ button_size = 20
         let theme = SkinTheme::default();
         let wm = theme.build_wm_theme();
         assert_eq!(wm.titlebar_height, 24);
+    }
+
+    #[test]
+    fn wm_theme_nine_patch_overrides() {
+        let toml = r##"
+[wm_theme]
+titlebar_nine_patch = { image = "assets/tb.png", insets = [4, 4, 4, 4] }
+frame_nine_patch = { image = "assets/frame.png", insets = [6, 6, 6, 6] }
+"##;
+        let theme: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = theme.build_wm_theme();
+        assert_eq!(
+            wm.titlebar_nine_patch,
+            Some(("assets/tb.png".to_string(), [4, 4, 4, 4]))
+        );
+        assert_eq!(
+            wm.frame_nine_patch,
+            Some(("assets/frame.png".to_string(), [6, 6, 6, 6]))
+        );
+        // Runtime patches are resolved by the shell, never at parse time.
+        assert!(wm.titlebar_patch.is_none());
+        assert!(wm.frame_patch.is_none());
     }
 
     #[test]

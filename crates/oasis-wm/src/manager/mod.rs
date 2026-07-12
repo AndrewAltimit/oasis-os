@@ -333,6 +333,45 @@ mod tests {
     }
 
     #[test]
+    fn nine_patch_chrome_stamped_and_cleared() {
+        use oasis_types::nine_patch::NinePatchSlices;
+
+        let slices = NinePatchSlices {
+            tex_width: 32,
+            tex_height: 32,
+            left: 4,
+            top: 4,
+            right: 4,
+            bottom: 4,
+        };
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let mut theme = wm.theme().clone();
+        theme.titlebar_patch = Some((TextureId(5), slices));
+        theme.frame_patch = Some((TextureId(6), slices));
+        wm.set_theme(theme);
+
+        // New windows pick the patches up at creation.
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        let tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(tb.texture, Some(TextureId(5)));
+        assert_eq!(tb.nine_patch, Some(slices));
+        let frame = sdi.get("w1.frame").unwrap();
+        assert_eq!(frame.texture, Some(TextureId(6)));
+        assert_eq!(frame.nine_patch, Some(slices));
+
+        // A theme without patches clears existing windows on re-apply.
+        let mut plain = wm.theme().clone();
+        plain.titlebar_patch = None;
+        plain.frame_patch = None;
+        wm.set_theme(plain);
+        wm.apply_chrome_patches(&mut sdi);
+        assert!(sdi.get("w1.titlebar").unwrap().texture.is_none());
+        assert!(sdi.get("w1.titlebar").unwrap().nine_patch.is_none());
+        assert!(sdi.get("w1.frame").unwrap().texture.is_none());
+    }
+
+    #[test]
     fn close_window_removes_sdi_objects() {
         let mut sdi = SdiRegistry::new();
         let mut wm = WindowManager::new(800, 600);

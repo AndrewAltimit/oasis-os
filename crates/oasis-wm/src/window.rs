@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use oasis_types::backend::Color;
+use oasis_types::nine_patch::NinePatchSlices;
 
 /// Shared, reference-counted window identifier.
 ///
@@ -265,6 +266,17 @@ pub struct WmTheme {
     pub modal_overlay_color: Color,
     /// Alpha applied to inactive window frames (default 180; 255 = no dim).
     pub inactive_frame_alpha: u8,
+
+    // -- Nine-patch chrome --
+    /// Titlebar nine-patch from the skin: (asset key, [l, t, r, b] insets).
+    /// The shell resolves it into `titlebar_patch` once a backend exists.
+    pub titlebar_nine_patch: Option<(String, [u16; 4])>,
+    /// Frame nine-patch from the skin: (asset key, insets).
+    pub frame_nine_patch: Option<(String, [u16; 4])>,
+    /// Uploaded titlebar texture + slices (set by the shell on skin swap).
+    pub titlebar_patch: Option<(oasis_types::backend::TextureId, NinePatchSlices)>,
+    /// Uploaded frame texture + slices.
+    pub frame_patch: Option<(oasis_types::backend::TextureId, NinePatchSlices)>,
 }
 
 impl Default for WmTheme {
@@ -315,6 +327,10 @@ impl Default for WmTheme {
             maximize_bottom_inset: 0,
             modal_overlay_color: Color::rgba(0, 0, 0, 100),
             inactive_frame_alpha: 180,
+            titlebar_nine_patch: None,
+            frame_nine_patch: None,
+            titlebar_patch: None,
+            frame_patch: None,
         }
     }
 }

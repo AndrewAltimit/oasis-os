@@ -246,6 +246,14 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             // loop holds the backend needed to upload a fresh texture, so
             // flag it here and let `refresh_wallpaper_if_pending` do the work.
             state.pending_wallpaper_refresh = true;
+            // Play the new skin's entrance so swaps feel like PSIX theme
+            // loads (also masks the wallpaper regeneration pop).
+            state.active_transition = crate::launch::make_entrance(
+                &state.active_theme,
+                state.skin.features.transition_fade_frames.unwrap_or(15),
+                sw,
+                sh,
+            );
         },
         Err(e) => {
             state.terminal.output_lines.push(format!("Skin error: {e}"));
@@ -336,7 +344,51 @@ pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend:
     }
     oasis_core::image_layers::destroy_image_layers(sdi, backend, &state.image_layers);
 
+    // Cached vector layer ops belong to the outgoing theme/resolution (D4).
+    state.background_layer_cache.invalidate();
+    state.chrome_layer_cache.invalidate();
+
     state.skin_layout_textures = state.skin.upload_layout_textures(sdi, backend);
+
+    // Top-tab pill textures (B5): upload the skin's `tab_texture_*` bar
+    // slots and hand the ids to the status bar. They share the layout
+    // texture lifecycle (destroyed above on the next refresh).
+    state.ui.status_bar.tab_texture_active = upload_bar_texture(
+        &state.skin,
+        state.active_theme.bar.tab_texture_active.as_deref(),
+        backend,
+        &mut state.skin_layout_textures,
+    );
+    state.ui.status_bar.tab_texture_inactive = upload_bar_texture(
+        &state.skin,
+        state.active_theme.bar.tab_texture_inactive.as_deref(),
+        backend,
+        &mut state.skin_layout_textures,
+    );
+
+    // WM nine-patch chrome (A2): resolve the theme's titlebar/frame patch
+    // configs into uploaded textures and re-stamp any open windows.
+    {
+        let mut wm_theme = state.wm.theme().clone();
+        wm_theme.titlebar_patch = upload_wm_patch(
+            &state.skin,
+            wm_theme.titlebar_nine_patch.as_ref(),
+            backend,
+            &mut state.skin_layout_textures,
+        );
+        wm_theme.frame_patch = upload_wm_patch(
+            &state.skin,
+            wm_theme.frame_nine_patch.as_ref(),
+            backend,
+            &mut state.skin_layout_textures,
+        );
+        let dirty = wm_theme.titlebar_patch.is_some() || wm_theme.frame_patch.is_some();
+        state.wm.set_theme(wm_theme);
+        if dirty || state.wm.window_count() > 0 {
+            state.wm.apply_chrome_patches(sdi);
+        }
+    }
+
     let sw = state.active_theme.screen_w;
     let sh = state.active_theme.screen_h;
     // Decals scale uniformly with the skin's native resolution so logos
@@ -394,6 +446,66 @@ pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend:
             obj.visible = false;
         }
         backend.set_host_cursor_visible(true);
+    }
+}
+
+/// Resolve a WM nine-patch config (asset key + insets) into an uploaded
+/// texture + slicing metadata. Returns None when unset, the asset is
+/// missing (already flagged by `skin lint`), or the upload fails.
+fn upload_wm_patch(
+    skin: &Skin,
+    config: Option<&(String, [u16; 4])>,
+    backend: &mut SdlBackend,
+    owned: &mut Vec<oasis_core::backend::TextureId>,
+) -> Option<(
+    oasis_core::backend::TextureId,
+    oasis_core::nine_patch::NinePatchSlices,
+)> {
+    let (key, insets) = config?;
+    let asset = skin.assets.get(key)?;
+    match backend.load_texture(asset.width, asset.height, &asset.rgba) {
+        Ok(tex) => {
+            owned.push(tex);
+            let [left, top, right, bottom] = *insets;
+            Some((
+                tex,
+                oasis_core::nine_patch::NinePatchSlices {
+                    tex_width: asset.width,
+                    tex_height: asset.height,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+            ))
+        },
+        Err(e) => {
+            log::warn!("WM chrome texture upload failed for '{key}': {e}");
+            None
+        },
+    }
+}
+
+/// Upload a bar chrome asset (if the skin sets and ships it) and track the
+/// texture id in `owned` for destruction on the next skin swap. Missing
+/// assets were already flagged by `skin lint` / load-time validation.
+fn upload_bar_texture(
+    skin: &Skin,
+    asset_key: Option<&str>,
+    backend: &mut SdlBackend,
+    owned: &mut Vec<oasis_core::backend::TextureId>,
+) -> Option<oasis_core::backend::TextureId> {
+    let key = asset_key?;
+    let asset = skin.assets.get(key)?;
+    match backend.load_texture(asset.width, asset.height, &asset.rgba) {
+        Ok(tex) => {
+            owned.push(tex);
+            Some(tex)
+        },
+        Err(e) => {
+            log::warn!("bar texture upload failed for '{key}': {e}");
+            None
+        },
     }
 }
 
@@ -899,6 +1011,8 @@ mod tests {
             pending_wallpaper_refresh: false,
             skin_layout_textures: Vec::new(),
             image_layers: Vec::new(),
+            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
             icon_drag: None,
             cursor_texture: None,
             settings: oasis_core::settings::SettingsStore::new(),

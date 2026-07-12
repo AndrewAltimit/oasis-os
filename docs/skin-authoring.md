@@ -334,7 +334,7 @@ decoded to RGBA at load time and referenced by its skin-relative path
 (`"assets/<file>.png"`). Skins under `skins/` that are compiled in as
 built-ins embed their assets in the binary automatically.
 
-Four things consume assets:
+Six things consume assets:
 
 ### 1. Textured layout objects (shaped chrome)
 
@@ -408,14 +408,84 @@ top-most SDI object instead. Without a `texture` the built-in procedural
 arrow is drawn, so `software_cursor = true` alone already gives a themed
 resolution-scaled pointer.
 
+### 5. Nine-patch chrome (scalable borders)
+
+```toml
+# layout.toml — any layout object
+[side_panel]
+x = 8
+y = 40
+w = 180
+h = 200
+nine_patch = { image = "assets/panel.png", insets = [6, 6, 6, 6] }
+
+# theme.toml — window manager chrome
+[wm_theme]
+titlebar_nine_patch = { image = "assets/titlebar.png", insets = [8, 4, 8, 4] }
+frame_nine_patch = { image = "assets/frame.png", insets = [4, 4, 4, 4] }
+```
+
+A nine-patch splits the image into a 3x3 grid using `insets`
+(`[left, top, right, bottom]`, in texture pixels): corners render at
+fixed size, edges stretch along one axis, and the center stretches in
+both — one small bitmap scales to any panel, bar, or window size without
+smearing its border. WM nine-patches apply to every window (titlebars
+follow resizes live) and stay crisp because slicing happens at draw time.
+`nine_patch` takes precedence over `texture` on the same object.
+
+### 6. Top-tab pill textures
+
+```toml
+# theme.toml
+[bar_overrides]
+tab_texture_active = "assets/tab_active.png"
+tab_texture_inactive = "assets/tab_inactive.png"
+```
+
+Replaces the procedural pill behind the APPS/MODS/NET tabs with
+alpha-blended bitmaps (shaped tab chrome, PSIX-style). The texture swaps
+between the two states as the active tab changes; either key may be set
+alone — the other state keeps the pill fill.
+
 ### Asset guidelines
 
 - **Power-of-two dimensions** (64, 128, 256, …) — required on PSP,
   flagged by `skin lint` otherwise.
 - Stay under the **2 MB decoded budget** per skin (`skin lint` warns).
   PNG on disk compresses far smaller; the budget is about RAM/VRAM.
-- `skin lint` also verifies every `texture =`, wallpaper `source`, layer
-  `source`, and `[cursor]` texture resolves to a shipped asset.
+- `skin lint` also verifies every `texture =`, `nine_patch` image,
+  wallpaper `source`, layer `source`, tab pill texture, and `[cursor]`
+  texture resolves to a shipped asset, and that nine-patch insets fit
+  inside their image.
+
+## Chrome Layers (vector overlay decorations)
+
+`[[chrome_layers]]` mirrors `[[background_layers]]` but renders in the
+overlay pass — on top of the bars, tabs, and windows — for procedurally
+shaped chrome accents without shipping art:
+
+```toml
+# theme.toml
+[[chrome_layers]]
+kind = "crosshair"
+size = 12
+color = "#FFFFFF30"
+position = { anchor = "top_right", offset_x = -0.05, offset_y = 0.04 }
+
+[[chrome_layers]]
+kind = "scanlines"
+spacing = 3
+color = "#00000018"
+```
+
+All vector layer kinds work (`grid`, `dot_grid`, `wireframe_sphere`,
+`radar_sweep`, `concentric_rings`, `glass_shard`, `scanlines`, `eq_bars`,
+`crosshair`, `floating_polygons`, `pulsing_core`, `waves`) with the same
+`position` / `animation` sub-tables; `"image"` and `"shader"` kinds are
+background-only (`skin lint` flags them). Static layers are tessellated
+once and cached; only animated layers rebuild per frame. The
+`background_performance` table (`max_layers`, `complexity_budget`,
+`reduced_motion`) applies to chrome layers too.
 
 ## Effect System
 
@@ -468,7 +538,7 @@ Lint your skin whenever a field appears to have no effect — a
 misspelled key is the most common cause. All shipped skins are kept
 lint-clean by a CI test (`all_shipped_skins_lint_clean`).
 
-## Transition Durations
+## Transitions & Motion
 
 Transition timing can be set in frames (features.toml) or milliseconds
 (theme.toml). Explicit frame counts win when both are present:
@@ -482,7 +552,26 @@ transition_fade_frames = 15     # frames at 60 fps
 fade_color = "#000000"
 fade_ms = 300                   # converted to frames at 60 fps
 slide_ms = 400
+entrance = "assemble"           # fade (default) | assemble | none
+entrance_ms = 750               # assemble duration (default 750ms)
+page_style = "slide"            # slide (default) | fade
+easing = "ease_out_cubic"       # entrance easing (see below)
 ```
+
+- **`entrance`** plays on boot and skin swap. `"assemble"` is the
+  PSIX signature move: the top bar slides down and the bottom bar
+  slides up from off-screen while a dark iris shrinks from the center;
+  bar text and tabs pop in when the chrome lands. It falls back to a
+  plain fade when `background_performance.reduced_motion` is set.
+- **`page_style = "fade"`** replaces the dashboard's horizontal page
+  slide with a quick crossfade.
+- **`easing`** overrides the entrance's built-in curve. Supported names:
+  `linear`, `ease_in_quad`, `ease_out_quad`, `ease_in_out_quad`,
+  `ease_out_cubic`, `ease_in_out_cubic`, `ease_out_elastic`,
+  `ease_out_bounce`.
+- In free icon layout, the selection highlight follows the mouse
+  (hover focus), driving the `focus_scale` / `focus_glow` icon
+  micro-motion from `[icon_overrides]`.
 
 ## Testing Your Skin
 

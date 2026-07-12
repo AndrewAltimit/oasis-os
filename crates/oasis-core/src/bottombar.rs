@@ -32,6 +32,15 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
+/// Pre-built SDI object names (D7: avoids per-frame `format!` allocations).
+/// Indices match `MediaTab::TABS`; pipes sit between adjacent tabs.
+const BTAB_NAMES: [&str; 4] = ["bar_btab_0", "bar_btab_1", "bar_btab_2", "bar_btab_3"];
+const BPIPE_NAMES: [&str; 3] = ["bar_bpipe_0", "bar_bpipe_1", "bar_bpipe_2"];
+/// Page dot names; length matches `theme::MAX_PAGE_DOTS`.
+const PAGE_DOT_NAMES: [&str; 4] = ["bar_page_0", "bar_page_1", "bar_page_2", "bar_page_3"];
+const _: () = assert!(PAGE_DOT_NAMES.len() == theme::MAX_PAGE_DOTS);
+const _: () = assert!(BTAB_NAMES.len() == MediaTab::TABS.len());
+
 /// Measure the pixel width of a text string using proportional glyph metrics.
 fn text_px(s: &str, font_size: u16) -> i32 {
     s.chars()
@@ -105,6 +114,9 @@ pub struct BottomBar {
     clock_text: String,
     /// Cached date string (for XP-style bottom-right clock).
     date_text: String,
+    /// Cached merged date+clock display string (D7: built once per
+    /// `update_info` instead of once per frame).
+    clock_display: String,
 }
 
 impl BottomBar {
@@ -119,6 +131,7 @@ impl BottomBar {
             dot_visual_page: 0.0,
             clock_text: "00:00".to_string(),
             date_text: String::new(),
+            clock_display: "00:00".to_string(),
         }
     }
 
@@ -132,6 +145,7 @@ impl BottomBar {
                 "???"
             };
             self.date_text = format!("{month_name} {}, {}", t.day, t.year);
+            self.clock_display = format!("{} {}", self.date_text, self.clock_text);
         }
     }
 
@@ -221,7 +235,7 @@ impl BottomBar {
                 at.bar.url_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_url") {
-                obj.text = Some(at.bar.url_text.clone());
+                obj.set_text(&at.bar.url_text);
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
                     obj.text_shadow_color = Some(at.bar.text_shadow_color);
@@ -245,12 +259,7 @@ impl BottomBar {
 
         // Bottom-right clock+date (XP-style, when enabled).
         let right_edge = if features.clock_in_bottombar {
-            let clock_str = if self.date_text.is_empty() {
-                self.clock_text.clone()
-            } else {
-                format!("{} {}", self.date_text, self.clock_text)
-            };
-            let clock_w = text_px(&clock_str, font_small);
+            let clock_w = text_px(&self.clock_display, font_small);
             let cx = screen_w as i32 - clock_w - 8;
             ensure_text(
                 sdi,
@@ -261,7 +270,7 @@ impl BottomBar {
                 at.bar.clock_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
-                obj.text = Some(clock_str);
+                obj.set_text(&self.clock_display);
                 obj.visible = true;
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
@@ -302,16 +311,16 @@ impl BottomBar {
             let mut cx = tabs_x;
             for (i, tab) in MediaTab::TABS.iter().enumerate() {
                 let label = tab.label();
-                let name = format!("bar_btab_{i}");
+                let name = BTAB_NAMES[i];
 
                 let color = if *tab == self.active_tab {
                     at.bar.media_tab_active
                 } else {
                     at.bar.media_tab_inactive
                 };
-                ensure_text(sdi, &name, cx, text_y, font_small, color);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.text = Some(label.to_string());
+                ensure_text(sdi, name, cx, text_y, font_small, color);
+                if let Ok(obj) = sdi.get_mut(name) {
+                    obj.set_text(label);
                     obj.text_color = color;
                     obj.visible = true;
                     if at.bar.text_shadow {
@@ -324,24 +333,18 @@ impl BottomBar {
                 // Pipe separator (except after last tab).
                 if i < MediaTab::TABS.len() - 1 {
                     cx += at.pipe_gap;
-                    let pipe_name = format!("bar_bpipe_{i}");
-                    ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.bar.pipe_color);
-                    if let Ok(obj) = sdi.get_mut(&pipe_name) {
-                        obj.text = Some("|".to_string());
+                    let pipe_name = BPIPE_NAMES[i];
+                    ensure_text(sdi, pipe_name, cx, text_y, font_small, at.bar.pipe_color);
+                    if let Ok(obj) = sdi.get_mut(pipe_name) {
+                        obj.set_text("|");
                     }
                     cx += pipe_w + at.pipe_gap;
                 }
             }
         } else {
             // Hide media tab objects when disabled.
-            for i in 0..MediaTab::TABS.len() {
-                for prefix in &["bar_btab_", "bar_bpipe_"] {
-                    let name = format!("{prefix}{i}");
-                    if let Ok(obj) = sdi.get_mut(&name) {
-                        obj.visible = false;
-                    }
-                }
-            }
+            hide_objects(sdi, &BTAB_NAMES);
+            hide_objects(sdi, &BPIPE_NAMES);
             hide_bezel(sdi, "bar_tab_bezel");
         }
 
@@ -361,7 +364,7 @@ impl BottomBar {
             let usb_x = url_text_end + 6;
             ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.bar.usb_color);
             if let Ok(obj) = sdi.get_mut("bar_usb") {
-                obj.text = Some("USB".to_string());
+                obj.set_text("USB");
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
                     obj.text_shadow_color = Some(at.bar.text_shadow_color);
@@ -379,15 +382,18 @@ impl BottomBar {
         if show_dots {
             let dots_x = usb_end + 12;
             let max_dots = theme::MAX_PAGE_DOTS;
-            for i in 0..self.total_pages.min(max_dots) {
-                let name = format!("bar_page_{i}");
+            for (i, name) in PAGE_DOT_NAMES
+                .iter()
+                .enumerate()
+                .take(self.total_pages.min(max_dots))
+            {
                 // Proximity: 1.0 when this dot is the visual page, 0.0 when far.
                 let proximity = (1.0 - (i as f32 - self.dot_visual_page).abs()).max(0.0);
                 let dot_color =
                     lerp_color(at.bar.page_dot_inactive, at.bar.page_dot_active, proximity);
                 ensure_rounded_fill(
                     sdi,
-                    &name,
+                    name,
                     dots_x + (i as i32) * 12,
                     bar_y + (bar_h as i32 - 6) / 2,
                     6,
@@ -396,20 +402,9 @@ impl BottomBar {
                     3,
                 );
             }
-            for i in self.total_pages.min(max_dots)..max_dots {
-                let name = format!("bar_page_{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
+            hide_objects(sdi, &PAGE_DOT_NAMES[self.total_pages.min(max_dots)..]);
         } else {
-            let max_dots = theme::MAX_PAGE_DOTS;
-            for i in 0..max_dots {
-                let name = format!("bar_page_{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
+            hide_objects(sdi, &PAGE_DOT_NAMES);
         }
     }
 
@@ -428,14 +423,9 @@ impl BottomBar {
         );
         hide_bezel(sdi, "bar_url_bezel");
         hide_bezel(sdi, "bar_tab_bezel");
-        for i in 0..MediaTab::TABS.len() {
-            for prefix in &["bar_btab_", "bar_bpipe_", "bar_page_"] {
-                let name = format!("{prefix}{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
-        }
+        hide_objects(sdi, &BTAB_NAMES);
+        hide_objects(sdi, &BPIPE_NAMES);
+        hide_objects(sdi, &PAGE_DOT_NAMES);
     }
 }
 

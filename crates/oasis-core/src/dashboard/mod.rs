@@ -55,6 +55,9 @@ pub struct DashboardConfig {
     pub free_cell_h: u32,
     /// Snap dragged icons to the virtual grid on drop (free mode).
     pub snap_to_grid: bool,
+    /// Page change style: "slide" (default) or "fade" (no icon slide; the
+    /// shell overlays a fade transition instead).
+    pub page_style: String,
 }
 
 impl DashboardConfig {
@@ -104,6 +107,7 @@ impl DashboardConfig {
             free_cell_w,
             free_cell_h,
             snap_to_grid: features.snap_to_grid,
+            page_style: at.transition_page_style.clone(),
         }
     }
 }
@@ -305,7 +309,7 @@ impl DashboardState {
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
-        self.page_anim = Some(PageSlideAnim {
+        self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
             from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
@@ -327,7 +331,7 @@ impl DashboardState {
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
-        self.page_anim = Some(PageSlideAnim {
+        self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
             from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
@@ -528,6 +532,7 @@ pub(crate) mod tests {
             free_cell_w: 80,
             free_cell_h: 80,
             snap_to_grid: true,
+            page_style: "slide".to_string(),
         }
     }
 
@@ -597,6 +602,23 @@ pub(crate) mod tests {
         dash.selected = 3;
         dash.handle_input(&Button::Up);
         assert_eq!(dash.selected, 1);
+    }
+
+    #[test]
+    fn page_style_slide_animates_fade_does_not() {
+        let mut dash = DashboardState::new(test_config(), test_apps(6));
+        dash.next_page();
+        assert!(dash.page_anim.is_some(), "slide style animates");
+
+        let mut cfg = test_config();
+        cfg.page_style = "fade".to_string();
+        let mut dash = DashboardState::new(cfg, test_apps(6));
+        dash.next_page();
+        assert!(dash.page_anim.is_none(), "fade style suppresses the slide");
+        assert_eq!(dash.page, 1);
+        dash.prev_page();
+        assert!(dash.page_anim.is_none());
+        assert_eq!(dash.page, 0);
     }
 
     #[test]
@@ -703,6 +725,7 @@ pub(crate) mod tests {
             free_cell_w: 68,
             free_cell_h: 68,
             snap_to_grid: true,
+            page_style: "slide".to_string(),
         }
     }
 

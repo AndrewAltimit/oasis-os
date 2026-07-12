@@ -118,6 +118,11 @@ pub struct AppState {
     pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
     /// Image background layers (watermark decals) for the current skin.
     pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Cached ops for static `background_layers` (perf item D4).
+    /// Invalidated on skin swap / resolution change.
+    pub background_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Cached ops for static `chrome_layers` (perf item D4).
+    pub chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
     /// Armed or active desktop-icon drag (free icon layout only).
     pub icon_drag: Option<crate::icon_drag::IconDrag>,
     /// Software cursor texture (only when `features.software_cursor`).
