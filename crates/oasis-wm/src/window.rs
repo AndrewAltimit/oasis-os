@@ -175,8 +175,10 @@ pub struct WmTheme {
     pub titlebar_active_color: Color,
     /// Titlebar background color (inactive window).
     pub titlebar_inactive_color: Color,
-    /// Titlebar text color.
+    /// Titlebar text color (active window).
     pub titlebar_text_color: Color,
+    /// Titlebar text color (inactive window).
+    pub titlebar_text_inactive_color: Color,
     /// Frame/border color.
     pub frame_color: Color,
     /// Content area background color.
@@ -273,6 +275,7 @@ impl Default for WmTheme {
             titlebar_active_color: Color::rgb(50, 80, 140),
             titlebar_inactive_color: Color::rgb(80, 80, 80),
             titlebar_text_color: Color::WHITE,
+            titlebar_text_inactive_color: Color::WHITE,
             frame_color: Color::rgb(40, 40, 40),
             content_bg_color: Color::rgb(30, 30, 30),
             btn_close_color: Color::rgb(200, 60, 60),

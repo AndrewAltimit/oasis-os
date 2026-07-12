@@ -54,7 +54,12 @@ pub struct SkinTheme {
     /// Surface color override (default: derived from background).
     #[serde(default)]
     pub surface: Option<String>,
-    /// Accent hover color override (default: derived from primary).
+    /// Accent color override (default: same as primary). Drives the UI
+    /// accent family (hover/pressed/subtle) when set, letting a skin use
+    /// a highlight color distinct from its primary.
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Accent hover color override (default: derived from the accent).
     #[serde(default)]
     pub accent_hover: Option<String>,
     /// Default border radius for UI elements (pixels).
@@ -217,6 +222,7 @@ impl Default for SkinTheme {
             output: default_output(),
             error: default_error(),
             surface: None,
+            accent: None,
             accent_hover: None,
             border_radius: None,
             shadow_intensity: None,
@@ -389,6 +395,49 @@ gradient_enabled = true
         let skin = SkinTheme::default();
         let ui = skin.to_ui_theme();
         assert_eq!(ui.accent, skin.primary_color());
+    }
+
+    #[test]
+    fn to_ui_theme_accent_override() {
+        let toml = r##"
+primary = "#FF71CE"
+accent = "#01CDFE"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let ui = skin.to_ui_theme();
+        // Accent family derives from the explicit accent, not primary.
+        assert_eq!(ui.accent, Color::rgb(0x01, 0xCD, 0xFE));
+        assert_ne!(ui.accent, skin.primary_color());
+        assert_eq!(ui.accent_subtle.r, 0x01);
+        assert_eq!(ui.info, ui.accent);
+    }
+
+    #[test]
+    fn build_wm_theme_titlebar_text_active_inactive() {
+        let toml = r##"
+[wm_theme]
+titlebar_text_active = "#FFFFFF"
+titlebar_text_inactive = "#888888"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = skin.build_wm_theme();
+        assert_eq!(wm.titlebar_text_color, Color::rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(
+            wm.titlebar_text_inactive_color,
+            Color::rgb(0x88, 0x88, 0x88)
+        );
+    }
+
+    #[test]
+    fn build_wm_theme_inactive_text_defaults_to_active() {
+        let toml = r##"
+[wm_theme]
+titlebar_text = "#FF00FF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = skin.build_wm_theme();
+        assert_eq!(wm.titlebar_text_color, Color::rgb(0xFF, 0x00, 0xFF));
+        assert_eq!(wm.titlebar_text_inactive_color, wm.titlebar_text_color);
     }
 
     // -- resolve_easing tests --

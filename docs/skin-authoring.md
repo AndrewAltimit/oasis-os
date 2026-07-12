@@ -165,7 +165,11 @@ The 9 base colors automatically derive ~30 UI element colors:
 ```toml
 # Surface color (default: lighten(background, 5%))
 surface = "#1E1E30"
-# Accent hover (default: lighten(primary, 15%))
+# Accent color (default: same as primary). Drives the accent family
+# (hover/pressed/subtle) when set, letting a skin highlight with a
+# color distinct from its primary.
+accent = "#01CDFE"
+# Accent hover (default: lighten(accent, 15%))
 accent_hover = "#8B7CF7"
 # Default border radius for UI elements
 border_radius = 6
@@ -184,6 +188,10 @@ border_width = 1
 titlebar_active = "#3264C8"
 titlebar_inactive = "#555566"
 titlebar_text = "#FFFFFF"
+# Synonym for titlebar_text (takes precedence when both are set):
+# titlebar_text_active = "#FFFFFF"
+# Title text color for unfocused windows (default: same as active):
+titlebar_text_inactive = "#AAAAAA"
 frame_color = "#333344"
 content_bg = "#1E1E2E"
 btn_close = "#C83232"
@@ -221,6 +229,13 @@ Override any specific UI element without changing the base color derivation.
 [bar_overrides]
 bar_bg = "#00000060"
 statusbar_bg = "#00000050"
+# Fallback for ALL bar text elements (battery, version, clock, URL,
+# USB, pipes, hints, category label); element-specific colors below win.
+text_color = "#000000"
+# Fallback gradient for both bars; statusbar_gradient_* / bar_gradient_*
+# take precedence.
+gradient_top = "#3D2B79"
+gradient_bottom = "#1A0A2E"
 battery_color = "#78FF78"
 tab_active_fill = "#FFFFFF1E"
 tab_active_alpha = 200
@@ -319,6 +334,38 @@ Switch skins at runtime from the terminal:
 > skin modern           # Switch to the "modern" skin
 > skin current          # Show current skin info
 > skin skins/my_skin    # Load from a directory path
+> skin lint my_skin     # Validate a skin and report warnings
+```
+
+## Validation & Linting
+
+Unknown TOML keys never fail a skin load (forwards compatibility), but
+they are recorded and surfaced so typos and unsupported fields don't
+silently do nothing:
+
+- Loading an external skin logs each unknown key as a warning.
+- `skin lint <name|path>` prints the full report: unknown keys, invalid
+  hex colors, out-of-bounds layout coordinates, and feature-flag
+  inconsistencies (e.g. `icons_per_page` exceeding the grid capacity).
+
+Lint your skin whenever a field appears to have no effect — a
+misspelled key is the most common cause. All shipped skins are kept
+lint-clean by a CI test (`all_shipped_skins_lint_clean`).
+
+## Transition Durations
+
+Transition timing can be set in frames (features.toml) or milliseconds
+(theme.toml). Explicit frame counts win when both are present:
+
+```toml
+# features.toml
+transition_fade_frames = 15     # frames at 60 fps
+
+# theme.toml
+[transition]
+fade_color = "#000000"
+fade_ms = 300                   # converted to frames at 60 fps
+slide_ms = 400
 ```
 
 ## Testing Your Skin

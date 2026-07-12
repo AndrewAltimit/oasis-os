@@ -12,3 +12,4 @@ show_version = false
 show_tabs = false
 transition_fade_frames = 0
 transition_slide_frames = 0
+reduced_motion = true

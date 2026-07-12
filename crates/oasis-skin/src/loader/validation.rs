@@ -13,6 +13,9 @@ impl Skin {
     pub fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
 
+        // -- Schema checks (unknown keys recorded at parse time) --
+        warnings.extend(self.schema_warnings.iter().cloned());
+
         // -- Manifest checks --
         if self.manifest.name.is_empty() {
             warnings.push("manifest: name is empty".to_string());
@@ -58,6 +61,7 @@ impl Skin {
         // Optional theme color fields.
         let opt_colors: &[(&str, &Option<String>)] = &[
             ("surface", &self.theme.surface),
+            ("accent", &self.theme.accent),
             ("accent_hover", &self.theme.accent_hover),
         ];
         for (name, value) in opt_colors {

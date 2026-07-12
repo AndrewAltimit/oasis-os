@@ -31,15 +31,19 @@ impl SkinTheme {
             .unwrap_or_else(|| lighten(bg, 0.05));
         let surface_variant = lighten(bg, 0.10);
 
-        // Accent variants: derived from primary.
-        let accent = primary;
+        // Accent variants: explicit `accent` override, else primary.
+        let accent = self
+            .accent
+            .as_ref()
+            .and_then(|s| parse_hex_color(s))
+            .unwrap_or(primary);
         let accent_hover = self
             .accent_hover
             .as_ref()
             .and_then(|s| parse_hex_color(s))
-            .unwrap_or_else(|| lighten(primary, 0.15));
-        let accent_pressed = darken(primary, 0.85);
-        let accent_subtle = with_alpha(primary, 30);
+            .unwrap_or_else(|| lighten(accent, 0.15));
+        let accent_pressed = darken(accent, 0.85);
+        let accent_subtle = with_alpha(accent, 30);
 
         // Border radius and shadow from extended fields.
         let radius = self.border_radius.unwrap_or(4);
@@ -118,6 +122,16 @@ impl SkinTheme {
         if let Some(ref ov) = self.wm_theme {
             apply_wm_overrides(&mut theme, ov);
         }
+        // Default inactive title text to the active text color when unset,
+        // so a custom `titlebar_text` carries over to unfocused windows.
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.titlebar_text_inactive.as_ref())
+            .is_none()
+        {
+            theme.titlebar_text_inactive_color = theme.titlebar_text_color;
+        }
         // Default glyph colors to titlebar_text_color if not explicitly set.
         if self
             .wm_theme
@@ -194,6 +208,17 @@ fn apply_wm_overrides(theme: &mut WmTheme, ov: &WmThemeOverrides) {
         && let Some(parsed) = parse_hex_color(c)
     {
         theme.titlebar_text_color = parsed;
+    }
+    // `titlebar_text_active` is a synonym that takes precedence.
+    if let Some(ref c) = ov.titlebar_text_active
+        && let Some(parsed) = parse_hex_color(c)
+    {
+        theme.titlebar_text_color = parsed;
+    }
+    if let Some(ref c) = ov.titlebar_text_inactive
+        && let Some(parsed) = parse_hex_color(c)
+    {
+        theme.titlebar_text_inactive_color = parsed;
     }
     if let Some(ref c) = ov.frame_color
         && let Some(parsed) = parse_hex_color(c)

@@ -356,6 +356,11 @@ impl ActiveTheme {
         dim: Color,
     ) -> BarTheme {
         let bar_ov = skin.bar_overrides.as_ref();
+        // Generic `text_color` is the fallback for all element-specific
+        // bar text colors; `gradient_top/bottom` for both bar gradients.
+        let bar_text = bar_ov.and_then(|b| b.text_color.as_ref());
+        let grad_top = bar_ov.and_then(|b| b.gradient_top.as_ref());
+        let grad_bottom = bar_ov.and_then(|b| b.gradient_bottom.as_ref());
 
         BarTheme {
             statusbar_bg: ov(
@@ -371,13 +376,19 @@ impl ActiveTheme {
                 with_alpha(secondary, 50),
             ),
             battery_color: ov(
-                bar_ov.and_then(|b| b.battery_color.as_ref()),
+                bar_ov.and_then(|b| b.battery_color.as_ref()).or(bar_text),
                 lighten(primary, 0.3),
             ),
-            version_color: ov(bar_ov.and_then(|b| b.version_color.as_ref()), text),
-            clock_color: ov(bar_ov.and_then(|b| b.clock_color.as_ref()), text),
-            url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()), dim),
-            usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()), dim),
+            version_color: ov(
+                bar_ov.and_then(|b| b.version_color.as_ref()).or(bar_text),
+                text,
+            ),
+            clock_color: ov(
+                bar_ov.and_then(|b| b.clock_color.as_ref()).or(bar_text),
+                text,
+            ),
+            url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()).or(bar_text), dim),
+            usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()).or(bar_text), dim),
             tab_active_fill: ov(
                 bar_ov.and_then(|b| b.tab_active_fill.as_ref()),
                 with_alpha(primary, 30),
@@ -388,15 +399,17 @@ impl ActiveTheme {
             media_tab_active: ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
             media_tab_inactive: ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
             pipe_color: ov(
-                bar_ov.and_then(|b| b.pipe_color.as_ref()),
+                bar_ov.and_then(|b| b.pipe_color.as_ref()).or(bar_text),
                 with_alpha(text, 60),
             ),
             r_hint_color: ov(
-                bar_ov.and_then(|b| b.r_hint_color.as_ref()),
+                bar_ov.and_then(|b| b.r_hint_color.as_ref()).or(bar_text),
                 with_alpha(text, 140),
             ),
             category_label_color: ov(
-                bar_ov.and_then(|b| b.category_label_color.as_ref()),
+                bar_ov
+                    .and_then(|b| b.category_label_color.as_ref())
+                    .or(bar_text),
                 with_alpha(text, 220),
             ),
             page_dot_active: ov(
@@ -409,29 +422,45 @@ impl ActiveTheme {
             ),
             statusbar_gradient_top: Self::bar_gradient_pair(
                 skin,
-                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                bar_ov
+                    .and_then(|b| b.statusbar_gradient_top.as_ref())
+                    .or(grad_top),
+                bar_ov
+                    .and_then(|b| b.statusbar_gradient_bottom.as_ref())
+                    .or(grad_bottom),
                 status_bar_color,
             )
             .map(|(t, _)| t),
             statusbar_gradient_bottom: Self::bar_gradient_pair(
                 skin,
-                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                bar_ov
+                    .and_then(|b| b.statusbar_gradient_top.as_ref())
+                    .or(grad_top),
+                bar_ov
+                    .and_then(|b| b.statusbar_gradient_bottom.as_ref())
+                    .or(grad_bottom),
                 status_bar_color,
             )
             .map(|(_, b)| b),
             gradient_top: Self::bar_gradient_pair(
                 skin,
-                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                bar_ov
+                    .and_then(|b| b.bar_gradient_top.as_ref())
+                    .or(grad_top),
+                bar_ov
+                    .and_then(|b| b.bar_gradient_bottom.as_ref())
+                    .or(grad_bottom),
                 status_bar_color,
             )
             .map(|(t, _)| t),
             gradient_bottom: Self::bar_gradient_pair(
                 skin,
-                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                bar_ov
+                    .and_then(|b| b.bar_gradient_top.as_ref())
+                    .or(grad_top),
+                bar_ov
+                    .and_then(|b| b.bar_gradient_bottom.as_ref())
+                    .or(grad_bottom),
                 status_bar_color,
             )
             .map(|(_, b)| b),

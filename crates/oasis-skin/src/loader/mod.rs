@@ -194,6 +194,30 @@ pub struct Skin {
     pub strings: SkinStrings,
     /// Optional corrupted visual effect modifiers.
     pub corrupted_modifiers: Option<CorruptedModifiers>,
+    /// Unknown TOML keys encountered during parsing (`file: key` per entry).
+    /// Unknown keys are ignored for forwards compatibility, but surfaced so
+    /// skin authors can catch typos and unsupported fields.
+    pub schema_warnings: Vec<String>,
+}
+
+/// Parse a TOML document, collecting any keys the target type ignores.
+///
+/// Unknown keys never fail the parse — they are recorded as `"{file}:
+/// unknown key `{path}`"` warnings so authors get feedback instead of
+/// silently dead configuration.
+fn parse_toml_lint<T: serde::de::DeserializeOwned>(
+    content: &str,
+    file: &str,
+    warnings: &mut Vec<String>,
+) -> Result<T> {
+    let de = toml::Deserializer::new(content);
+    serde_ignored::deserialize(de, |path| {
+        // serde_ignored renders Option-wrapped struct hops as `?` segments
+        // (e.g. `wm_theme.?.close_button_color`); strip them for readability.
+        let path = path.to_string().replace(".?.", ".");
+        warnings.push(format!("{file}: unknown key `{path}`"));
+    })
+    .map_err(|e| OasisError::Config(format!("{file}: {e}").into()))
 }
 
 impl Skin {
@@ -210,26 +234,39 @@ impl Skin {
         theme_toml: &str,
         strings_toml: &str,
     ) -> Result<Self> {
-        let manifest: SkinManifest = toml::from_str(manifest_toml)
-            .map_err(|e| OasisError::Config(format!("skin.toml: {e}").into()))?;
-        let layout: SkinLayout = toml::from_str(layout_toml)
-            .map_err(|e| OasisError::Config(format!("layout.toml: {e}").into()))?;
-        let features: SkinFeatures = toml::from_str(features_toml)
-            .map_err(|e| OasisError::Config(format!("features.toml: {e}").into()))?;
+        let mut schema_warnings = Vec::new();
+        let manifest: SkinManifest =
+            parse_toml_lint(manifest_toml, "skin.toml", &mut schema_warnings)?;
+        let layout: SkinLayout = parse_toml_lint(layout_toml, "layout.toml", &mut schema_warnings)?;
+        let mut features: SkinFeatures =
+            parse_toml_lint(features_toml, "features.toml", &mut schema_warnings)?;
 
         let theme: SkinTheme = if theme_toml.is_empty() {
             SkinTheme::default()
         } else {
-            toml::from_str(theme_toml)
-                .map_err(|e| OasisError::Config(format!("theme.toml: {e}").into()))?
+            parse_toml_lint(theme_toml, "theme.toml", &mut schema_warnings)?
         };
 
         let strings: SkinStrings = if strings_toml.is_empty() {
             SkinStrings::default()
         } else {
-            toml::from_str(strings_toml)
-                .map_err(|e| OasisError::Config(format!("strings.toml: {e}").into()))?
+            parse_toml_lint(strings_toml, "strings.toml", &mut schema_warnings)?
         };
+
+        // Millisecond transition durations from the theme convert to frames
+        // (60 fps); explicit frame counts in features.toml take precedence.
+        if let Some(t) = theme.transition.as_ref() {
+            if features.transition_fade_frames.is_none()
+                && let Some(ms) = t.fade_ms
+            {
+                features.transition_fade_frames = Some((ms * 60 / 1000).max(1));
+            }
+            if features.transition_slide_frames.is_none()
+                && let Some(ms) = t.slide_ms
+            {
+                features.transition_slide_frames = Some((ms * 60 / 1000).max(1));
+            }
+        }
 
         let corrupted_modifiers = if features.corrupted {
             Some(CorruptedModifiers::default())
@@ -244,6 +281,7 @@ impl Skin {
             theme,
             strings,
             corrupted_modifiers,
+            schema_warnings,
         })
     }
 
@@ -265,9 +303,11 @@ impl Skin {
         )?;
 
         if !corrupted_toml.is_empty() {
-            let modifiers: CorruptedModifiers = toml::from_str(corrupted_toml)
-                .map_err(|e| OasisError::Config(format!("corrupted.toml: {e}").into()))?;
+            let mut warnings = Vec::new();
+            let modifiers: CorruptedModifiers =
+                parse_toml_lint(corrupted_toml, "corrupted.toml", &mut warnings)?;
             skin.corrupted_modifiers = Some(modifiers);
+            skin.schema_warnings.append(&mut warnings);
         }
 
         Ok(skin)
@@ -324,6 +364,10 @@ impl Skin {
             && let Ok(parent) = super::builtin::load_builtin(parent_name)
         {
             skin.merge_theme_from(&parent);
+        }
+
+        for warning in &skin.schema_warnings {
+            log::warn!("skin '{}': {warning}", skin.manifest.name);
         }
 
         Ok(skin)
@@ -1000,6 +1044,112 @@ another_unknown = 42
 "#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
         assert_eq!(skin.manifest.name, "test");
+        // Unknown keys parse fine but are recorded as schema warnings.
+        assert!(
+            skin.schema_warnings
+                .iter()
+                .any(|w| w.contains("skin.toml") && w.contains("future_field")),
+            "missing schema warning: {:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn unknown_theme_keys_are_recorded() {
+        let theme = r##"
+background = "#000000"
+not_a_real_field = true
+
+[wm_theme]
+titlebar_height = 20
+close_button_colour = "#FF0000"
+
+[transition]
+bogus_ms = 300
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let has = |s: &str| skin.schema_warnings.iter().any(|w| w.contains(s));
+        assert!(has("not_a_real_field"), "{:?}", skin.schema_warnings);
+        assert!(
+            has("wm_theme.close_button_colour"),
+            "{:?}",
+            skin.schema_warnings
+        );
+        assert!(has("transition.bogus_ms"), "{:?}", skin.schema_warnings);
+        // Warnings also flow through validate().
+        assert!(skin.validate().iter().any(|w| w.contains("bogus_ms")));
+    }
+
+    #[test]
+    fn transition_ms_converts_to_frames() {
+        let theme = r#"
+[transition]
+fade_ms = 300
+slide_ms = 400
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        assert_eq!(skin.features.transition_fade_frames, Some(18));
+        assert_eq!(skin.features.transition_slide_frames, Some(24));
+    }
+
+    #[test]
+    fn explicit_frames_beat_transition_ms() {
+        let features = r#"
+transition_fade_frames = 5
+"#;
+        let theme = r#"
+[transition]
+fade_ms = 1000
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, features, theme, "").unwrap();
+        assert_eq!(skin.features.transition_fade_frames, Some(5));
+    }
+
+    #[test]
+    fn bar_text_color_fallback() {
+        let theme = r##"
+[bar_overrides]
+text_color = "#123456"
+clock_color = "#654321"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        // Specific color wins; unset elements fall back to text_color.
+        assert_eq!(
+            at.bar.clock_color,
+            oasis_types::backend::Color::rgb(0x65, 0x43, 0x21)
+        );
+        assert_eq!(
+            at.bar.version_color,
+            oasis_types::backend::Color::rgb(0x12, 0x34, 0x56)
+        );
+        assert_eq!(
+            at.bar.url_color,
+            oasis_types::backend::Color::rgb(0x12, 0x34, 0x56)
+        );
+    }
+
+    #[test]
+    fn all_shipped_skins_lint_clean() {
+        let mut report = String::new();
+        for name in crate::builtin::builtin_names() {
+            let skin = crate::builtin::load_builtin(name).unwrap();
+            for w in &skin.schema_warnings {
+                report.push_str(&format!("builtin '{name}': {w}\n"));
+            }
+        }
+        for name in crate::builtin::generated::GENERATED_SKIN_NAMES {
+            let skin = crate::builtin::generated::load_generated_skin(name)
+                .unwrap()
+                .unwrap();
+            for w in &skin.schema_warnings {
+                report.push_str(&format!("generated '{name}': {w}\n"));
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "shipped skins have schema warnings:\n{report}"
+        );
     }
 
     #[test]

@@ -8,15 +8,67 @@ use crate::CommandOutput;
 
 register_commands!(register_skin_commands, [SkinCmd]);
 
-// Terminal command for listing, showing, or switching UI skins.
+/// Resolve a skin for linting: built-in name, explicit path, or
+/// `./skins/{name}/`. Unlike `resolve_skin`, does NOT fall back to classic —
+/// a lint of a missing skin must be an error, not a lint of the fallback.
+fn load_for_lint(target: &str) -> Option<oasis_types::error::Result<oasis_skin::Skin>> {
+    if let Ok(skin) = builtin::load_builtin(target) {
+        return Some(Ok(skin));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = std::path::Path::new(target);
+        if path.join("skin.toml").is_file() {
+            return Some(Skin::from_directory(path));
+        }
+        let skins_dir = std::path::Path::new("skins").join(target);
+        if skins_dir.join("skin.toml").is_file() {
+            return Some(Skin::from_directory(&skins_dir));
+        }
+    }
+    None
+}
+
+/// Run `Skin::validate` on a named skin and format the report.
+fn lint_skin(target: &str) -> String {
+    match load_for_lint(target) {
+        None => format!("skin '{target}' not found (built-in name, path, or skins/ subdir)"),
+        Some(Err(e)) => format!("skin '{target}' failed to parse: {e}"),
+        Some(Ok(skin)) => {
+            let warnings = skin.validate();
+            if warnings.is_empty() {
+                format!(
+                    "{target}: clean ({} layout objects)",
+                    skin.layout.objects.len()
+                )
+            } else {
+                let mut out = format!("{target}: {} warning(s)\n", warnings.len());
+                for w in &warnings {
+                    out.push_str(&format!("  {w}\n"));
+                }
+                out
+            }
+        },
+    }
+}
+
+// Terminal command for listing, showing, linting, or switching UI skins.
 define_command!(
     SkinCmd,
     "skin",
-    "List, show, or switch skins",
-    "skin [list|current|<name>]",
+    "List, show, lint, or switch skins",
+    "skin [list|current|lint <name>|<name>]",
     "ui",
     |args, _env| {
         match args.first().copied() {
+            Some("lint") => {
+                let Some(target) = args.get(1).copied() else {
+                    return Ok(CommandOutput::Text(
+                        "usage: skin lint <name|path>".to_string(),
+                    ));
+                };
+                Ok(CommandOutput::Text(lint_skin(target)))
+            },
             None | Some("list") => {
                 let mut lines = String::from("Built-in skins:\n");
                 for name in builtin::builtin_names() {
@@ -82,6 +134,33 @@ mod tests {
         let mut env = make_env(&mut vfs);
         let out = cmd.execute(&[], &mut env).unwrap();
         assert!(matches!(out, CommandOutput::Text(_)));
+    }
+
+    #[test]
+    fn skin_lint_builtin_clean() {
+        let cmd = SkinCmd;
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let s = assert_text!(cmd.execute(&["lint", "classic"], &mut env).unwrap());
+        assert!(s.contains("clean"), "unexpected lint output: {s}");
+    }
+
+    #[test]
+    fn skin_lint_unknown_name() {
+        let cmd = SkinCmd;
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let s = assert_text!(cmd.execute(&["lint", "no-such-skin"], &mut env).unwrap());
+        assert!(s.contains("not found"), "unexpected lint output: {s}");
+    }
+
+    #[test]
+    fn skin_lint_no_target_shows_usage() {
+        let cmd = SkinCmd;
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let s = assert_text!(cmd.execute(&["lint"], &mut env).unwrap());
+        assert!(s.contains("usage"));
     }
 
     #[test]

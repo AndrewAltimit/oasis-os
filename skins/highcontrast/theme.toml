@@ -12,7 +12,6 @@ error = "#FF4444"
 border_radius = 0
 shadow_intensity = 0
 gradient_enabled = false
-reduced_motion = true
 
 [wm_theme]
 titlebar_height = 26
@@ -22,10 +21,10 @@ titlebar_inactive = "#0D0D0D"
 titlebar_text_active = "#FFFF00"
 titlebar_text_inactive = "#CCCCCC"
 titlebar_gradient = false
-close_button_color = "#FF4444"
-close_button_hover = "#FF6666"
-minimize_button_color = "#FFFF00"
-maximize_button_color = "#FFFF00"
+btn_close = "#FF4444"
+btn_close_hover = "#FF6666"
+btn_minimize = "#FFFF00"
+btn_maximize = "#FFFF00"
 frame_shadow_level = 0
 frame_border_radius = 0
 button_radius = 0

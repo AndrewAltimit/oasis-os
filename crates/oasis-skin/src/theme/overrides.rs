@@ -14,6 +14,13 @@ pub struct WmThemeOverrides {
     pub titlebar_active: Option<String>,
     pub titlebar_inactive: Option<String>,
     pub titlebar_text: Option<String>,
+    /// Titlebar text color for the focused window. Synonym for
+    /// `titlebar_text`; takes precedence when both are set.
+    #[serde(default)]
+    pub titlebar_text_active: Option<String>,
+    /// Titlebar text color for unfocused windows (default: same as active).
+    #[serde(default)]
+    pub titlebar_text_inactive: Option<String>,
     pub frame_color: Option<String>,
     pub content_bg: Option<String>,
     pub btn_close: Option<String>,
@@ -96,6 +103,18 @@ pub struct WmThemeOverrides {
 pub struct BarOverrides {
     pub bar_bg: Option<String>,
     pub statusbar_bg: Option<String>,
+    /// Fallback text color for all bar text elements (battery, version,
+    /// clock, URL, USB, pipes, hints, category label). Element-specific
+    /// colors below take precedence.
+    #[serde(default)]
+    pub text_color: Option<String>,
+    /// Fallback gradient top color for both bars. The bar-specific
+    /// `statusbar_gradient_*` / `bar_gradient_*` fields take precedence.
+    #[serde(default)]
+    pub gradient_top: Option<String>,
+    /// Fallback gradient bottom color for both bars.
+    #[serde(default)]
+    pub gradient_bottom: Option<String>,
     pub separator_color: Option<String>,
     pub battery_color: Option<String>,
     pub version_color: Option<String>,
@@ -525,6 +544,14 @@ pub struct OskOverrides {
 pub struct TransitionOverrides {
     /// Fade overlay color (hex). Default: derived from background.
     pub fade_color: Option<String>,
+    /// Fade transition duration in milliseconds (converted to frames at
+    /// 60 fps). `features.transition_fade_frames` takes precedence.
+    #[serde(default)]
+    pub fade_ms: Option<u32>,
+    /// Slide transition duration in milliseconds (converted to frames at
+    /// 60 fps). `features.transition_slide_frames` takes precedence.
+    #[serde(default)]
+    pub slide_ms: Option<u32>,
 }
 
 /// Per-element overrides for scrollbar appearance.
