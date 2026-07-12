@@ -239,6 +239,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/ffi-integration.md`](docs/ffi-integration.md) -- UE5 / C-ABI integration guide
 - [`docs/psp-plugin.md`](docs/psp-plugin.md) -- PSP kernel plugin (PRX) documentation
 - [`docs/browser-backlog.md`](docs/browser-backlog.md) -- Browser engine backlog and roadmap
+- [`docs/theming-desktop-plan.md`](docs/theming-desktop-plan.md) -- Advanced theming + PSIX-style desktop metaphor plan (asset pipeline, free icons, shaped chrome, perf)
 
 ### Subsystems
 - [`docs/oasis-js.md`](docs/oasis-js.md) -- JavaScript engine desktop API + DOM bindings catalog (PSP cross-compile lives in `javascript-engine.md`)
