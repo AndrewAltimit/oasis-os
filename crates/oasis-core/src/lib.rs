@@ -54,6 +54,7 @@ pub mod apps;
 pub mod bottombar;
 pub mod cursor;
 pub mod dashboard;
+pub mod image_layers;
 pub mod notifications;
 pub mod osk;
 pub mod plugin;

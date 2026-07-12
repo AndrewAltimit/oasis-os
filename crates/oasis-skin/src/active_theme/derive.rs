@@ -15,8 +15,8 @@ use crate::SkinTheme;
 use crate::theme::parse_hex_color;
 
 use super::{
-    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme, StartMenuTheme,
-    ToastTheme, WallpaperTheme,
+    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme, ScrollbarTheme,
+    StartMenuTheme, ToastTheme, WallpaperTheme,
 };
 
 /// Parse an optional hex color override, falling back to `fallback`.
@@ -47,6 +47,7 @@ impl ActiveTheme {
         let wallpaper_theme = Self::derive_wallpaper_theme(skin);
         let toast_theme = Self::derive_toast_theme(skin, primary, text);
         let background_layers = Self::derive_background_layers(skin);
+        let image_layers = Self::derive_image_layers(skin);
 
         let ico = skin.icon_overrides.as_ref();
         let bar_ov = skin.bar_overrides.as_ref();
@@ -67,6 +68,7 @@ impl ActiveTheme {
             wallpaper: wallpaper_theme,
             toast: toast_theme,
             background_layers,
+            image_layers,
             background_max_layers: bg_perf.and_then(|p| p.max_layers).unwrap_or(8),
             background_reduced_motion: bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false),
             background_complexity_budget: bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200),
@@ -852,6 +854,12 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|w| w.animated)
                 .unwrap_or(false),
+            source: skin.wallpaper.as_ref().and_then(|w| w.source.clone()),
+            fit: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.fit.clone())
+                .unwrap_or_else(|| "cover".to_string()),
         }
     }
 
@@ -902,6 +910,33 @@ impl ActiveTheme {
                 .and_then(|g| g.toast_slide_in)
                 .unwrap_or(true),
         }
+    }
+
+    /// Derive image decal layers (`kind = "image"`) from skin configuration.
+    ///
+    /// Image layers are not vector layers -- they carry an asset key that the
+    /// shell resolves against `Skin::assets` and uploads as a texture, so
+    /// they live in a separate list from `background_layers`.
+    fn derive_image_layers(skin: &SkinTheme) -> Vec<ImageLayerTheme> {
+        skin.background_layers
+            .as_ref()
+            .map(|layers| {
+                layers
+                    .iter()
+                    .filter(|cfg| cfg.kind == "image")
+                    .filter_map(|cfg| {
+                        let source = cfg.source.clone()?;
+                        Some(ImageLayerTheme {
+                            source,
+                            position: convert_layer_position(cfg),
+                            animation: convert_layer_animation(cfg),
+                            alpha: cfg.alpha.unwrap_or(255),
+                            enabled: cfg.enabled.unwrap_or(true),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Derive background layers from skin configuration.
@@ -1122,6 +1157,8 @@ impl ActiveTheme {
             grid_color: lighten(background, 0.08),
             noise_intensity: 0.3,
             animated: false,
+            source: None,
+            fit: "cover".to_string(),
         };
 
         // -- Toast theme --
@@ -1216,6 +1253,7 @@ impl ActiveTheme {
             wallpaper: wallpaper_theme,
             toast: toast_theme,
             background_layers: Vec::new(),
+            image_layers: Vec::new(),
             background_max_layers: 8,
             background_reduced_motion: false,
             background_complexity_budget: 200,
@@ -1295,9 +1333,7 @@ impl ActiveTheme {
         cfg: &crate::theme::BackgroundLayerConfig,
         ov_fn: &dyn Fn(Option<&String>, Color) -> Color,
     ) -> Option<oasis_vector::BackgroundLayer> {
-        use oasis_vector::background::{
-            Anchor, BackgroundLayer, LayerAnimation, LayerKind, LayerPosition,
-        };
+        use oasis_vector::background::{BackgroundLayer, LayerKind};
 
         let color = ov_fn(cfg.color.as_ref(), Color::rgba(255, 255, 255, 18));
 
@@ -1363,48 +1399,58 @@ impl ActiveTheme {
             _ => return None,
         };
 
-        let position = cfg
-            .position
-            .as_ref()
-            .map_or_else(LayerPosition::default, |p| {
-                let anchor = match p.anchor.as_deref().unwrap_or("center") {
-                    "top_left" => Anchor::TopLeft,
-                    "top_center" => Anchor::TopCenter,
-                    "top_right" => Anchor::TopRight,
-                    "center_left" => Anchor::CenterLeft,
-                    "center_right" => Anchor::CenterRight,
-                    "bottom_left" => Anchor::BottomLeft,
-                    "bottom_center" => Anchor::BottomCenter,
-                    "bottom_right" => Anchor::BottomRight,
-                    _ => Anchor::Center,
-                };
-                LayerPosition {
-                    anchor,
-                    offset_x: p.offset_x.unwrap_or(0.0),
-                    offset_y: p.offset_y.unwrap_or(0.0),
-                }
-            });
-
-        let animation = cfg
-            .animation
-            .as_ref()
-            .map_or_else(LayerAnimation::default, |a| LayerAnimation {
-                rotate_speed: a.rotate_speed.unwrap_or(0.0),
-                pulse_speed: a.pulse_speed.unwrap_or(0.0),
-                pulse_min_alpha: a.pulse_min_alpha.unwrap_or(0.5),
-                drift_x: a.drift_x.unwrap_or(0.0),
-                drift_y: a.drift_y.unwrap_or(0.0),
-                phase_offset: a.phase_offset.unwrap_or(0.0),
-            });
-
         Some(BackgroundLayer {
             kind,
             color,
-            position,
-            animation,
+            position: convert_layer_position(cfg),
+            animation: convert_layer_animation(cfg),
             enabled: cfg.enabled.unwrap_or(true),
         })
     }
+}
+
+/// Convert a layer's position sub-table to the runtime type.
+fn convert_layer_position(
+    cfg: &crate::theme::BackgroundLayerConfig,
+) -> oasis_vector::background::LayerPosition {
+    use oasis_vector::background::{Anchor, LayerPosition};
+    cfg.position
+        .as_ref()
+        .map_or_else(LayerPosition::default, |p| {
+            let anchor = match p.anchor.as_deref().unwrap_or("center") {
+                "top_left" => Anchor::TopLeft,
+                "top_center" => Anchor::TopCenter,
+                "top_right" => Anchor::TopRight,
+                "center_left" => Anchor::CenterLeft,
+                "center_right" => Anchor::CenterRight,
+                "bottom_left" => Anchor::BottomLeft,
+                "bottom_center" => Anchor::BottomCenter,
+                "bottom_right" => Anchor::BottomRight,
+                _ => Anchor::Center,
+            };
+            LayerPosition {
+                anchor,
+                offset_x: p.offset_x.unwrap_or(0.0),
+                offset_y: p.offset_y.unwrap_or(0.0),
+            }
+        })
+}
+
+/// Convert a layer's animation sub-table to the runtime type.
+fn convert_layer_animation(
+    cfg: &crate::theme::BackgroundLayerConfig,
+) -> oasis_vector::background::LayerAnimation {
+    use oasis_vector::background::LayerAnimation;
+    cfg.animation
+        .as_ref()
+        .map_or_else(LayerAnimation::default, |a| LayerAnimation {
+            rotate_speed: a.rotate_speed.unwrap_or(0.0),
+            pulse_speed: a.pulse_speed.unwrap_or(0.0),
+            pulse_min_alpha: a.pulse_min_alpha.unwrap_or(0.5),
+            drift_x: a.drift_x.unwrap_or(0.0),
+            drift_y: a.drift_y.unwrap_or(0.0),
+            phase_offset: a.phase_offset.unwrap_or(0.0),
+        })
 }
 
 /// Parse shader-specific parameters from a `BackgroundLayerConfig`.

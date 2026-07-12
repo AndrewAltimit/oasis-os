@@ -1,6 +1,8 @@
 # Advanced Theming & Desktop Metaphor Plan
 
-Status: **proposed** — research complete, implementation not started.
+Status: **in progress** — M0 (benchmarks + validation + `skin lint`) and
+M1 (asset pipeline: skin `assets/`, `texture =` layout objects, image
+wallpapers, image decal layers, D1 shader texture reuse) have landed.
 Branch: `feat/advanced-theming`.
 
 ## Goal

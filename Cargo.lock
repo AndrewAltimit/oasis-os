@@ -1272,6 +1272,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-skin",
  "oasis-terminal",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vector",
@@ -1371,12 +1372,15 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-sdi",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vector",
  "oasis-wm",
+ "png",
  "serde",
  "serde_ignored",
+ "tempfile",
  "toml",
 ]
 

@@ -22,6 +22,6 @@ mod structs;
 mod tests;
 
 pub use structs::{
-    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme, StartMenuTheme,
-    ToastTheme, WallpaperTheme,
+    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme, ScrollbarTheme,
+    StartMenuTheme, ToastTheme, WallpaperTheme,
 };

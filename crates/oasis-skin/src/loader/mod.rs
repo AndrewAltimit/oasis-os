@@ -3,14 +3,17 @@
 mod parsing;
 mod validation;
 
+use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use oasis_sdi::SdiRegistry;
+use oasis_types::backend::{SdiBackend, TextureId};
 use oasis_types::error::{OasisError, Result};
 
+use super::assets::SkinAsset;
 use super::corrupted::CorruptedModifiers;
 use super::strings::SkinStrings;
 use super::theme::SkinTheme;
@@ -198,6 +201,10 @@ pub struct Skin {
     /// Unknown keys are ignored for forwards compatibility, but surfaced so
     /// skin authors can catch typos and unsupported fields.
     pub schema_warnings: Vec<String>,
+    /// Decoded image assets keyed by skin-relative path
+    /// (e.g. `"assets/bar_top.png"`). Populated from the skin directory's
+    /// `assets/` folder or embedded bytes for built-in skins.
+    pub assets: HashMap<String, SkinAsset>,
 }
 
 /// Parse a TOML document, collecting any keys the target type ignores.
@@ -282,7 +289,71 @@ impl Skin {
             strings,
             corrupted_modifiers,
             schema_warnings,
+            assets: HashMap::new(),
         })
+    }
+
+    /// Decode a PNG and register it as a named asset (e.g.
+    /// `"assets/bar_top.png"`). Used by generated built-in skins to attach
+    /// `include_bytes!` payloads and by tests.
+    pub fn add_asset_png(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        let asset = SkinAsset::from_png_bytes(bytes)
+            .map_err(|e| OasisError::Config(format!("{name}: {e}").into()))?;
+        self.assets.insert(name.to_string(), asset);
+        Ok(())
+    }
+
+    /// Upload layout-referenced textures and attach them to their SDI
+    /// objects. Call after `apply_layout`/`swap_scaled` once a backend is
+    /// available. Returns the created texture ids; the caller owns them and
+    /// must destroy them on skin swap-out (SDI object destruction does not
+    /// free backend textures).
+    ///
+    /// Objects without explicit `w`/`h` in the layout inherit the asset's
+    /// native pixel dimensions.
+    pub fn upload_layout_textures(
+        &self,
+        sdi: &mut SdiRegistry,
+        backend: &mut dyn SdiBackend,
+    ) -> Vec<TextureId> {
+        let mut ids = Vec::new();
+        for (name, def) in &self.layout.objects {
+            let Some(ref asset_name) = def.texture else {
+                continue;
+            };
+            let Some(asset) = self.assets.get(asset_name) else {
+                log::warn!(
+                    "skin '{}': object '{name}' references missing asset '{asset_name}'",
+                    self.manifest.name
+                );
+                continue;
+            };
+            let tex = match backend.load_texture(asset.width, asset.height, &asset.rgba) {
+                Ok(tex) => tex,
+                Err(e) => {
+                    log::warn!(
+                        "skin '{}': texture upload for '{name}' failed: {e}",
+                        self.manifest.name
+                    );
+                    continue;
+                },
+            };
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.texture = Some(tex);
+                if def.w.is_none() {
+                    obj.w = asset.width;
+                }
+                if def.h.is_none() {
+                    obj.h = asset.height;
+                }
+                ids.push(tex);
+            } else {
+                // Layout applied and textures uploaded should always agree,
+                // but never leak a texture if the object vanished.
+                let _ = backend.destroy_texture(tex);
+            }
+        }
+        ids
     }
 
     /// Load a skin with explicit corrupted modifier configuration.
@@ -359,6 +430,9 @@ impl Skin {
             Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)?
         };
 
+        // Load image assets from the skin's assets/ subdirectory.
+        skin.load_assets_from(&dir.join("assets"));
+
         // Apply inheritance from a built-in parent skin if specified.
         if let Some(ref parent_name) = skin.manifest.inherits
             && let Ok(parent) = super::builtin::load_builtin(parent_name)
@@ -371,6 +445,42 @@ impl Skin {
         }
 
         Ok(skin)
+    }
+
+    /// Decode every `*.png` in an assets directory into `self.assets`,
+    /// keyed `"assets/<file>"`. Files that fail to decode are recorded as
+    /// schema warnings instead of failing the whole skin load.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_assets_from(&mut self, assets_dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(assets_dir) else {
+            return; // No assets/ directory -- nothing to do.
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let key = format!("assets/{file_name}");
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    if let Err(e) = self.add_asset_png(&key, &bytes) {
+                        self.schema_warnings.push(format!("{key}: {e}"));
+                    }
+                },
+                Err(e) => {
+                    self.schema_warnings.push(format!("{key}: {e}"));
+                },
+            }
+        }
     }
 
     /// Scan a directory for skin subdirectories (those containing `skin.toml`).
@@ -499,6 +609,14 @@ impl Skin {
         for (name, def) in &parent.layout.objects {
             if !self.layout.objects.contains_key(name) {
                 self.layout.objects.insert(name.clone(), def.clone());
+            }
+        }
+
+        // Merge assets: parent images fill in missing child assets so
+        // inherited layout objects keep their textures.
+        for (name, asset) in &parent.assets {
+            if !self.assets.contains_key(name) {
+                self.assets.insert(name.clone(), asset.clone());
             }
         }
     }
@@ -1591,6 +1709,252 @@ h = 50
             warnings.iter().any(|w| w.contains("screen_height is 0")),
             "missing zero height warning: {warnings:?}"
         );
+    }
+
+    // -- Asset tests --
+
+    fn png_bytes() -> Vec<u8> {
+        crate::assets::tests::encode_png(8, 8, png::ColorType::Rgba)
+    }
+
+    #[test]
+    fn add_asset_png_registers_asset() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let asset = &skin.assets["assets/logo.png"];
+        assert_eq!(asset.width, 8);
+        assert_eq!(asset.height, 8);
+    }
+
+    #[test]
+    fn add_asset_png_invalid_bytes_errors() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let err = skin.add_asset_png("assets/bad.png", b"nope").unwrap_err();
+        assert!(format!("{err}").contains("assets/bad.png"));
+    }
+
+    #[test]
+    fn from_directory_loads_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("skin.toml"), MANIFEST).unwrap();
+        std::fs::write(dir.path().join("layout.toml"), LAYOUT).unwrap();
+        std::fs::write(dir.path().join("features.toml"), FEATURES).unwrap();
+        let assets = dir.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        std::fs::write(assets.join("logo.png"), png_bytes()).unwrap();
+        std::fs::write(assets.join("broken.png"), b"not a png").unwrap();
+        std::fs::write(assets.join("readme.txt"), b"ignored").unwrap();
+
+        let skin = Skin::from_directory(dir.path()).unwrap();
+        assert!(skin.assets.contains_key("assets/logo.png"));
+        assert!(!skin.assets.contains_key("assets/readme.txt"));
+        // Broken PNG is skipped with a warning, not a hard failure.
+        assert!(!skin.assets.contains_key("assets/broken.png"));
+        assert!(
+            skin.schema_warnings
+                .iter()
+                .any(|w| w.contains("assets/broken.png")),
+            "{:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn layout_texture_field_parses() {
+        let layout = r#"
+[bar_top]
+x = 0
+y = 0
+w = 480
+h = 24
+texture = "assets/bar_top.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(
+            skin.layout.objects["bar_top"].texture.as_deref(),
+            Some("assets/bar_top.png")
+        );
+    }
+
+    #[test]
+    fn upload_layout_textures_attaches_and_sizes() {
+        let layout = r#"
+[logo]
+x = 10
+y = 20
+texture = "assets/logo.png"
+
+[bar]
+x = 0
+y = 0
+w = 480
+h = 24
+texture = "assets/logo.png"
+
+[plain]
+x = 0
+y = 0
+w = 10
+h = 10
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert_eq!(ids.len(), 2);
+        // No explicit w/h -> asset native dims.
+        let logo = sdi.get("logo").unwrap();
+        assert!(logo.texture.is_some());
+        assert_eq!((logo.w, logo.h), (8, 8));
+        // Explicit w/h wins over asset dims.
+        let bar = sdi.get("bar").unwrap();
+        assert!(bar.texture.is_some());
+        assert_eq!((bar.w, bar.h), (480, 24));
+        assert!(sdi.get("plain").unwrap().texture.is_none());
+    }
+
+    #[test]
+    fn upload_layout_textures_missing_asset_skipped() {
+        let layout = r#"
+[ghost]
+x = 0
+y = 0
+texture = "assets/missing.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert!(ids.is_empty());
+        assert!(sdi.get("ghost").unwrap().texture.is_none());
+    }
+
+    #[test]
+    fn validate_missing_texture_asset() {
+        let layout = r#"
+[ghost]
+x = 0
+y = 0
+texture = "assets/missing.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("ghost") && w.contains("assets/missing.png")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_image_wallpaper_sources() {
+        let theme = r#"
+[wallpaper]
+style = "image"
+fit = "sideways"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings.iter().any(|w| w.contains("no source set")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown fit")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_image_layer_sources() {
+        let theme = r#"
+[[background_layers]]
+kind = "image"
+source = "assets/nope.png"
+
+[[background_layers]]
+kind = "image"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("background_layers[0]") && w.contains("assets/nope.png")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("background_layers[1]") && w.contains("no source set")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_non_pot_asset_warns() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let bytes = crate::assets::tests::encode_png(10, 8, png::ColorType::Rgba);
+        skin.add_asset_png("assets/odd.png", &bytes).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("assets/odd.png") && w.contains("power-of-two")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn image_layer_theme_derivation() {
+        let theme = r#"
+[[background_layers]]
+kind = "image"
+source = "assets/logo.png"
+alpha = 128
+
+[background_layers.position]
+anchor = "bottom_right"
+offset_x = -0.05
+
+[background_layers.animation]
+pulse_speed = 0.5
+
+[[background_layers]]
+kind = "grid"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        // Image layers are split out; the grid stays a vector layer.
+        assert_eq!(at.image_layers.len(), 1);
+        assert_eq!(at.background_layers.len(), 1);
+        let layer = &at.image_layers[0];
+        assert_eq!(layer.source, "assets/logo.png");
+        assert_eq!(layer.alpha, 128);
+        assert!((layer.animation.pulse_speed - 0.5).abs() < f32::EPSILON);
+        assert!(matches!(
+            layer.position.anchor,
+            oasis_vector::background::Anchor::BottomRight
+        ));
+    }
+
+    #[test]
+    fn wallpaper_image_theme_derivation() {
+        let theme = r#"
+[wallpaper]
+style = "image"
+source = "assets/wall.png"
+fit = "tile"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        assert_eq!(at.wallpaper.style, "image");
+        assert_eq!(at.wallpaper.source.as_deref(), Some("assets/wall.png"));
+        assert_eq!(at.wallpaper.fit, "tile");
     }
 
     #[test]

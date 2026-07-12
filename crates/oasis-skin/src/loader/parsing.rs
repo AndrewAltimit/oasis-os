@@ -18,6 +18,11 @@ pub struct SkinObjectDef {
     pub color: Option<String>,
     pub text: Option<String>,
     pub text_color: Option<String>,
+    /// Image asset to render instead of a fill (e.g. `"assets/bar_top.png"`).
+    /// The bitmap is alpha-blended, so any silhouette works as shaped chrome.
+    /// Uploaded by `Skin::upload_layout_textures` once a backend exists.
+    #[serde(default)]
+    pub texture: Option<String>,
     pub font_size: Option<u16>,
     pub alpha: Option<u8>,
     pub visible: Option<bool>,

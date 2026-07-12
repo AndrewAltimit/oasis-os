@@ -366,9 +366,16 @@ impl SdiRegistry {
     /// 3. Stroke (if `stroke_width` set)
     /// 4. Text (if present)
     fn draw_object(obj: &SdiObject, backend: &mut dyn SdiBackend) -> Result<()> {
-        // Textured object -- blit the texture.
+        // Textured object -- blit the texture. A non-opaque `alpha` goes
+        // through the tinted path so textures can fade/pulse (backends
+        // without tint support fall back to a plain blit).
         if let Some(tex) = obj.texture {
-            backend.blit(tex, obj.x, obj.y, obj.w, obj.h)?;
+            if obj.alpha < 255 {
+                let tint = Color::rgba(255, 255, 255, obj.alpha);
+                backend.blit_tinted(tex, obj.x, obj.y, obj.w, obj.h, tint)?;
+            } else {
+                backend.blit(tex, obj.x, obj.y, obj.w, obj.h)?;
+            }
             return Ok(());
         }
 

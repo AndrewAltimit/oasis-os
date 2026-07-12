@@ -5,6 +5,7 @@
 //! framework interprets skins at runtime. Skins can be hot-swapped.
 
 pub mod active_theme;
+pub mod assets;
 pub mod builtin;
 pub mod corrupted;
 pub mod effects;
@@ -14,9 +15,10 @@ pub mod strings;
 pub mod theme;
 
 pub use active_theme::{
-    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme, StartMenuTheme,
-    ToastTheme, WallpaperTheme,
+    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme, ScrollbarTheme,
+    StartMenuTheme, ToastTheme, WallpaperTheme,
 };
+pub use assets::SkinAsset;
 pub use corrupted::{CorruptedModifiers, SimpleRng};
 pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};

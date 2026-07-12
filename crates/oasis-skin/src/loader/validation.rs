@@ -120,7 +120,18 @@ impl Skin {
                     warnings.push(format!("layout: '{obj_name}' invalid {field}: \"{v}\""));
                 }
             }
+            // Texture references must resolve to a loaded asset.
+            if let Some(ref tex) = def.texture
+                && !self.assets.contains_key(tex)
+            {
+                warnings.push(format!(
+                    "layout: '{obj_name}' references missing asset \"{tex}\""
+                ));
+            }
         }
+
+        // -- Asset checks --
+        self.validate_assets(&mut warnings);
 
         // -- Feature flag checks --
         if self.features.grid_cols == 0 {
@@ -146,5 +157,72 @@ impl Skin {
         }
 
         warnings
+    }
+
+    /// Asset-related validation: wallpaper/background sources must resolve,
+    /// PSP-hostile dimensions and oversized budgets are flagged.
+    fn validate_assets(&self, warnings: &mut Vec<String>) {
+        // Wallpaper image source.
+        if let Some(ref wp) = self.theme.wallpaper {
+            let style_is_image = wp.style.as_deref() == Some("image");
+            match (&wp.source, style_is_image) {
+                (Some(src), _) if !self.assets.contains_key(src) => {
+                    warnings.push(format!("wallpaper: missing asset \"{src}\""));
+                },
+                (None, true) => {
+                    warnings.push("wallpaper: style is \"image\" but no source set".to_string());
+                },
+                _ => {},
+            }
+            if let Some(ref fit) = wp.fit
+                && !matches!(fit.as_str(), "cover" | "contain" | "stretch" | "tile")
+            {
+                warnings.push(format!(
+                    "wallpaper: unknown fit \"{fit}\" (expected cover|contain|stretch|tile)"
+                ));
+            }
+        }
+
+        // Image background layers.
+        if let Some(ref layers) = self.theme.background_layers {
+            for (i, layer) in layers.iter().enumerate() {
+                if layer.kind != "image" {
+                    continue;
+                }
+                match &layer.source {
+                    Some(src) if !self.assets.contains_key(src) => {
+                        warnings.push(format!("background_layers[{i}]: missing asset \"{src}\""));
+                    },
+                    None => {
+                        warnings.push(format!(
+                            "background_layers[{i}]: kind is \"image\" but no source set"
+                        ));
+                    },
+                    _ => {},
+                }
+            }
+        }
+
+        // Per-asset dimension checks + total budget.
+        let mut total_bytes = 0usize;
+        let mut names: Vec<&String> = self.assets.keys().collect();
+        names.sort();
+        for name in names {
+            let asset = &self.assets[name];
+            total_bytes += asset.byte_size();
+            if !asset.is_power_of_two() {
+                warnings.push(format!(
+                    "asset \"{name}\": {}x{} is not power-of-two (required on PSP)",
+                    asset.width, asset.height
+                ));
+            }
+        }
+        if total_bytes > crate::assets::ASSET_BUDGET_BYTES {
+            warnings.push(format!(
+                "assets: {} KB decoded exceeds the {} KB per-skin budget",
+                total_bytes / 1024,
+                crate::assets::ASSET_BUDGET_BYTES / 1024
+            ));
+        }
     }
 }

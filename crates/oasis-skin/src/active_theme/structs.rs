@@ -298,6 +298,27 @@ pub struct WallpaperTheme {
     pub noise_intensity: f32,
     /// Whether the wallpaper animates (wave phase shift).
     pub animated: bool,
+    /// Image asset key for `style = "image"` (e.g. `"assets/wall.png"`).
+    pub source: Option<String>,
+    /// Image fit mode: "cover" (default), "contain", "stretch", "tile".
+    pub fit: String,
+}
+
+/// An image background layer: a bitmap decal (watermark, logo) composited
+/// between the wallpaper and the icon layer, positioned by anchor and
+/// optionally drifting/pulsing via the shared layer animation system.
+#[derive(Debug, Clone)]
+pub struct ImageLayerTheme {
+    /// Asset key into `Skin::assets` (e.g. `"assets/logo.png"`).
+    pub source: String,
+    /// Anchor + fractional offset within the viewport.
+    pub position: oasis_vector::background::LayerPosition,
+    /// Drift / pulse animation parameters.
+    pub animation: oasis_vector::background::LayerAnimation,
+    /// Base opacity 0-255.
+    pub alpha: u8,
+    /// Whether the layer renders.
+    pub enabled: bool,
 }
 
 /// Toast notification theme.
@@ -364,6 +385,9 @@ pub struct ActiveTheme {
     // -- Background layers --
     /// Data-driven background decoration layers.
     pub background_layers: Vec<oasis_vector::BackgroundLayer>,
+    /// Image decal layers (`kind = "image"`), rendered between the
+    /// wallpaper and the vector background pass.
+    pub image_layers: Vec<ImageLayerTheme>,
     /// Maximum number of background layers to render (default 8).
     pub background_max_layers: u8,
     /// Whether to suppress background layer animations (default false).

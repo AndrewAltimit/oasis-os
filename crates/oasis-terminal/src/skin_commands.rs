@@ -38,8 +38,9 @@ fn lint_skin(target: &str) -> String {
             let warnings = skin.validate();
             if warnings.is_empty() {
                 format!(
-                    "{target}: clean ({} layout objects)",
-                    skin.layout.objects.len()
+                    "{target}: clean ({} layout objects, {} assets)",
+                    skin.layout.objects.len(),
+                    skin.assets.len()
                 )
             } else {
                 let mut out = format!("{target}: {} warning(s)\n", warnings.len());

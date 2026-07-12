@@ -293,7 +293,7 @@ pub fn refresh_wallpaper_if_pending(
     let w = state.active_theme.screen_w;
     let h = state.active_theme.screen_h;
     let old_tex = sdi.get("wallpaper").ok().and_then(|o| o.texture);
-    let wp_data = wallpaper::generate_from_config(w, h, &state.active_theme);
+    let wp_data = wallpaper::generate_with_assets(w, h, &state.active_theme, &state.skin.assets);
     match backend.load_texture(w, h, &wp_data) {
         Ok(new_tex) => {
             // Only clear the flag on a successful upload so transient backend
@@ -310,6 +310,9 @@ pub fn refresh_wallpaper_if_pending(
             if let Some(tex) = old_tex {
                 let _ = backend.destroy_texture(tex);
             }
+            // A pending refresh also means the skin (or resolution) changed,
+            // which invalidates layout textures and image decal layers.
+            refresh_skin_assets(state, sdi, backend);
         },
         Err(e) => {
             state
@@ -318,6 +321,33 @@ pub fn refresh_wallpaper_if_pending(
                 .push(format!("Warning: wallpaper refresh failed: {e}"));
         },
     }
+}
+
+/// Rebuild backend-side skin assets: layout `texture =` uploads and image
+/// background layers. Destroys the previous skin's textures first.
+pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend: &mut SdlBackend) {
+    for tex in state.skin_layout_textures.drain(..) {
+        let _ = backend.destroy_texture(tex);
+    }
+    oasis_core::image_layers::destroy_image_layers(sdi, backend, &state.image_layers);
+
+    state.skin_layout_textures = state.skin.upload_layout_textures(sdi, backend);
+    let sw = state.active_theme.screen_w;
+    let sh = state.active_theme.screen_h;
+    // Decals scale uniformly with the skin's native resolution so logos
+    // keep their aspect ratio on scaled-up screens.
+    let base_w = state.skin.manifest.screen_width.max(1) as f32;
+    let base_h = state.skin.manifest.screen_height.max(1) as f32;
+    let scale = (sw as f32 / base_w).min(sh as f32 / base_h);
+    state.image_layers = oasis_core::image_layers::create_image_layers(
+        sdi,
+        backend,
+        &state.active_theme.image_layers,
+        &state.skin.assets,
+        sw,
+        sh,
+        scale,
+    );
 }
 
 /// Minimum virtual resolution accepted from a live resize request. Anything
@@ -815,6 +845,8 @@ mod tests {
             active_transition: None,
             frame_counter: 0,
             pending_wallpaper_refresh: false,
+            skin_layout_textures: Vec::new(),
+            image_layers: Vec::new(),
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,

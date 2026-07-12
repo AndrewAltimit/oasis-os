@@ -149,3 +149,51 @@ impl SdiCore for SdlBackend {
         Ok(())
     }
 }
+
+// -------------------------------------------------------------------
+// Inherent texture helpers (not part of SdiCore)
+// -------------------------------------------------------------------
+
+impl SdlBackend {
+    /// Update the pixels of an existing streaming texture in place.
+    ///
+    /// Reuses the texture created by `load_texture` instead of the
+    /// destroy + create churn (GPU texture allocation, HashMap
+    /// insert/remove, unbounded id growth) that per-frame callers like
+    /// the shader wallpaper bridge would otherwise incur. The texture
+    /// dimensions must match `width` x `height`; a mismatch returns an
+    /// error so the caller can destroy and re-create at the new size.
+    pub fn update_texture(
+        &mut self,
+        tex: TextureId,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Result<()> {
+        validate_rgba_data(width, height, rgba_data)?;
+
+        let texture = self
+            .textures
+            .get_mut(&tex.0)
+            .ok_or_else(|| texture_not_found(tex.0))?;
+
+        let query = texture.query();
+        if query.width != width || query.height != height {
+            return Err(oasis_core::error::OasisError::Backend(
+                format!(
+                    "update_texture: size mismatch (texture is {}x{}, data is {width}x{height})",
+                    query.width, query.height
+                )
+                .into(),
+            ));
+        }
+
+        texture
+            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            })
+            .backend_err()?;
+
+        Ok(())
+    }
+}

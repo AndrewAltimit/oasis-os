@@ -925,6 +925,8 @@ mod tests {
             active_transition: None,
             frame_counter: 0,
             pending_wallpaper_refresh: false,
+            skin_layout_textures: Vec::new(),
+            image_layers: Vec::new(),
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,

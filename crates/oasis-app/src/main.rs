@@ -397,6 +397,8 @@ fn main() -> Result<()> {
         active_transition,
         frame_counter: 0,
         pending_wallpaper_refresh: false,
+        skin_layout_textures: Vec::new(),
+        image_layers: Vec::new(),
         radio_manager: RadioManager::new(),
         radio_source: None,
         archive_catalog: None,
@@ -486,10 +488,11 @@ fn main() -> Result<()> {
     // doing it here hides the cost under the splash animation.
     splash_status!("Generating wallpaper texture...");
     let wallpaper_tex = {
-        let wp_data = wallpaper::generate_from_config(
+        let wp_data = wallpaper::generate_with_assets(
             state.config.screen_width,
             state.config.screen_height,
             &state.active_theme,
+            &state.skin.assets,
         );
         backend.load_texture(
             state.config.screen_width,
@@ -508,6 +511,9 @@ fn main() -> Result<()> {
     {
         obj.visible = false;
     }
+    // Upload layout `texture =` references and image decal layers for the
+    // startup skin (skin swaps rebuild these via the pending-refresh path).
+    commands::refresh_skin_assets(&mut state, &mut sdi, &mut backend);
     log::info!("Wallpaper loaded");
     splash_wait!(5.2);
 
@@ -666,6 +672,17 @@ fn main() -> Result<()> {
         // `skin` command processed in the input loop — sets the pending flag
         // so the wallpaper texture is regenerated against the new theme.
         commands::refresh_wallpaper_if_pending(&mut state, &mut sdi, &mut backend);
+
+        // Animate image decal layers (drift/pulse) by mutating their SDI
+        // objects; static layers cost nothing here.
+        if !state.image_layers.is_empty() {
+            oasis_core::image_layers::tick_image_layers(
+                &mut sdi,
+                &state.image_layers,
+                state.frame_counter as f32 / 60.0,
+                state.active_theme.background_reduced_motion,
+            );
+        }
 
         // Tick radio, music player, and TV subsystems.
         radio_controller::tick(&mut state, &mut vfs);

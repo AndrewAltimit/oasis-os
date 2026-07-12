@@ -257,8 +257,16 @@ pub struct IconOverrides {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WallpaperConfig {
     /// Style: "gradient" (default), "solid", "none", "grid", "noise",
-    /// "scanlines", or "dots".
+    /// "scanlines", "dots", or "image".
     pub style: Option<String>,
+    /// Image asset for `style = "image"` (e.g. `"assets/wall.png"`).
+    /// Composited over a solid base from the first color stop, so
+    /// transparent regions show through.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Image fit mode: "cover" (default), "contain", "stretch", or "tile".
+    #[serde(default)]
+    pub fit: Option<String>,
     /// Hex color stops for gradient wallpaper.
     pub color_stops: Option<Vec<String>>,
     /// Whether PSIX arc ripple waves are enabled (default true).
@@ -583,8 +591,16 @@ pub struct BrowserOverrides {
 pub struct BackgroundLayerConfig {
     /// Layer kind: "grid", "dot_grid", "wireframe_sphere", "radar_sweep",
     /// "concentric_rings", "glass_shard", "scanlines", "eq_bars",
-    /// "crosshair", "floating_polygons", "pulsing_core".
+    /// "crosshair", "floating_polygons", "pulsing_core", "image".
     pub kind: String,
+    /// Image asset for `kind = "image"` (e.g. `"assets/logo.png"`) --
+    /// PSIX-style watermark decals positioned by the `position` table and
+    /// animated (drift/pulse) by the `animation` table.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Base opacity 0-255 for `kind = "image"` layers (default 255).
+    #[serde(default)]
+    pub alpha: Option<u8>,
     /// Element color (hex, default "#FFFFFF12").
     #[serde(default)]
     pub color: Option<String>,

@@ -97,7 +97,10 @@ pub fn generate_from_config_with_phase(
     phase: f32,
 ) -> Vec<u8> {
     match at.wallpaper.style.as_str() {
-        "solid" => {
+        // "image" renders a solid base from the first stop; the caller
+        // composites the bitmap on top via `generate_with_assets` so
+        // transparent PNG regions show the base color.
+        "solid" | "image" => {
             let c = at
                 .wallpaper
                 .stops
@@ -348,6 +351,176 @@ fn blend_channel(bg: u8, fg: u8, alpha: u8) -> u8 {
     ((fg as u16 * a + bg as u16 * (255 - a)) / 255) as u8
 }
 
+/// How an image wallpaper maps onto the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFit {
+    /// Scale to fill the screen, cropping overflow (preserves aspect).
+    Cover,
+    /// Scale to fit inside the screen, letterboxing (preserves aspect).
+    Contain,
+    /// Scale each axis independently to fill exactly.
+    Stretch,
+    /// Repeat at native size from the top-left corner.
+    Tile,
+}
+
+impl ImageFit {
+    /// Parse a fit mode string; unknown values fall back to `Cover`.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "contain" => Self::Contain,
+            "stretch" => Self::Stretch,
+            "tile" => Self::Tile,
+            _ => Self::Cover,
+        }
+    }
+}
+
+/// Generate a wallpaper, compositing the skin's image asset on top when
+/// `style = "image"`. Falls back to the plain procedural output when the
+/// referenced asset is missing.
+pub fn generate_with_assets(
+    w: u32,
+    h: u32,
+    at: &crate::active_theme::ActiveTheme,
+    assets: &std::collections::HashMap<String, oasis_skin::SkinAsset>,
+) -> Vec<u8> {
+    let mut buf = generate_from_config(w, h, at);
+    if at.wallpaper.style == "image"
+        && let Some(ref src) = at.wallpaper.source
+    {
+        if let Some(asset) = assets.get(src) {
+            composite_image(
+                &mut buf,
+                w,
+                h,
+                asset.width,
+                asset.height,
+                &asset.rgba,
+                ImageFit::parse(&at.wallpaper.fit),
+            );
+        } else {
+            log::warn!("wallpaper: missing asset \"{src}\"");
+        }
+    }
+    buf
+}
+
+/// Composite a decoded RGBA image over a wallpaper buffer.
+///
+/// Scaled modes sample bilinearly; `Tile` repeats at native size. The image
+/// is alpha-blended over the existing buffer (source-over), so transparent
+/// regions keep the procedural base.
+pub fn composite_image(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    img_w: u32,
+    img_h: u32,
+    img: &[u8],
+    fit: ImageFit,
+) {
+    if w == 0 || h == 0 || img_w == 0 || img_h == 0 {
+        return;
+    }
+    if img.len() < (img_w as usize) * (img_h as usize) * 4 {
+        return;
+    }
+
+    if fit == ImageFit::Tile {
+        for y in 0..h {
+            let sy = (y % img_h) as usize;
+            for x in 0..w {
+                let sx = (x % img_w) as usize;
+                let src = (sy * img_w as usize + sx) * 4;
+                let dst = ((y * w + x) * 4) as usize;
+                blend_pixel(buf, dst, img[src], img[src + 1], img[src + 2], img[src + 3]);
+            }
+        }
+        return;
+    }
+
+    // Scale factors: image pixels per screen pixel.
+    let sx_cover = img_w as f32 / w as f32;
+    let sy_cover = img_h as f32 / h as f32;
+    let (scale_x, scale_y) = match fit {
+        ImageFit::Cover => {
+            let s = sx_cover.min(sy_cover);
+            (s, s)
+        },
+        ImageFit::Contain => {
+            let s = sx_cover.max(sy_cover);
+            (s, s)
+        },
+        ImageFit::Stretch => (sx_cover, sy_cover),
+        ImageFit::Tile => unreachable!(),
+    };
+
+    // Center the mapped region on both axes (crops for cover,
+    // letterboxes for contain).
+    let off_x = (img_w as f32 - w as f32 * scale_x) * 0.5;
+    let off_y = (img_h as f32 - h as f32 * scale_y) * 0.5;
+
+    for y in 0..h {
+        let src_y = (y as f32 + 0.5) * scale_y + off_y - 0.5;
+        for x in 0..w {
+            let src_x = (x as f32 + 0.5) * scale_x + off_x - 0.5;
+            if src_x < -0.5
+                || src_y < -0.5
+                || src_x > img_w as f32 - 0.5
+                || src_y > img_h as f32 - 0.5
+            {
+                continue; // Letterbox area -- keep the base wallpaper.
+            }
+            let (r, g, b, a) = sample_bilinear(img, img_w, img_h, src_x, src_y);
+            let dst = ((y * w + x) * 4) as usize;
+            blend_pixel(buf, dst, r, g, b, a);
+        }
+    }
+}
+
+/// Source-over blend one RGBA pixel into the buffer at `dst`.
+fn blend_pixel(buf: &mut [u8], dst: usize, r: u8, g: u8, b: u8, a: u8) {
+    buf[dst] = blend_channel(buf[dst], r, a);
+    buf[dst + 1] = blend_channel(buf[dst + 1], g, a);
+    buf[dst + 2] = blend_channel(buf[dst + 2], b, a);
+    // Wallpaper stays opaque.
+}
+
+/// Bilinearly sample an RGBA image at fractional coordinates (clamped).
+fn sample_bilinear(img: &[u8], w: u32, h: u32, x: f32, y: f32) -> (u8, u8, u8, u8) {
+    let x = x.clamp(0.0, w as f32 - 1.0);
+    let y = y.clamp(0.0, h as f32 - 1.0);
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+
+    let px = |xi: u32, yi: u32| -> [f32; 4] {
+        let off = ((yi * w + xi) * 4) as usize;
+        [
+            img[off] as f32,
+            img[off + 1] as f32,
+            img[off + 2] as f32,
+            img[off + 3] as f32,
+        ]
+    };
+    let p00 = px(x0, y0);
+    let p10 = px(x1, y0);
+    let p01 = px(x0, y1);
+    let p11 = px(x1, y1);
+
+    let mut out = [0u8; 4];
+    for (i, o) in out.iter_mut().enumerate() {
+        let top = p00[i] + (p10[i] - p00[i]) * fx;
+        let bot = p01[i] + (p11[i] - p01[i]) * fx;
+        *o = (top + (bot - top) * fy).round().clamp(0.0, 255.0) as u8;
+    }
+    (out[0], out[1], out[2], out[3])
+}
+
 /// Multi-stop gradient with configurable angle and optional wave arcs.
 fn generate_gradient_config(
     w: u32,
@@ -567,5 +740,94 @@ mod tests {
         let buf1 = generate_from_config_with_phase(32, 32, &at, 1.0);
         // With phase change, at least some pixels should differ.
         assert_ne!(buf0, buf1);
+    }
+
+    // -- Image wallpaper compositing --
+
+    /// A 2x2 image: red, green / blue, white -- all opaque.
+    fn quad_image() -> Vec<u8> {
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 255, //
+            0, 0, 255, 255, 255, 255, 255, 255,
+        ]
+    }
+
+    #[test]
+    fn image_fit_parse() {
+        assert_eq!(ImageFit::parse("contain"), ImageFit::Contain);
+        assert_eq!(ImageFit::parse("stretch"), ImageFit::Stretch);
+        assert_eq!(ImageFit::parse("tile"), ImageFit::Tile);
+        assert_eq!(ImageFit::parse("cover"), ImageFit::Cover);
+        assert_eq!(ImageFit::parse("bogus"), ImageFit::Cover);
+    }
+
+    #[test]
+    fn composite_stretch_covers_buffer() {
+        let mut buf = vec![0u8; 8 * 8 * 4];
+        for i in (3..buf.len()).step_by(4) {
+            buf[i] = 255;
+        }
+        composite_image(&mut buf, 8, 8, 2, 2, &quad_image(), ImageFit::Stretch);
+        // Top-left quadrant is red-dominant, top-right green-dominant.
+        assert!(buf[0] > 200 && buf[1] < 60, "top-left {:?}", &buf[0..4]);
+        let tr = (7 * 4) as usize;
+        assert!(buf[tr + 1] > 200 && buf[tr] < 60, "top-right");
+    }
+
+    #[test]
+    fn composite_tile_repeats_native_size() {
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        composite_image(&mut buf, 4, 4, 2, 2, &quad_image(), ImageFit::Tile);
+        // Pixel (0,0) and (2,0) both sample the red source pixel.
+        assert_eq!(&buf[0..3], &[255, 0, 0]);
+        assert_eq!(&buf[(2 * 4) as usize..(2 * 4 + 3) as usize], &[255, 0, 0]);
+        // Pixel (1,0) and (3,0) sample green.
+        assert_eq!(&buf[4..7], &[0, 255, 0]);
+    }
+
+    #[test]
+    fn composite_contain_letterboxes() {
+        // Wide screen, square image scaled with "contain" leaves side bars.
+        let mut buf = vec![10u8; 8 * 4 * 4];
+        let img = vec![255u8; 4 * 4 * 4]; // 4x4 solid white
+        composite_image(&mut buf, 8, 4, 4, 4, &img, ImageFit::Contain);
+        // Center column is white.
+        let mid = ((2 * 8 + 4) * 4) as usize;
+        assert_eq!(buf[mid], 255);
+        // Leftmost column stays base (letterbox).
+        let left = ((2 * 8) * 4) as usize;
+        assert_eq!(buf[left], 10);
+    }
+
+    #[test]
+    fn composite_alpha_blends_over_base() {
+        let mut buf = vec![0u8; 4]; // 1x1 black
+        buf[3] = 255;
+        let img = vec![255, 255, 255, 128]; // 50% white
+        composite_image(&mut buf, 1, 1, 1, 1, &img, ImageFit::Stretch);
+        assert!((120..=135).contains(&buf[0]), "got {}", buf[0]);
+    }
+
+    #[test]
+    fn generate_with_assets_composites_image_style() {
+        let mut at = at_with_style("image");
+        at.wallpaper.source = Some("assets/wall.png".to_string());
+        at.wallpaper.fit = "stretch".to_string();
+        at.wallpaper.stops = vec![crate::backend::Color::rgb(0, 0, 0)];
+        let mut assets = std::collections::HashMap::new();
+        assets.insert(
+            "assets/wall.png".to_string(),
+            oasis_skin::SkinAsset {
+                width: 2,
+                height: 2,
+                rgba: vec![255u8; 2 * 2 * 4],
+            },
+        );
+        let buf = generate_with_assets(8, 8, &at, &assets);
+        assert_eq!(buf[0], 255); // image, not the black base
+
+        // Missing asset falls back to the plain base.
+        let buf = generate_with_assets(8, 8, &at, &std::collections::HashMap::new());
+        assert_eq!(buf[0], 0);
     }
 }

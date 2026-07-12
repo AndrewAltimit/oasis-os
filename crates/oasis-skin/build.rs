@@ -4,7 +4,9 @@
 // For each skin directory that contains `skin.toml`, `layout.toml`,
 // `features.toml`, `theme.toml`, and `strings.toml`, this generates a Rust
 // function `gen_{name}_skin() -> Result<Skin>` that loads the skin via
-// `include_str!` + `Skin::from_toml_full()`.
+// `include_str!` + `Skin::from_toml_full()`. PNG images in the skin's
+// `assets/` subdirectory are embedded with `include_bytes!` and registered
+// via `Skin::add_asset_png`.
 
 use std::env;
 use std::fs;
@@ -20,7 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-run if any skin file changes.
     println!("cargo::rerun-if-changed={}", skins_dir.display());
 
-    let mut skins: Vec<(String, String)> = Vec::new(); // (dir_name, fn_name)
+    // (dir_name, fn_name, asset file names)
+    let mut skins: Vec<(String, String, Vec<String>)> = Vec::new();
 
     if let Ok(entries) = fs::read_dir(&skins_dir) {
         let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).collect();
@@ -58,10 +61,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("cargo::rerun-if-changed={}", fp.display());
             }
 
+            // Collect PNG assets from the skin's assets/ subdirectory.
+            let assets_dir = path.join("assets");
+            let mut assets: Vec<String> = Vec::new();
+            if let Ok(asset_entries) = fs::read_dir(&assets_dir) {
+                for ae in asset_entries.filter_map(|e| e.ok()) {
+                    let ap = ae.path();
+                    let is_png = ap
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
+                    if is_png {
+                        println!("cargo::rerun-if-changed={}", ap.display());
+                        assets.push(ae.file_name().to_string_lossy().to_string());
+                    }
+                }
+                assets.sort();
+            }
+
             // Convert directory name to a valid Rust identifier.
             // e.g., "retro-cga" -> "retro_cga"
             let fn_name = dir_name.replace('-', "_");
-            skins.push((dir_name, fn_name));
+            skins.push((dir_name, fn_name, assets));
         }
     }
 
@@ -78,11 +98,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "use crate::loader::Skin;")?;
     writeln!(out)?;
 
-    for (dir_name, fn_name) in &skins {
+    for (dir_name, fn_name, assets) in &skins {
         writeln!(out, "/// Load the `{dir_name}` skin (generated from TOML).")?;
         writeln!(out, "#[allow(dead_code)]")?;
         writeln!(out, "pub fn gen_{fn_name}_skin() -> Result<Skin> {{")?;
-        writeln!(out, "    Skin::from_toml_full(")?;
+        if assets.is_empty() {
+            // No assets: the parse result is the tail expression.
+            writeln!(out, "    Skin::from_toml_full(")?;
+        } else {
+            writeln!(out, "    let mut skin = Skin::from_toml_full(")?;
+        }
         writeln!(
             out,
             "        include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
@@ -108,7 +133,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "        include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
              \"/../../skins/{dir_name}/strings.toml\")),"
         )?;
-        writeln!(out, "    )")?;
+        writeln!(out, "    ){}", if assets.is_empty() { "" } else { "?;" })?;
+        for asset in assets {
+            writeln!(
+                out,
+                "    skin.add_asset_png(\"assets/{asset}\", \
+                 include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
+                 \"/../../skins/{dir_name}/assets/{asset}\")))?;"
+            )?;
+        }
+        if !assets.is_empty() {
+            writeln!(out, "    Ok(skin)")?;
+        }
         writeln!(out, "}}")?;
         writeln!(out)?;
     }
@@ -117,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "/// Names of skins generated from TOML directories.")?;
     writeln!(out, "#[allow(dead_code)]")?;
     writeln!(out, "pub const GENERATED_SKIN_NAMES: &[&str] = &[")?;
-    for (dir_name, _) in &skins {
+    for (dir_name, _, _) in &skins {
         writeln!(out, "    \"{dir_name}\",")?;
     }
     writeln!(out, "];")?;
@@ -131,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "pub fn load_generated_skin(name: &str) -> Option<Result<Skin>> {{"
     )?;
     writeln!(out, "    match name {{")?;
-    for (dir_name, fn_name) in &skins {
+    for (dir_name, fn_name, _) in &skins {
         writeln!(out, "        \"{dir_name}\" => Some(gen_{fn_name}_skin()),")?;
     }
     writeln!(out, "        _ => None,")?;

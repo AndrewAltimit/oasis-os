@@ -168,6 +168,8 @@ impl Default for ActiveTheme {
                 grid_color: Color::rgba(255, 255, 255, 20),
                 noise_intensity: 0.3,
                 animated: false,
+                source: None,
+                fit: "cover".to_string(),
             },
             toast: ToastTheme {
                 info_bg: Color::rgba(50, 100, 200, 220),
@@ -187,6 +189,7 @@ impl Default for ActiveTheme {
                 slide_in: true,
             },
             background_layers: Vec::new(),
+            image_layers: Vec::new(),
             background_max_layers: 8,
             background_reduced_motion: false,
             background_complexity_budget: 200,

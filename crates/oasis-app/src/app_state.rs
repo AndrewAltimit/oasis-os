@@ -111,7 +111,13 @@ pub struct AppState {
     /// Set by `apply_skin_swap` when the wallpaper texture needs to be
     /// regenerated against the new skin's theme. Consumed by the main loop
     /// (which holds the backend needed to upload textures) and cleared.
+    /// Also triggers re-upload of skin layout textures and image layers.
     pub pending_wallpaper_refresh: bool,
+    /// Backend textures uploaded for the current skin's layout
+    /// `texture =` references. Destroyed and re-uploaded on skin swap.
+    pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
+    /// Image background layers (watermark decals) for the current skin.
+    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub archive_catalog: Option<ArchiveCatalog>,

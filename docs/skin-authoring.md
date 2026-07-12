@@ -15,6 +15,9 @@ skins/my_skin/
   theme.toml         # Optional: color palette and visual properties
   strings.toml       # Optional: terminal strings (prompts, boot text)
   corrupted.toml     # Optional: corrupted effect modifiers
+  assets/            # Optional: PNG images (chrome, wallpaper, decals)
+    bar_top.png
+    wall.png
 ```
 
 Only `skin.toml`, `layout.toml`, and `features.toml` are required. Missing
@@ -97,6 +100,7 @@ Available fields per object:
 | `shadow_level` | u8 | Drop shadow intensity (0-3) |
 | `stroke_width` | u16 | Border stroke width |
 | `stroke_color` | hex color | Border stroke color |
+| `texture` | string | Image asset to render instead of a fill (see [Image Assets](#image-assets)) |
 
 ### features.toml (Feature Flags)
 
@@ -303,6 +307,81 @@ text_garble_chance = 0.08   # Probability of character garbling
 intensity = 1.0             # Overall effect intensity (0.0-1.0)
 ```
 
+## Image Assets
+
+Skins can ship PNG images in an `assets/` subdirectory. Every `*.png` is
+decoded to RGBA at load time and referenced by its skin-relative path
+(`"assets/<file>.png"`). Skins under `skins/` that are compiled in as
+built-ins embed their assets in the binary automatically.
+
+Three things consume assets:
+
+### 1. Textured layout objects (shaped chrome)
+
+```toml
+# layout.toml
+[bar_top]
+x = 0
+y = 0
+w = 480
+h = 28
+texture = "assets/bar_top.png"   # alpha-blended, any silhouette works
+```
+
+The bitmap is alpha-blended, so a notched or curved bar is just the alpha
+silhouette of the PNG — no shape primitives needed (this is how PSIX does
+its shaped chrome). When `w`/`h` are omitted the object takes the image's
+native pixel size; otherwise the image is stretched to fit. The `alpha`
+field still applies, so textured chrome can be translucent.
+
+### 2. Image wallpapers
+
+```toml
+# theme.toml
+[wallpaper]
+style = "image"
+source = "assets/wall.png"
+fit = "cover"                 # cover | contain | stretch | tile
+color_stops = ["#101018"]     # base color under transparent regions
+```
+
+`cover` fills the screen and crops overflow, `contain` letterboxes,
+`stretch` ignores aspect ratio, `tile` repeats at native size. Scaled
+modes sample bilinearly. The image composites over a solid base from the
+first color stop, so a transparent PNG shows the base color through.
+
+### 3. Image background layers (watermark decals)
+
+```toml
+# theme.toml
+[[background_layers]]
+kind = "image"
+source = "assets/logo.png"
+alpha = 96                    # base opacity 0-255
+
+[background_layers.position]
+anchor = "bottom_right"       # same anchors as vector layers
+offset_x = -0.02              # fraction of screen width
+
+[background_layers.animation]
+pulse_speed = 0.25            # Hz; oscillates alpha
+pulse_min_alpha = 0.5
+drift_x = 4.0                 # px oscillation amplitude
+```
+
+Decals render between the wallpaper and the icon layer, scale uniformly
+with the skin's native resolution, and animate without re-uploading
+pixels. Set `reduced_motion = true` (features.toml) to freeze them.
+
+### Asset guidelines
+
+- **Power-of-two dimensions** (64, 128, 256, …) — required on PSP,
+  flagged by `skin lint` otherwise.
+- Stay under the **2 MB decoded budget** per skin (`skin lint` warns).
+  PNG on disk compresses far smaller; the budget is about RAM/VRAM.
+- `skin lint` also verifies every `texture =`, wallpaper `source`, and
+  layer `source` resolves to a shipped asset.
+
 ## Effect System
 
 Effects are pluggable visual modifiers applied each frame. Built-in effects:
@@ -345,8 +424,10 @@ silently do nothing:
 
 - Loading an external skin logs each unknown key as a warning.
 - `skin lint <name|path>` prints the full report: unknown keys, invalid
-  hex colors, out-of-bounds layout coordinates, and feature-flag
-  inconsistencies (e.g. `icons_per_page` exceeding the grid capacity).
+  hex colors, out-of-bounds layout coordinates, feature-flag
+  inconsistencies (e.g. `icons_per_page` exceeding the grid capacity),
+  and asset problems (missing `texture`/`source` references,
+  non-power-of-two images, decoded size over the per-skin budget).
 
 Lint your skin whenever a field appears to have no effect — a
 misspelled key is the most common cause. All shipped skins are kept
