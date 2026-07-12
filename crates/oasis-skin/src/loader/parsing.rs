@@ -67,7 +67,13 @@ pub struct SkinLayout {
 
 /// Apply a layout's SDI object definitions to an SDI registry.
 pub(crate) fn apply_layout_inner(layout: &SkinLayout, sdi: &mut SdiRegistry, sx: f64, sy: f64) {
-    for (name, def) in &layout.objects {
+    // Create in sorted name order: objects without an explicit `z` get the
+    // registry's auto-incrementing z, so HashMap iteration order would make
+    // their stacking (and any same-z tiebreak) random per process.
+    let mut names: Vec<&String> = layout.objects.keys().collect();
+    names.sort();
+    for name in names {
+        let def = &layout.objects[name];
         if !sdi.contains(name) {
             sdi.create(name);
         }

@@ -50,6 +50,17 @@ author = "Your Name"
 description = "A custom skin for OASIS_OS"
 screen_width = 480      # Virtual resolution width (default: 480)
 screen_height = 272     # Virtual resolution height (default: 272)
+
+# Desktop render size override. By default, PSP-native (480x272) skins
+# are upscaled to 1280x720 on desktop and other sizes render as-is;
+# set both fields to pin an explicit desktop resolution instead.
+# desktop_width = 960
+# desktop_height = 544
+
+# Base this skin on a built-in parent: only overrides live in this
+# skin's files, everything else comes from the parent (see
+# "Skin Inheritance" below).
+# inherits = "classic"
 ```
 
 ### layout.toml (SDI Object Definitions)
@@ -201,6 +212,10 @@ border_radius = 6
 shadow_intensity = 2
 # Enable gradient fills
 gradient_enabled = true
+# Success/positive status color (toasts, badges; default #50C878)
+success = "#8CEB32"
+# Warning/caution status color (default #FFB432)
+warning = "#FFC81E"
 ```
 
 #### WM Theme Overrides
@@ -487,6 +502,149 @@ once and cached; only animated layers rebuild per frame. The
 `background_performance` table (`max_layers`, `complexity_budget`,
 `reduced_motion`) applies to chrome layers too.
 
+## Named SDI Slots
+
+Every element on screen is a named SDI object. `layout.toml` objects are
+skin-owned (any name you like); the component names below are runtime-owned
+but *targetable*: a `layout.toml` entry with the same name pre-seeds the
+object, and `texture =` / `nine_patch =` assignments on them survive the
+component's per-frame updates (that is how shaped bars work).
+
+| Name(s) | Owner | Notes |
+|---------|-------|-------|
+| `wallpaper` | shell | Full-screen texture, z = -1000 |
+| `content_bg` | skin layout | Conventional content backdrop between the bars |
+| `bar_top`, `bar_top_line` | status bar | Background + separator; textureable |
+| `bar_tab_0..2`, `bar_tab_bg_0..2` | status bar | Top tab labels + pills (see tab pill textures) |
+| `bar_battery`, `bar_clock`, `bar_version`, `bar_usb` | status bar | Info text slots |
+| `bar_bottom`, `bar_bottom_line` | bottom bar | Background + separator; textureable |
+| `bar_btab_0..3`, `bar_bpipe_0..2` | bottom bar | Media category tabs + separators |
+| `bar_page_0..3`, `bar_bottom_clock`, `bar_url` | bottom bar | Page dots, clock, URL |
+| `icon_*` | dashboard | Per-icon families (body, stripe, fold, label, shadow, …) |
+| `cursor_highlight` | dashboard | Free-layout selection highlight |
+| `image_layer_*` | shell | `[[background_layers]]` image decals |
+| `sm_*` | start menu | Panel, items, footer |
+| `taskbar_*`, `start_btn_*` | taskbar | Window buttons, start button |
+| `toast_*` | toasts | Notification cards |
+| `term_*`, `terminal_bg` | terminal | Output lines, prompt, input bar |
+| `mouse_cursor` | shell | Software cursor (top-most) |
+
+Z-ordering: objects without an explicit `z` get an auto-incrementing value
+in **sorted name order** of the layout file, so stacking is deterministic;
+equal z resolves alphabetically. Free-layout icons render in a fixed band —
+selection highlight at z 40, icons at 50, the dragged icon at 60 — above
+layout chrome and below the overlay pass (bars, start menu, toasts).
+
+## Geometry Overrides
+
+`[geometry]` in theme.toml adjusts metrics without touching code:
+
+```toml
+[geometry]
+statusbar_height = 28      # default 24
+bottombar_height = 28      # default 24
+tab_row_height = 18        # 0 hides the top tab row
+icon_width = 26            # dashboard icon size
+icon_height = 30
+# Document-icon anatomy (icon_style = "document"):
+icon_stripe_h = 13         # header band height (default 12)
+icon_fold_size = 9         # corner fold size (default 10)
+icon_gfx_h = 22            # graphic area height
+icon_gfx_pad = 4           # padding around the graphic
+icon_label_pad = 4         # gap between icon and label
+# Also: tab_w, tab_h, tab_gap, tab_start_x, font_small/body/hint/heading,
+#   focus_ring_color/width/offset, cursor_pad, toast_* sizing,
+#   scrollbar_width, terminal_line_height, page_slide_duration, …
+```
+
+## Widget States
+
+`[widget_states.*]` overrides interactive widget colors (buttons, inputs,
+toggles, scrollbars) that are otherwise derived from the base palette:
+
+```toml
+[widget_states.button]
+normal_bg = "#3A3A40"
+hover_bg = "#55555C"
+pressed_bg = "#2A2A2E"
+disabled_bg = "#26262A"
+disabled_text = "#555555"
+
+[widget_states.input]
+bg = "#101014"
+border = "#3A3A40"
+focus_border = "#F5820F"
+
+[widget_states.toggle]
+track_off = "#FFFFFF14"
+track_on = "#F5820F"
+thumb = "#F0F0E8"
+
+[widget_states.scrollbar]
+track = "#FFFFFF0A"
+thumb = "#FFFFFF28"
+thumb_hover = "#FFFFFF50"
+```
+
+Unknown widget or slot names are flagged by `skin lint`.
+
+## Per-App Palettes (app_themes)
+
+`[app_themes.<app>]` recolors an app's interior without touching the
+global palette. Every slot falls back to the app's theme-derived default,
+so partial tables are fine.
+
+```toml
+[app_themes.terminal]
+prompt = "#8CEB32"
+
+[app_themes.file_manager]
+selected_bg = "#F5820F"
+```
+
+Recognized slots per app:
+
+- **`terminal`** — `bg`, `border`, `output`, `input_bg`, `prompt`,
+  `scrollbar_track`, `scrollbar_thumb`
+- **`file_manager`** — `bg`, `title_text`, `text`, `dim_text`,
+  `selected_bg`, `selected_text`, `divider`, `status_bg`, `status_text`,
+  `pane_bg`, `pane_text`, `folder_icon`, `folder_icon_tab`, `file_icon`,
+  `file_icon_fold`
+- **`settings`** — `bg`, `title_bar_bg`, `title_bar_text`, `text`,
+  `selected_text`, `selected_bg`, `selection_accent`, `dim_text`,
+  `divider`
+- **`tv_guide`** — `bg`, `grid_line`, `header_bg`, `selected_bg`,
+  `live_badge`, and the rest of the grid palette (see
+  `TvGuideColors` in `oasis-app-tv-guide`)
+
+## Skin Inheritance
+
+`inherits = "<builtin-name>"` in skin.toml bases a skin on a built-in
+parent — the recommended authoring pattern for variants. Merging is
+fill-only and child-wins: any file/table/field the child sets is used
+verbatim; anything it omits comes from the parent. Layout objects and
+assets merge by name, collection tables (`app_themes`, `widget_states`,
+`gradients`, `animations`) inherit whole-table only when the child
+defines none. Maximum depth is 3.
+
+The shipped `psix-tribute` skin demonstrates the pattern: it inherits
+`classic` and its files contain only the PSIX-specific overrides.
+
+## Hot Reload (skin-dev)
+
+Build the desktop shell with the `skin-dev` feature to iterate on a skin
+live — the running shell polls the active external skin directory once a
+second and re-applies the skin when any file changes:
+
+```bash
+cargo run -p oasis-app --features skin-dev -- my_skin
+# …edit skins/my_skin/theme.toml in another window; saving reloads it.
+```
+
+Reloads re-read the TOML and assets from disk (even for names that are
+also compiled in as built-ins) and play the skin's entrance transition,
+so what you see is exactly what a fresh boot would show.
+
 ## Effect System
 
 Effects are pluggable visual modifiers applied each frame. Built-in effects:
@@ -594,6 +752,30 @@ ls screenshots/
 | corrupted | Glitched terminal | Terminal + corruption effects |
 | desktop | Windowed desktop | WM + terminal |
 | modern | Purple accent, rounded | Dashboard + WM + browser |
+| psix-tribute | PSIX homage | Every theming capability (see below) |
+
+## Showcase: the psix-tribute skin
+
+`skins/psix-tribute/` is the acceptance test for the theming system —
+read it alongside this guide as a worked example of every capability:
+
+- **Inheritance**: `inherits = "classic"`, files carry only overrides.
+- **Wallpaper**: orange→lime multi-stop gradient with wave arcs
+  (`[wallpaper] color_stops`, `angle`, `wave_intensity`).
+- **Decal**: drifting, pulsing watermark (`[[background_layers]]`
+  `kind = "image"`).
+- **Shaped chrome**: alpha-silhouette `bar_top` / `bar_bottom` textures
+  assigned from layout.toml, plus `tab_texture_active/inactive` pills.
+- **Nine-patch WM chrome**: `titlebar_nine_patch` / `frame_nine_patch`.
+- **Vector chrome**: `[[chrome_layers]]` crosshair + corner rings.
+- **Desktop icons**: `icon_layout = "free"` with document-style icons,
+  tuned `[geometry]` icon anatomy, themed selection stroke, and a
+  themed `[cursor]` software pointer.
+- **Motion**: `entrance = "assemble"` with `ease_out_cubic`.
+- **Track C**: `[widget_states.*]` and `[app_themes.*]` overrides.
+
+Its PNG assets are generated by `scripts/gen-psix-tribute-assets.py`
+(deterministic procedural art — no external sources).
 
 ## Worked Example: "Neon" Skin
 

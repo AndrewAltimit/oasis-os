@@ -200,7 +200,10 @@ impl SdiRegistry {
     /// reaches `i32::MAX` to prevent overflow.
     fn renormalize_z_orders(&mut self) {
         let mut sorted: Vec<String> = self.objects.keys().cloned().collect();
-        sorted.sort_unstable_by_key(|name| self.objects[name].z);
+        // Tiebreak equal z by name: HashMap iteration order is random per
+        // process, so a bare z sort makes draw order (and thus which of two
+        // overlapping same-z objects wins) nondeterministic.
+        sorted.sort_unstable_by(|a, b| (self.objects[a].z, a).cmp(&(self.objects[b].z, b)));
         for (i, name) in sorted.iter().enumerate() {
             // Cast is safe: object count is bounded by memory well before i32::MAX.
             self.objects.get_mut(name).expect("key from own iterator").z = i as i32;
@@ -227,10 +230,16 @@ impl SdiRegistry {
                 self.z_sorted_base.push(name.clone());
             }
         }
-        self.z_sorted_base
-            .sort_unstable_by_key(|name| self.objects[name].z);
-        self.z_sorted_overlay
-            .sort_unstable_by_key(|name| self.objects[name].z);
+        // Tiebreak equal z by name so draw order is deterministic (HashMap
+        // iteration order is random per process; without this, overlapping
+        // same-z objects — e.g. free-layout icons over content_bg — flicker
+        // between runs).
+        self.z_sorted_base.sort_unstable_by(|a, b| {
+            (self.objects[a].z, a.as_str()).cmp(&(self.objects[b].z, b.as_str()))
+        });
+        self.z_sorted_overlay.sort_unstable_by(|a, b| {
+            (self.objects[a].z, a.as_str()).cmp(&(self.objects[b].z, b.as_str()))
+        });
         self.z_dirty = false;
     }
 
@@ -542,6 +551,25 @@ mod tests {
         assert!(reg.contains("temp"));
         reg.destroy("temp").unwrap();
         assert!(!reg.contains("temp"));
+    }
+
+    #[test]
+    fn equal_z_draw_order_is_deterministic_by_name() {
+        // Free-layout dashboards force icon objects to the same z as the
+        // content backdrop; the tie must resolve by name (not HashMap
+        // iteration order) so "icon_*" always draws over "content_bg".
+        let mut reg = SdiRegistry::new();
+        // Insert in an order that differs from the alphabetical result.
+        for name in ["icon_body_3", "content_bg", "icon_body_1", "icon_body_2"] {
+            let obj = reg.create(name);
+            obj.z = 0;
+        }
+        reg.z_dirty = true;
+        reg.ensure_z_sorted();
+        assert_eq!(
+            reg.z_sorted_base,
+            vec!["content_bg", "icon_body_1", "icon_body_2", "icon_body_3"]
+        );
     }
 
     #[test]

@@ -49,7 +49,18 @@ impl SkinTheme {
         let radius = self.border_radius.unwrap_or(4);
         let shadow_level = self.shadow_intensity.unwrap_or(1);
 
-        Theme {
+        let success = self
+            .success
+            .as_ref()
+            .and_then(|s| parse_hex_color(s))
+            .unwrap_or_else(|| Color::rgb(80, 200, 120));
+        let warning = self
+            .warning
+            .as_ref()
+            .and_then(|s| parse_hex_color(s))
+            .unwrap_or_else(|| Color::rgb(255, 180, 50));
+
+        let mut theme = Theme {
             background: bg,
             surface,
             surface_variant,
@@ -65,8 +76,8 @@ impl SkinTheme {
             accent_pressed,
             accent_subtle,
 
-            success: Color::rgb(80, 200, 120),
-            warning: Color::rgb(255, 180, 50),
+            success,
+            warning,
             error: err,
             info: accent,
 
@@ -84,6 +95,9 @@ impl SkinTheme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: accent,
+            toggle_thumb: text,
             tooltip_bg: lighten(bg, 0.15),
             tooltip_text: text,
 
@@ -113,7 +127,12 @@ impl SkinTheme {
             reduced_motion: false,
             font_scale: 1.0,
             text_direction: oasis_types::text_direction::TextDirection::Ltr,
+        };
+
+        if let Some(ref states) = self.widget_states {
+            apply_widget_states(&mut theme, states);
         }
+        theme
     }
 
     /// Build a `WmTheme` from the defaults plus any overrides.
@@ -183,6 +202,46 @@ impl SkinTheme {
             theme.btn_maximize_hover = lighten(theme.btn_maximize_color, 0.15);
         }
         theme
+    }
+}
+
+/// Apply `[widget_states.*]` color overrides onto a derived `Theme`.
+///
+/// Recognized slots (unknown widgets/keys are ignored; `skin lint` warns):
+/// - `button`: `normal_bg`, `hover_bg`, `pressed_bg`, `disabled_bg`,
+///   `disabled_text`
+/// - `input`: `bg`, `border`, `focus_border`
+/// - `toggle`: `track_off`, `track_on`, `thumb`
+/// - `scrollbar`: `track`, `thumb`, `thumb_hover`
+fn apply_widget_states(
+    theme: &mut Theme,
+    states: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) {
+    let get = |widget: &str, key: &str| {
+        states
+            .get(widget)
+            .and_then(|m| m.get(key))
+            .and_then(|hex| parse_hex_color(hex))
+    };
+    for (slot, key, widget_key) in [
+        (&mut theme.button_bg, "button", "normal_bg"),
+        (&mut theme.button_bg_hover, "button", "hover_bg"),
+        (&mut theme.button_bg_pressed, "button", "pressed_bg"),
+        (&mut theme.button_bg_disabled, "button", "disabled_bg"),
+        (&mut theme.text_disabled, "button", "disabled_text"),
+        (&mut theme.input_bg, "input", "bg"),
+        (&mut theme.input_border, "input", "border"),
+        (&mut theme.input_border_focus, "input", "focus_border"),
+        (&mut theme.toggle_track_off, "toggle", "track_off"),
+        (&mut theme.toggle_track_on, "toggle", "track_on"),
+        (&mut theme.toggle_thumb, "toggle", "thumb"),
+        (&mut theme.scrollbar_track, "scrollbar", "track"),
+        (&mut theme.scrollbar_thumb, "scrollbar", "thumb"),
+        (&mut theme.scrollbar_thumb_hover, "scrollbar", "thumb_hover"),
+    ] {
+        if let Some(c) = get(key, widget_key) {
+            *slot = c;
+        }
     }
 }
 

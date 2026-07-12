@@ -6,12 +6,17 @@ wallpapers, image decal layers, D1 shader texture reuse), M2
 (desktop icons: `icon_layout = "free"` with per-icon positions +
 column auto-flow, rect hit-testing + icon drag & drop, per-skin
 position persistence, `software_cursor` + `[cursor]` theming, free-mode
-selection highlight, D3 vector icon scene cache), and M3 (chrome &
+selection highlight, D3 vector icon scene cache), M3 (chrome &
 motion: `[[chrome_layers]]` overlay vector chrome, tab pill texture
 slots, `nine_patch` on layout objects + WM titlebar/frame chrome,
 `[transition]` entrance = assemble/fade/none + page_style + easing,
 free-mode hover focus, D4 static-layer op caching, D7 bar update_sdi
-churn) have landed. Branch: `feat/advanced-theming`.
+churn), and M4 (showcase + adoption: B7 `psix-tribute` skin, Track C
+wiring — `widget_states` into the UI toolkit, `app_themes` in
+terminal/file manager/settings, skin inheritance in practice, exposed
+toast/icon-anatomy/desktop-size constants — A6 `skin-dev` hot reload,
+skin-authoring docs v2, screenshot fixtures + deterministic z-order)
+have landed. Branch: `feat/advanced-theming`.
 
 ## Goal
 

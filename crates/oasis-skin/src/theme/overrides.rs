@@ -373,6 +373,21 @@ pub struct GeometryOverrides {
     /// X offset where top tabs start (default: proportional to screen).
     #[serde(default)]
     pub tab_start_x: Option<i32>,
+    /// Document-icon stripe (header band) height (default 12).
+    #[serde(default)]
+    pub icon_stripe_h: Option<u32>,
+    /// Document-icon corner fold size (default 10).
+    #[serde(default)]
+    pub icon_fold_size: Option<u32>,
+    /// Icon graphic area height (default 22).
+    #[serde(default)]
+    pub icon_gfx_h: Option<u32>,
+    /// Padding around the icon graphic area (default 4).
+    #[serde(default)]
+    pub icon_gfx_pad: Option<u32>,
+    /// Gap between icon graphic and its label (default 4).
+    #[serde(default)]
+    pub icon_label_pad: Option<i32>,
     /// Body text font size (default 12).
     #[serde(default)]
     pub font_body: Option<u16>,

@@ -1,0 +1,13 @@
+boot_text = [
+    "OASIS_OS [psix-tribute]",
+    "Loading theme: hot orange...",
+    "Desktop icons: free layout",
+    "Chrome: assembling...",
+    "Ready.",
+]
+prompt_format = "psix> "
+title = "OASIS_OS // PSIX TRIBUTE"
+home_label = "Desktop"
+welcome_message = "Welcome back. Type 'help' for commands."
+error_prefix = "err: "
+shutdown_message = "See you, space cowboy."

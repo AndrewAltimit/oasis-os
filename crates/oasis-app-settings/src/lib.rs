@@ -5,10 +5,18 @@
 //! published back to the shell through VFS IPC paths, and the shell applies
 //! them live to the running session.
 
-use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
+use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
+use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
+
+mod colors;
+
+pub use colors::SettingsColors;
 
 /// VFS IPC path used to request a skin change.
 pub const SKIN_CHANGE_REQUEST_PATH: &str = "/system/ipc/skin-change";
@@ -441,10 +449,158 @@ impl SettingsApp {
             _ => {},
         }
     }
+
+    /// Re-color the generic SDI objects created by `render_app_chrome` /
+    /// `render_content_sdi` with the per-app palette. When no
+    /// `[app_themes.settings]` overrides exist, [`SettingsColors::from_theme`]
+    /// returns exactly the theme values the shared renderer already applied,
+    /// so this pass is a visual no-op.
+    fn apply_sdi_colors(&self, sdi: &mut SdiRegistry, colors: &SettingsColors) {
+        if let Ok(obj) = sdi.get_mut("app_bg") {
+            obj.color = colors.bg;
+        }
+        if let Ok(obj) = sdi.get_mut("app_title_bg") {
+            obj.color = colors.title_bar_bg;
+        }
+        if let Ok(obj) = sdi.get_mut("app_title_text") {
+            obj.text_color = colors.title_bar_text;
+        }
+        if let Ok(obj) = sdi.get_mut("app_sel_bg") {
+            obj.color = colors.selected_bg;
+        }
+        if let Ok(obj) = sdi.get_mut("app_sel_accent") {
+            obj.color = colors.selection_accent;
+        }
+        if let Ok(obj) = sdi.get_mut("app_scroll") {
+            obj.text_color = colors.dim_text;
+        }
+        // Line objects: same 100-object cap as `hide_app_sdi`.
+        for i in 0..100 {
+            let name = format!("app_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.text_color = if i == self.content.cursor {
+                    colors.selected_text
+                } else {
+                    colors.text
+                };
+            }
+        }
+    }
 }
 
 impl App for SettingsApp {
-    impl_content_app_methods!(content);
+    fn title(&self) -> &str {
+        &self.content.title
+    }
+
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
+
+    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // Same sequence as `impl_content_app_methods!`, followed by a
+        // per-app recolor pass driven by `[app_themes.settings]`.
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+        self.apply_sdi_colors(sdi, &SettingsColors::from_theme(at));
+    }
+
+    /// Windowed renderer. Mirrors
+    /// `oasis_app_core::render::draw_content_windowed` line-for-line, but
+    /// sources colors from [`SettingsColors`] so skins can restyle the
+    /// Settings window via `[app_themes.settings]`. Keep the layout metrics
+    /// in sync with the shared renderer (and with `handle_click`).
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        let colors = SettingsColors::from_theme(at);
+        let content = &self.content;
+
+        // Title row. Settings never sets `browse_dir`/`viewing_file`, so the
+        // generic renderer's directory suffix is always empty here.
+        backend.draw_text(&content.title, cx + 4, cy + 2, 12, colors.title_bar_text)?;
+
+        // Separator.
+        backend.fill_rect(
+            cx,
+            cy + at.app.title_bar_height as i32 - 4,
+            cw,
+            1,
+            colors.divider,
+        )?;
+
+        // Content lines.
+        let line_h = at.terminal_line_height.max(12) as i32;
+        let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
+        let visible = content
+            .lines
+            .len()
+            .saturating_sub(content.scroll)
+            .min(max_lines);
+        for i in 0..visible {
+            let line_idx = content.scroll + i;
+            let line = &content.lines[line_idx];
+            let prefix = if i == content.cursor { "> " } else { "  " };
+            let text = format!("{prefix}{line}");
+            let text_color = if i == content.cursor {
+                colors.selected_text
+            } else {
+                colors.text
+            };
+            let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
+            backend.draw_text(&text, cx + 4, y, 12, text_color)?;
+        }
+
+        // Scroll indicator.
+        let scroll_text = if content.lines.len() > max_lines {
+            format!(
+                "[{}/{}]  Cancel=back",
+                content.scroll + 1,
+                content.lines.len().saturating_sub(max_lines) + 1,
+            )
+        } else {
+            "Cancel=back".to_string()
+        };
+        let scroll_y = cy + ch as i32 - 14;
+        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, colors.dim_text)?;
+
+        Ok(())
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+
+    fn take_pending_request(&mut self) -> Option<(String, String)> {
+        self.content.pending_vfs_request.take()
+    }
+
+    fn peek_pending_request(&self) -> Option<&(String, String)> {
+        self.content.pending_vfs_request.as_ref()
+    }
+
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         // Always check for shell-published state updates first so the display
@@ -1115,5 +1271,53 @@ mod tests {
         assert!(parse_resolution("not a resolution").is_none());
         assert!(parse_resolution("800").is_none());
         assert!(parse_resolution("ax600").is_none());
+    }
+
+    // -- Per-app color theming --
+
+    #[test]
+    fn update_sdi_defaults_match_shared_renderer() {
+        // Without [app_themes.settings], the recolor pass must leave every
+        // object exactly as the shared renderer set it.
+        let mut app = make_app();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        app.update_sdi(&mut sdi, &at);
+
+        let bg = sdi.get("app_bg").expect("app_bg exists");
+        assert_eq!(bg.color, at.app.bg);
+        let sel = sdi.get("app_sel_bg").expect("app_sel_bg exists");
+        assert_eq!(sel.color, at.app.selected_bg);
+        // The cursor starts on the active skin row (ITEMS_START + 0), so
+        // that line gets selected_text and line 0 gets the normal color.
+        let line = sdi.get("app_line_0").expect("app_line_0 exists");
+        assert_eq!(line.text_color, at.app.text);
+        let cursor_name = format!("app_line_{}", app.content.cursor);
+        let cursor_line = sdi.get(&cursor_name).expect("cursor line exists");
+        assert_eq!(cursor_line.text_color, at.app.selected_text);
+    }
+
+    #[test]
+    fn update_sdi_applies_settings_overrides() {
+        use oasis_types::backend::Color;
+
+        let mut app = make_app();
+        let mut sdi = SdiRegistry::new();
+        let mut at = ActiveTheme::default();
+        let bg = Color::rgba(1, 2, 3, 255);
+        let text = Color::rgba(4, 5, 6, 255);
+        let overrides = at.app_themes.entry("settings".to_string()).or_default();
+        overrides.insert("bg".to_string(), bg);
+        overrides.insert("text".to_string(), text);
+
+        app.update_sdi(&mut sdi, &at);
+
+        let obj = sdi.get("app_bg").expect("app_bg exists");
+        assert_eq!(obj.color, bg);
+        let line = sdi.get("app_line_1").expect("app_line_1 exists");
+        assert_eq!(line.text_color, text);
+        // Slots without overrides keep the theme default.
+        let title = sdi.get("app_title_bg").expect("app_title_bg exists");
+        assert_eq!(title.color, at.app.title_bar_bg);
     }
 }

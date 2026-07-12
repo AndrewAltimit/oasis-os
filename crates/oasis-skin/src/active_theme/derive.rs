@@ -172,11 +172,31 @@ impl ActiveTheme {
             tab_start_x: 34,
             pipe_gap: 5,
             r_hint_w: 28,
-            icon_stripe_h: 12,
-            icon_fold_size: 10,
-            icon_gfx_h: 22,
-            icon_gfx_pad: 4,
-            icon_label_pad: 4,
+            icon_stripe_h: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_stripe_h)
+                .unwrap_or(12),
+            icon_fold_size: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_fold_size)
+                .unwrap_or(10),
+            icon_gfx_h: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_gfx_h)
+                .unwrap_or(22),
+            icon_gfx_pad: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_gfx_pad)
+                .unwrap_or(4),
+            icon_label_pad: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_label_pad)
+                .unwrap_or(4),
             tab_w_override: skin
                 .geometry
                 .as_ref()
@@ -899,9 +919,19 @@ impl ActiveTheme {
     fn derive_toast_theme(skin: &SkinTheme, primary: Color, text: Color) -> ToastTheme {
         ToastTheme {
             info_bg: with_alpha(primary, 220),
-            success_bg: Color::rgba(60, 180, 100, 220),
+            success_bg: skin
+                .success
+                .as_ref()
+                .and_then(|s| parse_hex_color(s))
+                .map(|c| with_alpha(c, 220))
+                .unwrap_or(Color::rgba(60, 180, 100, 220)),
             error_bg: with_alpha(skin.error_color(), 220),
-            warning_bg: Color::rgba(230, 170, 40, 220),
+            warning_bg: skin
+                .warning
+                .as_ref()
+                .and_then(|s| parse_hex_color(s))
+                .map(|c| with_alpha(c, 220))
+                .unwrap_or(Color::rgba(230, 170, 40, 220)),
             text_color: text,
             border_radius: skin
                 .geometry
@@ -1267,6 +1297,9 @@ impl ActiveTheme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: primary,
+            toggle_thumb: text,
             tooltip_bg: lighten(background, 0.15),
             tooltip_text: text,
             font_size_xs: 8,

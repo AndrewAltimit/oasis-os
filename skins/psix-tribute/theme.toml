@@ -1,0 +1,134 @@
+# psix-tribute theme -- hot orange chrome over the classic PSIX
+# orange -> lime wallpaper. Exercises every M0-M4 theming capability:
+# image wallpaper stops, decal + chrome layers, shaped bar textures,
+# nine-patch WM chrome, tab pill textures, widget/app state palettes,
+# assemble entrance, themed cursor.
+
+# -- 9 base colors --
+background = "#141416"
+primary = "#F5820F"
+secondary = "#3A3A40"
+text = "#F0F0E8"
+dim_text = "#8A8A84"
+status_bar = "#1A1A1E"
+prompt = "#8CEB32"
+output = "#D8D8D0"
+error = "#FF5040"
+
+# Extended palette
+accent = "#F5820F"
+success = "#8CEB32"
+warning = "#FFC81E"
+border_radius = 3
+shadow_intensity = 1
+gradient_enabled = true
+
+# -- PSIX orange -> lime multi-stop wallpaper with wave arcs --
+[wallpaper]
+style = "gradient"
+color_stops = ["#F56E0F", "#FFAA0F", "#FFE61E", "#8CEB32", "#C8FC82"]
+angle = 8.0
+wave_enabled = true
+wave_intensity = 1.1
+
+# -- Drifting watermark decal (between wallpaper and icons) --
+[[background_layers]]
+kind = "image"
+source = "assets/watermark.png"
+alpha = 60
+
+[background_layers.position]
+anchor = "bottom_right"
+offset_x = -0.04
+offset_y = -0.06
+
+[background_layers.animation]
+pulse_speed = 0.2
+pulse_min_alpha = 0.6
+drift_x = 3.0
+
+# -- Vector chrome accents in the overlay pass --
+[[chrome_layers]]
+kind = "crosshair"
+size = 9
+color = "#F5820F55"
+position = { anchor = "top_right", offset_x = -0.035, offset_y = 0.045 }
+
+[[chrome_layers]]
+kind = "concentric_rings"
+count = 3
+radius = 26
+stroke_width = 1
+color = "#FFFFFF16"
+position = { anchor = "bottom_left", offset_x = 0.03, offset_y = -0.04 }
+
+# -- Motion language --
+[transition]
+entrance = "assemble"
+entrance_ms = 750
+page_style = "slide"
+easing = "ease_out_cubic"
+fade_color = "#0A0A0C"
+
+# -- Bars: shaped textures live in layout.toml; pills are bitmaps --
+[bar_overrides]
+tab_texture_active = "assets/tab_active.png"
+tab_texture_inactive = "assets/tab_inactive.png"
+text_shadow = true
+text_shadow_color = "#000000A0"
+# The bar textures bake their own orange accent edge; hide the
+# procedural separator line so it doesn't double up.
+separator_color = "#00000000"
+
+# -- Window chrome: nine-patch titlebar + frame --
+[wm_theme]
+titlebar_nine_patch = { image = "assets/titlebar.png", insets = [8, 4, 8, 4] }
+frame_nine_patch = { image = "assets/frame.png", insets = [4, 4, 4, 4] }
+titlebar_text = "#F0F0E8"
+titlebar_text_inactive = "#8A8A84"
+
+# -- Themed software cursor --
+[cursor]
+texture = "assets/cursor.png"
+hotspot = [1, 1]
+
+# -- PSIX document icons with tuned anatomy --
+[icon_overrides]
+icon_style = "document"
+body_color = "#ECECE4"
+fold_color = "#C8C8BE"
+outline_color = "#3A3A40"
+label_color = "#141416"
+cursor_style = "stroke"
+cursor_color = "#F5820F"
+cursor_stroke_width = 2
+
+[geometry]
+statusbar_height = 28
+bottombar_height = 28
+tab_row_height = 18
+icon_width = 26
+icon_height = 30
+icon_stripe_h = 13
+icon_fold_size = 9
+focus_ring_color = "#F5820FAA"
+
+# -- Interactive widget states (Track C showcase) --
+[widget_states.button]
+normal_bg = "#3A3A40"
+hover_bg = "#55555C"
+pressed_bg = "#2A2A2E"
+disabled_bg = "#26262A"
+
+[widget_states.toggle]
+track_off = "#FFFFFF14"
+track_on = "#F5820F"
+thumb = "#F0F0E8"
+
+[widget_states.input]
+focus_border = "#F5820F"
+
+# -- App palettes (Track C showcase) --
+[app_themes.tv_guide]
+selected_bg = "#F5820F"
+live_badge = "#8CEB32"

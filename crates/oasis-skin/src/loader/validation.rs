@@ -275,6 +275,46 @@ impl Skin {
             }
         }
 
+        // Widget state overrides: warn on widget/slot names nothing reads.
+        if let Some(ref states) = self.theme.widget_states {
+            const KNOWN: &[(&str, &[&str])] = &[
+                (
+                    "button",
+                    &[
+                        "normal_bg",
+                        "hover_bg",
+                        "pressed_bg",
+                        "disabled_bg",
+                        "disabled_text",
+                    ],
+                ),
+                ("input", &["bg", "border", "focus_border"]),
+                ("toggle", &["track_off", "track_on", "thumb"]),
+                ("scrollbar", &["track", "thumb", "thumb_hover"]),
+            ];
+            let mut widgets: Vec<&String> = states.keys().collect();
+            widgets.sort();
+            for widget in widgets {
+                match KNOWN.iter().find(|(w, _)| w == widget) {
+                    None => warnings.push(format!(
+                        "widget_states.{widget}: unknown widget (expected one of: \
+                         button, input, toggle, scrollbar)"
+                    )),
+                    Some((_, keys)) => {
+                        let mut slots: Vec<&String> = states[widget].keys().collect();
+                        slots.sort();
+                        for slot in slots {
+                            if !keys.contains(&slot.as_str()) {
+                                warnings.push(format!(
+                                    "widget_states.{widget}.{slot}: unknown state slot"
+                                ));
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
         // Per-asset dimension checks + total budget.
         let mut total_bytes = 0usize;
         let mut names: Vec<&String> = self.assets.keys().collect();

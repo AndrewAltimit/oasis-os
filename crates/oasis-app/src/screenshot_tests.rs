@@ -18,6 +18,8 @@
 //!   screenshots/tests/{scenario}/golden.png  (with --bless)
 //!   screenshots/tests/report.html            (with --report)
 
+mod capture_assets;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -270,6 +272,35 @@ fn render_and_save(
     // Render again after swap so read_pixels gets the presented frame.
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
+
+    let pixels = backend.read_pixels(0, 0, w, h)?;
+    save_png(path, w, h, &pixels)?;
+    Ok(())
+}
+
+/// `render_and_save` plus the skin's `[[chrome_layers]]` overlay pass —
+/// a no-op for skins without chrome layers, so historical goldens are
+/// unaffected.
+fn render_and_save_themed(
+    backend: &mut SdlBackend,
+    sdi: &mut SdiRegistry,
+    w: u32,
+    h: u32,
+    path: &Path,
+    at: &ActiveTheme,
+) -> anyhow::Result<()> {
+    if at.chrome_layers.is_empty() {
+        return render_and_save(backend, sdi, w, h, path);
+    }
+    let mut cache = oasis_core::vector_overlay::LayerOpsCache::new();
+    backend.clear(Color::rgb(10, 10, 18))?;
+    sdi.draw(backend)?;
+    oasis_core::vector_overlay::render_vector_chrome(backend, at, 0, &mut cache)?;
+    backend.swap_buffers()?;
+
+    backend.clear(Color::rgb(10, 10, 18))?;
+    sdi.draw(backend)?;
+    oasis_core::vector_overlay::render_vector_chrome(backend, at, 0, &mut cache)?;
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
     save_png(path, w, h, &pixels)?;
@@ -662,9 +693,12 @@ fn run_skin_scenario(
 
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
+    // Skin assets (layout textures, tab pills, image decals) — no-op for
+    // skins without an assets/ directory.
+    capture_assets::setup(&skin, &active_theme, &mut sdi, backend, &mut status_bar);
 
     // Wallpaper.
-    let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
+    let wp_data = wallpaper::generate_with_assets(w, h, &active_theme, &skin.assets);
     let wallpaper_tex = backend.load_texture(w, h, &wp_data)?;
     {
         let obj = sdi.create("wallpaper");
@@ -676,12 +710,19 @@ fn run_skin_scenario(
         obj.z = -1000;
     }
 
-    // Cursor.
+    // Cursor (themed `[cursor]` texture when the skin opts in).
     let mut mouse_cursor = CursorState::new(w, h);
     mouse_cursor.scale = active_theme.cursor_scale;
     {
-        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(active_theme.cursor_scale);
+        let themed = capture_assets::themed_cursor(&skin, &active_theme);
+        let is_themed = themed.is_some();
+        let (cursor_pixels, cw, ch) =
+            themed.unwrap_or_else(|| cursor::generate_cursor_pixels(active_theme.cursor_scale));
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
+        if is_themed {
+            mouse_cursor.size = Some((cw, ch));
+            mouse_cursor.hotspot = active_theme.cursor_hotspot;
+        }
         mouse_cursor.update_sdi(&mut sdi);
         if let Ok(obj) = sdi.get_mut("mouse_cursor") {
             obj.texture = Some(cursor_tex);
@@ -704,7 +745,14 @@ fn run_skin_scenario(
                 sm.update_sdi(&mut sdi, &active_theme);
             }
             mouse_cursor.update_sdi(&mut sdi);
-            render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+            render_and_save_themed(
+                backend,
+                &mut sdi,
+                w,
+                h,
+                &out_dir.join("actual.png"),
+                &active_theme,
+            )?;
         },
         "terminal" => {
             dashboard.hide_sdi(&mut sdi);
@@ -728,7 +776,14 @@ fn run_skin_scenario(
                 "status",
             );
             mouse_cursor.update_sdi(&mut sdi);
-            render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+            render_and_save_themed(
+                backend,
+                &mut sdi,
+                w,
+                h,
+                &out_dir.join("actual.png"),
+                &active_theme,
+            )?;
         },
         "start_menu" => {
             dashboard.update_sdi(&mut sdi, &active_theme);
@@ -740,7 +795,14 @@ fn run_skin_scenario(
             }
             mouse_cursor.set_position(40, 250);
             mouse_cursor.update_sdi(&mut sdi);
-            render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+            render_and_save_themed(
+                backend,
+                &mut sdi,
+                w,
+                h,
+                &out_dir.join("actual.png"),
+                &active_theme,
+            )?;
         },
         "windows" => {
             dashboard.hide_sdi(&mut sdi);
@@ -751,7 +813,20 @@ fn run_skin_scenario(
             }
             hide_terminal_objects(&mut sdi);
 
-            let mut wm = WindowManager::new(w, h);
+            // Historical scenarios render with the default WM theme; only
+            // skins that define nine-patch chrome opt into their themed WM
+            // so the bitmap chrome shows up in the fixture.
+            let has_patches =
+                skin.theme.wm_theme.as_ref().is_some_and(|o| {
+                    o.titlebar_nine_patch.is_some() || o.frame_nine_patch.is_some()
+                });
+            let mut wm = if has_patches {
+                let mut wm_theme = skin.theme.build_wm_theme();
+                capture_assets::resolve_wm_patches(&skin, &mut wm_theme, backend);
+                WindowManager::with_theme(w, h, wm_theme)
+            } else {
+                WindowManager::new(w, h)
+            };
             let configs = [
                 WindowConfig {
                     id: "win1".to_string(),
@@ -792,7 +867,14 @@ fn run_skin_scenario(
             }
             mouse_cursor.set_position(250, 130);
             mouse_cursor.update_sdi(&mut sdi);
-            render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+            render_and_save_themed(
+                backend,
+                &mut sdi,
+                w,
+                h,
+                &out_dir.join("actual.png"),
+                &active_theme,
+            )?;
         },
         "browser" => {
             dashboard.hide_sdi(&mut sdi);

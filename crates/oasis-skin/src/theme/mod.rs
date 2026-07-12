@@ -62,6 +62,12 @@ pub struct SkinTheme {
     /// Accent hover color override (default: derived from the accent).
     #[serde(default)]
     pub accent_hover: Option<String>,
+    /// Success/positive color override (toasts, status badges).
+    #[serde(default)]
+    pub success: Option<String>,
+    /// Warning/caution color override (toasts, status badges).
+    #[serde(default)]
+    pub warning: Option<String>,
     /// Default border radius for UI elements (pixels).
     #[serde(default)]
     pub border_radius: Option<u16>,
@@ -244,6 +250,8 @@ impl Default for SkinTheme {
             surface: None,
             accent: None,
             accent_hover: None,
+            success: None,
+            warning: None,
             border_radius: None,
             shadow_intensity: None,
             gradient_enabled: None,
@@ -559,6 +567,60 @@ pressed_bg = "#353535"
         let states = skin.widget_states.unwrap();
         let button = &states["button"];
         assert_eq!(button["hover_bg"], "#656565");
+    }
+
+    #[test]
+    fn widget_states_override_ui_theme() {
+        let toml = r##"
+[widget_states.button]
+normal_bg = "#505050"
+hover_bg = "#656565"
+
+[widget_states.toggle]
+track_on = "#FF8C1E"
+thumb = "#101010"
+
+[widget_states.input]
+focus_border = "#00FFAA"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.button_bg, Color::rgb(0x50, 0x50, 0x50));
+        assert_eq!(theme.button_bg_hover, Color::rgb(0x65, 0x65, 0x65));
+        assert_eq!(theme.toggle_track_on, Color::rgb(0xFF, 0x8C, 0x1E));
+        assert_eq!(theme.toggle_thumb, Color::rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.input_border_focus, Color::rgb(0x00, 0xFF, 0xAA));
+        // Slots not overridden keep their derived values.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.button_bg_pressed, plain.button_bg_pressed);
+        assert_eq!(theme.toggle_track_off, plain.toggle_track_off);
+    }
+
+    #[test]
+    fn ui_theme_toggle_defaults_derive_from_accent() {
+        let skin = SkinTheme::default();
+        let theme = skin.to_ui_theme();
+        // Without widget_states, the toggle derives from the accent family
+        // exactly as the widget hardcoded before.
+        assert_eq!(theme.toggle_track_off, Color::rgba(255, 255, 255, 10));
+        assert_eq!(theme.toggle_track_on, theme.accent);
+        assert_eq!(theme.toggle_thumb, theme.text_on_accent);
+    }
+
+    #[test]
+    fn success_warning_override_toast_and_ui() {
+        let toml = r##"
+success = "#00CC66"
+warning = "#FFAA00"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.success, Color::rgb(0x00, 0xCC, 0x66));
+        assert_eq!(theme.warning, Color::rgb(0xFF, 0xAA, 0x00));
+        // Defaults are the historical literals.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(plain.success, Color::rgb(80, 200, 120));
+        assert_eq!(plain.warning, Color::rgb(255, 180, 50));
     }
 
     // -- Phase 12: expanded SkinTheme tests --

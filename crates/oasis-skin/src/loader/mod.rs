@@ -40,6 +40,13 @@ pub struct SkinManifest {
     /// Virtual screen height in pixels (default 272).
     #[serde(default = "default_height")]
     pub screen_height: u32,
+    /// Desktop render width override (default: PSP-native 480x272 skins
+    /// are upscaled to 1280x720 on desktop; other sizes render as-is).
+    #[serde(default)]
+    pub desktop_width: Option<u32>,
+    /// Desktop render height override (see `desktop_width`).
+    #[serde(default)]
+    pub desktop_height: Option<u32>,
     /// Parent skin to inherit from (built-in name).
     ///
     /// Child skin only needs to specify overrides; non-overridden fields
@@ -585,8 +592,17 @@ impl Skin {
         if ct.surface.is_none() {
             ct.surface.clone_from(&pt.surface);
         }
+        if ct.accent.is_none() {
+            ct.accent.clone_from(&pt.accent);
+        }
         if ct.accent_hover.is_none() {
             ct.accent_hover.clone_from(&pt.accent_hover);
+        }
+        if ct.success.is_none() {
+            ct.success.clone_from(&pt.success);
+        }
+        if ct.warning.is_none() {
+            ct.warning.clone_from(&pt.warning);
         }
         if ct.border_radius.is_none() {
             ct.border_radius = pt.border_radius;
@@ -620,6 +636,15 @@ impl Skin {
         }
         if ct.wallpaper.is_none() {
             ct.wallpaper.clone_from(&pt.wallpaper);
+        }
+        if ct.cursor.is_none() {
+            ct.cursor.clone_from(&pt.cursor);
+        }
+        if ct.background_layers.is_none() {
+            ct.background_layers.clone_from(&pt.background_layers);
+        }
+        if ct.chrome_layers.is_none() {
+            ct.chrome_layers.clone_from(&pt.chrome_layers);
         }
         if ct.geometry.is_none() {
             ct.geometry.clone_from(&pt.geometry);

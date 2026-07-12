@@ -21,6 +21,13 @@ use crate::skin::SkinFeatures;
 use crate::ui::flex::GridLayout;
 use crate::ui::layout::Padding;
 
+/// Base-layer z for free-layout icons: above the skin's layout chrome
+/// (auto z stays in low single digits) and the selection highlight
+/// (`FREE_ICON_Z - 10`), below the overlay pass (bars, start menu).
+pub const FREE_ICON_Z: i32 = 50;
+/// z for the icon being dragged, raised above its siblings.
+pub const FREE_ICON_DRAG_Z: i32 = 60;
+
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
 pub struct DashboardConfig {
@@ -429,10 +436,16 @@ impl DashboardState {
                 _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
             }
 
-            // In free layout, raise the dragged icon above its siblings so
+            // In free layout, lift icons into an explicit z band above the
+            // skin's base-layer chrome (layout objects take single-digit
+            // auto z), with the dragged icon raised above its siblings so
             // it stays visible while crossing them.
             if self.config.free_layout {
-                let z = if self.drag_index == Some(i) { 60 } else { 0 };
+                let z = if self.drag_index == Some(i) {
+                    FREE_ICON_DRAG_Z
+                } else {
+                    FREE_ICON_Z
+                };
                 for name in names.all() {
                     if let Ok(obj) = sdi.get_mut(name) {
                         obj.z = z;
@@ -473,7 +486,7 @@ impl DashboardState {
                     cursor.y = y;
                     cursor.w = w;
                     cursor.h = h;
-                    cursor.z = -1;
+                    cursor.z = FREE_ICON_Z - 10;
                     cursor.text = None;
                     cursor.border_radius = Some(at.icon.cursor_border_radius);
                     if at.icon.cursor_style == "fill" {

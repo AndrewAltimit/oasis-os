@@ -16,6 +16,8 @@
 //!   screenshots/{skin}/03_mods_tab.png    -- MODS top tab selected
 //!   screenshots/{skin}/04_terminal.png    -- Terminal mode
 
+mod capture_assets;
+
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +25,6 @@ use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::bottombar::{BottomBar, MediaTab};
-use oasis_core::color::lighten;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::platform::DesktopPlatform;
@@ -107,6 +108,13 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
 
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
+    capture_assets::setup(
+        &skin,
+        &active_theme,
+        &mut sdi,
+        &mut backend,
+        &mut status_bar,
+    );
 
     // Wallpaper — skip for shader skins (shader replaces the wallpaper).
     // Also hide any opaque content_bg that the skin layout creates, since
@@ -117,7 +125,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     }
     if !has_shader {
         let wallpaper_tex = {
-            let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
+            let wp_data = wallpaper::generate_with_assets(w, h, &active_theme, &skin.assets);
             backend.load_texture(w, h, &wp_data)?
         };
         let obj = sdi.create("wallpaper");
@@ -129,12 +137,21 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         obj.z = -1000;
     }
 
-    // Mouse cursor (position it near center for the screenshot).
+    // Mouse cursor (position it near center for the screenshot). Skins
+    // with a themed `[cursor]` texture show it instead of the procedural
+    // arrow, mirroring the runtime software-cursor path.
     let mut mouse_cursor = CursorState::new(w, h);
     mouse_cursor.scale = active_theme.cursor_scale;
     {
-        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(active_theme.cursor_scale);
+        let themed = capture_assets::themed_cursor(&skin, &active_theme);
+        let is_themed = themed.is_some();
+        let (cursor_pixels, cw, ch) =
+            themed.unwrap_or_else(|| cursor::generate_cursor_pixels(active_theme.cursor_scale));
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
+        if is_themed {
+            mouse_cursor.size = Some((cw, ch));
+            mouse_cursor.hotspot = active_theme.cursor_hotspot;
+        }
         mouse_cursor.update_sdi(&mut sdi);
         if let Ok(obj) = sdi.get_mut("mouse_cursor") {
             obj.texture = Some(cursor_tex);
@@ -160,7 +177,8 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     // For dashboard+WM skins, defer window creation to screenshot 4 so
     // dashboard screenshots 1-3 don't have overlapping windows.
     let mut wm = if has_wm {
-        let wm_theme = skin.theme.build_wm_theme();
+        let mut wm_theme = skin.theme.build_wm_theme();
+        capture_assets::resolve_wm_patches(&skin, &mut wm_theme, &mut backend);
         let mut wm = WindowManager::with_theme(w, h, wm_theme);
         if !has_dashboard {
             create_demo_windows_with_content(&mut wm, &mut sdi, w, h, &active_theme)?;
@@ -280,7 +298,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
                     &mut sdi,
                     "demo_terminal",
                     &DEMO_TERMINAL_CONTENT,
-                    active_theme.app.terminal_output_color,
+                    oasis_core::terminal_sdi::TerminalColors::from_theme(&active_theme).output,
                     8,
                 );
             }
@@ -340,7 +358,7 @@ fn create_demo_windows_with_content(
         sdi,
         "demo_terminal",
         &DEMO_TERMINAL_CONTENT,
-        at.app.terminal_output_color,
+        oasis_core::terminal_sdi::TerminalColors::from_theme(at).output,
         8,
     );
 
@@ -380,6 +398,21 @@ fn render_and_save(
 struct VectorCtx<'a> {
     dashboard: &'a DashboardState,
     theme: &'a ActiveTheme,
+}
+
+/// Draw `[[chrome_layers]]` in the overlay pass, mirroring the main loop.
+fn render_chrome(
+    b: &mut SdlBackend,
+    vector: Option<&VectorCtx<'_>>,
+    fixed_frame: u32,
+) -> anyhow::Result<()> {
+    if let Some(v) = vector
+        && !v.theme.chrome_layers.is_empty()
+    {
+        let mut cache = oasis_core::vector_overlay::LayerOpsCache::new();
+        oasis_core::vector_overlay::render_vector_chrome(b, v.theme, fixed_frame, &mut cache)?;
+    }
+    Ok(())
 }
 
 fn render_and_save_inner(
@@ -422,9 +455,11 @@ fn render_and_save_inner(
             oasis_core::vector_overlay::render_vector_background(b, v.theme, fixed_frame)?;
             v.dashboard.render_vector_icons(b, v.theme, fixed_frame)?;
             s.draw_overlay_layer(b)?;
+            render_chrome(b, vector.as_ref(), fixed_frame)?;
             return Ok(());
         }
         s.draw(b)?;
+        render_chrome(b, vector.as_ref(), fixed_frame)?;
         Ok(())
     };
 
@@ -560,6 +595,7 @@ fn setup_terminal_objects(
     let line_h = at.terminal_line_height;
     let font_size = line_h.saturating_sub(4).max(8) as u16;
     let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+    let tc = oasis_core::terminal_sdi::TerminalColors::from_theme(at);
 
     if !sdi.contains("terminal_bg") {
         let obj = sdi.create("terminal_bg");
@@ -567,7 +603,7 @@ fn setup_terminal_objects(
         obj.y = content_y;
         obj.w = content_w;
         obj.h = usable_h;
-        obj.color = at.app.bg;
+        obj.color = tc.bg;
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
@@ -581,7 +617,7 @@ fn setup_terminal_objects(
             obj.x = content_x + 4;
             obj.y = content_y + 2 + (i as i32) * (line_h as i32);
             obj.font_size = font_size;
-            obj.text_color = at.app.terminal_output_color;
+            obj.text_color = tc.output;
             obj.w = 0;
             obj.h = 0;
         }
@@ -592,7 +628,7 @@ fn setup_terminal_objects(
     }
 
     let input_y = content_y + (usable_h as i32) - (line_h as i32) - 2;
-    let input_bg_color = lighten(at.app.bg, 0.03);
+    let input_bg_color = tc.input_bg;
     if !sdi.contains("term_input_bg") {
         let obj = sdi.create("term_input_bg");
         obj.x = content_x;
@@ -610,7 +646,7 @@ fn setup_terminal_objects(
         obj.x = content_x + 4;
         obj.y = input_y + 2;
         obj.font_size = font_size;
-        obj.text_color = at.app.terminal_prompt_color;
+        obj.text_color = tc.prompt;
         obj.w = 0;
         obj.h = 0;
     }

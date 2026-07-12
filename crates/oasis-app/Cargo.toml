@@ -37,6 +37,10 @@ video-decode = ["_video", "oasis-video/h264"]
 # Full decode via system ffmpeg (Main/High profile, SIMD-optimized).
 # Default for desktop — requires libavcodec-dev etc. on the system.
 video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
+# Dev-only: poll the active external skin directory each second and
+# hot-reload it when files change on disk (see src/hot_reload.rs).
+# Run: cargo run -p oasis-app --features skin-dev -- <skin>
+skin-dev = []
 
 [dependencies]
 oasis-core = { workspace = true, features = ["tls-rustls"] }

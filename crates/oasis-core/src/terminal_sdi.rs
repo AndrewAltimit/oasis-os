@@ -1,10 +1,54 @@
 use crate::active_theme::ActiveTheme;
+use crate::backend::Color;
 use crate::backend::TextureId;
 use crate::bottombar::BottomBar;
 use crate::sdi::SdiRegistry;
 
 /// Maximum lines retained in the scrollback buffer.
 pub const MAX_OUTPUT_LINES: usize = 2000;
+
+/// Resolved terminal colors, honoring `[app_themes.terminal]` skin overrides.
+///
+/// Each slot falls back to the exact theme-derived color the terminal used
+/// before per-app overrides existed, so skins without an
+/// `[app_themes.terminal]` section render pixel-identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalColors {
+    /// Terminal background fill (key: `bg`).
+    pub bg: Color,
+    /// 1px border stroke around the terminal background (key: `border`).
+    pub border: Color,
+    /// Scrollback output text (key: `output`).
+    pub output: Color,
+    /// Input bar background (key: `input_bg`).
+    pub input_bg: Color,
+    /// Prompt line text: cwd, typed input, and cursor (key: `prompt`).
+    pub prompt: Color,
+    /// Scrollbar track (key: `scrollbar_track`).
+    pub scrollbar_track: Color,
+    /// Scrollbar thumb (key: `scrollbar_thumb`).
+    pub scrollbar_thumb: Color,
+}
+
+impl TerminalColors {
+    /// Build colors from the active theme, using `[app_themes.terminal]`
+    /// overrides where present.
+    pub fn from_theme(at: &ActiveTheme) -> Self {
+        let c = |key: &str, default: Color| at.app_color("terminal", key).unwrap_or(default);
+        Self {
+            bg: c("bg", at.app.bg),
+            border: c("border", at.bar.separator_color),
+            output: c(
+                "output",
+                oasis_types::color::with_alpha(at.app.terminal_output_color, 255),
+            ),
+            input_bg: c("input_bg", oasis_types::color::lighten(at.app.bg, 0.03)),
+            prompt: c("prompt", at.app.terminal_prompt_color),
+            scrollbar_track: c("scrollbar_track", at.scrollbar.track_color),
+            scrollbar_thumb: c("scrollbar_thumb", at.scrollbar.thumb_color),
+        }
+    }
+}
 
 /// Compute the number of visible output lines for the given theme.
 ///
@@ -119,6 +163,7 @@ pub fn setup_terminal_objects(
     let bg_w = at.screen_w - (margin * 2) as u32;
     let bg_h = (bot_y - top_y) as u32;
     let visible_lines = visible_output_lines(at);
+    let colors = TerminalColors::from_theme(at);
 
     // Terminal background.
     if !sdi.contains("terminal_bg") {
@@ -127,10 +172,10 @@ pub fn setup_terminal_objects(
         obj.y = top_y;
         obj.w = bg_w;
         obj.h = bg_h;
-        obj.color = at.app.bg;
+        obj.color = colors.bg;
         obj.border_radius = Some(at.terminal_border_radius);
         obj.stroke_width = Some(1);
-        obj.stroke_color = Some(at.bar.separator_color);
+        obj.stroke_color = Some(colors.border);
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
@@ -139,7 +184,7 @@ pub fn setup_terminal_objects(
     // Show visible lines from the scrollback buffer, offset by scroll.
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
-    let output_color = oasis_types::color::with_alpha(at.app.terminal_output_color, 255);
+    let output_color = colors.output;
     for i in 0..visible_lines {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
@@ -165,7 +210,7 @@ pub fn setup_terminal_objects(
         obj.y = input_y;
         obj.w = bg_w;
         obj.h = 20;
-        obj.color = oasis_types::color::lighten(at.app.bg, 0.03);
+        obj.color = colors.input_bg;
         obj.border_radius = Some(at.app.input_border_radius);
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
@@ -178,7 +223,7 @@ pub fn setup_terminal_objects(
         obj.x = margin + 4;
         obj.y = input_y + 2;
         obj.font_size = at.font_body;
-        obj.text_color = at.app.terminal_prompt_color;
+        obj.text_color = colors.prompt;
         obj.w = 0;
         obj.h = 0;
     }
@@ -203,6 +248,7 @@ pub fn paint_terminal_scrollbar(
     if total_lines <= visible_lines {
         return Ok(());
     }
+    let colors = TerminalColors::from_theme(at);
     let margin = 4i32;
     let top_y = at.statusbar_height as i32 + 2;
     let bot_y = at.screen_h as i32 - at.bottombar_height as i32;
@@ -215,7 +261,7 @@ pub fn paint_terminal_scrollbar(
     let track_h: u32 = bg_h;
 
     // Track.
-    backend.fill_rect(track_x, track_y, sb_w, track_h, at.scrollbar.track_color)?;
+    backend.fill_rect(track_x, track_y, sb_w, track_h, colors.scrollbar_track)?;
 
     // Thumb: proportional to visible/total ratio.
     let ratio = visible_lines as f32 / total_lines as f32;
@@ -228,7 +274,7 @@ pub fn paint_terminal_scrollbar(
         1.0
     };
     let thumb_y = track_y + (scrollable as f32 * frac) as i32;
-    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, at.scrollbar.thumb_color)?;
+    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, colors.scrollbar_thumb)?;
     Ok(())
 }
 
@@ -491,5 +537,65 @@ mod tests {
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/> _"));
+    }
+
+    // -- TerminalColors --
+
+    #[test]
+    fn terminal_colors_defaults_match_legacy() {
+        // Without [app_themes.terminal] every slot must equal the exact
+        // theme-derived color used before overrides existed (screenshot
+        // regression relies on this).
+        let at = ActiveTheme::default();
+        let colors = TerminalColors::from_theme(&at);
+        assert_eq!(colors.bg, at.app.bg);
+        assert_eq!(colors.border, at.bar.separator_color);
+        assert_eq!(
+            colors.output,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+        assert_eq!(
+            colors.input_bg,
+            oasis_types::color::lighten(at.app.bg, 0.03)
+        );
+        assert_eq!(colors.prompt, at.app.terminal_prompt_color);
+        assert_eq!(colors.scrollbar_track, at.scrollbar.track_color);
+        assert_eq!(colors.scrollbar_thumb, at.scrollbar.thumb_color);
+    }
+
+    #[test]
+    fn terminal_colors_override_applies() {
+        let mut at = ActiveTheme::default();
+        let prompt = Color::rgb(255, 0, 255);
+        let bg = Color::rgb(1, 2, 3);
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("prompt".to_string(), prompt);
+        overrides.insert("bg".to_string(), bg);
+        at.app_themes.insert("terminal".to_string(), overrides);
+
+        let colors = TerminalColors::from_theme(&at);
+        assert_eq!(colors.prompt, prompt);
+        assert_eq!(colors.bg, bg);
+        // Slots without an override keep their theme-derived defaults.
+        assert_eq!(
+            colors.output,
+            TerminalColors::from_theme(&ActiveTheme::default()).output
+        );
+        assert_eq!(colors.border, at.bar.separator_color);
+    }
+
+    #[test]
+    fn setup_terminal_objects_honors_app_theme_override() {
+        let mut at = ActiveTheme::default();
+        let prompt = Color::rgb(0, 128, 64);
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("prompt".to_string(), prompt);
+        at.app_themes.insert("terminal".to_string(), overrides);
+
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at, true);
+        assert_eq!(sdi.get("term_prompt").unwrap().text_color, prompt);
+        // Non-overridden slots keep the default color.
+        assert_eq!(sdi.get("terminal_bg").unwrap().color, at.app.bg);
     }
 }

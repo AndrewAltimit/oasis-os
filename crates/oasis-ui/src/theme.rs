@@ -70,6 +70,12 @@ pub struct Theme {
     pub scrollbar_thumb: Color,
     /// Scrollbar thumb on hover.
     pub scrollbar_thumb_hover: Color,
+    /// Toggle track color when off.
+    pub toggle_track_off: Color,
+    /// Toggle track color when on.
+    pub toggle_track_on: Color,
+    /// Toggle thumb color.
+    pub toggle_thumb: Color,
     /// Tooltip background.
     pub tooltip_bg: Color,
     /// Tooltip text color.
@@ -222,6 +228,9 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: Color::rgb(80, 160, 255),
+            toggle_thumb: Color::rgb(255, 255, 255),
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
 
@@ -291,6 +300,9 @@ impl Theme {
             scrollbar_track: Color::rgba(0, 0, 0, 10),
             scrollbar_thumb: Color::rgba(0, 0, 0, 30),
             scrollbar_thumb_hover: Color::rgba(0, 0, 0, 60),
+            toggle_track_off: Color::rgba(0, 0, 0, 10),
+            toggle_track_on: Color::rgb(50, 120, 220),
+            toggle_thumb: Color::rgb(255, 255, 255),
             tooltip_bg: Color::rgb(40, 40, 50),
             tooltip_text: Color::rgb(240, 240, 245),
 
@@ -332,6 +344,7 @@ impl Theme {
         theme.accent_subtle = Color::rgba(255, 140, 30, 30);
         theme.border_strong = Color::rgb(255, 140, 30);
         theme.success = Color::rgb(100, 220, 80);
+        theme.toggle_track_on = theme.accent;
         theme
     }
 
@@ -377,6 +390,9 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 30),
             scrollbar_thumb: Color::rgba(255, 255, 255, 120),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 200),
+            toggle_track_off: Color::rgba(255, 255, 255, 30),
+            toggle_track_on: Color::rgb(0, 255, 255),
+            toggle_thumb: Color::rgb(0, 0, 0),
             tooltip_bg: Color::rgb(0, 0, 0),
             tooltip_text: Color::rgb(255, 255, 255),
 
@@ -488,6 +504,9 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: Color::rgb(80, 160, 255),
+            toggle_thumb: Color::rgb(255, 255, 255),
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
 

@@ -9,6 +9,8 @@
 mod app_state;
 mod boot_splash;
 mod commands;
+#[cfg(feature = "skin-dev")]
+mod hot_reload;
 mod icon_drag;
 mod input;
 mod launch;
@@ -74,8 +76,13 @@ fn main() -> Result<()> {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
 
-    // Desktop: scale up PSP-native skins (480x272) to a usable desktop resolution.
-    if config.screen_width == 480 && config.screen_height == 272 {
+    // Desktop: scale up PSP-native skins (480x272) to a usable desktop
+    // resolution. Skins can pin an explicit size via `desktop_width` /
+    // `desktop_height` in skin.toml.
+    if let (Some(dw), Some(dh)) = (skin.manifest.desktop_width, skin.manifest.desktop_height) {
+        config.screen_width = dw.max(1);
+        config.screen_height = dh.max(1);
+    } else if config.screen_width == 480 && config.screen_height == 272 {
         config.screen_width = 1280;
         config.screen_height = 720;
     }
@@ -598,6 +605,9 @@ fn main() -> Result<()> {
         }
     }
 
+    #[cfg(feature = "skin-dev")]
+    let mut skin_watcher = hot_reload::SkinWatcher::new();
+
     'running: loop {
         state.frame_counter += 1;
 
@@ -683,6 +693,19 @@ fn main() -> Result<()> {
             &mut vfs,
             "SDL3",
         );
+
+        // Dev-only: reload the active external skin when its files change
+        // on disk. Passing the directory path forces `resolve_skin` to
+        // re-read the TOML instead of hitting the compiled-in copy.
+        #[cfg(feature = "skin-dev")]
+        if state
+            .frame_counter
+            .is_multiple_of(hot_reload::POLL_INTERVAL_FRAMES)
+            && let Some(dir) = skin_watcher.poll(&state.skin.manifest.name)
+        {
+            log::info!("skin-dev: reloading skin from {}", dir.display());
+            commands::apply_skin_swap(&dir.to_string_lossy(), &mut state, &mut sdi, &vfs);
+        }
 
         // Any skin swap — whether from the Settings app above or a terminal
         // `skin` command processed in the input loop — sets the pending flag

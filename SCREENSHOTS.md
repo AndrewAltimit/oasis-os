@@ -12,9 +12,9 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
-| Retro CGA | Paper | High Contrast | Altimit |
-|:---:|:---:|:---:|:---:|
-| ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) | ![Altimit](screenshots/altimit/01_dashboard.png) |
+| Retro CGA | Paper | High Contrast | Altimit | PSIX Tribute |
+|:---:|:---:|:---:|:---:|:---:|
+| ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) | ![Altimit](screenshots/altimit/01_dashboard.png) | ![PSIX Tribute](screenshots/psix-tribute/01_dashboard.png) |
 
 ## Terminals
 
@@ -26,9 +26,9 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Balatro](screenshots/balatro/04_terminal.png) | ![Win95](screenshots/win95/04_terminal.png) | ![Solarized](screenshots/solarized/04_terminal.png) | ![Vaporwave](screenshots/vaporwave/04_terminal.png) |
 
-| High Contrast | GNOME | Retro CGA | Paper | Altimit |
-|:---:|:---:|:---:|:---:|:---:|
-| ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) | ![CGA](screenshots/retro-cga/04_terminal.png) | ![Paper](screenshots/paper/04_terminal.png) | ![Altimit](screenshots/altimit/04_terminal.png) |
+| High Contrast | GNOME | Retro CGA | Paper | Altimit | PSIX Tribute |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) | ![CGA](screenshots/retro-cga/04_terminal.png) | ![Paper](screenshots/paper/04_terminal.png) | ![Altimit](screenshots/altimit/04_terminal.png) | ![PSIX Tribute](screenshots/psix-tribute/04_terminal.png) |
 
 ## Media Tabs
 

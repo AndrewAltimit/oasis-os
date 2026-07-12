@@ -26,11 +26,13 @@ use oasis_types::input::Button;
 use oasis_ui::menu_bar::MenuHit;
 use oasis_vfs::Vfs;
 
+pub mod colors;
 pub(crate) mod commands;
 pub(crate) mod model;
 pub(crate) mod state;
 pub(crate) mod view;
 
+pub use colors::FileManagerColors;
 pub use model::{FileOp, FilePanel, NavTarget, TreeEntry, ViewMode};
 pub use state::FileManagerApp;
 
@@ -211,7 +213,7 @@ impl App for FileManagerApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        backend.fill_rect(cx, cy, cw, ch, at.app.bg)?;
+        backend.fill_rect(cx, cy, cw, ch, FileManagerColors::from_theme(at).bg)?;
 
         if self.content.viewing_file.is_some() {
             return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);

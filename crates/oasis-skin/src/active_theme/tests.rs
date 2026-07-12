@@ -644,6 +644,10 @@ disabled_text = "#555555"
                 "altimit",
                 "#0A0A1A80|#080816FF|#00CC88FF|#00CC881E|#D0E8E0FF|#00CC88FF|#00CC8840|#0E0E22FF|#0A0A1AFF|#00CC8860|#080816FF|#0E0E22FF|#00CC88DC",
             ),
+            (
+                "psix-tribute",
+                "#1A1A1E50|#1A1A1E5A|#F8A757FF|#F5820F1E|#F0F0E8FF|#F0F0E8FF|#F5820FFF|#ECECE4FF|#141423DC|#F5820FC8|#18181AFF|#262628FF|#F5820FDC",
+            ),
         ];
 
         // First check: the registry must list exactly the skins we

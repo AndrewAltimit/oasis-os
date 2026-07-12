@@ -285,7 +285,11 @@ impl Widget for Toggle {
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let radius = h as u16 / 2;
-        let bg = lerp_color(ctx.theme.scrollbar_track, ctx.theme.accent, self.progress);
+        let bg = lerp_color(
+            ctx.theme.toggle_track_off,
+            ctx.theme.toggle_track_on,
+            self.progress,
+        );
         ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
 
         // Thumb circle.
@@ -294,7 +298,7 @@ impl Widget for Toggle {
         let thumb_x = x + h as i32 / 2 + (travel as f32 * self.progress) as i32;
         let thumb_y = y + h as i32 / 2;
         ctx.backend
-            .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.text_on_accent)?;
+            .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.toggle_thumb)?;
         Ok(())
     }
 }

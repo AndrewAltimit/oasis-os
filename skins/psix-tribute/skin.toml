@@ -1,0 +1,9 @@
+name = "psix-tribute"
+version = "1.0"
+author = "OASIS_OS"
+description = "Tribute to the PSIX homebrew shell: shaped orange chrome, free desktop icons, assemble entrance"
+screen_width = 480
+screen_height = 272
+# Showcase for the skin inheritance pattern: only overrides live here,
+# everything else (fonts, app screens, browser chrome) comes from classic.
+inherits = "classic"
