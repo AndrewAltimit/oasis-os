@@ -1,8 +1,12 @@
 # Advanced Theming & Desktop Metaphor Plan
 
-Status: **in progress** — M0 (benchmarks + validation + `skin lint`) and
+Status: **in progress** — M0 (benchmarks + validation + `skin lint`),
 M1 (asset pipeline: skin `assets/`, `texture =` layout objects, image
-wallpapers, image decal layers, D1 shader texture reuse) have landed.
+wallpapers, image decal layers, D1 shader texture reuse), and M2
+(desktop icons: `icon_layout = "free"` with per-icon positions +
+column auto-flow, rect hit-testing + icon drag & drop, per-skin
+position persistence, `software_cursor` + `[cursor]` theming, free-mode
+selection highlight, D3 vector icon scene cache) have landed.
 Branch: `feat/advanced-theming`.
 
 ## Goal

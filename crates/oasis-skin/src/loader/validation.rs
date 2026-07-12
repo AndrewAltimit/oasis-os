@@ -134,6 +134,12 @@ impl Skin {
         self.validate_assets(&mut warnings);
 
         // -- Feature flag checks --
+        if !matches!(self.features.icon_layout.as_str(), "grid" | "free") {
+            warnings.push(format!(
+                "features: unknown icon_layout \"{}\" (expected grid|free)",
+                self.features.icon_layout,
+            ));
+        }
         if self.features.grid_cols == 0 {
             warnings.push("features: grid_cols is 0".to_string());
         }
@@ -181,6 +187,14 @@ impl Skin {
                     "wallpaper: unknown fit \"{fit}\" (expected cover|contain|stretch|tile)"
                 ));
             }
+        }
+
+        // Software cursor texture.
+        if let Some(ref cursor) = self.theme.cursor
+            && let Some(ref src) = cursor.texture
+            && !self.assets.contains_key(src)
+        {
+            warnings.push(format!("cursor: missing asset \"{src}\""));
         }
 
         // Image background layers.

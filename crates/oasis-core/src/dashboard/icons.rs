@@ -102,7 +102,7 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
         );
@@ -167,7 +167,7 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
         );
@@ -216,7 +216,7 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
         );

@@ -239,6 +239,8 @@ impl Default for ActiveTheme {
             clear_color: Color::rgb(10, 10, 18),
             terminal_line_height: 16,
             cursor_scale: 1,
+            cursor_texture: None,
+            cursor_hotspot: (0, 0),
             transition_fade_color: Color::BLACK,
             focus_ring_color: Color::rgba(100, 200, 255, 180),
             focus_ring_width: 2,

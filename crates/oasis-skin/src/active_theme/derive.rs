@@ -200,6 +200,13 @@ impl ActiveTheme {
                 .and_then(|g| g.terminal_line_height)
                 .unwrap_or(16),
             cursor_scale: 1,
+            cursor_texture: skin.cursor.as_ref().and_then(|c| c.texture.clone()),
+            cursor_hotspot: skin
+                .cursor
+                .as_ref()
+                .and_then(|c| c.hotspot)
+                .map(|[x, y]| (x, y))
+                .unwrap_or((0, 0)),
             focus_ring_color: skin
                 .geometry
                 .as_ref()
@@ -1303,6 +1310,8 @@ impl ActiveTheme {
             clear_color: darken(background, 0.5),
             terminal_line_height: 16,
             cursor_scale: 1,
+            cursor_texture: None,
+            cursor_hotspot: (0, 0),
             focus_ring_color: with_alpha(primary, 180),
             focus_ring_width: 2,
             focus_ring_offset: 2,

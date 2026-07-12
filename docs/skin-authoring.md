@@ -116,7 +116,27 @@ grid_cols = 3             # Grid columns
 grid_rows = 2             # Grid rows
 corrupted = false         # Enable corrupted visual effects
 command_categories = []   # Restrict to specific command categories
+
+# -- Desktop icon layout --
+icon_layout = "grid"      # "grid" (uniform cells) or "free" (desktop icons)
+snap_to_grid = true       # Free layout: snap dropped icons to a virtual grid
+launch_on_single_click = true  # false = first click selects, second launches
+software_cursor = false   # Draw a themed software cursor (hides host pointer)
 ```
+
+#### Free icon layout
+
+`icon_layout = "free"` turns the dashboard into a desktop: fixed-size icon
+cells (2x the theme's icon dimensions) auto-flow **top-to-bottom in
+columns** from the top-left, PSIX-style, instead of stretching to fill a
+centered grid. Pointer users can drag icons anywhere in the content area;
+drops snap to a virtual grid (unless `snap_to_grid = false`), are clamped
+away from the bars, and persist per skin (settings key
+`icon_positions.<skin>.<app path>`). The selected icon gets a themed
+highlight driven by the `[icon_overrides]` cursor fields (`cursor_style =
+"stroke"` outlines it, `"fill"` paints a backdrop, `"none"` disables).
+D-pad navigation still walks icons in reading order, so keyboard and PSP
+users lose nothing.
 
 ### theme.toml (Color Palette)
 
@@ -314,7 +334,7 @@ decoded to RGBA at load time and referenced by its skin-relative path
 (`"assets/<file>.png"`). Skins under `skins/` that are compiled in as
 built-ins embed their assets in the binary automatically.
 
-Three things consume assets:
+Four things consume assets:
 
 ### 1. Textured layout objects (shaped chrome)
 
@@ -373,14 +393,29 @@ Decals render between the wallpaper and the icon layer, scale uniformly
 with the skin's native resolution, and animate without re-uploading
 pixels. Set `reduced_motion = true` (features.toml) to freeze them.
 
+### 4. Themed software cursor
+
+```toml
+# theme.toml
+[cursor]
+texture = "assets/cursor.png"
+hotspot = [1, 1]              # click point within the image (default [0, 0])
+```
+
+Only used when the skin sets `software_cursor = true` in features.toml —
+that hides the host OS pointer and draws the skin's cursor as a
+top-most SDI object instead. Without a `texture` the built-in procedural
+arrow is drawn, so `software_cursor = true` alone already gives a themed
+resolution-scaled pointer.
+
 ### Asset guidelines
 
 - **Power-of-two dimensions** (64, 128, 256, …) — required on PSP,
   flagged by `skin lint` otherwise.
 - Stay under the **2 MB decoded budget** per skin (`skin lint` warns).
   PNG on disk compresses far smaller; the budget is about RAM/VRAM.
-- `skin lint` also verifies every `texture =`, wallpaper `source`, and
-  layer `source` resolves to a shipped asset.
+- `skin lint` also verifies every `texture =`, wallpaper `source`, layer
+  `source`, and `[cursor]` texture resolves to a shipped asset.
 
 ## Effect System
 

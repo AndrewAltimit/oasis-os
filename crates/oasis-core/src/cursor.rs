@@ -24,6 +24,12 @@ pub struct CursorState {
     pub visible: bool,
     /// Scale factor (1 = base 12x18, 2 = 24x36, 3 = 36x54).
     pub scale: u32,
+    /// Click hotspot offset subtracted from the draw position (themed
+    /// cursors; the procedural arrow points from its top-left corner).
+    pub hotspot: (i32, i32),
+    /// Custom cursor bitmap size for themed textures.
+    /// `None` = procedural 12x18 scaled by `scale`.
+    pub size: Option<(u32, u32)>,
 }
 
 impl CursorState {
@@ -34,6 +40,8 @@ impl CursorState {
             y: screen_h as i32 / 2,
             visible: true,
             scale: 1,
+            hotspot: (0, 0),
+            size: None,
         }
     }
 
@@ -55,16 +63,17 @@ impl CursorState {
     /// Update the cursor SDI object to reflect current position.
     pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
         let s = self.scale.max(1);
+        let (w, h) = self.size.unwrap_or((CURSOR_W * s, CURSOR_H * s));
         if !sdi.contains(CURSOR_SDI_NAME) {
             let obj = sdi.create(CURSOR_SDI_NAME);
-            obj.w = CURSOR_W * s;
-            obj.h = CURSOR_H * s;
             obj.overlay = true;
             obj.z = 10000; // Always on top.
         }
         if let Ok(obj) = sdi.get_mut(CURSOR_SDI_NAME) {
-            obj.x = self.x;
-            obj.y = self.y;
+            obj.w = w;
+            obj.h = h;
+            obj.x = self.x - self.hotspot.0;
+            obj.y = self.y - self.hotspot.1;
             obj.visible = self.visible;
             // The texture is assigned externally after load_texture.
         }

@@ -14,7 +14,7 @@ pub use conversion::{ContrastWarning, contrast_ratio};
 pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
-    BarOverrides, BrowserOverrides, GeometryOverrides, GradientPreset, IconOverrides,
+    BarOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset, IconOverrides,
     LayerAnimationConfig, LayerPositionConfig, OskOverrides, ScrollbarOverrides,
     StartMenuOverrides, TransitionOverrides, WallpaperConfig, WmThemeOverrides,
 };
@@ -103,6 +103,10 @@ pub struct SkinTheme {
     /// Wallpaper generation configuration.
     #[serde(default)]
     pub wallpaper: Option<WallpaperConfig>,
+
+    /// Software mouse cursor theming (texture + hotspot).
+    #[serde(default)]
+    pub cursor: Option<CursorConfig>,
 
     /// Geometry overrides (bar heights, icon sizes, font sizes).
     #[serde(default)]
@@ -235,6 +239,7 @@ impl Default for SkinTheme {
             osk_overrides: None,
             start_menu_overrides: None,
             wallpaper: None,
+            cursor: None,
             geometry: None,
             transition: None,
             scrollbar_overrides: None,

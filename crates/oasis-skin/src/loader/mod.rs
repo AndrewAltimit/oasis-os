@@ -82,6 +82,24 @@ pub struct SkinFeatures {
     /// Icons per page (grid capacity).
     #[serde(default = "default_icons_per_page")]
     pub icons_per_page: u32,
+    /// Dashboard icon layout: `"grid"` (uniform cells, default) or `"free"`
+    /// (desktop-style per-icon positions with column auto-flow and drag &
+    /// drop on pointer targets).
+    #[serde(default = "default_icon_layout")]
+    pub icon_layout: String,
+    /// In free layout, snap dragged icons to a virtual grid on drop
+    /// (default true — matches real desktop behaviour).
+    #[serde(default = "yes")]
+    pub snap_to_grid: bool,
+    /// Launch apps on a single pointer click (default true). When false,
+    /// the first click only selects the icon and a second click launches.
+    #[serde(default = "yes")]
+    pub launch_on_single_click: bool,
+    /// Draw the skin's own software mouse cursor instead of relying on the
+    /// host OS pointer (default false). Themeable via `[cursor]` in
+    /// theme.toml.
+    #[serde(default)]
+    pub software_cursor: bool,
     /// Grid columns.
     #[serde(default = "default_grid_cols")]
     pub grid_cols: u32,
@@ -142,6 +160,9 @@ fn default_pages() -> u32 {
 fn default_icons_per_page() -> u32 {
     9
 }
+fn default_icon_layout() -> String {
+    "grid".to_string()
+}
 fn default_grid_cols() -> u32 {
     3
 }
@@ -159,6 +180,10 @@ impl Default for SkinFeatures {
             window_manager: false,
             dashboard_pages: 1,
             icons_per_page: 15,
+            icon_layout: "grid".to_string(),
+            snap_to_grid: true,
+            launch_on_single_click: true,
+            software_cursor: false,
             grid_cols: 5,
             grid_rows: 3,
             command_categories: Vec::new(),

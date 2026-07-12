@@ -253,6 +253,21 @@ pub struct IconOverrides {
     pub focus_glow_color: Option<String>,
 }
 
+/// Software mouse cursor theming (`[cursor]` in theme.toml).
+///
+/// Only used when the skin enables `features.software_cursor`. Without a
+/// `texture`, the built-in procedural arrow cursor is drawn.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CursorConfig {
+    /// Asset path for the cursor bitmap (e.g. `"assets/cursor.png"`).
+    #[serde(default)]
+    pub texture: Option<String>,
+    /// Click hotspot `[x, y]` within the cursor image (default `[0, 0]`,
+    /// the top-left corner — correct for arrow cursors).
+    #[serde(default)]
+    pub hotspot: Option<[i32; 2]>,
+}
+
 /// Wallpaper generation configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WallpaperConfig {

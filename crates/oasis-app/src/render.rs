@@ -167,8 +167,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         },
     }
 
-    // No software cursor on the SDL build — the host OS already renders
-    // its own pointer over our window, so we'd just be drawing a duplicate.
+    // Software cursor: skins opt in via `features.software_cursor` (the
+    // host pointer is hidden by `refresh_skin_assets`). Everyone else
+    // keeps the host OS pointer — drawing our own would duplicate it.
+    if state.skin.features.software_cursor {
+        state.ui.mouse_cursor.update_sdi(sdi);
+    }
 
     // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
     // where we explicitly hide it to prevent bleed-through, and skip when a

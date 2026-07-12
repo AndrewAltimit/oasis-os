@@ -505,6 +505,11 @@ pub struct ActiveTheme {
     // -- Cursor --
     /// Cursor scale factor (1 at <1920px, 2 at 1920px+).
     pub cursor_scale: u32,
+    /// Asset path for a themed software cursor bitmap (from `[cursor]`
+    /// in theme.toml). `None` = procedural arrow cursor.
+    pub cursor_texture: Option<String>,
+    /// Software cursor click hotspot (x, y) within the cursor image.
+    pub cursor_hotspot: (i32, i32),
 
     // -- Transition --
     /// Transition fade overlay color (default: black).

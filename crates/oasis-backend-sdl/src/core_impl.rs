@@ -196,4 +196,20 @@ impl SdlBackend {
 
         Ok(())
     }
+
+    /// Show or hide the host OS mouse pointer over the window.
+    ///
+    /// Skins that enable `features.software_cursor` draw their own themed
+    /// cursor, so the host pointer is hidden to avoid a double cursor.
+    pub fn set_host_cursor_visible(&mut self, visible: bool) {
+        // SAFETY: SDL_ShowCursor/SDL_HideCursor are global SDL calls with
+        // no preconditions beyond SDL_Init, which ran in `new()`.
+        unsafe {
+            if visible {
+                sdl3::sys::mouse::SDL_ShowCursor();
+            } else {
+                sdl3::sys::mouse::SDL_HideCursor();
+            }
+        }
+    }
 }

@@ -215,6 +215,11 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 DashboardConfig::from_features(&swapped.features, &state.active_theme);
             let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
             state.ui.dashboard = DashboardState::new(dash_config, apps);
+            crate::icon_drag::load_icon_positions(
+                &state.settings,
+                &swapped.manifest.name,
+                &mut state.ui.dashboard,
+            );
             state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
             state.ui.bottom_bar.current_page = 0;
             state.ui.start_menu = StartMenuState::new_with_theme(
@@ -348,6 +353,48 @@ pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend:
         sh,
         scale,
     );
+
+    // Software cursor: themed `[cursor]` texture when the skin ships one,
+    // procedural arrow otherwise. Skins that don't opt in keep the host
+    // OS pointer (and no SDI cursor object is shown).
+    if let Some(tex) = state.cursor_texture.take() {
+        let _ = backend.destroy_texture(tex);
+    }
+    if state.skin.features.software_cursor {
+        let themed = state
+            .active_theme
+            .cursor_texture
+            .as_ref()
+            .and_then(|name| state.skin.assets.get(name))
+            .map(|a| (a.rgba.clone(), a.width, a.height));
+        let is_themed = themed.is_some();
+        let (pixels, cw, ch) = themed.unwrap_or_else(|| {
+            oasis_core::cursor::generate_cursor_pixels(state.active_theme.cursor_scale)
+        });
+        match backend.load_texture(cw, ch, &pixels) {
+            Ok(tex) => {
+                state.cursor_texture = Some(tex);
+                let cursor = &mut state.ui.mouse_cursor;
+                cursor.size = is_themed.then_some((cw, ch));
+                cursor.hotspot = if is_themed {
+                    state.active_theme.cursor_hotspot
+                } else {
+                    (0, 0)
+                };
+                cursor.update_sdi(sdi);
+                if let Ok(obj) = sdi.get_mut("mouse_cursor") {
+                    obj.texture = Some(tex);
+                }
+                backend.set_host_cursor_visible(false);
+            },
+            Err(e) => log::warn!("software cursor texture upload failed: {e}"),
+        }
+    } else {
+        if let Ok(obj) = sdi.get_mut("mouse_cursor") {
+            obj.visible = false;
+        }
+        backend.set_host_cursor_visible(true);
+    }
 }
 
 /// Minimum virtual resolution accepted from a live resize request. Anything
@@ -447,6 +494,11 @@ pub fn apply_resolution_change(
     let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
     let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
     state.ui.dashboard = DashboardState::new(dash_config, apps);
+    crate::icon_drag::load_icon_positions(
+        &state.settings,
+        &state.skin.manifest.name,
+        &mut state.ui.dashboard,
+    );
     state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
     state.ui.bottom_bar.current_page = 0;
     state.ui.start_menu = StartMenuState::new_with_theme(
@@ -847,6 +899,9 @@ mod tests {
             pending_wallpaper_refresh: false,
             skin_layout_textures: Vec::new(),
             image_layers: Vec::new(),
+            icon_drag: None,
+            cursor_texture: None,
+            settings: oasis_core::settings::SettingsStore::new(),
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,

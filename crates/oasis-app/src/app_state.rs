@@ -118,6 +118,14 @@ pub struct AppState {
     pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
     /// Image background layers (watermark decals) for the current skin.
     pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Armed or active desktop-icon drag (free icon layout only).
+    pub icon_drag: Option<crate::icon_drag::IconDrag>,
+    /// Software cursor texture (only when `features.software_cursor`).
+    /// Destroyed and re-uploaded on skin swap.
+    pub cursor_texture: Option<oasis_core::backend::TextureId>,
+    /// Persistent key-value settings (icon positions, ...), stored in the
+    /// VFS at `/system/settings.toml`.
+    pub settings: oasis_core::settings::SettingsStore,
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub archive_catalog: Option<ArchiveCatalog>,

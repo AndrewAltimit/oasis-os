@@ -13,7 +13,47 @@ use oasis_core::wm::manager::WmEvent;
 use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
-use crate::{commands, launch};
+use crate::{commands, icon_drag, launch};
+
+/// Launch the dashboard app at page index `idx` as a floating window.
+///
+/// `fade` adds the fullscreen fade transition (used from dashboard mode
+/// where the screen is otherwise idle; desktop mode skips it so open
+/// windows aren't covered by the overlay).
+fn launch_dashboard_icon(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+    idx: usize,
+    fade: bool,
+) {
+    state.ui.dashboard.selected = idx;
+    let Some(app) = state.ui.dashboard.selected_app() else {
+        return;
+    };
+    log::info!("Click-launching app: {}", app.title);
+    let app = app.clone();
+    let result = launch::launch_app_window(
+        &app,
+        &mut state.wm,
+        sdi,
+        &mut state.content.open_runners,
+        &mut state.content.browser,
+        &state.browser_config,
+        vfs,
+        &state.net.tls_provider,
+        state.skin.features.window_manager,
+        &state.plugin_manager,
+    );
+    launch::apply_launch(result, &mut state.mode);
+    if fade {
+        state.active_transition = Some(launch::make_transition(
+            state.config.screen_width,
+            state.config.screen_height,
+            state.skin.features.transition_fade_frames.unwrap_or(15),
+        ));
+    }
+}
 
 /// Tear down active radio playback and any pending network work.
 ///
@@ -216,45 +256,19 @@ pub fn handle_desktop_input(
                 WmEvent::DesktopClick(dx, dy) => {
                     if state.wm.window_count() == 0 {
                         state.mode = Mode::Dashboard;
-                    } else if state.ui.bottom_bar.active_tab == MediaTab::None {
-                        // Forward desktop clicks to dashboard icons. With the
-                        // selector box removed, clicks launch on the first
-                        // press — no prior selection required.
-                        let cfg = &state.ui.dashboard.config;
-                        let gx = dx - cfg.grid_x;
-                        let gy = dy - cfg.grid_y;
-                        if gx >= 0 && gy >= 0 {
-                            let col = gx as usize / cfg.cell_w as usize;
-                            let row = gy as usize / cfg.cell_h as usize;
-                            if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
-                                let idx = row * cfg.grid_cols as usize + col;
-                                let page_apps = state.ui.dashboard.current_page_apps().len();
-                                if idx < page_apps {
-                                    state.ui.dashboard.selected = idx;
-                                    if let Some(app) = state.ui.dashboard.selected_app() {
-                                        let app = app.clone();
-                                        let result = launch::launch_app_window(
-                                            &app,
-                                            &mut state.wm,
-                                            sdi,
-                                            &mut state.content.open_runners,
-                                            &mut state.content.browser,
-                                            &state.browser_config,
-                                            vfs,
-                                            &state.net.tls_provider,
-                                            state.skin.features.window_manager,
-                                            &state.plugin_manager,
-                                        );
-                                        // No fullscreen fade here: in desktop
-                                        // mode other windows are already on
-                                        // screen, and a fade overlay would
-                                        // briefly cover them. Dashboard-mode
-                                        // launches keep the transition because
-                                        // the screen is otherwise idle.
-                                        launch::apply_launch(result, &mut state.mode);
-                                    }
-                                }
-                            }
+                    } else if state.ui.bottom_bar.active_tab == MediaTab::None
+                        && let Some(idx) = state.ui.dashboard.icon_at(dx, dy)
+                    {
+                        // Forward desktop clicks to dashboard icons.
+                        if state.ui.dashboard.config.free_layout {
+                            icon_drag::begin(state, idx, dx, dy);
+                        } else {
+                            // No fullscreen fade here: in desktop mode other
+                            // windows are already on screen, and a fade
+                            // overlay would briefly cover them.
+                            // Dashboard-mode launches keep the transition
+                            // because the screen is otherwise idle.
+                            launch_dashboard_icon(state, sdi, vfs, idx, false);
                         }
                     }
                 },
@@ -264,11 +278,25 @@ pub fn handle_desktop_input(
         InputEvent::CursorMove { x, y } => {
             state.ui.taskbar.set_hover(*x, *y);
             state.ui.start_menu.set_hover(*x, *y);
+            if icon_drag::active(state) {
+                // Desktop-icon drag in progress: the press already missed
+                // every window, so the WM has nothing to track.
+                icon_drag::on_move(state, *x, *y);
+                return InputResult::Continue;
+            }
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
         },
         InputEvent::PointerRelease { x, y } => {
+            if icon_drag::active(state) {
+                if let icon_drag::ReleaseAction::Launch(idx) =
+                    icon_drag::on_release(state, vfs, *x, *y)
+                {
+                    launch_dashboard_icon(state, sdi, vfs, idx, false);
+                }
+                return InputResult::Continue;
+            }
             state
                 .wm
                 .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, sdi);
@@ -591,43 +619,27 @@ pub fn handle_default_input(
                 }
                 return InputResult::Continue;
             }
-            if state.ui.bottom_bar.active_tab == MediaTab::None {
-                let cfg = &state.ui.dashboard.config;
-                let gx = *x - cfg.grid_x;
-                let gy = *y - cfg.grid_y;
-                if gx >= 0 && gy >= 0 {
-                    let col = gx as usize / cfg.cell_w as usize;
-                    let row = gy as usize / cfg.cell_h as usize;
-                    if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
-                        let idx = row * cfg.grid_cols as usize + col;
-                        let page_apps = state.ui.dashboard.current_page_apps().len();
-                        if idx < page_apps {
-                            state.ui.dashboard.selected = idx;
-                            if let Some(app) = state.ui.dashboard.selected_app() {
-                                log::info!("Click-launching app: {}", app.title);
-                                let app = app.clone();
-                                let result = launch::launch_app_window(
-                                    &app,
-                                    &mut state.wm,
-                                    sdi,
-                                    &mut state.content.open_runners,
-                                    &mut state.content.browser,
-                                    &state.browser_config,
-                                    vfs,
-                                    &state.net.tls_provider,
-                                    state.skin.features.window_manager,
-                                    &state.plugin_manager,
-                                );
-                                launch::apply_launch(result, &mut state.mode);
-                                state.active_transition = Some(launch::make_transition(
-                                    state.config.screen_width,
-                                    state.config.screen_height,
-                                    state.skin.features.transition_fade_frames.unwrap_or(15),
-                                ));
-                            }
-                        }
-                    }
+            if state.ui.bottom_bar.active_tab == MediaTab::None
+                && let Some(idx) = state.ui.dashboard.icon_at(*x, *y)
+            {
+                if state.ui.dashboard.config.free_layout {
+                    // Free layout: arm a drag; the release decides between
+                    // drop-commit, select, and launch.
+                    icon_drag::begin(state, idx, *x, *y);
+                } else {
+                    launch_dashboard_icon(state, sdi, vfs, idx, true);
                 }
+            }
+        },
+
+        // Free-layout icon drag tracking (no-ops when nothing is armed).
+        InputEvent::CursorMove { x, y } if state.mode == Mode::Dashboard => {
+            icon_drag::on_move(state, *x, *y);
+        },
+        InputEvent::PointerRelease { x, y } if state.mode == Mode::Dashboard => {
+            if let icon_drag::ReleaseAction::Launch(idx) = icon_drag::on_release(state, vfs, *x, *y)
+            {
+                launch_dashboard_icon(state, sdi, vfs, idx, true);
             }
         },
 
@@ -927,6 +939,9 @@ mod tests {
             pending_wallpaper_refresh: false,
             skin_layout_textures: Vec::new(),
             image_layers: Vec::new(),
+            icon_drag: None,
+            cursor_texture: None,
+            settings: oasis_core::settings::SettingsStore::new(),
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,

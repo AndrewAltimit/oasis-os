@@ -9,6 +9,7 @@
 mod app_state;
 mod boot_splash;
 mod commands;
+mod icon_drag;
 mod input;
 mod launch;
 mod media_controller;
@@ -399,6 +400,9 @@ fn main() -> Result<()> {
         pending_wallpaper_refresh: false,
         skin_layout_textures: Vec::new(),
         image_layers: Vec::new(),
+        icon_drag: None,
+        cursor_texture: None,
+        settings: oasis_core::settings::SettingsStore::new(),
         radio_manager: RadioManager::new(),
         radio_source: None,
         archive_catalog: None,
@@ -432,6 +436,15 @@ fn main() -> Result<()> {
         #[cfg(feature = "_video")]
         tv_current_url: None,
     };
+
+    // Load persisted settings and apply per-skin icon positions (free
+    // icon layout). Missing files and grid-layout skins are no-ops.
+    state.settings.load(&vfs);
+    icon_drag::load_icon_positions(
+        &state.settings,
+        &state.skin.manifest.name,
+        &mut state.ui.dashboard,
+    );
 
     // Prime the status bar with real time + power info so the first frame
     // shows accurate values instead of the "--:--" / "--%" placeholders.
