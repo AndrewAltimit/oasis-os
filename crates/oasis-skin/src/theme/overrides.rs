@@ -328,6 +328,57 @@ pub struct WallpaperConfig {
     pub animated: Option<bool>,
 }
 
+/// Typography scale for the widget toolkit: the font-size ladder and spacing
+/// tokens every `oasis-ui` widget reads off the derived `Theme`.
+///
+/// These were hardcoded in the theme derivation, which meant a skin could
+/// restyle every color in the shell but not make its text one pixel larger.
+/// Unset fields keep the historical defaults (an 8 px body size, a 2/4/8/12/16
+/// spacing ramp), so an existing skin renders identically.
+///
+/// ```toml
+/// [typography]
+/// font_size_md = 10
+/// font_size_lg = 18
+/// spacing_md = 10
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TypographyOverrides {
+    /// Extra-small font size (default 8).
+    #[serde(default)]
+    pub font_size_xs: Option<u16>,
+    /// Small font size (default 8).
+    #[serde(default)]
+    pub font_size_sm: Option<u16>,
+    /// Medium/body font size (default 8).
+    #[serde(default)]
+    pub font_size_md: Option<u16>,
+    /// Large font size (default 16).
+    #[serde(default)]
+    pub font_size_lg: Option<u16>,
+    /// Extra-large font size (default 16).
+    #[serde(default)]
+    pub font_size_xl: Option<u16>,
+    /// Display font size (default 24).
+    #[serde(default)]
+    pub font_size_xxl: Option<u16>,
+    /// Extra-small spacing step (default 2).
+    #[serde(default)]
+    pub spacing_xs: Option<u16>,
+    /// Small spacing step (default 4).
+    #[serde(default)]
+    pub spacing_sm: Option<u16>,
+    /// Medium spacing step (default 8).
+    #[serde(default)]
+    pub spacing_md: Option<u16>,
+    /// Large spacing step (default 12).
+    #[serde(default)]
+    pub spacing_lg: Option<u16>,
+    /// Extra-large spacing step (default 16).
+    #[serde(default)]
+    pub spacing_xl: Option<u16>,
+}
+
 /// Geometry overrides for bar heights, icon sizes, and font sizes.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GeometryOverrides {

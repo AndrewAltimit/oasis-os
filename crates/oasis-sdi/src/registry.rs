@@ -15,16 +15,24 @@ use oasis_types::shadow::Shadow;
 use crate::object::SdiObject;
 
 /// The SDI scene graph: a flat, named registry of blittable objects.
+///
+/// Objects live in a dense `Vec` (the slab); `index` maps a name to its slot.
+/// The z-sorted draw lists hold slot handles rather than names, so the draw
+/// path never hashes a string — it indexes straight into the slab.
 #[derive(Debug)]
 pub struct SdiRegistry {
-    objects: HashMap<String, SdiObject>,
+    /// Dense object storage. A slot's handle is stable until an object is
+    /// destroyed (`destroy` swap-removes and repairs the moved entry's index).
+    objects: Vec<SdiObject>,
+    /// Object name -> slab handle.
+    index: HashMap<String, usize>,
     /// Monotonically increasing counter for assigning z-order to new objects.
     next_z: i32,
-    /// Pre-sorted names of non-overlay objects in z-order (ascending).
+    /// Pre-sorted handles of non-overlay objects in z-order (ascending).
     /// Rebuilt on mutation rather than on every `draw()` call.
-    z_sorted_base: Vec<String>,
-    /// Pre-sorted names of overlay objects in z-order (ascending).
-    z_sorted_overlay: Vec<String>,
+    z_sorted_base: Vec<usize>,
+    /// Pre-sorted handles of overlay objects in z-order (ascending).
+    z_sorted_overlay: Vec<usize>,
     /// Whether the z-sorted lists need rebuilding before next draw.
     z_dirty: bool,
 }
@@ -33,7 +41,8 @@ impl SdiRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self {
-            objects: HashMap::new(),
+            objects: Vec::new(),
+            index: HashMap::new(),
             next_z: 0,
             z_sorted_base: Vec::new(),
             z_sorted_overlay: Vec::new(),
@@ -44,7 +53,8 @@ impl SdiRegistry {
     /// Create a new object and insert it into the registry.
     /// Returns a mutable reference to the newly created object for chaining.
     ///
-    /// If an object with the same name already exists, it is replaced.
+    /// If an object with the same name already exists, it is replaced (its
+    /// slab slot is reused, but every property — including z — is reset).
     pub fn create(&mut self, name: impl Into<String>) -> &mut SdiObject {
         let name = name.into();
         if self.next_z == i32::MAX {
@@ -53,37 +63,53 @@ impl SdiRegistry {
         let mut obj = SdiObject::new(&name);
         obj.z = self.next_z;
         self.next_z += 1;
-        self.objects.insert(name.clone(), obj);
         self.z_dirty = true;
-        // SAFETY (logical): We just inserted with this key on the line above,
-        // so the entry is guaranteed to exist.
-        self.objects
-            .get_mut(&name)
-            .expect("just-inserted key missing")
+
+        let handle = match self.index.get(&name) {
+            Some(&h) => {
+                self.objects[h] = obj;
+                h
+            },
+            None => {
+                let h = self.objects.len();
+                self.objects.push(obj);
+                self.index.insert(name, h);
+                h
+            },
+        };
+        &mut self.objects[handle]
     }
 
     /// Get a shared reference to an object by name.
     pub fn get(&self, name: &str) -> Result<&SdiObject> {
-        self.objects
+        self.index
             .get(name)
+            .map(|&h| &self.objects[h])
             .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
     }
 
     /// Get a mutable reference to an object by name.
     pub fn get_mut(&mut self, name: &str) -> Result<&mut SdiObject> {
-        self.objects
-            .get_mut(name)
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
+        match self.index.get(name) {
+            Some(&h) => Ok(&mut self.objects[h]),
+            None => Err(OasisError::Sdi(format!("object not found: {name}").into())),
+        }
     }
 
     /// Remove an object from the registry.
     pub fn destroy(&mut self, name: &str) -> Result<()> {
-        self.objects
+        let handle = self
+            .index
             .remove(name)
-            .map(|_| {
-                self.z_dirty = true;
-            })
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
+            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))?;
+        self.objects.swap_remove(handle);
+        // `swap_remove` moved the former last object into `handle` (unless the
+        // removed object *was* last) — repoint its index entry.
+        if let Some(moved) = self.objects.get(handle) {
+            self.index.insert(moved.name.clone(), handle);
+        }
+        self.z_dirty = true;
+        Ok(())
     }
 
     /// Move an object to the top of the z-order (drawn last = on top).
@@ -101,7 +127,7 @@ impl SdiRegistry {
 
     /// Move an object to the bottom of the z-order (drawn first = behind).
     pub fn move_to_bottom(&mut self, name: &str) -> Result<()> {
-        let min_z = self.objects.values().map(|o| o.z).min().unwrap_or(0) - 1;
+        let min_z = self.objects.iter().map(|o| o.z).min().unwrap_or(0) - 1;
         let obj = self.get_mut(name)?;
         obj.z = min_z;
         self.z_dirty = true;
@@ -120,7 +146,7 @@ impl SdiRegistry {
 
     /// Returns true if an object with the given name exists.
     pub fn contains(&self, name: &str) -> bool {
-        self.objects.contains_key(name)
+        self.index.contains_key(name)
     }
 
     /// Load raw RGBA pixel data as a texture through the backend and assign it
@@ -176,7 +202,12 @@ impl SdiRegistry {
         let theme: HashMap<String, ThemeEntry> =
             toml::from_str(toml_str).map_err(|e| OasisError::Config(format!("{e}").into()))?;
 
-        for (name, entry) in theme {
+        // Apply in name order: newly created objects take their auto-z from the
+        // creation counter, and HashMap iteration order is random per process.
+        let mut entries: Vec<(String, ThemeEntry)> = theme.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, entry) in entries {
             if !self.contains(&name) {
                 self.create(&name);
             }
@@ -192,54 +223,59 @@ impl SdiRegistry {
 
     /// Return an iterator over all object names in the registry.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.objects.keys().map(String::as_str)
+        self.objects.iter().map(|o| o.name.as_str())
     }
 
     /// Renormalize all z-orders by sorting objects by their current z-value
     /// and reassigning sequential values starting from 0. Called when `next_z`
     /// reaches `i32::MAX` to prevent overflow.
     fn renormalize_z_orders(&mut self) {
-        let mut sorted: Vec<String> = self.objects.keys().cloned().collect();
-        // Tiebreak equal z by name: HashMap iteration order is random per
-        // process, so a bare z sort makes draw order (and thus which of two
-        // overlapping same-z objects wins) nondeterministic.
-        sorted.sort_unstable_by(|a, b| (self.objects[a].z, a).cmp(&(self.objects[b].z, b)));
-        for (i, name) in sorted.iter().enumerate() {
+        let mut handles: Vec<usize> = (0..self.objects.len()).collect();
+        // Tiebreak equal z by name: slab order depends on insertion/removal
+        // history, so a bare z sort would leave draw order (and thus which of
+        // two overlapping same-z objects wins) dependent on it.
+        handles.sort_unstable_by(|&a, &b| self.z_key(a).cmp(&self.z_key(b)));
+        for (i, &h) in handles.iter().enumerate() {
             // Cast is safe: object count is bounded by memory well before i32::MAX.
-            self.objects.get_mut(name).expect("key from own iterator").z = i as i32;
+            self.objects[h].z = i as i32;
         }
-        self.next_z = sorted.len() as i32;
+        self.next_z = handles.len() as i32;
         self.z_dirty = true;
+    }
+
+    /// Sort key for an object handle: z first, then name for a stable tiebreak.
+    fn z_key(&self, handle: usize) -> (i32, &str) {
+        let obj = &self.objects[handle];
+        (obj.z, obj.name.as_str())
     }
 
     /// Rebuild the cached z-order index if it is dirty.
     ///
-    /// Partitions objects into base and overlay lists and sorts each by
-    /// z-value using `sort_unstable_by_key` (faster than stable sort).
-    /// Reuses allocated `Vec` capacity via `clear()` + `push`.
+    /// Partitions object handles into base and overlay lists and sorts each by
+    /// z-value. Reuses allocated `Vec` capacity via `clear()` + `push`.
     fn ensure_z_sorted(&mut self) {
         if !self.z_dirty {
             return;
         }
-        self.z_sorted_base.clear();
-        self.z_sorted_overlay.clear();
-        for (name, obj) in &self.objects {
+        // Move the lists out so the sort comparator can borrow `self.objects`.
+        let mut base = std::mem::take(&mut self.z_sorted_base);
+        let mut overlay = std::mem::take(&mut self.z_sorted_overlay);
+        base.clear();
+        overlay.clear();
+        for (handle, obj) in self.objects.iter().enumerate() {
             if obj.overlay {
-                self.z_sorted_overlay.push(name.clone());
+                overlay.push(handle);
             } else {
-                self.z_sorted_base.push(name.clone());
+                base.push(handle);
             }
         }
-        // Tiebreak equal z by name so draw order is deterministic (HashMap
-        // iteration order is random per process; without this, overlapping
-        // same-z objects — e.g. free-layout icons over content_bg — flicker
-        // between runs).
-        self.z_sorted_base.sort_unstable_by(|a, b| {
-            (self.objects[a].z, a.as_str()).cmp(&(self.objects[b].z, b.as_str()))
-        });
-        self.z_sorted_overlay.sort_unstable_by(|a, b| {
-            (self.objects[a].z, a.as_str()).cmp(&(self.objects[b].z, b.as_str()))
-        });
+        // Tiebreak equal z by name so draw order is deterministic: without it,
+        // overlapping same-z objects — e.g. free-layout icons over content_bg —
+        // would swap depending on slab order.
+        base.sort_unstable_by(|&a, &b| self.z_key(a).cmp(&self.z_key(b)));
+        overlay.sort_unstable_by(|&a, &b| self.z_key(a).cmp(&self.z_key(b)));
+        self.z_sorted_base = base;
+        self.z_sorted_overlay = overlay;
         self.z_dirty = false;
     }
 
@@ -259,8 +295,8 @@ impl SdiRegistry {
     pub fn draw_base_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         self.ensure_z_sorted();
 
-        for name in &self.z_sorted_base {
-            let obj = &self.objects[name];
+        for &handle in &self.z_sorted_base {
+            let obj = &self.objects[handle];
             if !obj.visible || obj.alpha == 0 {
                 continue;
             }
@@ -273,8 +309,8 @@ impl SdiRegistry {
     ///
     /// Call after [`Self::draw_base_layer`] and any custom mid-layer rendering.
     pub fn draw_overlay_layer(&self, backend: &mut dyn SdiBackend) -> Result<()> {
-        for name in &self.z_sorted_overlay {
-            let obj = &self.objects[name];
+        for &handle in &self.z_sorted_overlay {
+            let obj = &self.objects[handle];
             if !obj.visible || obj.alpha == 0 {
                 continue;
             }
@@ -285,7 +321,7 @@ impl SdiRegistry {
 
     /// Draw a single named object (if it exists and is visible).
     pub fn draw_named(&self, name: &str, backend: &mut dyn SdiBackend) -> Result<()> {
-        if let Some(obj) = self.objects.get(name)
+        if let Some(obj) = self.index.get(name).map(|&h| &self.objects[h])
             && obj.visible
             && obj.alpha > 0
         {
@@ -350,16 +386,16 @@ impl SdiRegistry {
     /// Internal: draw objects from a z-sorted list, applying a filter.
     fn draw_layer_filtered(
         &self,
-        layer: &[String],
+        layer: &[usize],
         backend: &mut dyn SdiBackend,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<()> {
-        for name in layer {
-            let obj = &self.objects[name];
+        for &handle in layer {
+            let obj = &self.objects[handle];
             if !obj.visible || obj.alpha == 0 {
                 continue;
             }
-            if !keep(name) {
+            if !keep(&obj.name) {
                 continue;
             }
             Self::draw_object(obj, backend)?;
@@ -566,10 +602,36 @@ mod tests {
         }
         reg.z_dirty = true;
         reg.ensure_z_sorted();
+        let order: Vec<&str> = reg
+            .z_sorted_base
+            .iter()
+            .map(|&h| reg.objects[h].name.as_str())
+            .collect();
         assert_eq!(
-            reg.z_sorted_base,
+            order,
             vec!["content_bg", "icon_body_1", "icon_body_2", "icon_body_3"]
         );
+    }
+
+    #[test]
+    fn destroy_repairs_swapped_handle() {
+        // `destroy` swap-removes from the slab: the object that gets moved into
+        // the freed slot must keep resolving by name (and keep drawing).
+        let mut reg = SdiRegistry::new();
+        for name in ["a", "b", "c"] {
+            reg.create(name).color = Color::rgb(1, 2, 3);
+        }
+        reg.destroy("a").unwrap();
+        assert_eq!(reg.len(), 2);
+        // "c" was the last slab entry, so it moved into "a"'s slot.
+        assert!(reg.get("c").is_ok());
+        assert!(reg.get("b").is_ok());
+        reg.get_mut("c").unwrap().x = 42;
+        assert_eq!(reg.get("c").unwrap().x, 42);
+        assert_eq!(reg.get("b").unwrap().x, 0);
+        let mut names: Vec<&str> = reg.names().collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["b", "c"]);
     }
 
     #[test]

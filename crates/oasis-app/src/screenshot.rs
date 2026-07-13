@@ -473,6 +473,10 @@ fn render_and_save_inner(
 }
 
 /// Save RGBA pixel data as a PNG file.
+///
+/// The alpha channel is forced opaque: a window framebuffer has no
+/// transparency, and SDL's software renderer otherwise leaves a per-primitive
+/// blend artifact there that would make the gallery PNGs partly see-through.
 fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<()> {
     let file = fs::File::create(path)?;
     let writer = std::io::BufWriter::new(file);
@@ -480,7 +484,11 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header()?;
-    writer.write_image_data(rgba)?;
+    let mut opaque = rgba.to_vec();
+    for px in opaque.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    writer.write_image_data(&opaque)?;
     Ok(())
 }
 

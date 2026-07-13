@@ -1,9 +1,17 @@
 //! Glyph cache and text rendering for the SDL3 backend.
 //!
-//! Manages a fixed-size LRU cache of pre-rendered glyph textures. Each
-//! unique (character, font_size, color, bold, italic) combination is
-//! rasterized once into an RGBA buffer, uploaded as an SDL streaming
-//! texture, and reused on subsequent draws.
+//! Manages a fixed-size LRU cache of pre-rendered glyph textures.
+//!
+//! Opaque text — which is nearly all of it — is cached **color-independently**:
+//! each (character, font_size, bold, italic) is rasterized white once and
+//! tinted at blit time with SDL's texture color modulation. One texture then
+//! serves every color the shell draws that character in, so re-skinning, a
+//! hover color lerp, or an accent animation costs nothing. The tint is exact:
+//! SDL modulates by `src * mod / 255`, a white source leaves `mod` unchanged,
+//! and blending a fully opaque source yields the source.
+//!
+//! Translucent text keeps a color-keyed entry with the color baked into the
+//! pixels — see `SdlBackend::tints_at_blit`.
 
 use oasis_core::backend::{BackendErrExt, Color, SdiText};
 use oasis_core::error::Result;
@@ -16,13 +24,39 @@ use super::{SdlBackend, font, frect};
 /// Maximum number of cached glyph textures before LRU eviction kicks in.
 pub(crate) const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
+/// Fraction of the cache evicted when it fills, as a divisor: the oldest
+/// `MAX_GLYPH_CACHE_SIZE / EVICT_DIVISOR` entries go at once. Evicting in
+/// batches amortizes the O(n log n) sort over many insertions instead of
+/// paying an O(n) min-scan per new glyph.
+const EVICT_DIVISOR: usize = 4;
+
+/// A cached glyph: its texture plus the dimensions it was rasterized at.
+///
+/// The dimensions are stored here so the draw path never calls
+/// `Texture::query()` (an FFI round-trip) per glyph per frame.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GlyphEntry {
+    /// Texture id in `SdlBackend::textures`.
+    pub(crate) texture: u64,
+    /// Rasterized width in pixels.
+    pub(crate) w: u32,
+    /// Rasterized height in pixels.
+    pub(crate) h: u32,
+    /// Value of `glyph_access_counter` at the last hit (LRU timestamp).
+    pub(crate) last_used: u64,
+}
+
 // -------------------------------------------------------------------
 // Glyph rendering helpers
 // -------------------------------------------------------------------
 
 impl SdlBackend {
-    /// Render a single glyph to an RGBA buffer and load it as an SDL
-    /// texture. Returns the texture ID stored in `self.textures`.
+    /// Render a single glyph into an RGBA buffer and load it as an SDL texture.
+    /// Returns the texture ID stored in `self.textures` plus the rasterized
+    /// dimensions.
+    ///
+    /// `color` is white for cache entries that are tinted at blit time, and the
+    /// text color itself for the translucent entries that bake it in.
     pub(crate) fn render_glyph_texture(
         &mut self,
         ch: char,
@@ -30,7 +64,7 @@ impl SdlBackend {
         color: Color,
         bold: bool,
         italic: bool,
-    ) -> Result<u64> {
+    ) -> Result<(u64, u32, u32)> {
         let fs = font_size.max(1) as i32;
         let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         let bold_extra = if bold { 1 } else { 0 };
@@ -116,7 +150,94 @@ impl SdlBackend {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
         self.textures.insert(id, texture);
-        Ok(id)
+        Ok((id, gw, gh))
+    }
+
+    /// Look up a glyph, rendering and caching it on miss. Returns the entry.
+    ///
+    /// Opaque text gets a color-independent entry (white pixels, tinted at
+    /// blit); translucent text gets a color-keyed entry with the color baked
+    /// in — see [`Self::tints_at_blit`] for why.
+    fn glyph_entry(
+        &mut self,
+        ch: char,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<GlyphEntry> {
+        let tinted = Self::tints_at_blit(color);
+        let key = if tinted {
+            GlyphCacheKey::colorless(ch, font_size, bold, italic)
+        } else {
+            GlyphCacheKey::new(ch, font_size, color, bold, italic)
+        };
+        self.glyph_access_counter += 1;
+        let stamp = self.glyph_access_counter;
+
+        if let Some(entry) = self.glyph_cache.get_mut(&key) {
+            // Cache hit: touch the in-entry LRU stamp (no second HashMap).
+            entry.last_used = stamp;
+            return Ok(*entry);
+        }
+
+        if self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
+            self.evict_oldest_glyphs();
+        }
+
+        let raster = if tinted {
+            Color::rgba(255, 255, 255, 255)
+        } else {
+            color
+        };
+        let (texture, w, h) = self.render_glyph_texture(ch, font_size, raster, bold, italic)?;
+        let entry = GlyphEntry {
+            texture,
+            w,
+            h,
+            last_used: stamp,
+        };
+        self.glyph_cache.insert(key, entry);
+        Ok(entry)
+    }
+
+    /// Whether a glyph in this color is served from the color-independent
+    /// cache and tinted at blit time.
+    ///
+    /// Opaque text is: SDL modulates a white source as `255 * mod / 255 == mod`
+    /// and, with a fully opaque source, the blend result *is* the source — so a
+    /// tinted white glyph is byte-for-byte what rasterizing in that color used
+    /// to produce, and every color of a character shares one texture.
+    ///
+    /// Translucent text is not. Modulating alpha moves the blit onto SDL's
+    /// modulated blend path, whose rounding differs from the per-pixel-alpha
+    /// path by up to 2/255 against a contrasting background. That is invisible
+    /// but it is not identical, and there is little to win: a glyph that is
+    /// fading has a different alpha — and so a different key — on the next
+    /// frame regardless of how the cache is keyed.
+    fn tints_at_blit(color: Color) -> bool {
+        color.a == 255
+    }
+
+    /// Drop the oldest quarter of the cache in one pass.
+    fn evict_oldest_glyphs(&mut self) {
+        let victims = (MAX_GLYPH_CACHE_SIZE / EVICT_DIVISOR).max(1);
+        let mut stamps: Vec<(u64, GlyphCacheKey)> = self
+            .glyph_cache
+            .iter()
+            .map(|(&key, entry)| (entry.last_used, key))
+            .collect();
+        if stamps.is_empty() {
+            return;
+        }
+        // Partial sort: we only need the `victims` oldest.
+        let pivot = victims.min(stamps.len()).saturating_sub(1);
+        stamps.select_nth_unstable_by_key(pivot, |&(stamp, _)| stamp);
+        for &(_, key) in stamps.iter().take(victims) {
+            if let Some(entry) = self.glyph_cache.remove(&key) {
+                self.textures.remove(&entry.texture);
+            }
+        }
     }
 
     /// Write a single pixel into a glyph RGBA buffer, with bounds
@@ -156,40 +277,19 @@ impl SdiText for SdlBackend {
         let (tx, ty) = self.translate(x, y);
         let mut cx = tx;
 
+        let tinted = Self::tints_at_blit(color);
         for ch in text.chars() {
-            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if self.glyph_cache.contains_key(&key) {
-                // Cache hit: update LRU access counter.
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            } else {
-                // Evict LRU entry when cache is full.
-                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                    if let Some((&oldest_key, _)) =
-                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
-                    {
-                        if let Some(tex_id) = self.glyph_cache.remove(&oldest_key) {
-                            self.textures.remove(&tex_id);
-                        }
-                        self.glyph_access.remove(&oldest_key);
-                    } else {
-                        break;
-                    }
+            let entry = self.glyph_entry(ch, font_size, color, bold, italic)?;
+            // Dimensions come from the cache entry, not a `texture.query()`
+            // FFI round-trip per glyph per frame.
+            if let Some(texture) = self.textures.get_mut(&entry.texture) {
+                if tinted {
+                    // White glyph, tinted to the requested color by SDL.
+                    texture.set_color_mod(color.r, color.g, color.b);
                 }
-                // Render the glyph to a small RGBA buffer.
-                let tex_id = self.render_glyph_texture(ch, font_size, color, bold, italic)?;
-                self.glyph_cache.insert(key, tex_id);
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            }
-            // Blit the cached glyph texture.
-            if let Some(&tex_id) = self.glyph_cache.get(&key)
-                && let Some(texture) = self.textures.get(&tex_id)
-            {
-                let query = texture.query();
                 let _ = self
                     .canvas
-                    .copy(texture, None, frect(cx, ty, query.width, query.height));
+                    .copy(texture, None, frect(cx, ty, entry.w, entry.h));
             }
             cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         }

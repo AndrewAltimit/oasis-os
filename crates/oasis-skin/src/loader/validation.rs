@@ -315,6 +315,44 @@ impl Skin {
             }
         }
 
+        // Typography: a zero font size renders nothing, and the bitmap font is
+        // unreadable past a few dozen pixels — both are almost always typos.
+        if let Some(ref typo) = self.theme.typography {
+            for (name, value) in [
+                ("font_size_xs", typo.font_size_xs),
+                ("font_size_sm", typo.font_size_sm),
+                ("font_size_md", typo.font_size_md),
+                ("font_size_lg", typo.font_size_lg),
+                ("font_size_xl", typo.font_size_xl),
+                ("font_size_xxl", typo.font_size_xxl),
+            ] {
+                match value {
+                    Some(0) => warnings.push(format!(
+                        "typography.{name}: 0 renders no text (omit the key to keep the default)"
+                    )),
+                    Some(v) if v > 64 => warnings.push(format!(
+                        "typography.{name}: {v}px is beyond the bitmap font's usable range (max 64)"
+                    )),
+                    _ => {},
+                }
+            }
+            for (name, value) in [
+                ("spacing_xs", typo.spacing_xs),
+                ("spacing_sm", typo.spacing_sm),
+                ("spacing_md", typo.spacing_md),
+                ("spacing_lg", typo.spacing_lg),
+                ("spacing_xl", typo.spacing_xl),
+            ] {
+                if let Some(v) = value
+                    && v > 64
+                {
+                    warnings.push(format!(
+                        "typography.{name}: {v}px will push widget content off small screens"
+                    ));
+                }
+            }
+        }
+
         // Per-asset dimension checks + total budget.
         let mut total_bytes = 0usize;
         let mut names: Vec<&String> = self.assets.keys().collect();

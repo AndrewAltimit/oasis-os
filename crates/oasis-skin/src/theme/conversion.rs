@@ -129,6 +129,9 @@ impl SkinTheme {
             text_direction: oasis_types::text_direction::TextDirection::Ltr,
         };
 
+        if let Some(ref typo) = self.typography {
+            apply_typography(&mut theme, typo);
+        }
         if let Some(ref states) = self.widget_states {
             apply_widget_states(&mut theme, states);
         }
@@ -202,6 +205,30 @@ impl SkinTheme {
             theme.btn_maximize_hover = lighten(theme.btn_maximize_color, 0.15);
         }
         theme
+    }
+}
+
+/// Apply the `[typography]` scale onto a derived `Theme`.
+///
+/// Unset fields keep the derivation's defaults, so skins written before this
+/// existed produce a byte-identical `Theme`.
+fn apply_typography(theme: &mut Theme, typo: &super::TypographyOverrides) {
+    for (slot, value) in [
+        (&mut theme.font_size_xs, typo.font_size_xs),
+        (&mut theme.font_size_sm, typo.font_size_sm),
+        (&mut theme.font_size_md, typo.font_size_md),
+        (&mut theme.font_size_lg, typo.font_size_lg),
+        (&mut theme.font_size_xl, typo.font_size_xl),
+        (&mut theme.font_size_xxl, typo.font_size_xxl),
+        (&mut theme.spacing_xs, typo.spacing_xs),
+        (&mut theme.spacing_sm, typo.spacing_sm),
+        (&mut theme.spacing_md, typo.spacing_md),
+        (&mut theme.spacing_lg, typo.spacing_lg),
+        (&mut theme.spacing_xl, typo.spacing_xl),
+    ] {
+        if let Some(v) = value {
+            *slot = v;
+        }
     }
 }
 

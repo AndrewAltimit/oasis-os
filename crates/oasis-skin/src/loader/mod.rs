@@ -649,6 +649,9 @@ impl Skin {
         if ct.geometry.is_none() {
             ct.geometry.clone_from(&pt.geometry);
         }
+        if ct.typography.is_none() {
+            ct.typography.clone_from(&pt.typography);
+        }
         if ct.transition.is_none() {
             ct.transition.clone_from(&pt.transition);
         }

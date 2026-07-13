@@ -557,6 +557,43 @@ icon_label_pad = 4         # gap between icon and label
 #   scrollbar_width, terminal_line_height, page_slide_duration, …
 ```
 
+## Typography
+
+`[geometry]`'s `font_*` keys size the *shell* (bars, icons, terminal).
+`[typography]` sizes the *widget toolkit* — the font-size ladder and spacing
+tokens every `oasis-ui` widget (buttons, lists, tables, modals, the apps built
+on them) reads off the derived theme. Before this existed they were hardcoded,
+so a skin could restyle every color in the shell but not make its text one
+pixel larger.
+
+```toml
+[typography]
+font_size_xs = 8           # default 8
+font_size_sm = 8           # default 8
+font_size_md = 10          # body text — default 8
+font_size_lg = 18          # default 16
+font_size_xl = 16          # default 16
+font_size_xxl = 24         # display — default 24
+
+spacing_xs = 2             # default 2
+spacing_sm = 4             # default 4
+spacing_md = 10            # default 8
+spacing_lg = 12            # default 12
+spacing_xl = 16            # default 16
+```
+
+Every key is optional and unset keys keep the defaults above, so a skin written
+before this table renders identically. `skin lint` warns on a zero font size
+(renders nothing) and on values past the bitmap font's usable range.
+
+**Per-skin TTF fonts are not supported.** Glyph advances come from
+`oasis_types::bitmap_font::glyph_advance()`, which every layout pass in the
+shell, the browser, and the terminal calls directly — a skin-supplied face
+would need a font-metrics provider threaded through all of them before the
+first glyph could be rasterized. The `@font-face` pipeline in `oasis-browser`
+(fontdue) already does this for *page* content, and is the model to follow if
+the shell ever grows the same capability.
+
 ## Widget States
 
 `[widget_states.*]` overrides interactive widget colors (buttons, inputs,

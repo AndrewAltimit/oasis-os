@@ -16,7 +16,8 @@ pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
     BarOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset, IconOverrides,
     LayerAnimationConfig, LayerPositionConfig, NinePatchDef, OskOverrides, ScrollbarOverrides,
-    StartMenuOverrides, TransitionOverrides, WallpaperConfig, WmThemeOverrides,
+    StartMenuOverrides, TransitionOverrides, TypographyOverrides, WallpaperConfig,
+    WmThemeOverrides,
 };
 
 /// Color scheme for a skin.
@@ -117,6 +118,10 @@ pub struct SkinTheme {
     /// Geometry overrides (bar heights, icon sizes, font sizes).
     #[serde(default)]
     pub geometry: Option<GeometryOverrides>,
+
+    /// Typography scale for the widget toolkit (font-size ladder + spacing).
+    #[serde(default)]
+    pub typography: Option<TypographyOverrides>,
 
     /// Transition effect overrides.
     #[serde(default)]
@@ -265,6 +270,7 @@ impl Default for SkinTheme {
             wallpaper: None,
             cursor: None,
             geometry: None,
+            typography: None,
             transition: None,
             scrollbar_overrides: None,
             background_layers: None,
@@ -594,6 +600,55 @@ focus_border = "#00FFAA"
         let plain = SkinTheme::default().to_ui_theme();
         assert_eq!(theme.button_bg_pressed, plain.button_bg_pressed);
         assert_eq!(theme.toggle_track_off, plain.toggle_track_off);
+    }
+
+    #[test]
+    fn typography_overrides_ui_theme_scale() {
+        let toml = r##"
+[typography]
+font_size_md = 10
+font_size_lg = 18
+spacing_md = 10
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        let plain = SkinTheme::default().to_ui_theme();
+
+        assert_eq!(theme.font_size_md, 10);
+        assert_eq!(theme.font_size_lg, 18);
+        assert_eq!(theme.spacing_md, 10);
+        // Unset steps keep the historical ladder.
+        assert_eq!(theme.font_size_xs, plain.font_size_xs);
+        assert_eq!(theme.font_size_xxl, plain.font_size_xxl);
+        assert_eq!(theme.spacing_xl, plain.spacing_xl);
+    }
+
+    #[test]
+    fn no_typography_table_is_identical_to_before() {
+        // Every shipped skin predates `[typography]`: the derived scale must be
+        // exactly the values that were hardcoded in the derivation.
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(
+            (
+                theme.font_size_xs,
+                theme.font_size_sm,
+                theme.font_size_md,
+                theme.font_size_lg,
+                theme.font_size_xl,
+                theme.font_size_xxl
+            ),
+            (8, 8, 8, 16, 16, 24)
+        );
+        assert_eq!(
+            (
+                theme.spacing_xs,
+                theme.spacing_sm,
+                theme.spacing_md,
+                theme.spacing_lg,
+                theme.spacing_xl
+            ),
+            (2, 4, 8, 12, 16)
+        );
     }
 
     #[test]

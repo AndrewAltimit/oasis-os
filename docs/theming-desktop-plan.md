@@ -15,8 +15,11 @@ churn), and M4 (showcase + adoption: B7 `psix-tribute` skin, Track C
 wiring — `widget_states` into the UI toolkit, `app_themes` in
 terminal/file manager/settings, skin inheritance in practice, exposed
 toast/icon-anatomy/desktop-size constants — A6 `skin-dev` hot reload,
-skin-authoring docs v2, screenshot fixtures + deterministic z-order)
-have landed. Branch: `feat/advanced-theming`.
+skin-authoring docs v2, screenshot fixtures + deterministic z-order),
+and M5 (perf tail: D2 color-independent glyph cache, D5 no-alloc window
+compositing, D6 glyph cache bookkeeping, D8 handle-based SDI z-lists,
+D9 evaluated and declined, A7 typography tokens) have landed. Branch:
+`feat/advanced-theming`.
 
 ## Goal
 
@@ -314,6 +317,33 @@ features, so they land in the same milestone as their feature.
 | D8 | **SDI handle-based z-lists** — draw path does a `HashMap<String>` lookup per object per frame (`oasis-sdi/src/registry.rs:349`); move to index/handle-based z-lists. Do this *before* themes multiply object counts. | Low–Med | Med | all backends |
 | D9 | **Shell batching** — extend `SdiBatch` use beyond browser/file-manager into the SDI registry draw (coalesce same-color rect runs, batched text). Biggest payoff on PSP/WASM. Defer to last; measure first. | Med | High | PSP/WASM mainly |
 | D10 | **Draw-path benchmark** — `oasis-sdi/benches/sdi_registry.rs` never benches `draw()`. Add a full-scene draw bench against the test backend + a dashboard-frame bench, so D1–D9 and the new theme features are regression-gated. Land this *first*. | — (enabler) | Low | CI |
+
+### M5 results (measured against the M0 `sdi_draw` benchmarks)
+
+D8 dominated: moving the z-lists from cloned names to slab handles cut the
+steady-state draw of a 120-object frame from ~3.6 µs to ~0.53 µs (−85%), a
+1000-object frame by −82%, the z-list rebuild by −95%, and the
+window-compositing pass by −68% (D5 + D8 together). Per-object registry cost is
+now ~4 ns.
+
+**D9 (shell batching) was evaluated and declined.** Two measurements say the
+work would not pay for itself:
+
+1. After D8 the registry side of the draw is ~4 ns/object against a no-op
+   backend — there is no per-object bookkeeping left worth coalescing. What
+   remains is the backend call itself.
+2. `SdiBatch` can only coalesce *flat* rects and same-style text runs, and the
+   shell's objects do not come in runs. A 12-icon dashboard scene is 37
+   objects: 12 flat rects, 8 rounded, 8 text, 4 shadowed, 4 stroked — and they
+   interleave per icon (rounded body, flat graphic, text label), so
+   order-preserving runs are 1–2 objects long. Coalescing would remove a
+   handful of calls per frame and add a staging buffer plus a draw-order
+   hazard.
+
+The remaining upside is backend-local — PSP's GU command cost and WASM's
+per-call JS FFI overhead — and belongs *inside* those backends'
+`fill_rect`/`draw_text` (where `SdiBatch` is already overridable), not in a
+restructured shared draw path.
 
 ---
 

@@ -36,6 +36,7 @@ pub use oasis_types::geometry::ClipRect;
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
+use crate::glyph_cache::GlyphEntry;
 use oasis_rasterize::GlyphCacheKey;
 
 // Re-export input helpers for tests.
@@ -94,11 +95,11 @@ pub struct SdlBackend {
     pub(crate) current_render_target: Option<u64>,
     /// Monotonic counter for render-target ids.
     pub(crate) next_render_target_id: u64,
-    /// Maps glyph key to a cached SDL texture ID (lives in `textures`).
-    pub(crate) glyph_cache: HashMap<GlyphCacheKey, u64>,
-    /// LRU access timestamps for glyph cache eviction.
-    pub(crate) glyph_access: HashMap<GlyphCacheKey, u64>,
-    /// Monotonic counter for LRU access tracking.
+    /// Maps a color-independent glyph key to its cached texture and metrics.
+    /// Glyphs are rasterized white and tinted at blit time, so one entry
+    /// serves every color the shell draws that character in.
+    pub(crate) glyph_cache: HashMap<GlyphCacheKey, GlyphEntry>,
+    /// Monotonic counter for LRU access tracking (bumped on every glyph draw).
     pub(crate) glyph_access_counter: u64,
     // SAFETY: Must be declared after `textures` -- see comment above.
     pub(crate) texture_creator: TextureCreator<WindowContext>,
@@ -152,7 +153,6 @@ impl SdlBackend {
             current_render_target: None,
             next_render_target_id: 1,
             glyph_cache: HashMap::new(),
-            glyph_access: HashMap::new(),
             glyph_access_counter: 0,
             texture_creator,
             next_texture_id: 1,
@@ -833,7 +833,6 @@ impl Drop for SdlBackend {
         // declaration order), which is a fragile invariant. Clearing here makes
         // the safety guarantee explicit and immune to field reordering.
         self.glyph_cache.clear();
-        self.glyph_access.clear();
         self.textures.clear();
         // Render targets share the same lifetime-erasure pattern as
         // `textures` and must be dropped before `texture_creator`.
@@ -1382,7 +1381,6 @@ mod tests {
             None => return,
         };
         assert!(backend.glyph_cache.is_empty());
-        assert!(backend.glyph_access.is_empty());
         assert_eq!(backend.glyph_access_counter, 0);
     }
 
@@ -1400,7 +1398,6 @@ mod tests {
             .unwrap();
         // Two distinct characters should create two cache entries.
         assert_eq!(backend.glyph_cache.len(), 2);
-        assert_eq!(backend.glyph_access.len(), 2);
 
         // Drawing the same text again should not increase cache
         // size (cache hits).
@@ -1408,6 +1405,59 @@ mod tests {
             .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
             .unwrap();
         assert_eq!(backend.glyph_cache.len(), 2);
+    }
+
+    #[test]
+    #[ignore]
+    fn glyph_cache_is_color_independent() {
+        // Glyphs are rasterized white and tinted at blit time, so drawing the
+        // same character in a dozen colors (themes, hovers, fades) must reuse
+        // one cache entry — the whole point of D2.
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        for i in 0..12u8 {
+            let color = Color::rgb(i * 20, 255 - i * 20, 128);
+            backend
+                .draw_text_styled("A", 0, 0, 16, color, false, false)
+                .unwrap();
+        }
+        assert_eq!(backend.glyph_cache.len(), 1);
+
+        // Style variants still get their own entries.
+        backend
+            .draw_text_styled("A", 0, 0, 16, Color::WHITE, true, false)
+            .unwrap();
+        backend
+            .draw_text_styled("A", 0, 0, 24, Color::WHITE, false, false)
+            .unwrap();
+        assert_eq!(backend.glyph_cache.len(), 3);
+    }
+
+    #[test]
+    #[ignore]
+    fn glyph_cache_entry_carries_dimensions() {
+        // The draw path reads dimensions from the entry instead of calling
+        // Texture::query() per glyph per frame (D6).
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend
+            .draw_text_styled("A", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        let entry = *backend
+            .glyph_cache
+            .values()
+            .next()
+            .expect("one glyph cached");
+        assert_eq!(entry.h, 16);
+        assert!(entry.w > 0);
+        let texture = backend.textures.get(&entry.texture).expect("glyph texture");
+        let query = texture.query();
+        assert_eq!((entry.w, entry.h), (query.width, query.height));
     }
 
     /// Regression: a degenerate (zero-width or zero-height) clip rect

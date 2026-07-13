@@ -604,55 +604,63 @@ impl Window {
     }
 
     /// The list of SDI object suffixes this window creates.
-    pub fn sdi_suffixes(&self) -> Vec<&'static str> {
+    ///
+    /// Returns a borrowed static slice: the render path calls this once per
+    /// window per frame, so it must not allocate.
+    pub fn sdi_suffixes(&self) -> &'static [&'static str] {
+        const FULLSCREEN: &[&str] = &["content"];
+        const FLOATING_WIDGET: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "content",
+            "content_stroke",
+        ];
+        const PANEL: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "content",
+            "content_stroke",
+        ];
+        const DIALOG: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "content",
+            "content_stroke",
+        ];
+        const APP_WINDOW: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "btn_minimize",
+            "btn_minimize_glyph",
+            "btn_maximize",
+            "btn_maximize_glyph",
+            "content",
+            "content_stroke",
+        ];
         match self.window_type {
-            WindowType::Fullscreen => vec!["content"],
-            WindowType::FloatingWidget => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::Panel => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::Dialog => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::AppWindow => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "btn_minimize",
-                "btn_minimize_glyph",
-                "btn_maximize",
-                "btn_maximize_glyph",
-                "content",
-                "content_stroke",
-            ],
+            WindowType::Fullscreen => FULLSCREEN,
+            WindowType::FloatingWidget => FLOATING_WIDGET,
+            WindowType::Panel => PANEL,
+            WindowType::Dialog => DIALOG,
+            WindowType::AppWindow => APP_WINDOW,
         }
     }
 

@@ -414,8 +414,26 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header()?;
-    writer.write_image_data(rgba)?;
+    writer.write_image_data(&opaque(rgba))?;
     Ok(())
+}
+
+/// Force the alpha channel of a captured frame to 255.
+///
+/// The window framebuffer is opaque — the GPU renderer reads back alpha 255
+/// everywhere, and that is what the committed gallery PNGs contain. SDL's
+/// *software* renderer (what CI uses) instead leaves whatever alpha its blend
+/// path happened to write, which is a per-primitive artifact rather than
+/// anything on screen: a golden that records it compares two runs on a channel
+/// no one can see, and flips whenever a draw takes a different blit path.
+/// Normalizing here keeps the comparison on the pixels that are actually
+/// rendered.
+fn opaque(rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
