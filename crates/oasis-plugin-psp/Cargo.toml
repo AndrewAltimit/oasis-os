@@ -4,7 +4,7 @@
 # Builds a kernel-mode PRX plugin that stays resident alongside games,
 # providing in-game overlay UI and background MP3 playback.
 #
-# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Build with: RUST_PSP_BUILD_STD=1 cargo psp --release
 
 [workspace]
 

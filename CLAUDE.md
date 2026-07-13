@@ -41,10 +41,10 @@ cargo clippy --workspace -- -D warnings
 cargo deny check
 
 # Build PSP backend (excluded from workspace, requires nightly + cargo-psp)
-cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
-cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Build UE5 FFI shared library
 cargo build --release -p oasis-ffi
@@ -165,7 +165,7 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 The framework lives in 49 crate directories under `crates/`:
 - **39 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
 - **1 explicitly excluded crate** (`oasis-backend-psp`, on the `mipsel-sony-psp` target)
-- **9 standalone PSP-target crates** that are not mentioned in the workspace `Cargo.toml` at all and are built individually via `cargo +nightly psp`: `oasis-plugin-psp`, `oasis-devloop-psp`, `oasis-me-boot`, `oasis-prx-decrypt-psp`, `oasis-recovery-psp`, `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp`
+- **9 standalone PSP-target crates** that are not mentioned in the workspace `Cargo.toml` at all and are built individually via `cargo psp`: `oasis-plugin-psp`, `oasis-devloop-psp`, `oasis-me-boot`, `oasis-prx-decrypt-psp`, `oasis-recovery-psp`, `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp`
 
 Each module below is its own crate (previously all in oasis-core):
 

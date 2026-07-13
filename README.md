@@ -166,15 +166,15 @@ python3 -m http.server 8080          # serve at http://localhost:8080/www/
 ```bash
 # EBOOT (main application)
 cd crates/oasis-backend-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Kernel overlay plugin (PRX)
 cd crates/oasis-plugin-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Network recovery EBOOT
 cd crates/oasis-recovery-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 ### UE5 (FFI Library)

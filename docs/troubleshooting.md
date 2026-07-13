@@ -51,14 +51,14 @@ Build the EBOOT:
 
 ```bash
 cd crates/oasis-backend-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 Build the kernel PRX plugin:
 
 ```bash
 cd crates/oasis-plugin-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 ### MIPS memcpy/memset Recursion

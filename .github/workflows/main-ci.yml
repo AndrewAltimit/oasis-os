@@ -241,19 +241,19 @@ jobs:
       - name: Build PSP EBOOT
         run: |
           cd crates/oasis-backend-psp
-          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release
 
       - name: Build PSP Plugin PRX
         continue-on-error: true
         run: |
           cd crates/oasis-plugin-psp
-          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release
 
       - name: Build PSP Recovery EBOOT
         continue-on-error: true
         run: |
           cd crates/oasis-recovery-psp
-          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release
 
       - name: Collect PSP artifacts
         if: always()

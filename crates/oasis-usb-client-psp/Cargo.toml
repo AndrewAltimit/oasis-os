@@ -5,7 +5,7 @@
 # for thin-client communication with a Luckfox Pico (or any USB host).
 # The PSP acts as a USB device with bulk IN/OUT endpoints.
 #
-# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Build with: RUST_PSP_BUILD_STD=1 cargo psp --release
 
 [workspace]
 

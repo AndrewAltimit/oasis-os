@@ -1,6 +1,6 @@
 # Standalone crate -- excluded from the oasis_os workspace because it
 # requires the mipsel-sony-psp target and the rust-psp SDK.
-# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Build with: RUST_PSP_BUILD_STD=1 cargo psp --release
 
 [workspace]
 

@@ -18,11 +18,11 @@ cd "$(dirname "$0")"
 export RUST_PSP_BUILD_STD=1
 
 if [ "${1:-}" = "release" ]; then
-    cargo +nightly psp --release
+    cargo psp --release
     echo ""
     echo "EBOOT.PBP: target/mipsel-sony-psp-std/release/EBOOT.PBP"
 else
-    cargo +nightly psp
+    cargo psp
     echo ""
     echo "EBOOT.PBP: target/mipsel-sony-psp-std/debug/EBOOT.PBP"
 fi

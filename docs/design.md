@@ -336,7 +336,7 @@ oasis-core = { path = "../oasis-core" }
 | Target | Cargo Command | Render Backend | Input Backend | VFS Backend | Status |
 |--------|--------------|----------------|---------------|-------------|--------|
 | Desktop (dev) | `cargo build --release -p oasis-app` | SDL3 | Keyboard/mouse | Real Linux FS | Implemented |
-| PSP / PPSSPP | `cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release` | sceGu hardware (Sprites) | PSP controller | ms0:/ real FS | Implemented |
+| PSP / PPSSPP | `cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release` | sceGu hardware (Sprites) | PSP controller | ms0:/ real FS | Implemented |
 | UE5 (in-game) | `cargo build --release -p oasis-ffi` (cdylib) | UE5 render target | UE5 interaction | Game asset VFS | Implemented (FFI ready) |
 | Raspberry Pi (briefcase) | `cargo build --release -p oasis-app --target aarch64-unknown-linux-gnu` | SDL3 | Keyboard/gamepad | Real Linux FS | Planned (SDL3 backend works, cross-compile not yet tested) |
 
@@ -1294,7 +1294,7 @@ The CI pipeline also includes PSP EBOOT build, PPSSPP headless testing, AI code 
 | `oasis-test` | cargo test | Unit tests (desktop target, core + VFS + commands + skins) |
 | `oasis-build` | cargo build | Release build verification |
 | `oasis-deny` | cargo-deny | License and advisory audit |
-| PSP build | cargo +nightly psp --release | Verify EBOOT.PBP builds |
+| PSP build | cargo psp --release | Verify EBOOT.PBP builds |
 | PSP integration (PPSSPP) [PLANNED] | docker compose up ppsspp-mcp + MCP test sequence | Boot EBOOT in container, verify screenshot |
 
 ### 15.3 Context Protection

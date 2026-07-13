@@ -226,7 +226,7 @@ jobs:
       - name: Build PSP EBOOT
         run: |
           cd crates/oasis-backend-psp
-          RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release
 
       # -- PSP Emulator Test -------------------------------------------------
       - name: Run OASIS_OS EBOOT in PPSSPPHeadless

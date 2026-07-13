@@ -1177,7 +1177,9 @@ dependencies = [
  "oasis-ui",
  "oasis-vector",
  "oasis-wm",
+ "png",
  "serde",
+ "serde_ignored",
  "toml",
 ]
 
@@ -1588,6 +1590,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

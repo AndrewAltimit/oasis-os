@@ -50,7 +50,7 @@ plugin status
 
 ```bash
 cd crates/oasis-plugin-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 Output: `target/mipsel-sony-psp-std/release/oasis_plugin.prx`
