@@ -248,10 +248,10 @@ fn all_scenarios() -> Vec<Scenario> {
     scenarios
 }
 
+/// `builtin_names()` already leads with "classic", so it needs no prepending —
+/// doing so ran (and counted) every classic scenario twice.
 fn all_skin_names() -> Vec<String> {
-    let mut names: Vec<String> = builtin_names().iter().map(|s| s.to_string()).collect();
-    names.insert(0, "classic".to_string());
-    names
+    builtin_names().iter().map(|s| s.to_string()).collect()
 }
 
 // ---------------------------------------------------------------------------
