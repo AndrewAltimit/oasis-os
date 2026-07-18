@@ -38,6 +38,13 @@ the same branch, closing the gaps a post-M5 audit surfaced:
   in `skin lint`; the previously dead `focus_ring_*` fields now render
   through `FocusStyle::from_theme` (exact fallback keeps unset skins
   pixel-identical).
+- **Authoring & QA tooling (W4)**: `skin inspect <name>` prints a plain-text
+  contact sheet (resolved base colors + WCAG AA contrast report + derived
+  bar/icon/start-menu/app-screen tokens + ANSI palette rows); the Settings
+  "Appearance" editor gained a per-role inline contrast readout (`AA` / `low`
+  against each role's sensible partner color, live while stepping a channel);
+  and `skin lint` warning strings were reworded to name the field, the
+  offending value, and the fix/threshold. Tooling only — no render change.
 - **UI sound themes**: `[sounds]` table (click/open/close/error/toast/nav
   WAV one-shots + volume), an 8-voice SFX mixer in oasis-audio on a
   dedicated SDL stream, shell chokepoint hooks; silent by default.

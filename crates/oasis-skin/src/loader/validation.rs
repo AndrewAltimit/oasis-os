@@ -18,25 +18,29 @@ impl Skin {
 
         // -- Manifest checks --
         if self.manifest.name.is_empty() {
-            warnings.push("manifest: name is empty".to_string());
+            warnings.push("manifest: name is empty (set a non-empty name = \"...\")".to_string());
         }
         if self.manifest.screen_width == 0 {
-            warnings.push("manifest: screen_width is 0".to_string());
+            warnings.push(
+                "manifest: screen_width is 0 (set a positive pixel width, e.g. 480)".to_string(),
+            );
         }
         if self.manifest.screen_height == 0 {
-            warnings.push("manifest: screen_height is 0".to_string());
+            warnings.push(
+                "manifest: screen_height is 0 (set a positive pixel height, e.g. 272)".to_string(),
+            );
         }
         // Sanity bound: screens larger than 8K are suspicious.
         const MAX_SCREEN: u32 = 7680;
         if self.manifest.screen_width > MAX_SCREEN {
             warnings.push(format!(
-                "manifest: screen_width {} exceeds {}",
+                "manifest: screen_width {}px exceeds the {}px maximum (use a smaller resolution)",
                 self.manifest.screen_width, MAX_SCREEN,
             ));
         }
         if self.manifest.screen_height > MAX_SCREEN {
             warnings.push(format!(
-                "manifest: screen_height {} exceeds {}",
+                "manifest: screen_height {}px exceeds the {}px maximum (use a smaller resolution)",
                 self.manifest.screen_height, MAX_SCREEN,
             ));
         }
@@ -55,7 +59,10 @@ impl Skin {
         ];
         for (name, value) in theme_colors {
             if parse_hex_color(value).is_none() {
-                warnings.push(format!("theme: invalid color for '{name}': \"{value}\""));
+                warnings.push(format!(
+                    "theme: invalid color for '{name}': \"{value}\" \
+                     (expected #RRGGBB or #RRGGBBAA)"
+                ));
             }
         }
         // Optional theme color fields.
@@ -68,7 +75,10 @@ impl Skin {
             if let Some(v) = value
                 && parse_hex_color(v).is_none()
             {
-                warnings.push(format!("theme: invalid color for '{name}': \"{v}\""));
+                warnings.push(format!(
+                    "theme: invalid color for '{name}': \"{v}\" \
+                     (expected #RRGGBB or #RRGGBBAA)"
+                ));
             }
         }
 
@@ -245,10 +255,15 @@ impl Skin {
             ));
         }
         if self.features.grid_cols == 0 {
-            warnings.push("features: grid_cols is 0".to_string());
+            warnings.push(
+                "features: grid_cols is 0 (set at least 1 so the icon grid has a column)"
+                    .to_string(),
+            );
         }
         if self.features.grid_rows == 0 {
-            warnings.push("features: grid_rows is 0".to_string());
+            warnings.push(
+                "features: grid_rows is 0 (set at least 1 so the icon grid has a row)".to_string(),
+            );
         }
         if self.features.dashboard_pages == 0 && self.features.dashboard {
             warnings.push("features: dashboard is enabled but dashboard_pages is 0".to_string());

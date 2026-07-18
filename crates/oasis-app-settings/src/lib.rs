@@ -10,7 +10,7 @@ use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
-use oasis_skin::theme::parse_hex_color;
+use oasis_skin::theme::{contrast_ratio, parse_hex_color};
 use oasis_skin::{SkinTheme, SkinVariant, resolve_skin};
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::input::Button;
@@ -112,9 +112,35 @@ const BASE_COLOR_LABELS: [&str; 9] = [
 /// (Apply, Save, and one row per variant).
 const APPEARANCE_ACTIONS: usize = 2 + SkinVariant::ALL.len();
 
+/// For each base-color role (indexed like [`BASE_COLOR_LABELS`]), the partner
+/// role its contrast is measured against and the WCAG AA ratio it should
+/// clear. Surfaces (`Background`, `Status Bar`) are judged by the readability
+/// of `Text` drawn on them; foreground roles are judged against `Background`.
+/// `Text` itself is held to the 4.5:1 body-text minimum; the rest to 3.0:1.
+const CONTRAST_PARTNERS: [(usize, f64); 9] = [
+    (3, 4.5), // Background   vs Text
+    (0, 3.0), // Primary      vs Background
+    (0, 3.0), // Secondary    vs Background
+    (0, 4.5), // Text         vs Background
+    (0, 3.0), // Dim Text     vs Background
+    (3, 4.5), // Status Bar   vs Text
+    (0, 3.0), // Prompt       vs Background
+    (0, 3.0), // Output       vs Background
+    (0, 3.0), // Error        vs Background
+];
+
 /// Format a color as `#RRGGBB`.
 fn hex(c: Color) -> String {
     format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
+}
+
+/// Short label for a base-color role, used in the inline contrast readout.
+fn short_role(role: usize) -> &'static str {
+    match role {
+        0 => "Bg",
+        3 => "Text",
+        _ => BASE_COLOR_LABELS[role],
+    }
 }
 
 /// State for the Appearance base-color editor.
@@ -321,6 +347,7 @@ impl SettingsApp {
 
         for (i, label) in BASE_COLOR_LABELS.iter().enumerate() {
             let c = self.appearance.colors[i];
+            let readout = self.contrast_readout(i);
             if self.item_cursor == i && self.appearance.editing_channel.is_some() {
                 let ch = self.appearance.editing_channel.unwrap_or(0);
                 let mark = |idx: u8, name: char, v: u8| {
@@ -331,14 +358,14 @@ impl SettingsApp {
                     }
                 };
                 lines.push(format!(
-                    "   {label:<11} {} {}{}{}",
+                    "   {label:<11} {} {}{}{} {readout}",
                     hex(c),
                     mark(0, 'R', c.r),
                     mark(1, 'G', c.g),
                     mark(2, 'B', c.b),
                 ));
             } else {
-                lines.push(format!("   {label:<11} {}", hex(c)));
+                lines.push(format!("   {label:<11} {}  {readout}", hex(c)));
             }
         }
 
@@ -354,7 +381,22 @@ impl SettingsApp {
             lines.push("  [Confirm]=Done  [Cancel]=Revert".to_string());
         } else {
             lines.push("  [Confirm]=Edit color / activate".to_string());
+            lines.push("  AA = passes WCAG contrast, low = below".to_string());
         }
+    }
+
+    /// Inline contrast readout for a base-color row: the ratio against the
+    /// role's sensible partner color (see [`CONTRAST_PARTNERS`]) plus an
+    /// `AA` / `low` verdict at the WCAG AA threshold. Recomputed on every
+    /// refresh, so it updates live as a channel is stepped.
+    fn contrast_readout(&self, role: usize) -> String {
+        let (partner, required) = CONTRAST_PARTNERS[role];
+        let ratio = contrast_ratio(
+            self.appearance.colors[role],
+            self.appearance.colors[partner],
+        );
+        let verdict = if ratio >= required { "AA" } else { "low" };
+        format!("vs {} {ratio:.1}:1 {verdict}", short_role(partner))
     }
 
     /// Name used by "Save as custom skin": `custom-<base>` where `<base>` is
@@ -1654,6 +1696,44 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("custom-classic")));
         assert!(lines.iter().any(|l| l.contains("Variant: Dark")));
         assert!(lines.iter().any(|l| l.contains("Variant: High Contrast")));
+    }
+
+    #[test]
+    fn appearance_rows_show_contrast_readout() {
+        let vfs = make_vfs();
+        let app = appearance_app(&vfs);
+        let lines = app.lines();
+        // Every base-color row carries a "vs <partner> N.N:1 <verdict>"
+        // readout; the Text role is judged against the background.
+        let text_row = lines
+            .iter()
+            .find(|l| l.trim_start().starts_with("Text ") && l.contains(":1"))
+            .expect("Text row has a contrast readout");
+        assert!(
+            text_row.contains("vs Bg"),
+            "Text judged vs background: {text_row}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(" AA") || l.contains(" low")),
+            "no contrast verdicts rendered"
+        );
+    }
+
+    #[test]
+    fn contrast_readout_flags_low_contrast() {
+        let app = SettingsApp::new("/apps/settings", "classic", 480, 272, "SDL3");
+        // Background (role 0) is judged against Text (role 3).
+        let readout = app.contrast_readout(0);
+        assert!(
+            readout.starts_with("vs Text"),
+            "unexpected partner: {readout}"
+        );
+        assert!(
+            readout.contains("AA") || readout.contains("low"),
+            "missing verdict: {readout}"
+        );
     }
 
     #[test]

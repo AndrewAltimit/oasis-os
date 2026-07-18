@@ -839,7 +839,29 @@ Switch skins at runtime from the terminal:
 > skin current          # Show current skin info
 > skin skins/my_skin    # Load from a directory path
 > skin lint my_skin     # Validate a skin and report warnings
+> skin inspect my_skin  # Print a color/contrast/token contact sheet
 ```
+
+`skin inspect <name>` is a read-only authoring aid: it resolves the skin
+(same rules as `skin lint`) and prints a plain-text contact sheet with the
+nine resolved base colors, a WCAG AA contrast report for the key
+text/background pairs (ratio + PASS/FAIL at the 4.5:1 / 3:1 thresholds),
+and a dump of the derived bar / icon / start-menu / app-screen token colors
+plus the ANSI palette rows. It works on every backend (no color codes, no
+extra deps), so you can eyeball a palette on PSP or WASM too.
+
+### In-app Appearance editor
+
+Settings → **Appearance** is a line-based editor for the nine base colors of
+the running skin. Move the cursor to a role and press Confirm to edit it;
+Left/Right pick the R/G/B channel and Up/Down step it. Each color row shows
+an inline contrast readout against a sensible partner color — foreground
+roles are measured against `Background`, while surface roles (`Background`,
+`Status Bar`) are measured by the readability of `Text` drawn on them — with
+an `AA` / `low` verdict at the WCAG AA threshold, updated live as you step a
+channel. The action rows below apply the edited palette as an in-memory
+preview, save it as a `custom-<skin>` skin, or derive a Dark / Light /
+High-contrast variant.
 
 ## Validation & Linting
 
