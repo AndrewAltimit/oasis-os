@@ -121,6 +121,18 @@ pub struct BarTheme {
     pub tab_texture_active: Option<String>,
     /// Asset key for inactive top-tab pill textures (None = pill fill).
     pub tab_texture_inactive: Option<String>,
+    /// Media-dock transport button fill (`bottombar_style = "media_dock"`).
+    pub dock_button_fill: Color,
+    /// Media-dock transport glyph (triangle/rect) color.
+    pub dock_button_glyph: Color,
+    /// Media-dock progress track (background) color.
+    pub dock_progress_track: Color,
+    /// Media-dock progress fill (foreground) color.
+    pub dock_progress_fill: Color,
+    /// Media-dock volume track (background) color.
+    pub dock_vol_track: Color,
+    /// Media-dock volume fill (foreground) color.
+    pub dock_vol_fill: Color,
 }
 
 /// Dashboard icon rendering and cursor highlight theme.

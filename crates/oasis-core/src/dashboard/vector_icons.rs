@@ -446,6 +446,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
 
         // Hide all SDI sub-objects (vector rendering is done directly).
@@ -470,6 +471,7 @@ impl DashboardState {
             self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix),
         );
 
         // Store the vector icon slot for rendering in render_vector_icons().

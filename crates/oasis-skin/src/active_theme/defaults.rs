@@ -46,6 +46,12 @@ impl Default for ActiveTheme {
                 tab_inactive_stroke: Color::rgba(255, 255, 255, 60),
                 tab_texture_active: None,
                 tab_texture_inactive: None,
+                dock_button_fill: Color::rgba(255, 255, 255, 30),
+                dock_button_glyph: Color::rgba(255, 255, 255, 220),
+                dock_progress_track: Color::rgba(255, 255, 255, 40),
+                dock_progress_fill: Color::rgba(255, 255, 255, 200),
+                dock_vol_track: Color::rgba(255, 255, 255, 40),
+                dock_vol_fill: Color::rgba(255, 255, 255, 160),
             },
             icon: IconTheme {
                 body_color: Color::rgb(250, 250, 248),

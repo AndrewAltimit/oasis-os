@@ -240,6 +240,24 @@ pub struct BarOverrides {
     /// Taskbar active indicator color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taskbar_indicator: Option<String>,
+    /// Media-dock transport button fill (`bottombar_style = "media_dock"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_button_fill: Option<String>,
+    /// Media-dock transport glyph color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_button_glyph: Option<String>,
+    /// Media-dock progress track (background) color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_progress_track: Option<String>,
+    /// Media-dock progress fill (foreground) color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_progress_fill: Option<String>,
+    /// Media-dock volume track (background) color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_vol_track: Option<String>,
+    /// Media-dock volume fill (foreground) color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_vol_fill: Option<String>,
 }
 
 /// Per-element overrides for dashboard icon rendering.

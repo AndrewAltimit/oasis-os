@@ -28,6 +28,10 @@ pub const FREE_ICON_Z: i32 = 50;
 /// z for the icon being dragged, raised above its siblings.
 pub const FREE_ICON_DRAG_Z: i32 = 60;
 
+/// Left padding (px) for column-layout icons and their labels, so the
+/// left-aligned column hugs the grid's left margin.
+pub(crate) const COLUMN_LEFT_PAD: i32 = 6;
+
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
 pub struct DashboardConfig {
@@ -60,6 +64,13 @@ pub struct DashboardConfig {
     /// Fixed cell size in free mode (grid cells stretch to fill instead).
     pub free_cell_w: u32,
     pub free_cell_h: u32,
+    /// Cap free/column auto-flow to this many columns (`None` = as many as
+    /// fit the grid width). Set to `Some(1)` by `"column"` layout.
+    pub free_cols: Option<u32>,
+    /// Left-align icons (and their labels) within the cell instead of
+    /// centering. Enabled by the `"column"` layout for a sparse PSIX-style
+    /// left column.
+    pub left_align_icons: bool,
     /// Snap dragged icons to the virtual grid on drop (free mode).
     pub snap_to_grid: bool,
     /// Page change style: "slide" (default) or "fade" (no icon slide; the
@@ -88,11 +99,32 @@ impl DashboardConfig {
 
         let grid_layout = GridLayout::new(cols).with_padding(Padding::ZERO);
 
+        // `"column"` layout: sparse PSIX-style single left column. Same
+        // interaction semantics as `"free"`, but auto-flow is capped to
+        // `free_icon_cols` columns (default 1) and icons hug the left edge.
+        let is_column = features.icon_layout == "column";
+        let free_layout = features.icon_layout == "free" || is_column;
+
         // Free-mode cells are a fixed size derived from the theme's icon
         // dimensions (2x leaves room for a two-line label) instead of
         // stretching to fill the grid area like grid cells do.
         let free_cell_w = (at.icon_width * 2).max(48);
-        let free_cell_h = (at.icon_height * 2).max(48);
+        let free_cell_h = if is_column {
+            // Taller pitch so the column reads sparse: icon + two label
+            // lines + a comfortable gap. Scales with the theme's icon size
+            // so a column skin with small icons still packs several rows.
+            (at.icon_height + at.icon_label_pad as u32 + (at.font_small as u32 + 1) * 2 + 8).max(48)
+        } else {
+            (at.icon_height * 2).max(48)
+        };
+
+        // Column mode caps auto-flow to `free_icon_cols` columns, defaulting
+        // to a single column. Free mode only honours an explicit cap.
+        let free_cols = if is_column {
+            Some(features.free_icon_cols.unwrap_or(1))
+        } else {
+            features.free_icon_cols
+        };
 
         Self {
             grid_cols: cols,
@@ -110,9 +142,11 @@ impl DashboardConfig {
             cursor_lerp_speed: at.cursor_lerp_speed,
             page_slide_duration: at.page_slide_duration,
             press_flash_duration: at.press_flash_duration,
-            free_layout: features.icon_layout == "free",
+            free_layout,
             free_cell_w,
             free_cell_h,
+            free_cols,
+            left_align_icons: is_column,
             snap_to_grid: features.snap_to_grid,
             page_style: at.transition_page_style.clone(),
         }
@@ -190,6 +224,9 @@ struct IconGeometry {
     icon_h: u32,
     cell_x: i32,
     text_pad: i32,
+    /// Left-align the label under the icon instead of centering it in the
+    /// cell (column layout).
+    left_align: bool,
 }
 
 /// Runtime state for the icon grid dashboard.
@@ -418,7 +455,12 @@ impl DashboardState {
             }
 
             let (cell_x, cell_y) = (origins[i].0 + slide_offset, origins[i].1);
-            let ix = cell_x + (cell_w as i32 - icon_w as i32) / 2;
+            let left_align = self.config.left_align_icons;
+            let ix = if left_align {
+                cell_x + COLUMN_LEFT_PAD
+            } else {
+                cell_x + (cell_w as i32 - icon_w as i32) / 2
+            };
             let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4;
 
             let geo = IconGeometry {
@@ -428,6 +470,7 @@ impl DashboardState {
                 icon_h,
                 cell_x,
                 text_pad,
+                left_align,
             };
             match at.icon.style.as_str() {
                 "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
@@ -544,6 +587,8 @@ pub(crate) mod tests {
             free_layout: false,
             free_cell_w: 80,
             free_cell_h: 80,
+            free_cols: None,
+            left_align_icons: false,
             snap_to_grid: true,
             page_style: "slide".to_string(),
         }
@@ -737,6 +782,8 @@ pub(crate) mod tests {
             free_layout: false,
             free_cell_w: 68,
             free_cell_h: 68,
+            free_cols: None,
+            left_align_icons: false,
             snap_to_grid: true,
             page_style: "slide".to_string(),
         }

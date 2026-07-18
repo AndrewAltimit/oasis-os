@@ -91,11 +91,20 @@ pub struct SkinFeatures {
     /// Icons per page (grid capacity).
     #[serde(default = "default_icons_per_page")]
     pub icons_per_page: u32,
-    /// Dashboard icon layout: `"grid"` (uniform cells, default) or `"free"`
+    /// Dashboard icon layout: `"grid"` (uniform cells, default), `"free"`
     /// (desktop-style per-icon positions with column auto-flow and drag &
-    /// drop on pointer targets).
+    /// drop on pointer targets), or `"column"` (opt-in sparse PSIX-style
+    /// left column — same interaction semantics as `free`, but auto-flow is
+    /// constrained to `free_icon_cols` columns (default 1), icons are
+    /// left-aligned instead of centered, and the vertical pitch is larger).
     #[serde(default = "default_icon_layout")]
     pub icon_layout: String,
+    /// Cap the free/column auto-flow to this many columns. `None` = as many
+    /// as fit the grid width (classic `free` behaviour). In `"column"`
+    /// layout this defaults to 1 when unset; in `"free"` layout it applies
+    /// only when explicitly set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_icon_cols: Option<u32>,
     /// In free layout, snap dragged icons to a virtual grid on drop
     /// (default true — matches real desktop behaviour).
     #[serde(default = "yes")]
@@ -158,6 +167,12 @@ pub struct SkinFeatures {
     /// Disable animations for accessibility (defaults to false).
     #[serde(default)]
     pub reduced_motion: bool,
+    /// Bottom bar style. `""` (default) = classic footer. `"media_dock"` =
+    /// decorative PSIX-style media dock (transport pills + progress/volume
+    /// tracks alongside the media tab strip). Purely cosmetic — no audio
+    /// binding.
+    #[serde(default)]
+    pub bottombar_style: String,
 }
 
 fn yes() -> bool {
@@ -190,6 +205,7 @@ impl Default for SkinFeatures {
             dashboard_pages: 1,
             icons_per_page: 15,
             icon_layout: "grid".to_string(),
+            free_icon_cols: None,
             snap_to_grid: true,
             launch_on_single_click: true,
             software_cursor: false,
@@ -208,6 +224,7 @@ impl Default for SkinFeatures {
             transition_fade_frames: None,
             transition_slide_frames: None,
             reduced_motion: false,
+            bottombar_style: String::new(),
         }
     }
 }

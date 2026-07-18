@@ -11,8 +11,8 @@ use crate::active_theme::ActiveTheme;
 use crate::platform::SystemTime;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
-    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_rounded_fill, ensure_text, hide_bezel,
-    hide_objects,
+    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_pill, ensure_rounded_fill, ensure_text,
+    hide_bezel, hide_indexed, hide_objects,
 };
 use crate::theme;
 
@@ -40,6 +40,67 @@ const BPIPE_NAMES: [&str; 3] = ["bar_bpipe_0", "bar_bpipe_1", "bar_bpipe_2"];
 const PAGE_DOT_NAMES: [&str; 4] = ["bar_page_0", "bar_page_1", "bar_page_2", "bar_page_3"];
 const _: () = assert!(PAGE_DOT_NAMES.len() == theme::MAX_PAGE_DOTS);
 const _: () = assert!(BTAB_NAMES.len() == MediaTab::TABS.len());
+
+/// Media-dock transport pill names (`bottombar_style = "media_dock"`).
+const DOCK_BTN_NAMES: [&str; 3] = ["bar_dock_prev", "bar_dock_play", "bar_dock_next"];
+/// Media-dock progress/volume track + fill names.
+const DOCK_TRACK_NAMES: [&str; 4] = [
+    "bar_dock_progress_track",
+    "bar_dock_progress_fill",
+    "bar_dock_vol_track",
+    "bar_dock_vol_fill",
+];
+/// Scanline-rect prefixes for the transport-glyph triangles. Each hosts up
+/// to `DOCK_GLYPH_ROWS` 1px scanlines (`{prefix}0`, `{prefix}1`, …): prev is
+/// two left triangles, play one right triangle, next two right triangles.
+const DOCK_GLYPH_PREFIXES: [&str; 5] = [
+    "bar_dock_prev_a_",
+    "bar_dock_prev_b_",
+    "bar_dock_play_g_",
+    "bar_dock_next_a_",
+    "bar_dock_next_b_",
+];
+/// Max scanlines reserved per transport-glyph triangle.
+const DOCK_GLYPH_ROWS: usize = 9;
+
+/// Hide every media-dock SDI object (transport pills, glyph scanlines, and
+/// progress/volume tracks). A no-op when the objects don't exist, so it is
+/// safe to call from the classic footer path.
+fn hide_dock(sdi: &mut SdiRegistry) {
+    hide_objects(sdi, &DOCK_BTN_NAMES);
+    hide_objects(sdi, &DOCK_TRACK_NAMES);
+    for prefix in DOCK_GLYPH_PREFIXES {
+        hide_indexed(sdi, prefix, DOCK_GLYPH_ROWS);
+    }
+}
+
+/// Draw one transport-glyph triangle as a stack of 1px scanline rects.
+///
+/// `rows` scanlines form a triangle whose apex points right (`point_right`)
+/// or left. The widest scanline sits at the vertical center. Unused
+/// scanlines up to `DOCK_GLYPH_ROWS` are left hidden by the caller.
+fn dock_triangle(
+    sdi: &mut SdiRegistry,
+    prefix: &str,
+    gx: i32,
+    gy: i32,
+    rows: usize,
+    point_right: bool,
+    color: oasis_types::backend::Color,
+) {
+    let half = (rows as i32 - 1) / 2;
+    let max_w = half + 1;
+    for r in 0..rows {
+        let dc = (r as i32 - half).abs();
+        let w = (max_w - dc).max(1);
+        let x = if point_right { gx } else { gx + (max_w - w) };
+        let name = format!("{prefix}{r}");
+        ensure_border(sdi, &name, x, gy + r as i32, w as u32, 1, color);
+        if let Ok(obj) = sdi.get_mut(&name) {
+            obj.z = 902; // above the pill fill (901)
+        }
+    }
+}
 
 /// Measure the pixel width of a text string using proportional glyph metrics.
 fn text_px(s: &str, font_size: u16) -> i32 {
@@ -171,6 +232,12 @@ impl BottomBar {
         at: &ActiveTheme,
         features: &crate::skin::SkinFeatures,
     ) {
+        // Opt-in decorative media-dock style. Branch early so the classic
+        // footer path below is untouched when the style is unset.
+        if features.bottombar_style == "media_dock" {
+            self.update_sdi_dock(sdi, at, features);
+            return;
+        }
         let bar_y = (at.screen_h - at.bottombar_height) as i32;
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
@@ -288,59 +355,7 @@ impl BottomBar {
         // Media category tabs (pipe-separated). Disabled by default; opt in
         // per-skin via `show_media_tabs = true` for PSP-style layouts.
         if features.show_media_tabs {
-            let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
-            let labels_w: i32 = tab_labels.iter().map(|l| text_px(l, font_small)).sum();
-            let pipe_w = text_px("|", font_small);
-            let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
-            let total_w = labels_w + pipes_w;
-            let tabs_x = right_edge - total_w - 8;
-
-            // Chrome bezel around tab group.
-            let tab_bx = tabs_x - 6;
-            let tab_bw = (total_w + 14) as u32;
-            ensure_chrome_bezel(
-                sdi,
-                "bar_tab_bezel",
-                tab_bx,
-                bz_y,
-                tab_bw,
-                bz_h,
-                &BezelStyle::chrome(),
-            );
-
-            let mut cx = tabs_x;
-            for (i, tab) in MediaTab::TABS.iter().enumerate() {
-                let label = tab.label();
-                let name = BTAB_NAMES[i];
-
-                let color = if *tab == self.active_tab {
-                    at.bar.media_tab_active
-                } else {
-                    at.bar.media_tab_inactive
-                };
-                ensure_text(sdi, name, cx, text_y, font_small, color);
-                if let Ok(obj) = sdi.get_mut(name) {
-                    obj.set_text(label);
-                    obj.text_color = color;
-                    obj.visible = true;
-                    if at.bar.text_shadow {
-                        obj.text_shadow_offset = Some((1, 1));
-                        obj.text_shadow_color = Some(at.bar.text_shadow_color);
-                    }
-                }
-                cx += text_px(label, font_small);
-
-                // Pipe separator (except after last tab).
-                if i < MediaTab::TABS.len() - 1 {
-                    cx += at.pipe_gap;
-                    let pipe_name = BPIPE_NAMES[i];
-                    ensure_text(sdi, pipe_name, cx, text_y, font_small, at.bar.pipe_color);
-                    if let Ok(obj) = sdi.get_mut(pipe_name) {
-                        obj.set_text("|");
-                    }
-                    cx += pipe_w + at.pipe_gap;
-                }
-            }
+            self.draw_media_tabs(sdi, at, right_edge);
         } else {
             // Hide media tab objects when disabled.
             hide_objects(sdi, &BTAB_NAMES);
@@ -353,6 +368,10 @@ impl BottomBar {
         if let Ok(obj) = sdi.get_mut("bar_r_hint") {
             obj.visible = false;
         }
+
+        // Classic footer never shows the media dock; hide any dock objects
+        // left over from a prior dock skin (no-op when they don't exist).
+        hide_dock(sdi);
 
         // USB indicator (after URL text -- hidden when URL is empty).
         let usb_end = if at.bar.url_text.is_empty() {
@@ -408,6 +427,306 @@ impl BottomBar {
         }
     }
 
+    /// Draw the right-aligned media category tab strip (AUDIO/VIDEO/IMAGE/
+    /// FILE) ending just left of `right_edge`, and return the left x of the
+    /// tab group. Shared by the classic footer and the media dock.
+    fn draw_media_tabs(&self, sdi: &mut SdiRegistry, at: &ActiveTheme, right_edge: i32) -> i32 {
+        let font_small = at.font_small;
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_h = at.bottombar_height;
+        let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
+        let bz_y = bar_y + 2;
+        let bz_h = bar_h.saturating_sub(4);
+
+        let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
+        let labels_w: i32 = tab_labels.iter().map(|l| text_px(l, font_small)).sum();
+        let pipe_w = text_px("|", font_small);
+        let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
+        let total_w = labels_w + pipes_w;
+        let tabs_x = right_edge - total_w - 8;
+
+        // Chrome bezel around tab group.
+        let tab_bx = tabs_x - 6;
+        let tab_bw = (total_w + 14) as u32;
+        ensure_chrome_bezel(
+            sdi,
+            "bar_tab_bezel",
+            tab_bx,
+            bz_y,
+            tab_bw,
+            bz_h,
+            &BezelStyle::chrome(),
+        );
+
+        let mut cx = tabs_x;
+        for (i, tab) in MediaTab::TABS.iter().enumerate() {
+            let label = tab.label();
+            let name = BTAB_NAMES[i];
+
+            let color = if *tab == self.active_tab {
+                at.bar.media_tab_active
+            } else {
+                at.bar.media_tab_inactive
+            };
+            ensure_text(sdi, name, cx, text_y, font_small, color);
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.set_text(label);
+                obj.text_color = color;
+                obj.visible = true;
+                if at.bar.text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
+                }
+            }
+            cx += text_px(label, font_small);
+
+            // Pipe separator (except after last tab).
+            if i < MediaTab::TABS.len() - 1 {
+                cx += at.pipe_gap;
+                let pipe_name = BPIPE_NAMES[i];
+                ensure_text(sdi, pipe_name, cx, text_y, font_small, at.bar.pipe_color);
+                if let Ok(obj) = sdi.get_mut(pipe_name) {
+                    obj.set_text("|");
+                }
+                cx += pipe_w + at.pipe_gap;
+            }
+        }
+        tabs_x
+    }
+
+    /// Decorative PSIX-style media dock (`bottombar_style = "media_dock"`).
+    ///
+    /// Draws transport pills (prev / play / next) with primitive triangle
+    /// glyphs, a progress track + fill, a volume track + fill, and keeps the
+    /// right-aligned media tab strip + USB indicator + clock. Progress and
+    /// volume use static placeholder levels — the dock carries no audio
+    /// binding.
+    fn update_sdi_dock(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        features: &crate::skin::SkinFeatures,
+    ) {
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_h = at.bottombar_height;
+        let font_small = at.font_small;
+        let screen_w = at.screen_w;
+        let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
+
+        // Background bar + separator (same chrome as the classic footer).
+        if !sdi.contains("bar_bottom") {
+            let obj = sdi.create("bar_bottom");
+            obj.overlay = true;
+            obj.z = 900;
+        }
+        if let Ok(obj) = sdi.get_mut("bar_bottom") {
+            obj.x = 0;
+            obj.y = bar_y;
+            obj.w = screen_w;
+            obj.h = bar_h;
+            obj.color = at.bar.bg;
+            obj.visible = true;
+            obj.gradient_top = at.bar.gradient_top;
+            obj.gradient_bottom = at.bar.gradient_bottom;
+        }
+        ensure_border(
+            sdi,
+            "bar_bottom_line",
+            0,
+            bar_y,
+            screen_w,
+            1,
+            at.bar.separator_color,
+        );
+
+        // Classic-only elements the dock replaces or omits.
+        hide_objects(sdi, &["bar_url", "bar_r_hint"]);
+        hide_bezel(sdi, "bar_url_bezel");
+        hide_objects(sdi, &PAGE_DOT_NAMES);
+
+        // Right side: clock (optional), then media tabs, then USB.
+        let right_edge = if features.clock_in_bottombar {
+            let clock_w = text_px(&self.clock_display, font_small);
+            let cx = screen_w as i32 - clock_w - 8;
+            ensure_text(
+                sdi,
+                "bar_bottom_clock",
+                cx,
+                text_y,
+                font_small,
+                at.bar.clock_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
+                obj.set_text(&self.clock_display);
+                obj.visible = true;
+                if at.bar.text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
+                }
+            }
+            cx
+        } else {
+            if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
+                obj.visible = false;
+            }
+            screen_w as i32
+        };
+
+        // Media tab strip is forced on in dock mode (regardless of
+        // `show_media_tabs`) so the dock always carries the AUDIO/VIDEO/
+        // IMAGE/FILE selector.
+        let tabs_x = self.draw_media_tabs(sdi, at, right_edge);
+
+        // USB indicator to the left of the tab strip.
+        let usb_w = text_px("USB", font_small);
+        let usb_x = tabs_x - 8 - usb_w;
+        ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.bar.usb_color);
+        if let Ok(obj) = sdi.get_mut("bar_usb") {
+            obj.set_text("USB");
+            obj.visible = true;
+            if at.bar.text_shadow {
+                obj.text_shadow_offset = Some((1, 1));
+                obj.text_shadow_color = Some(at.bar.text_shadow_color);
+            }
+        }
+
+        // Left side: transport pills with primitive triangle glyphs.
+        let left = if features.start_menu {
+            at.menu.button_width as i32 + 10
+        } else {
+            8
+        };
+        let pill_h = (bar_h as i32 - 8).max(10);
+        let pill_w = pill_h + 6;
+        let gap = 4;
+        let by = bar_y + (bar_h as i32 - pill_h) / 2;
+        // Glyph triangle geometry (odd row count for a symmetric apex).
+        let rows = ((pill_h / 2) | 1).clamp(3, DOCK_GLYPH_ROWS as i32) as usize;
+        let max_w = (rows as i32 - 1) / 2 + 1;
+        let gy = by + (pill_h - rows as i32) / 2;
+        let glyph = at.bar.dock_button_glyph;
+
+        let mut bx = left + 4;
+        for (i, name) in DOCK_BTN_NAMES.iter().enumerate() {
+            ensure_pill(
+                sdi,
+                name,
+                bx,
+                by,
+                pill_w as u32,
+                pill_h as u32,
+                at.bar.dock_button_fill,
+                glyph,
+            );
+            match i {
+                // prev: two left-pointing triangles.
+                0 => {
+                    let gw = 2 * max_w + 1;
+                    let gx = bx + (pill_w - gw) / 2;
+                    dock_triangle(sdi, DOCK_GLYPH_PREFIXES[0], gx, gy, rows, false, glyph);
+                    dock_triangle(
+                        sdi,
+                        DOCK_GLYPH_PREFIXES[1],
+                        gx + max_w + 1,
+                        gy,
+                        rows,
+                        false,
+                        glyph,
+                    );
+                },
+                // play: one right-pointing triangle.
+                1 => {
+                    let gx = bx + (pill_w - max_w) / 2;
+                    dock_triangle(sdi, DOCK_GLYPH_PREFIXES[2], gx, gy, rows, true, glyph);
+                },
+                // next: two right-pointing triangles.
+                _ => {
+                    let gw = 2 * max_w + 1;
+                    let gx = bx + (pill_w - gw) / 2;
+                    dock_triangle(sdi, DOCK_GLYPH_PREFIXES[3], gx, gy, rows, true, glyph);
+                    dock_triangle(
+                        sdi,
+                        DOCK_GLYPH_PREFIXES[4],
+                        gx + max_w + 1,
+                        gy,
+                        rows,
+                        true,
+                        glyph,
+                    );
+                },
+            }
+            bx += pill_w + gap;
+        }
+        // Hide any glyph scanlines beyond the active row count.
+        for prefix in DOCK_GLYPH_PREFIXES {
+            for r in rows..DOCK_GLYPH_ROWS {
+                if let Ok(obj) = sdi.get_mut(&format!("{prefix}{r}")) {
+                    obj.visible = false;
+                }
+            }
+        }
+
+        // Progress + volume tracks fill the middle between the transport
+        // pills and the USB indicator. Static placeholder levels.
+        let track_h = 4u32;
+        let track_y = bar_y + (bar_h as i32 - track_h as i32) / 2;
+        let track_x = bx + 6;
+        let region_end = usb_x - 12;
+        let avail = (region_end - track_x).max(24);
+        let prog_w = (avail * 3 / 5).max(16) as u32;
+        let vol_x = track_x + prog_w as i32 + 10;
+        let vol_w = (region_end - vol_x).clamp(12, avail) as u32;
+
+        ensure_rounded_fill(
+            sdi,
+            "bar_dock_progress_track",
+            track_x,
+            track_y,
+            prog_w,
+            track_h,
+            at.bar.dock_progress_track,
+            2,
+        );
+        // 40% placeholder progress.
+        ensure_rounded_fill(
+            sdi,
+            "bar_dock_progress_fill",
+            track_x,
+            track_y,
+            (prog_w * 2 / 5).max(1),
+            track_h,
+            at.bar.dock_progress_fill,
+            2,
+        );
+        ensure_rounded_fill(
+            sdi,
+            "bar_dock_vol_track",
+            vol_x,
+            track_y,
+            vol_w,
+            track_h,
+            at.bar.dock_vol_track,
+            2,
+        );
+        // 70% placeholder volume.
+        ensure_rounded_fill(
+            sdi,
+            "bar_dock_vol_fill",
+            vol_x,
+            track_y,
+            (vol_w * 7 / 10).max(1),
+            track_h,
+            at.bar.dock_vol_fill,
+            2,
+        );
+        // Draw fills above their tracks.
+        for name in ["bar_dock_progress_fill", "bar_dock_vol_fill"] {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.z = 902;
+            }
+        }
+    }
+
     /// Hide all bottom bar SDI objects.
     pub fn hide_sdi(sdi: &mut SdiRegistry) {
         hide_objects(
@@ -426,6 +745,7 @@ impl BottomBar {
         hide_objects(sdi, &BTAB_NAMES);
         hide_objects(sdi, &BPIPE_NAMES);
         hide_objects(sdi, &PAGE_DOT_NAMES);
+        hide_dock(sdi);
     }
 }
 

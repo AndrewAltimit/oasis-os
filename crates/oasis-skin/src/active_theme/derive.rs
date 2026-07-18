@@ -607,6 +607,32 @@ impl ActiveTheme {
             ),
             tab_texture_active: bar_ov.and_then(|b| b.tab_texture_active.clone()),
             tab_texture_inactive: bar_ov.and_then(|b| b.tab_texture_inactive.clone()),
+            dock_button_fill: ov(
+                bar_ov.and_then(|b| b.dock_button_fill.as_ref()),
+                with_alpha(primary, 30),
+            ),
+            dock_button_glyph: ov(
+                bar_ov
+                    .and_then(|b| b.dock_button_glyph.as_ref())
+                    .or(bar_text),
+                with_alpha(text, 220),
+            ),
+            dock_progress_track: ov(
+                bar_ov.and_then(|b| b.dock_progress_track.as_ref()),
+                with_alpha(text, 40),
+            ),
+            dock_progress_fill: ov(
+                bar_ov.and_then(|b| b.dock_progress_fill.as_ref()),
+                with_alpha(primary, 200),
+            ),
+            dock_vol_track: ov(
+                bar_ov.and_then(|b| b.dock_vol_track.as_ref()),
+                with_alpha(text, 40),
+            ),
+            dock_vol_fill: ov(
+                bar_ov.and_then(|b| b.dock_vol_fill.as_ref()),
+                with_alpha(secondary, 160),
+            ),
         }
     }
 
@@ -1188,6 +1214,12 @@ impl ActiveTheme {
             tab_inactive_stroke: with_alpha(text, 60),
             tab_texture_active: None,
             tab_texture_inactive: None,
+            dock_button_fill: with_alpha(primary, 30),
+            dock_button_glyph: with_alpha(text, 220),
+            dock_progress_track: with_alpha(text, 40),
+            dock_progress_fill: with_alpha(primary, 200),
+            dock_vol_track: with_alpha(text, 40),
+            dock_vol_fill: with_alpha(secondary, 160),
         };
 
         // -- Icon theme --

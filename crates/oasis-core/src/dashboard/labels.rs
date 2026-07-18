@@ -39,7 +39,12 @@ pub(crate) fn wrap_label(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
-/// Render word-wrapped, centered label lines under an icon.
+/// Render word-wrapped label lines under an icon.
+///
+/// Lines are centered within `[cell_x, cell_x + cell_w]` by default. When
+/// `left` is `Some(x)` (column layout) each line is left-aligned at `x`
+/// instead, so the label hugs the icon's left edge.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_label(
     sdi: &mut SdiRegistry,
     at: &ActiveTheme,
@@ -48,12 +53,19 @@ pub(crate) fn draw_label(
     cell_w: u32,
     label_y: i32,
     title: &str,
+    left: Option<i32>,
 ) {
     let fs = at.font_small;
     let glyph_w = (fs.max(8) / 8) as u32 * 8;
     let max_chars = (cell_w / glyph_w).max(1) as usize;
     let lines = wrap_label(title, max_chars);
     let line_h = glyph_w as i32 + 1; // 1px spacing between lines
+    // Left edge for a line of pixel width `tw`: fixed `x` when left-aligned,
+    // otherwise centered within the cell (unchanged legacy arithmetic).
+    let line_x = |tw: i32| match left {
+        Some(x) => x,
+        None => cell_x + (cell_w as i32 - tw) / 2,
+    };
 
     // Label shadows (1px offset).
     if let Some(shadow_color) = at.icon.label_shadow {
@@ -61,7 +73,7 @@ pub(crate) fn draw_label(
         if let Ok(obj) = sdi.get_mut(&names.shadow) {
             if let Some(line) = lines.first() {
                 let tw = line.len() as i32 * glyph_w as i32;
-                obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                obj.x = line_x(tw) + 1;
                 obj.y = label_y + 1;
                 obj.w = 0;
                 obj.h = 0;
@@ -78,7 +90,7 @@ pub(crate) fn draw_label(
         if let Ok(obj) = sdi.get_mut(&names.shadow2) {
             if lines.len() > 1 {
                 let tw = lines[1].len() as i32 * glyph_w as i32;
-                obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                obj.x = line_x(tw) + 1;
                 obj.y = label_y + line_h + 1;
                 obj.w = 0;
                 obj.h = 0;
@@ -104,7 +116,7 @@ pub(crate) fn draw_label(
     if let Ok(obj) = sdi.get_mut(&names.label) {
         if let Some(line) = lines.first() {
             let tw = line.len() as i32 * glyph_w as i32;
-            obj.x = cell_x + (cell_w as i32 - tw) / 2;
+            obj.x = line_x(tw);
             obj.y = label_y;
             obj.w = 0;
             obj.h = 0;
@@ -120,7 +132,7 @@ pub(crate) fn draw_label(
     if let Ok(obj) = sdi.get_mut(&names.label2) {
         if lines.len() > 1 {
             let tw = lines[1].len() as i32 * glyph_w as i32;
-            obj.x = cell_x + (cell_w as i32 - tw) / 2;
+            obj.x = line_x(tw);
             obj.y = label_y + line_h;
             obj.w = 0;
             obj.h = 0;

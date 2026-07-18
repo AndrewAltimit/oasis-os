@@ -269,10 +269,24 @@ impl Skin {
         self.check_colorblind_pairs(&mut warnings);
 
         // -- Feature flag checks --
-        if !matches!(self.features.icon_layout.as_str(), "grid" | "free") {
+        if !matches!(
+            self.features.icon_layout.as_str(),
+            "grid" | "free" | "column"
+        ) {
             warnings.push(format!(
-                "features: unknown icon_layout \"{}\" (expected grid|free)",
+                "features: unknown icon_layout \"{}\" (expected grid|free|column)",
                 self.features.icon_layout,
+            ));
+        }
+        if self.features.free_icon_cols == Some(0) {
+            warnings.push(
+                "features: free_icon_cols is 0 (set at least 1, or omit for auto)".to_string(),
+            );
+        }
+        if !matches!(self.features.bottombar_style.as_str(), "" | "media_dock") {
+            warnings.push(format!(
+                "features: unknown bottombar_style \"{}\" (expected \"\"|media_dock)",
+                self.features.bottombar_style,
             ));
         }
         if self.features.grid_cols == 0 {

@@ -27,6 +27,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         let r = at.icon.border_radius as u32;
         // Clamp sub-element sizes to fit within the icon body's rounded rect.
@@ -105,6 +106,7 @@ impl DashboardState {
             self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix),
         );
     }
 
@@ -124,6 +126,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         use oasis_types::color::{darken, lighten};
 
@@ -170,6 +173,7 @@ impl DashboardState {
             self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix),
         );
     }
 
@@ -189,6 +193,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         // Hide document-specific sub-objects.
         for name in [&names.outline, &names.stripe, &names.fold, &names.gfx] {
@@ -219,6 +224,7 @@ impl DashboardState {
             self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix),
         );
     }
 }
