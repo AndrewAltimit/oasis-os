@@ -237,6 +237,11 @@ pub struct Skin {
     /// (e.g. `"assets/bar_top.png"`). Populated from the skin directory's
     /// `assets/` folder or embedded bytes for built-in skins.
     pub assets: HashMap<String, SkinAsset>,
+    /// Raw WAV sound assets keyed by skin-relative path
+    /// (e.g. `"assets/click.wav"`), referenced by the theme's `[sounds]`
+    /// table. Decoding to PCM happens at playback-load time in the shell,
+    /// so `oasis-skin` only stores and header-validates the bytes.
+    pub sound_assets: HashMap<String, Vec<u8>>,
 }
 
 /// Parse a TOML document, collecting any keys the target type ignores.
@@ -322,6 +327,7 @@ impl Skin {
             corrupted_modifiers,
             schema_warnings,
             assets: HashMap::new(),
+            sound_assets: HashMap::new(),
         })
     }
 
@@ -332,6 +338,20 @@ impl Skin {
         let asset = SkinAsset::from_png_bytes(bytes)
             .map_err(|e| OasisError::Config(format!("{name}: {e}").into()))?;
         self.assets.insert(name.to_string(), asset);
+        Ok(())
+    }
+
+    /// Register raw WAV bytes as a named sound asset (e.g.
+    /// `"assets/click.wav"`). The header is checked here so obviously
+    /// broken files fail loudly at load time; full decode happens in the
+    /// shell's SFX player.
+    pub fn add_asset_wav(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        if super::assets::probe_wav(bytes).is_none() {
+            return Err(OasisError::Config(
+                format!("{name}: not an uncompressed PCM WAV").into(),
+            ));
+        }
+        self.sound_assets.insert(name.to_string(), bytes.to_vec());
         Ok(())
     }
 
@@ -493,8 +513,9 @@ impl Skin {
         Ok(skin)
     }
 
-    /// Decode every `*.png` in an assets directory into `self.assets`,
-    /// keyed `"assets/<file>"`. Files that fail to decode are recorded as
+    /// Decode every `*.png` (images) and `*.wav` (UI sounds) in an assets
+    /// directory into `self.assets` / `self.sound_assets`, keyed
+    /// `"assets/<file>"`. Files that fail to decode are recorded as
     /// schema warnings instead of failing the whole skin load.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_assets_from(&mut self, assets_dir: &Path) {
@@ -505,8 +526,9 @@ impl Skin {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| {
-                p.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                p.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("png") || ext.eq_ignore_ascii_case("wav")
+                })
             })
             .collect();
         files.sort();
@@ -515,10 +537,18 @@ impl Skin {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let is_wav = path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
             let key = format!("assets/{file_name}");
             match std::fs::read(&path) {
                 Ok(bytes) => {
-                    if let Err(e) = self.add_asset_png(&key, &bytes) {
+                    let result = if is_wav {
+                        self.add_asset_wav(&key, &bytes)
+                    } else {
+                        self.add_asset_png(&key, &bytes)
+                    };
+                    if let Err(e) = result {
                         self.schema_warnings.push(format!("{key}: {e}"));
                     }
                 },
@@ -684,6 +714,17 @@ impl Skin {
         for (name, asset) in &parent.assets {
             if !self.assets.contains_key(name) {
                 self.assets.insert(name.clone(), asset.clone());
+            }
+        }
+
+        // Merge UI sounds the same way: the parent's [sounds] table fills
+        // in when the child has none, and parent WAVs back inherited paths.
+        if ct.sounds.is_none() {
+            ct.sounds.clone_from(&pt.sounds);
+        }
+        for (name, bytes) in &parent.sound_assets {
+            if !self.sound_assets.contains_key(name) {
+                self.sound_assets.insert(name.clone(), bytes.clone());
             }
         }
     }

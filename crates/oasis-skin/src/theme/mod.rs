@@ -210,6 +210,72 @@ pub struct SkinTheme {
     #[serde(default)]
     pub widget_states:
         Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
+
+    /// UI sound theme: WAV assets played on interface events.
+    ///
+    /// ```toml
+    /// [sounds]
+    /// click = "assets/click.wav"
+    /// nav = "assets/nav.wav"
+    /// volume = 0.8
+    /// ```
+    #[serde(default)]
+    pub sounds: Option<SkinSounds>,
+}
+
+/// UI sound theme (`[sounds]` in theme.toml): each field references a WAV
+/// asset by skin-relative path (e.g. `"assets/click.wav"`). Omitted events
+/// stay silent; a skin without a `[sounds]` table is fully silent.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SkinSounds {
+    /// Button / interactive element click.
+    #[serde(default)]
+    pub click: Option<String>,
+    /// App launch / window open.
+    #[serde(default)]
+    pub open: Option<String>,
+    /// App / window close.
+    #[serde(default)]
+    pub close: Option<String>,
+    /// Error feedback (error toasts).
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Non-error toast notification.
+    #[serde(default)]
+    pub toast: Option<String>,
+    /// Cursor / d-pad navigation between icons (rate-limited).
+    #[serde(default)]
+    pub nav: Option<String>,
+    /// Master volume for UI sounds, 0.0–1.0 (default 1.0).
+    #[serde(default)]
+    pub volume: Option<f32>,
+}
+
+impl SkinSounds {
+    /// Iterate the configured `(event, asset_path)` pairs.
+    pub fn entries(&self) -> [(&'static str, Option<&str>); 6] {
+        [
+            ("click", self.click.as_deref()),
+            ("open", self.open.as_deref()),
+            ("close", self.close.as_deref()),
+            ("error", self.error.as_deref()),
+            ("toast", self.toast.as_deref()),
+            ("nav", self.nav.as_deref()),
+        ]
+    }
+
+    /// The asset path configured for a named event, if any.
+    pub fn path_for(&self, event: &str) -> Option<&str> {
+        self.entries()
+            .into_iter()
+            .find(|(name, _)| *name == event)
+            .and_then(|(_, path)| path)
+    }
+
+    /// Master volume clamped to 0.0–1.0 (default 1.0).
+    pub fn effective_volume(&self) -> f32 {
+        self.volume.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
 }
 
 fn default_bg() -> String {
@@ -280,6 +346,7 @@ impl Default for SkinTheme {
             gradients: None,
             animations: None,
             widget_states: None,
+            sounds: None,
         }
     }
 }

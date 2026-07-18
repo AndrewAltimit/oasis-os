@@ -103,6 +103,93 @@ impl SkinAsset {
     }
 }
 
+/// Header facts of a skin sound asset, parsed without decoding the PCM.
+///
+/// Mirrors what `oasis-audio`'s WAV decoder accepts (uncompressed PCM,
+/// mono/stereo, 8- or 16-bit) so validation warnings match runtime
+/// behaviour without pulling an audio dependency into `oasis-skin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavInfo {
+    /// Sample rate in Hz.
+    pub sample_rate: u32,
+    /// Channel count (1 = mono, 2 = stereo).
+    pub channels: u16,
+    /// Bits per sample (8 or 16).
+    pub bits_per_sample: u16,
+    /// Size of the PCM `data` chunk in bytes.
+    pub data_bytes: usize,
+}
+
+impl WavInfo {
+    /// Playback duration in seconds.
+    pub fn duration_secs(&self) -> f32 {
+        let bytes_per_sec =
+            self.sample_rate as f32 * self.channels as f32 * (self.bits_per_sample / 8) as f32;
+        if bytes_per_sec <= 0.0 {
+            return 0.0;
+        }
+        self.data_bytes as f32 / bytes_per_sec
+    }
+}
+
+/// Probe a WAV byte stream's header. Returns `None` for anything the
+/// runtime decoder would reject (non-RIFF, compressed, >2 channels,
+/// unusual bit depths, missing chunks).
+pub fn probe_wav(data: &[u8]) -> Option<WavInfo> {
+    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return None;
+    }
+    let (fmt_off, _) = find_riff_chunk(data, b"fmt ")?;
+    if fmt_off + 16 > data.len() {
+        return None;
+    }
+    let u16_le = |off: usize| u16::from_le_bytes([data[off], data[off + 1]]);
+    let audio_format = u16_le(fmt_off);
+    if audio_format != 1 {
+        return None; // Not uncompressed PCM.
+    }
+    let channels = u16_le(fmt_off + 2);
+    let sample_rate = u32::from_le_bytes([
+        data[fmt_off + 4],
+        data[fmt_off + 5],
+        data[fmt_off + 6],
+        data[fmt_off + 7],
+    ]);
+    let bits_per_sample = u16_le(fmt_off + 14);
+    if channels == 0 || channels > 2 || sample_rate == 0 {
+        return None;
+    }
+    if bits_per_sample != 8 && bits_per_sample != 16 {
+        return None;
+    }
+    let (data_off, data_size) = find_riff_chunk(data, b"data")?;
+    let data_bytes = data_size.min(data.len().saturating_sub(data_off));
+    Some(WavInfo {
+        sample_rate,
+        channels,
+        bits_per_sample,
+        data_bytes,
+    })
+}
+
+/// Find a RIFF sub-chunk by ID. Returns (data_offset, declared_size).
+fn find_riff_chunk(data: &[u8], id: &[u8; 4]) -> Option<(usize, usize)> {
+    let mut pos = 12; // Skip the 12-byte RIFF header.
+    while pos + 8 <= data.len() {
+        let chunk_id = &data[pos..pos + 4];
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
+        if chunk_id == id {
+            return Some((pos + 8, chunk_size));
+        }
+        // Chunks are padded to even sizes.
+        let padded = chunk_size.saturating_add(1) & !1;
+        pos = pos.checked_add(8 + padded)?;
+    }
+    None
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -172,6 +259,67 @@ pub(crate) mod tests {
     #[test]
     fn decode_garbage_fails() {
         assert!(SkinAsset::from_png_bytes(b"not a png").is_err());
+    }
+
+    /// Build a minimal valid 16-bit PCM WAV in memory (shared with the
+    /// loader / validation tests).
+    pub(crate) fn make_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
+        let bits_per_sample: u16 = 16;
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample / 8);
+        let block_align = channels * (bits_per_sample / 8);
+        let data_size = (samples.len() * 2) as u32;
+        let file_size = 36 + data_size;
+
+        let mut buf = Vec::with_capacity(file_size as usize + 8);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for &s in samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn probe_wav_reads_header() {
+        let wav = make_wav(&[0i16; 4410], 44_100, 1);
+        let info = probe_wav(&wav).expect("probe");
+        assert_eq!(info.sample_rate, 44_100);
+        assert_eq!(info.channels, 1);
+        assert_eq!(info.bits_per_sample, 16);
+        assert_eq!(info.data_bytes, 8820);
+        assert!((info.duration_secs() - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn probe_wav_rejects_garbage() {
+        assert!(probe_wav(b"not a wav").is_none());
+        assert!(probe_wav(&[]).is_none());
+    }
+
+    #[test]
+    fn probe_wav_rejects_compressed() {
+        let mut wav = make_wav(&[0i16; 16], 22_050, 1);
+        // Patch the format tag (offset 20) to something non-PCM.
+        wav[20] = 2;
+        assert!(probe_wav(&wav).is_none());
+    }
+
+    #[test]
+    fn probe_wav_rejects_many_channels() {
+        let mut wav = make_wav(&[0i16; 16], 22_050, 2);
+        wav[22] = 6; // channels
+        assert!(probe_wav(&wav).is_none());
     }
 
     #[test]

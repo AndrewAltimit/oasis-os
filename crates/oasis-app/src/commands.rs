@@ -241,6 +241,9 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
                 .output_lines
                 .push(format!("Switched to skin: {}", swapped.manifest.name));
             state.skin = swapped;
+            // Swap-out frees the old skin's decoded SFX samples and loads
+            // the new skin's [sounds] WAVs (mirrors image asset lifecycle).
+            crate::ui_sfx::reload_for_skin(state);
             // The wallpaper texture was generated against the previous theme
             // (grid color, gradient stops, shader-layer visibility). The main
             // loop holds the backend needed to upload a fresh texture, so
@@ -1023,6 +1026,8 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
             toasts: oasis_core::toast::ToastManager::new(),
+            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            sfx: oasis_audio::sfx::SfxPlayer::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),

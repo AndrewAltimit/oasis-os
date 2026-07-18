@@ -19,6 +19,7 @@ mod radio_controller;
 mod render;
 mod sysinfo;
 mod tv_controller;
+mod ui_sfx;
 mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
@@ -424,6 +425,8 @@ fn main() -> Result<()> {
             ab
         },
         toasts: ToastManager::new(),
+        ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+        sfx: oasis_audio::sfx::SfxPlayer::new(),
         pending_tv_catalog_fetch: None,
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
@@ -468,6 +471,9 @@ fn main() -> Result<()> {
             .update_info(time.as_ref(), power.as_ref());
         state.ui.bottom_bar.update_info(time.as_ref());
     }
+
+    // Load the startup skin's UI sounds (no-op for silent skins).
+    ui_sfx::reload_for_skin(&mut state);
 
     // Show a welcome toast.
     state.toasts.show(
@@ -727,6 +733,10 @@ fn main() -> Result<()> {
         radio_controller::tick(&mut state, &mut vfs);
         media_controller::tick(&mut state, &mut vfs);
         tv_controller::tick(&mut state, &mut backend, &mut vfs);
+
+        // UI sound effects: fire queued events and pump mixed PCM into the
+        // dedicated SFX stream (no-op for skins without a [sounds] table).
+        ui_sfx::tick(&mut state);
 
         // Auto-exit timer for TV streaming tests.
         if let Some(timeout) = tv_timeout_secs {
