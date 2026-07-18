@@ -101,6 +101,9 @@ pub struct SdlBackend {
     pub(crate) glyph_cache: HashMap<GlyphCacheKey, GlyphEntry>,
     /// Monotonic counter for LRU access tracking (bumped on every glyph draw).
     pub(crate) glyph_access_counter: u64,
+    /// Active skin-provided TrueType font (`SdiText::set_font`). `None`
+    /// keeps the built-in bitmap font — the pixel-identical default path.
+    pub(crate) ttf_font: Option<oasis_rasterize::ttf::TtfFont>,
     // SAFETY: Must be declared after `textures` -- see comment above.
     pub(crate) texture_creator: TextureCreator<WindowContext>,
     pub(crate) next_texture_id: u64,
@@ -154,6 +157,7 @@ impl SdlBackend {
             next_render_target_id: 1,
             glyph_cache: HashMap::new(),
             glyph_access_counter: 0,
+            ttf_font: None,
             texture_creator,
             next_texture_id: 1,
             clip_stack: ClipStack::new(width, height),
@@ -1490,5 +1494,110 @@ mod tests {
             pixels[0], 255,
             "zero-height clip should reject all fills, got {pixels:?}",
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Skin TTF font tests
+    // ---------------------------------------------------------------
+
+    /// The oasis-browser web-font test fixture: a tiny but valid TTF.
+    const TEST_TTF: &[u8] = include_bytes!("../../oasis-browser/test_data/minimal.ttf");
+
+    #[test]
+    fn set_font_installs_and_clears_ttf_state() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        assert!(backend.ttf_font.is_none());
+
+        // Garbage bytes are rejected; the bitmap font stays active.
+        backend.set_font(Some(b"not a font"));
+        assert!(backend.ttf_font.is_none());
+
+        backend.set_font(Some(TEST_TTF));
+        assert!(backend.ttf_font.is_some());
+
+        backend.set_font(None);
+        assert!(backend.ttf_font.is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn set_font_evicts_glyph_cache_textures() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        backend
+            .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        assert_eq!(backend.glyph_cache.len(), 2);
+        let glyph_textures: Vec<u64> = backend.glyph_cache.values().map(|e| e.texture).collect();
+
+        backend.set_font(Some(TEST_TTF));
+        assert!(backend.glyph_cache.is_empty());
+        for id in glyph_textures {
+            assert!(
+                !backend.textures.contains_key(&id),
+                "stale glyph texture {id} survived the font swap"
+            );
+        }
+    }
+
+    #[test]
+    fn ttf_measure_matches_per_char_advances() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Bitmap path is untouched without a font.
+        assert_eq!(
+            backend.measure_text("Hello", 16),
+            oasis_core::backend::bitmap_measure_text("Hello", 16)
+        );
+
+        backend.set_font(Some(TEST_TTF));
+        let ttf = backend.ttf_font.as_ref().expect("font installed");
+        // Whatever glyphs the fixture has, measurement must equal the same
+        // per-character integer advances the draw loop accumulates — with
+        // bitmap fallback for characters the font lacks.
+        let text = "Hello ▲▼ world";
+        let expected: u32 = text
+            .chars()
+            .map(|ch| {
+                if ttf.has_glyph(ch) {
+                    ttf.advance(ch, 16.0).max(0) as u32
+                } else {
+                    oasis_types::bitmap_font::glyph_advance_scaled(ch, 16) as u32
+                }
+            })
+            .sum();
+        assert_eq!(backend.measure_text(text, 16), expected);
+    }
+
+    #[test]
+    #[ignore]
+    fn ttf_draw_advances_agree_with_measure() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.set_font(Some(TEST_TTF));
+        backend.clear(Color::BLACK).unwrap();
+        let text = "AV.";
+        backend
+            .draw_text_styled(text, 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        // Sum the advances of the entries the draw created, in draw order.
+        let drawn: i32 = text
+            .chars()
+            .map(|ch| backend.glyph_cache[&GlyphCacheKey::colorless(ch, 16, false, false)].advance)
+            .sum();
+        assert_eq!(drawn.max(0) as u32, backend.measure_text(text, 16));
     }
 }

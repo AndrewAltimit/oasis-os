@@ -1340,6 +1340,7 @@ dependencies = [
 name = "oasis-rasterize"
 version = "1.4.0"
 dependencies = [
+ "fontdue",
  "oasis-types",
 ]
 
@@ -1370,6 +1371,7 @@ dependencies = [
 name = "oasis-skin"
 version = "1.4.0"
 dependencies = [
+ "fontdue",
  "log",
  "oasis-sdi",
  "oasis-test-backend",

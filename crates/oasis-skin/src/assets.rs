@@ -14,6 +14,11 @@ use oasis_types::error::{OasisError, Result};
 /// of uncompressed sprites; PSP-friendly skins should stay well under this.
 pub const ASSET_BUDGET_BYTES: usize = 2 * 1024 * 1024;
 
+/// Soft budget for a skin's `[typography] font` TTF/OTF file. A full Latin
+/// subset fits comfortably; anything larger is usually an unsubsetted CJK
+/// font that would bloat every skin swap.
+pub const FONT_BUDGET_BYTES: usize = 512 * 1024;
+
 /// A decoded skin image: raw RGBA8 pixels ready for texture upload.
 #[derive(Debug, Clone)]
 pub struct SkinAsset {

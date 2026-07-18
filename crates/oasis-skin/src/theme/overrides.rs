@@ -344,6 +344,13 @@ pub struct WallpaperConfig {
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TypographyOverrides {
+    /// Skin-relative path to a TTF/OTF font file (e.g. `"assets/skin.ttf"`).
+    ///
+    /// When set, backends with a TTF rasterizer render all shell text with
+    /// this font instead of the built-in bitmap font; backends without one
+    /// (and any character the font lacks) keep the bitmap glyphs.
+    #[serde(default)]
+    pub font: Option<String>,
     /// Extra-small font size (default 8).
     #[serde(default)]
     pub font_size_xs: Option<u16>,
