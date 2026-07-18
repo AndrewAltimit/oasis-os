@@ -72,6 +72,70 @@ impl Skin {
             }
         }
 
+        // -- [palette] ANSI slot checks --
+        if let Some(ref palette) = self.theme.palette {
+            for (idx, name) in crate::active_theme::AnsiPalette::SLOT_NAMES
+                .iter()
+                .enumerate()
+            {
+                if let Some(v) = palette.slot(idx)
+                    && parse_hex_color(v).is_none()
+                {
+                    warnings.push(format!("palette: invalid color for '{name}': \"{v}\""));
+                }
+            }
+        }
+
+        // -- [cursor] checks --
+        if let Some(ref cursor) = self.theme.cursor {
+            let cursor_colors: &[(&str, &Option<String>)] =
+                &[("fill", &cursor.fill), ("outline", &cursor.outline)];
+            for (name, value) in cursor_colors {
+                if let Some(v) = value
+                    && parse_hex_color(v).is_none()
+                {
+                    warnings.push(format!("cursor: invalid color for '{name}': \"{v}\""));
+                }
+            }
+        }
+
+        // -- [boot] checks --
+        if let Some(ref boot) = self.theme.boot {
+            let boot_colors: &[(&str, &Option<String>)] = &[
+                ("banner_bg", &boot.banner_bg),
+                ("banner_border", &boot.banner_border),
+                ("chrome", &boot.chrome),
+                ("text", &boot.text),
+                ("bios_text", &boot.bios_text),
+            ];
+            for (name, value) in boot_colors {
+                if let Some(v) = value
+                    && parse_hex_color(v).is_none()
+                {
+                    warnings.push(format!("boot: invalid color for '{name}': \"{v}\""));
+                }
+            }
+            let boot_stop_lists: &[(&str, &Option<Vec<String>>, usize)] = &[
+                ("sky_stops", &boot.sky_stops, 6),
+                ("ground_stops", &boot.ground_stops, 4),
+            ];
+            for (name, stops, expected) in boot_stop_lists {
+                if let Some(list) = stops {
+                    if list.len() != *expected {
+                        warnings.push(format!(
+                            "boot: {name} has {} entries, expected {expected}",
+                            list.len()
+                        ));
+                    }
+                    for v in list {
+                        if parse_hex_color(v).is_none() {
+                            warnings.push(format!("boot: invalid {name} color: \"{v}\""));
+                        }
+                    }
+                }
+            }
+        }
+
         // -- Layout coordinate checks --
         let sw = self.manifest.screen_width as i32;
         let sh = self.manifest.screen_height as i32;

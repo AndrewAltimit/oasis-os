@@ -14,6 +14,184 @@ mod tests {
         assert_eq!(at.icon.cursor_border_radius, 6);
     }
 
+    // -- ANSI palette --
+
+    #[test]
+    fn ansi_palette_semantic_slots() {
+        let skin = SkinTheme::default();
+        let at = ActiveTheme::from_skin(&skin);
+        // white == terminal output color, bright_white == text color.
+        assert_eq!(at.ansi.color(7), skin.output_color());
+        assert_eq!(at.ansi.color(15), skin.text_color());
+        // Chromatic slots are distinct.
+        assert_ne!(at.ansi.color(1), at.ansi.color(2));
+        assert_ne!(at.ansi.color(4), at.ansi.color(5));
+        // Red slot is red-dominant, green slot green-dominant.
+        let red = at.ansi.color(1);
+        assert!(red.r > red.g && red.r > red.b);
+        let green = at.ansi.color(2);
+        assert!(green.g > green.r && green.g > green.b);
+        let blue = at.ansi.color(4);
+        assert!(blue.b > blue.r && blue.b > blue.g);
+    }
+
+    #[test]
+    fn ansi_palette_bright_variants_lighter() {
+        let at = ActiveTheme::default();
+        use oasis_types::color::rgb_to_hsl;
+        for slot in 1..7 {
+            let (_, _, l_normal) = rgb_to_hsl(at.ansi.color(slot));
+            let (_, _, l_bright) = rgb_to_hsl(at.ansi.color(slot + 8));
+            assert!(
+                l_bright > l_normal,
+                "bright slot {} should be lighter",
+                slot + 8
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_palette_default_matches_from_skin_default() {
+        // ActiveTheme::default() and from_skin(default) agree on the palette.
+        let a = ActiveTheme::default();
+        let b = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(a.ansi, b.ansi);
+    }
+
+    #[test]
+    fn ansi_palette_deterministic() {
+        let skin = SkinTheme::default();
+        let a = ActiveTheme::from_skin(&skin);
+        let b = ActiveTheme::from_skin(&skin);
+        assert_eq!(a.ansi, b.ansi);
+    }
+
+    #[test]
+    fn ansi_palette_overrides() {
+        let toml = r##"
+[palette]
+red = "#FF5555"
+bright_green = "#69FF94"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ansi.color(1), Color::rgb(0xFF, 0x55, 0x55));
+        assert_eq!(at.ansi.color(10), Color::rgb(0x69, 0xFF, 0x94));
+        // Unset slots keep the derived defaults.
+        let derived = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(at.ansi.color(4), derived.ansi.color(4));
+    }
+
+    #[test]
+    fn ansi_sgr_code_mapping() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.ansi.from_sgr_code(31), Some(at.ansi.color(1)));
+        assert_eq!(at.ansi.from_sgr_code(94), Some(at.ansi.color(12)));
+        assert_eq!(at.ansi.from_sgr_code(38), None);
+        assert_eq!(at.ansi.from_sgr_code(0), None);
+    }
+
+    // -- Cursor colors --
+
+    #[test]
+    fn cursor_colors_default_white_black() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.cursor_fill, Color::rgb(255, 255, 255));
+        assert_eq!(at.cursor_outline, Color::rgb(0, 0, 0));
+        let from_skin = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(from_skin.cursor_fill, at.cursor_fill);
+        assert_eq!(from_skin.cursor_outline, at.cursor_outline);
+    }
+
+    #[test]
+    fn cursor_colors_overridable() {
+        let toml = r##"
+[cursor]
+fill = "#00FF88"
+outline = "#112233"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.cursor_fill, Color::rgb(0, 255, 0x88));
+        assert_eq!(at.cursor_outline, Color::rgb(0x11, 0x22, 0x33));
+    }
+
+    // -- Hardcoded-color hole closure --
+
+    #[test]
+    fn data_led_color_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.icon.data_led_color, Color::rgb(0, 200, 100));
+
+        let toml = r##"
+[icon_overrides]
+data_led_color = "#FF00FF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.data_led_color, Color::rgb(255, 0, 255));
+    }
+
+    #[test]
+    fn app_fallback_colors_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.icon.fallback_colors.len(), 6);
+        assert_eq!(at.icon.fallback_colors[0], Color::rgb(70, 130, 180));
+        assert_eq!(at.icon.fallback_colors[5], Color::rgb(100, 149, 237));
+
+        let toml = r##"
+[icon_overrides]
+fallback_colors = ["#111111", "#222222"]
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.fallback_colors.len(), 2);
+        assert_eq!(at.icon.fallback_colors[1], Color::rgb(0x22, 0x22, 0x22));
+    }
+
+    #[test]
+    fn start_menu_item_fallback_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.menu.item_fallback_color, Color::rgb(100, 100, 100));
+
+        let toml = r##"
+[start_menu_overrides]
+item_fallback_color = "#ABCDEF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.menu.item_fallback_color, Color::rgb(0xAB, 0xCD, 0xEF));
+    }
+
+    #[test]
+    fn background_default_layer_color() {
+        let toml = r##"
+[[background_layers]]
+kind = "grid"
+spacing = 30
+
+[background_performance]
+default_layer_color = "#FF000080"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.background_layers.len(), 1);
+        assert_eq!(at.background_layers[0].color, Color::rgba(255, 0, 0, 128));
+
+        // Without the override, layers default to #FFFFFF12.
+        let toml = r##"
+[[background_layers]]
+kind = "grid"
+spacing = 30
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(
+            at.background_layers[0].color,
+            Color::rgba(255, 255, 255, 18)
+        );
+    }
+
     #[test]
     fn with_features_propagates_reduced_motion() {
         let skin = SkinTheme::default();

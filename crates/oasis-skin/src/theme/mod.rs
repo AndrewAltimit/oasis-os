@@ -14,10 +14,10 @@ pub use conversion::{ContrastWarning, composite_over, contrast_ratio};
 pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
-    BarOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset, IconOverrides,
-    LayerAnimationConfig, LayerPositionConfig, NinePatchDef, OskOverrides, ScrollbarOverrides,
-    StartMenuOverrides, TransitionOverrides, TypographyOverrides, WallpaperConfig,
-    WmThemeOverrides,
+    BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset,
+    IconOverrides, LayerAnimationConfig, LayerPositionConfig, NinePatchDef, OskOverrides,
+    PaletteOverrides, ScrollbarOverrides, StartMenuOverrides, TransitionOverrides,
+    TypographyOverrides, WallpaperConfig, WmThemeOverrides,
 };
 
 /// Color scheme for a skin.
@@ -111,7 +111,14 @@ pub struct SkinTheme {
     #[serde(default)]
     pub wallpaper: Option<WallpaperConfig>,
 
-    /// Software mouse cursor theming (texture + hotspot).
+    /// Software mouse cursor theming (texture + hotspot + procedural
+    /// arrow fill/outline colors).
+    ///
+    /// ```toml
+    /// [cursor]
+    /// fill = "#FFFFFF"
+    /// outline = "#000000"
+    /// ```
     #[serde(default)]
     pub cursor: Option<CursorConfig>,
 
@@ -130,6 +137,28 @@ pub struct SkinTheme {
     /// Per-element overrides for scrollbar appearance.
     #[serde(default)]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
+
+    /// 16-slot ANSI terminal palette overrides.
+    ///
+    /// ```toml
+    /// [palette]
+    /// red = "#FF5555"
+    /// bright_green = "#69FF94"
+    /// ```
+    ///
+    /// Unset slots derive from the skin's base colors.
+    #[serde(default)]
+    pub palette: Option<PaletteOverrides>,
+
+    /// Boot splash color overrides.
+    ///
+    /// ```toml
+    /// [boot]
+    /// banner_border = "#AA88FF"
+    /// sky_stops = ["#02001A", "#050044", "#150088", "#5500CC", "#AA55FF", "#FFFFFF"]
+    /// ```
+    #[serde(default)]
+    pub boot: Option<BootOverrides>,
 
     /// Background decoration layers for the dashboard.
     ///
@@ -273,6 +302,8 @@ impl Default for SkinTheme {
             typography: None,
             transition: None,
             scrollbar_overrides: None,
+            palette: None,
+            boot: None,
             background_layers: None,
             chrome_layers: None,
             background_performance: None,

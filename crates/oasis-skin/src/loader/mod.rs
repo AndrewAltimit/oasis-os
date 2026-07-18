@@ -685,6 +685,12 @@ impl Skin {
         if ct.scrollbar_overrides.is_none() {
             ct.scrollbar_overrides.clone_from(&pt.scrollbar_overrides);
         }
+        if ct.palette.is_none() {
+            ct.palette.clone_from(&pt.palette);
+        }
+        if ct.boot.is_none() {
+            ct.boot.clone_from(&pt.boot);
+        }
         // Merge collection fields: only fill if child has none.
         if ct.app_themes.is_none() {
             ct.app_themes.clone_from(&pt.app_themes);

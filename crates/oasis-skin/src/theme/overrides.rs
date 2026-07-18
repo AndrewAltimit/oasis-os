@@ -279,12 +279,131 @@ pub struct IconOverrides {
     /// Focus glow color (hex, default: accent at 40% alpha).
     #[serde(default)]
     pub focus_glow_color: Option<String>,
+    /// LED accent color on the vector "data" icon (hex, default "#00C864").
+    #[serde(default)]
+    pub data_led_color: Option<String>,
+    /// Fallback colors cycled for discovered apps without an ICON0
+    /// (hex array, default: 6-color steel-blue/green/gold/... cycle).
+    #[serde(default)]
+    pub fallback_colors: Option<Vec<String>>,
+}
+
+/// 16-slot ANSI terminal palette overrides (`[palette]` table).
+///
+/// Each slot maps to an SGR foreground code: `black`..`white` cover
+/// 30-37, `bright_black`..`bright_white` cover 90-97. Unset slots fall
+/// back to the palette derived from the skin's base colors.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PaletteOverrides {
+    /// SGR 30.
+    #[serde(default)]
+    pub black: Option<String>,
+    /// SGR 31.
+    #[serde(default)]
+    pub red: Option<String>,
+    /// SGR 32.
+    #[serde(default)]
+    pub green: Option<String>,
+    /// SGR 33.
+    #[serde(default)]
+    pub yellow: Option<String>,
+    /// SGR 34.
+    #[serde(default)]
+    pub blue: Option<String>,
+    /// SGR 35.
+    #[serde(default)]
+    pub magenta: Option<String>,
+    /// SGR 36.
+    #[serde(default)]
+    pub cyan: Option<String>,
+    /// SGR 37.
+    #[serde(default)]
+    pub white: Option<String>,
+    /// SGR 90.
+    #[serde(default)]
+    pub bright_black: Option<String>,
+    /// SGR 91.
+    #[serde(default)]
+    pub bright_red: Option<String>,
+    /// SGR 92.
+    #[serde(default)]
+    pub bright_green: Option<String>,
+    /// SGR 93.
+    #[serde(default)]
+    pub bright_yellow: Option<String>,
+    /// SGR 94.
+    #[serde(default)]
+    pub bright_blue: Option<String>,
+    /// SGR 95.
+    #[serde(default)]
+    pub bright_magenta: Option<String>,
+    /// SGR 96.
+    #[serde(default)]
+    pub bright_cyan: Option<String>,
+    /// SGR 97.
+    #[serde(default)]
+    pub bright_white: Option<String>,
+}
+
+impl PaletteOverrides {
+    /// Return the override for a palette slot index (0-15), if set.
+    pub fn slot(&self, idx: usize) -> Option<&String> {
+        match idx {
+            0 => self.black.as_ref(),
+            1 => self.red.as_ref(),
+            2 => self.green.as_ref(),
+            3 => self.yellow.as_ref(),
+            4 => self.blue.as_ref(),
+            5 => self.magenta.as_ref(),
+            6 => self.cyan.as_ref(),
+            7 => self.white.as_ref(),
+            8 => self.bright_black.as_ref(),
+            9 => self.bright_red.as_ref(),
+            10 => self.bright_green.as_ref(),
+            11 => self.bright_yellow.as_ref(),
+            12 => self.bright_blue.as_ref(),
+            13 => self.bright_magenta.as_ref(),
+            14 => self.bright_cyan.as_ref(),
+            15 => self.bright_white.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+/// Boot splash color overrides (`[boot]` table).
+///
+/// Themes the desktop boot splash (BIOS banner + synthwave splash).
+/// Unset fields keep the built-in PSIX purple look.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BootOverrides {
+    /// Sky gradient stop colors, top to bottom (6 hex values).
+    #[serde(default)]
+    pub sky_stops: Option<Vec<String>>,
+    /// Ground gradient stop colors, top to bottom (4 hex values).
+    #[serde(default)]
+    pub ground_stops: Option<Vec<String>>,
+    /// BIOS banner interior fill (hex, default "#120E24").
+    #[serde(default)]
+    pub banner_bg: Option<String>,
+    /// BIOS banner border color (hex, default "#AA88FF").
+    #[serde(default)]
+    pub banner_border: Option<String>,
+    /// Chrome accents: status-line prefix, progress bar (default "#AA88FF").
+    #[serde(default)]
+    pub chrome: Option<String>,
+    /// Status line text color (hex, default "#E6DCFF").
+    #[serde(default)]
+    pub text: Option<String>,
+    /// BIOS log line text color (hex, default "#CCCCCC").
+    #[serde(default)]
+    pub bios_text: Option<String>,
 }
 
 /// Software mouse cursor theming (`[cursor]` in theme.toml).
 ///
 /// Only used when the skin enables `features.software_cursor`. Without a
-/// `texture`, the built-in procedural arrow cursor is drawn.
+/// `texture`, the built-in procedural arrow cursor is drawn (recolorable
+/// via `fill`/`outline`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CursorConfig {
     /// Asset path for the cursor bitmap (e.g. `"assets/cursor.png"`).
@@ -294,6 +413,14 @@ pub struct CursorConfig {
     /// the top-left corner — correct for arrow cursors).
     #[serde(default)]
     pub hotspot: Option<[i32; 2]>,
+    /// Procedural arrow fill color (hex, default "#FFFFFF"). Ignored
+    /// when `texture` is set.
+    #[serde(default)]
+    pub fill: Option<String>,
+    /// Procedural arrow outline color (hex, default "#000000"). Ignored
+    /// when `texture` is set.
+    #[serde(default)]
+    pub outline: Option<String>,
 }
 
 /// Wallpaper generation configuration.
@@ -603,6 +730,10 @@ pub struct StartMenuOverrides {
     /// Item separator color (hex, default: derived from panel border).
     #[serde(default)]
     pub item_separator_color: Option<String>,
+    /// Fallback color for items beyond the `item_colors` list
+    /// (hex, default "#646464").
+    #[serde(default)]
+    pub item_fallback_color: Option<String>,
 }
 
 /// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
@@ -852,6 +983,10 @@ pub struct BackgroundPerformanceConfig {
     /// Maximum number of VectorOps to emit (default 200).
     #[serde(default)]
     pub complexity_budget: Option<u32>,
+    /// Default element color for layers that omit `color`
+    /// (hex, default "#FFFFFF12").
+    #[serde(default)]
+    pub default_layer_color: Option<String>,
 }
 
 /// A reusable gradient preset (two-color linear gradient).

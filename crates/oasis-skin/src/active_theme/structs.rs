@@ -4,6 +4,56 @@
 
 use oasis_types::backend::Color;
 
+/// 16-color ANSI terminal palette.
+///
+/// Slots 0-7 map to SGR foreground codes 30-37 (black, red, green,
+/// yellow, blue, magenta, cyan, white); slots 8-15 map to 90-97
+/// (bright variants). Derived from the skin's base colors unless a
+/// `[palette]` table overrides individual slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnsiPalette {
+    /// The 16 slot colors in SGR order.
+    pub colors: [Color; 16],
+}
+
+impl AnsiPalette {
+    /// Slot names in SGR order (used for TOML keys and validation).
+    pub const SLOT_NAMES: [&'static str; 16] = [
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white",
+    ];
+
+    /// Return the color for a palette slot (0-15). Out-of-range indices
+    /// wrap into the table.
+    pub fn color(&self, idx: usize) -> Color {
+        self.colors[idx & 15]
+    }
+
+    /// Map an SGR foreground code (30-37, 90-97) to a palette color.
+    /// Returns `None` for codes outside those ranges.
+    pub fn from_sgr_code(&self, code: u8) -> Option<Color> {
+        match code {
+            30..=37 => Some(self.colors[(code - 30) as usize]),
+            90..=97 => Some(self.colors[(code - 90 + 8) as usize]),
+            _ => None,
+        }
+    }
+}
+
 /// Status bar, bottom bar, tab pills, and page dot theme.
 #[derive(Debug, Clone)]
 pub struct BarTheme {
@@ -129,6 +179,10 @@ pub struct IconTheme {
     pub container_style: String,
     /// Padding (px) between the container edge and the glyph bounding box.
     pub container_padding: u16,
+    /// LED accent color on the vector "data" icon.
+    pub data_led_color: Color,
+    /// Fallback colors cycled for discovered apps without an ICON0.
+    pub fallback_colors: Vec<Color>,
 }
 
 /// Start button and popup panel theme.
@@ -208,6 +262,8 @@ pub struct StartMenuTheme {
     pub item_separator: bool,
     /// Item separator color.
     pub item_separator_color: Color,
+    /// Fallback color for items beyond the `item_colors` list.
+    pub item_fallback_color: Color,
 }
 
 /// App content area, title bar, terminal, and selection theme.
@@ -517,6 +573,14 @@ pub struct ActiveTheme {
     pub cursor_texture: Option<String>,
     /// Software cursor click hotspot (x, y) within the cursor image.
     pub cursor_hotspot: (i32, i32),
+    /// Procedural mouse cursor arrow fill color (default white).
+    pub cursor_fill: Color,
+    /// Procedural mouse cursor arrow outline color (default black).
+    pub cursor_outline: Color,
+
+    // -- Terminal ANSI palette --
+    /// 16-color ANSI palette for SGR-colored terminal output.
+    pub ansi: AnsiPalette,
 
     // -- Transition --
     /// Transition fade overlay color (default: black).

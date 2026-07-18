@@ -103,12 +103,15 @@ fn tree_recursive(
     for (i, entry) in entries.iter().enumerate() {
         let is_last = i == count - 1;
         let connector = if is_last { "└── " } else { "├── " };
-        let suffix = if entry.kind == EntryKind::Directory {
-            "/"
+        if entry.kind == EntryKind::Directory {
+            // Directories in the bright-blue ANSI slot (SGR 94), matching `ls`.
+            lines.push(format!(
+                "{prefix}{connector}\u{1b}[94m{}/\u{1b}[0m",
+                entry.name
+            ));
         } else {
-            ""
-        };
-        lines.push(format!("{prefix}{connector}{}{suffix}", entry.name));
+            lines.push(format!("{prefix}{connector}{}", entry.name));
+        }
 
         if entry.kind == EntryKind::Directory {
             *dirs += 1;

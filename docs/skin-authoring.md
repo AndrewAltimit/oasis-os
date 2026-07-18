@@ -301,6 +301,11 @@ cursor_color = "#FFFFFF32"
 icon_border_radius = 6
 cursor_border_radius = 8
 cursor_stroke_width = 2
+# LED accent on the vector "data" icon (default "#00C864").
+data_led_color = "#00C864"
+# Colors cycled for discovered apps without an ICON0 (default: 6-color
+# steel-blue/green/gold/plum/indian-red/cornflower cycle).
+fallback_colors = ["#4682B4", "#3CB371", "#DAA520"]
 # Also: outline_color, shadow_color
 ```
 
@@ -314,6 +319,96 @@ chrome_button_bg = "#404040"
 url_bar_bg = "#202020"
 link_color = "#0066CC"
 # Also: url_bar_text, status_bar_bg, status_bar_text
+```
+
+#### ANSI Terminal Palette
+
+Terminal output may contain SGR foreground escape sequences
+(`ESC[31m` red .. `ESC[0m` reset — see `docs/terminal-commands.md`).
+The 16 slots are derived from the base colors automatically: the six
+standard hues (red, yellow, green, cyan, blue, magenta) are tinted
+toward the skin — saturation from `primary`, lightness from `output` —
+`white`/`bright_white` reuse `output`/`text`, and the blacks are
+primary-tinted darks. Override any slot explicitly:
+
+```toml
+[palette]
+black = "#101010"
+red = "#FF5555"
+green = "#50FA7B"
+yellow = "#F1FA8C"
+blue = "#6272A4"
+magenta = "#FF79C6"
+cyan = "#8BE9FD"
+white = "#CCCCCC"
+bright_black = "#44475A"
+bright_red = "#FF6E6E"
+bright_green = "#69FF94"
+bright_yellow = "#FFFFA5"
+bright_blue = "#D6ACFF"
+bright_magenta = "#FF92DF"
+bright_cyan = "#A4FFFF"
+bright_white = "#FFFFFF"
+```
+
+The derived palette only affects SGR-colored output — plain terminal
+text keeps using `output`, so existing skins render identically unless
+a command emits color.
+
+#### Mouse Cursor
+
+The procedural arrow cursor (desktop/WASM software cursor and
+screenshots) can be recolored. These fields extend the same `[cursor]`
+table that holds `texture`/`hotspot` (see "Themed software cursor"
+under Image Assets); they only apply when no `texture` is set:
+
+```toml
+[cursor]
+fill = "#FFFFFF"     # arrow interior (default white)
+outline = "#000000"  # arrow border (default black)
+```
+
+#### Boot Splash
+
+The desktop boot splash (BIOS banner + synthwave horizon) defaults to
+the PSIX purple look. Because the skin is resolved before the splash
+starts, every phase can be themed:
+
+```toml
+[boot]
+# Sky gradient, 6 stops top-to-bottom (positions fixed at
+# 0.0 / 0.2 / 0.5 / 0.8 / 0.95 / 1.0).
+sky_stops = ["#02001A", "#050044", "#150088", "#5500CC", "#AA55FF", "#FFFFFF"]
+# Ground gradient, 4 stops top-to-bottom (0.0 / 0.05 / 0.3 / 1.0).
+ground_stops = ["#FFFFFF", "#6A00CC", "#150088", "#02001A"]
+banner_bg = "#120E24"      # BIOS banner interior
+banner_border = "#AA88FF"  # BIOS banner frame
+chrome = "#AA88FF"         # status-line prefix + progress bar
+text = "#E6DCFF"           # status line text
+bios_text = "#CCCCCC"      # BIOS log lines + banner subtitle
+```
+
+#### Start Menu Overrides
+
+```toml
+[start_menu_overrides]
+# Fallback color for items beyond the item_colors list (default "#646464").
+item_fallback_color = "#646464"
+# Also: panel_bg, panel_border, item_text, highlight_color, button_bg,
+#   button_text, item_colors, layout_mode, columns, ... (see
+#   StartMenuOverrides in oasis-skin for the full list)
+```
+
+#### Background Layer Defaults
+
+```toml
+[background_performance]
+max_layers = 8
+reduced_motion = false
+complexity_budget = 200
+# Color used by [[background_layers]] entries that omit `color`
+# (default "#FFFFFF12").
+default_layer_color = "#FFFFFF12"
 ```
 
 ### strings.toml (Terminal Strings)

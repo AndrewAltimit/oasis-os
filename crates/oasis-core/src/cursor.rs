@@ -5,6 +5,7 @@
 
 use crate::input::InputEvent;
 use crate::sdi::SdiRegistry;
+use oasis_types::backend::Color;
 
 /// Cursor arrow dimensions.
 const CURSOR_W: u32 = 12;
@@ -87,14 +88,28 @@ impl CursorState {
     }
 }
 
-/// Generate a procedural arrow cursor as RGBA pixel data.
+/// Generate a procedural arrow cursor with the classic white fill and
+/// black outline.
+///
+/// See [`generate_cursor_pixels_themed`] for skin-driven colors; this
+/// wrapper keeps the legacy defaults (`[cursor]` table absent).
+pub fn generate_cursor_pixels(scale: u32) -> (Vec<u8>, u32, u32) {
+    generate_cursor_pixels_themed(scale, Color::rgb(255, 255, 255), Color::rgb(0, 0, 0))
+}
+
+/// Generate a procedural arrow cursor as RGBA pixel data with themed
+/// colors (`ActiveTheme::cursor_fill` / `ActiveTheme::cursor_outline`).
 ///
 /// `scale` controls resolution: each bitmap pixel becomes a `scale x scale`
 /// block. Returns `(pixels, width, height)` where dimensions are
 /// `CURSOR_W * scale` by `CURSOR_H * scale`.
-pub fn generate_cursor_pixels(scale: u32) -> (Vec<u8>, u32, u32) {
+pub fn generate_cursor_pixels_themed(
+    scale: u32,
+    fill: Color,
+    outline: Color,
+) -> (Vec<u8>, u32, u32) {
     let scale = scale.max(1);
-    // 12x18 cursor bitmap. Legend: 0=transparent, 1=black outline, 2=white fill.
+    // 12x18 cursor bitmap. Legend: 0=transparent, 1=outline, 2=fill.
     #[rustfmt::skip]
     let bitmap: [[u8; 12]; 18] = [
         [1,0,0,0,0,0,0,0,0,0,0,0],
@@ -124,9 +139,9 @@ pub fn generate_cursor_pixels(scale: u32) -> (Vec<u8>, u32, u32) {
     for (by, row) in bitmap.iter().enumerate() {
         for (bx, &val) in row.iter().enumerate() {
             let (r, g, b, a) = match val {
-                1 => (0, 0, 0, 255),       // Black outline
-                2 => (255, 255, 255, 255), // White fill
-                _ => (0, 0, 0, 0),         // Transparent
+                1 => (outline.r, outline.g, outline.b, 255), // Outline
+                2 => (fill.r, fill.g, fill.b, 255),          // Fill
+                _ => (0, 0, 0, 0),                           // Transparent
             };
             // Fill scale x scale block.
             for sy in 0..scale {

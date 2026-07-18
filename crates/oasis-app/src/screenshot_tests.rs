@@ -734,8 +734,13 @@ fn run_skin_scenario(
     {
         let themed = capture_assets::themed_cursor(&skin, &active_theme);
         let is_themed = themed.is_some();
-        let (cursor_pixels, cw, ch) =
-            themed.unwrap_or_else(|| cursor::generate_cursor_pixels(active_theme.cursor_scale));
+        let (cursor_pixels, cw, ch) = themed.unwrap_or_else(|| {
+            cursor::generate_cursor_pixels_themed(
+                active_theme.cursor_scale,
+                active_theme.cursor_fill,
+                active_theme.cursor_outline,
+            )
+        });
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
         if is_themed {
             mouse_cursor.size = Some((cw, ch));
