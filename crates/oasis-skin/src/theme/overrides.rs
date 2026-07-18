@@ -296,6 +296,10 @@ pub struct IconOverrides {
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_style: Option<String>,
+    /// Document-icon emblem anchor: "top" (default) or "badge"
+    /// (overlapping the bottom-right corner, PSIX-style).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gfx_anchor: Option<String>,
     /// Vector icon preset name (used when `icon_style = "vector"`).
     /// Available presets: "altimit" (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]

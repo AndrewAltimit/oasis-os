@@ -306,6 +306,10 @@ data_led_color = "#00C864"
 # Colors cycled for discovered apps without an ICON0 (default: 6-color
 # steel-blue/green/gold/plum/indian-red/cornflower cycle).
 fallback_colors = ["#4682B4", "#3CB371", "#DAA520"]
+# Document-icon emblem anchor: "top" (default, tinted inset block below
+# the stripe) or "badge" (solid square overlapping the page's
+# bottom-right corner, PSIX-style).
+gfx_anchor = "badge"
 # Also: outline_color, shadow_color
 ```
 

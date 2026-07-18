@@ -85,8 +85,9 @@ dock_vol_fill = "#8CEB32"
 texture = "assets/cursor.png"
 hotspot = [1, 1]
 
-# -- PSIX document icons: white page bodies, uniform red emblem, white
-# labels with auto drop shadow (reference: red-ribbon pages, white text) --
+# -- PSIX document icons: white page bodies, uniform red emblem badge
+# overlapping the bottom-right corner (like the reference), white labels
+# with auto drop shadow (reference: red-badge pages, white text) --
 [icon_overrides]
 icon_style = "document"
 body_color = "#F8F8F4"
@@ -94,6 +95,7 @@ fold_color = "#D8D8D2"
 outline_color = "#55554E"
 label_color = "#FFFFFF"
 fallback_colors = ["#C83223"]
+gfx_anchor = "badge"
 cursor_style = "stroke"
 # White ring: an orange ring vanishes into the orange half of the ribbon.
 cursor_color = "#FFFFFFE0"
@@ -108,13 +110,13 @@ tab_w = 34
 tab_h = 13
 tab_gap = 3
 tab_start_x = 34
-# Small page icons; no top stripe, small red emblem pane.
+# Small page icons; no top stripe, chunky red corner badge.
 icon_width = 26
 icon_height = 30
 icon_stripe_h = 0
 icon_fold_size = 8
-icon_gfx_h = 10
-icon_gfx_pad = 8
+icon_gfx_h = 14
+icon_gfx_pad = 7
 focus_ring_color = "#F5820FAA"
 
 # -- Interactive widget states --

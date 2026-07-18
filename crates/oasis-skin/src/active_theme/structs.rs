@@ -166,6 +166,9 @@ pub struct IconTheme {
     pub style: String,
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     pub cursor_style: String,
+    /// Document-icon emblem anchor: "top" (default, inset block below the
+    /// stripe) or "badge" (overlapping the bottom-right corner, PSIX-style).
+    pub gfx_anchor: String,
     /// Dashboard icon shadow level (default 1).
     pub shadow_level: u8,
     /// Vector icon preset name (used when `style = "vector"`).

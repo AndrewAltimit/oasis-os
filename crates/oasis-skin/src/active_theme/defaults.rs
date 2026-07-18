@@ -68,6 +68,7 @@ impl Default for ActiveTheme {
                 cursor_stroke_width: 2,
                 style: "document".to_string(),
                 cursor_style: "stroke".to_string(),
+                gfx_anchor: "top".to_string(),
                 shadow_level: 1,
                 vector_preset: "altimit".to_string(),
                 idle_float: false,

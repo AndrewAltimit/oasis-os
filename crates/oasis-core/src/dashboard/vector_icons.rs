@@ -471,7 +471,7 @@ impl DashboardState {
             self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
-            left_align.then_some(ix),
+            left_align.then_some(ix + icon_w as i32 / 2),
         );
 
         // Store the vector icon slot for rendering in render_vector_icons().

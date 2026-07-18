@@ -700,6 +700,9 @@ impl ActiveTheme {
             cursor_style: ico
                 .and_then(|i| i.cursor_style.clone())
                 .unwrap_or_else(|| "stroke".to_string()),
+            gfx_anchor: ico
+                .and_then(|i| i.gfx_anchor.clone())
+                .unwrap_or_else(|| "top".to_string()),
             shadow_level: skin
                 .geometry
                 .as_ref()
@@ -1262,6 +1265,7 @@ impl ActiveTheme {
             cursor_stroke_width: 2,
             style: "document".to_string(),
             cursor_style: "stroke".to_string(),
+            gfx_anchor: "top".to_string(),
             shadow_level: 1,
             vector_preset: "altimit".to_string(),
             idle_float: false,

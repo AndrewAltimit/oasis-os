@@ -512,7 +512,11 @@ impl DashboardState {
         .then(|| {
             let (ox, oy) = origins[self.selected];
             let pad = self.config.cursor_pad.max(0);
-            let ix = ox + slide_offset + (cell_w as i32 - icon_w as i32) / 2;
+            let ix = if self.config.left_align_icons {
+                ox + slide_offset + COLUMN_LEFT_PAD
+            } else {
+                ox + slide_offset + (cell_w as i32 - icon_w as i32) / 2
+            };
             let iy = oy + (cell_h as i32 - icon_h as i32) / 4;
             (
                 ix - pad,
