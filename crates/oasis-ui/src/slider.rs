@@ -188,16 +188,23 @@ impl Widget for Slider {
     }
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let accent = ctx.theme.interactive_accent(self.disabled);
-        let track_bg = if self.disabled {
-            dim_color(ctx.theme.input_bg)
+        // Dedicated slider slots; their defaults equal the fields the
+        // slider historically borrowed (input_bg / accent / surface),
+        // so untouched themes render identically.
+        let accent = if self.disabled {
+            ctx.theme.text_disabled
         } else {
-            ctx.theme.input_bg
+            ctx.theme.slider_fill
+        };
+        let track_bg = if self.disabled {
+            dim_color(ctx.theme.slider_track)
+        } else {
+            ctx.theme.slider_track
         };
         let thumb_fill = if self.disabled {
-            dim_color(ctx.theme.surface)
+            dim_color(ctx.theme.slider_thumb)
         } else {
-            ctx.theme.surface
+            ctx.theme.slider_thumb
         };
         let thumb_border = ctx.theme.interactive_border(self.disabled, true);
 

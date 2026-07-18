@@ -1789,6 +1789,55 @@ size = 12
     }
 
     #[test]
+    fn validate_widget_states_accepts_known_slots() {
+        let theme_toml = r##"
+[widget_states.button]
+hover_bg = "#656565"
+
+[widget_states.slider]
+track = "#101018"
+fill = "#FF8C1E"
+thumb = "#F0F0E8"
+
+[widget_states.menu]
+bg = "#2A2A30"
+hover_bg = "#F5820F"
+separator = "#55555C"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            !warnings.iter().any(|w| w.contains("widget_states")),
+            "known widget_states slots should not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_widget_states_flags_typos() {
+        let theme_toml = r##"
+[widget_states.slider]
+trak = "#101018"
+
+[widget_states.menus]
+bg = "#2A2A30"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("widget_states.slider.trak") && w.contains("unknown state")),
+            "missing typo'd slot warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("widget_states.menus") && w.contains("unknown widget")),
+            "missing unknown widget warning: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn validate_zero_screen_dimensions() {
         let manifest = "name = \"zero\"\nscreen_width = 0\nscreen_height = 0\n";
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();

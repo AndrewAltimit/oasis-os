@@ -431,8 +431,8 @@ mod private {
         bar_y: i32,
         bar_w: u32,
         bar_h: u32,
+        style: &MenuStyle,
     ) {
-        let style = MenuStyle::default();
         ensure_rect(
             sdi,
             "app_fm_menubar_bg",
@@ -516,6 +516,7 @@ mod private {
         bar_x: i32,
         bar_y: i32,
         bar_h: u32,
+        style: &MenuStyle,
     ) {
         for name in [
             "app_fm_dd_bg",
@@ -541,7 +542,6 @@ mod private {
         let Some(menu) = bar.menus.get(idx) else {
             return;
         };
-        let style = MenuStyle::default();
 
         // Anchor x to the open label.
         let mut label_x = 6i32;
@@ -780,8 +780,9 @@ impl FileManagerApp {
         // Menu bar below the title bar.
         let title_h = at.app.title_bar_height as i32;
         let menu_y = cy + title_h;
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
         self.menu
-            .draw_bar(backend, cx, menu_y, cw, FM_MENU_H, &MenuStyle::default())?;
+            .draw_bar(backend, cx, menu_y, cw, FM_MENU_H, &menu_style)?;
 
         // Vertical divider below the menu strip.
         let content_y = menu_y + FM_MENU_H as i32;
@@ -842,7 +843,7 @@ impl FileManagerApp {
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &MenuStyle::default())?;
+                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &menu_style)?;
         }
 
         Ok(())
@@ -887,7 +888,16 @@ impl FileManagerApp {
             .saturating_sub(title_h + FM_MENU_H + at.statusbar_height + at.bottombar_height + 14);
         let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
 
-        update_menu_bar_sdi(sdi, &self.menu, 0, menu_y, at.screen_w, FM_MENU_H);
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        update_menu_bar_sdi(
+            sdi,
+            &self.menu,
+            0,
+            menu_y,
+            at.screen_w,
+            FM_MENU_H,
+            &menu_style,
+        );
 
         // Vertical divider.
         if !sdi.contains("app_divider") {
@@ -999,7 +1009,7 @@ impl FileManagerApp {
         }
 
         // Drop-down overlay (when an open menu exists).
-        update_menu_dropdown_sdi(sdi, &self.menu, 0, menu_y, FM_MENU_H);
+        update_menu_dropdown_sdi(sdi, &self.menu, 0, menu_y, FM_MENU_H, &menu_style);
 
         // Hide single-panel lines.
         for i in 0..100 {
@@ -1045,7 +1055,16 @@ impl FileManagerApp {
         let dark = colors.divider;
 
         // Menu bar (shared MenuBar widget; click hits routed via App::handle_click).
-        update_menu_bar_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_w, g.menu_h);
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        update_menu_bar_sdi(
+            sdi,
+            &self.menu,
+            g.menu_x,
+            g.menu_y,
+            g.menu_w,
+            g.menu_h,
+            &menu_style,
+        );
 
         // Address bar.
         ensure_rect(
@@ -1331,7 +1350,7 @@ impl FileManagerApp {
         }
 
         // Drop-down overlay last so it floats above the icon grid.
-        update_menu_dropdown_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_h);
+        update_menu_dropdown_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_h, &menu_style);
     }
 
     /// Direct-draw Explorer view in windowed mode.
@@ -1358,14 +1377,9 @@ impl FileManagerApp {
         let dark = colors.divider;
 
         // Menu bar via the shared MenuBar widget.
-        self.menu.draw_bar(
-            backend,
-            g.menu_x,
-            g.menu_y,
-            g.menu_w,
-            g.menu_h,
-            &MenuStyle::default(),
-        )?;
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        self.menu
+            .draw_bar(backend, g.menu_x, g.menu_y, g.menu_w, g.menu_h, &menu_style)?;
 
         // Address bar.
         backend.fill_rect(g.menu_x, g.addr_y, g.menu_w, g.addr_h, colors.bg)?;
@@ -1529,13 +1543,8 @@ impl FileManagerApp {
 
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
-            self.menu.draw_dropdown(
-                backend,
-                g.menu_x,
-                g.menu_y,
-                g.menu_h,
-                &MenuStyle::default(),
-            )?;
+            self.menu
+                .draw_dropdown(backend, g.menu_x, g.menu_y, g.menu_h, &menu_style)?;
         }
 
         Ok(())

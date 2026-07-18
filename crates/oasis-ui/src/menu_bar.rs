@@ -114,7 +114,7 @@ pub enum MenuHit {
 }
 
 /// Visual parameters — Windows-95 bezel defaults.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MenuStyle {
     pub bar_bg: Color,
     pub bar_border: Color,
@@ -148,6 +148,33 @@ impl Default for MenuStyle {
             item_hot_text: Color::rgb(255, 255, 255),
             item_disabled_text: Color::rgb(150, 150, 150),
             separator: Color::rgb(170, 170, 170),
+            font_size: 11,
+        }
+    }
+}
+
+impl MenuStyle {
+    /// Build a style from the theme's `menu_*` slots.
+    ///
+    /// Every built-in [`Theme`](crate::theme::Theme) defaults those
+    /// slots to the same Win95 grays as [`MenuStyle::default`], so
+    /// switching a call site from `default()` to `from_theme` is
+    /// pixel-identical until a skin overrides `[widget_states.menu]`.
+    pub fn from_theme(theme: &crate::theme::Theme) -> Self {
+        Self {
+            bar_bg: theme.menu_bg,
+            bar_border: theme.menu_border,
+            label_text: theme.menu_text,
+            label_hot_bg: theme.menu_hover_bg,
+            label_hot_text: theme.menu_hover_text,
+            dropdown_bg: theme.menu_dropdown_bg,
+            dropdown_border_light: theme.menu_dropdown_border_light,
+            dropdown_border_dark: theme.menu_dropdown_border_dark,
+            item_text: theme.menu_item_text,
+            item_hot_bg: theme.menu_hover_bg,
+            item_hot_text: theme.menu_hover_text,
+            item_disabled_text: theme.menu_disabled_text,
+            separator: theme.menu_separator,
             font_size: 11,
         }
     }
@@ -576,6 +603,34 @@ mod tests {
         bar.close();
         assert!(!bar.is_open());
         assert_eq!(bar.hovered_item, None);
+    }
+
+    #[test]
+    fn from_theme_matches_default_for_builtin_themes() {
+        use crate::theme::Theme;
+        // Every built-in theme keeps the Win95 gray menu defaults, so
+        // the theme-derived style is pixel-identical to `default()`.
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::classic(),
+            Theme::high_contrast(),
+            Theme::colorblind(),
+        ] {
+            assert_eq!(MenuStyle::from_theme(&theme), MenuStyle::default());
+        }
+    }
+
+    #[test]
+    fn from_theme_reads_overridden_slots() {
+        use crate::theme::Theme;
+        let mut theme = Theme::dark();
+        theme.menu_bg = Color::rgb(10, 20, 30);
+        theme.menu_hover_bg = Color::rgb(200, 0, 0);
+        let style = MenuStyle::from_theme(&theme);
+        assert_eq!(style.bar_bg, Color::rgb(10, 20, 30));
+        assert_eq!(style.label_hot_bg, Color::rgb(200, 0, 0));
+        assert_eq!(style.item_hot_bg, Color::rgb(200, 0, 0));
     }
 
     #[test]

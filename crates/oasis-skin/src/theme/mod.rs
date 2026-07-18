@@ -663,6 +663,77 @@ spacing_md = 10
     }
 
     #[test]
+    fn ui_theme_slider_defaults_derive_from_legacy_slots() {
+        // Without widget_states, the slider slots equal the fields the
+        // widget used to borrow (input_bg / accent / surface).
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.slider_track, theme.input_bg);
+        assert_eq!(theme.slider_fill, theme.accent);
+        assert_eq!(theme.slider_thumb, theme.surface);
+    }
+
+    #[test]
+    fn ui_theme_menu_defaults_are_win95_grays() {
+        // Without widget_states, the menu bar keeps the Win95 grays that
+        // `MenuStyle::default()` always hardcoded.
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.menu_bg, Color::rgb(240, 240, 240));
+        assert_eq!(theme.menu_border, Color::rgb(180, 180, 180));
+        assert_eq!(theme.menu_text, Color::rgb(30, 30, 30));
+        assert_eq!(theme.menu_hover_bg, Color::rgb(49, 106, 197));
+        assert_eq!(theme.menu_hover_text, Color::rgb(255, 255, 255));
+        assert_eq!(theme.menu_dropdown_bg, Color::rgb(236, 236, 236));
+        assert_eq!(theme.menu_dropdown_border_light, Color::rgb(255, 255, 255));
+        assert_eq!(theme.menu_dropdown_border_dark, Color::rgb(105, 105, 105));
+        assert_eq!(theme.menu_item_text, Color::rgb(20, 20, 20));
+        assert_eq!(theme.menu_disabled_text, Color::rgb(150, 150, 150));
+        assert_eq!(theme.menu_separator, Color::rgb(170, 170, 170));
+    }
+
+    #[test]
+    fn widget_states_slider_overrides_ui_theme() {
+        let toml = r##"
+[widget_states.slider]
+track = "#101018"
+fill = "#FF8C1E"
+thumb = "#F0F0E8"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.slider_track, Color::rgb(0x10, 0x10, 0x18));
+        assert_eq!(theme.slider_fill, Color::rgb(0xFF, 0x8C, 0x1E));
+        assert_eq!(theme.slider_thumb, Color::rgb(0xF0, 0xF0, 0xE8));
+        // Unrelated slots keep their derived values.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.accent, plain.accent);
+        assert_eq!(theme.input_bg, plain.input_bg);
+    }
+
+    #[test]
+    fn widget_states_menu_overrides_ui_theme() {
+        let toml = r##"
+[widget_states.menu]
+bg = "#2A2A30"
+text = "#E0E0E8"
+hover_bg = "#F5820F"
+hover_text = "#101010"
+dropdown_bg = "#33333A"
+separator = "#55555C"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.menu_bg, Color::rgb(0x2A, 0x2A, 0x30));
+        assert_eq!(theme.menu_text, Color::rgb(0xE0, 0xE0, 0xE8));
+        assert_eq!(theme.menu_hover_bg, Color::rgb(0xF5, 0x82, 0x0F));
+        assert_eq!(theme.menu_hover_text, Color::rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.menu_dropdown_bg, Color::rgb(0x33, 0x33, 0x3A));
+        assert_eq!(theme.menu_separator, Color::rgb(0x55, 0x55, 0x5C));
+        // Slots not overridden keep the Win95 defaults.
+        assert_eq!(theme.menu_border, Color::rgb(180, 180, 180));
+        assert_eq!(theme.menu_item_text, Color::rgb(20, 20, 20));
+    }
+
+    #[test]
     fn success_warning_override_toast_and_ui() {
         let toml = r##"
 success = "#00CC66"

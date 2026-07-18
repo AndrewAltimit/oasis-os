@@ -597,7 +597,8 @@ the shell ever grows the same capability.
 ## Widget States
 
 `[widget_states.*]` overrides interactive widget colors (buttons, inputs,
-toggles, scrollbars) that are otherwise derived from the base palette:
+toggles, scrollbars, sliders, menu bars) that are otherwise derived from
+the base palette:
 
 ```toml
 [widget_states.button]
@@ -621,7 +622,30 @@ thumb = "#F0F0E8"
 track = "#FFFFFF0A"
 thumb = "#FFFFFF28"
 thumb_hover = "#FFFFFF50"
+
+[widget_states.slider]
+track = "#101014"   # unfilled track (defaults to the input background)
+fill = "#F5820F"    # filled portion (defaults to the accent)
+thumb = "#26262A"   # thumb fill (defaults to the surface color)
+
+[widget_states.menu]
+bg = "#F0F0F0"                       # menu bar background
+border = "#B4B4B4"                   # menu bar bottom border
+text = "#1E1E1E"                     # top-level label text
+hover_bg = "#316AC5"                 # open-label / hovered-item highlight
+hover_text = "#FFFFFF"               # text on the hover highlight
+dropdown_bg = "#ECECEC"              # drop-down panel background
+dropdown_border_light = "#FFFFFF"    # bezel highlight (top/left)
+dropdown_border_dark = "#696969"     # bezel shadow (bottom/right)
+item_text = "#141414"                # drop-down item text
+disabled_text = "#969696"            # disabled item text
+separator = "#AAAAAA"                # drop-down separator line
 ```
+
+The `menu` slots feed `MenuStyle::from_theme` in `oasis-ui`; their
+defaults are the classic Win95 grays the menu bar widget has always
+used, so skins that never touch `[widget_states.menu]` render exactly
+as before.
 
 Unknown widget or slot names are flagged by `skin lint`.
 

@@ -120,7 +120,7 @@ impl TextEditorApp {
         // Menu bar: real widget with live drop-downs.
         let menu_h: u32 = 18;
         let menu_y = cy + title_h as i32;
-        let menu_style = oasis_ui::menu_bar::MenuStyle::default();
+        let menu_style = oasis_ui::menu_bar::MenuStyle::from_theme(&at.ui_theme);
         self.menu
             .draw_bar(backend, cx, menu_y, cw, menu_h, &menu_style)?;
         // Suppress unused warnings — still using these palette
