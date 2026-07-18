@@ -21,6 +21,39 @@ compositing, D6 glyph cache bookkeeping, D8 handle-based SDI z-lists,
 D9 evaluated and declined, A7 typography tokens) have landed. Branch:
 `feat/advanced-theming`.
 
+**M6 (second wave — UI/UX theme-engine completeness) has also landed** on
+the same branch, closing the gaps a post-M5 audit surfaced:
+
+- **A7 completed — per-skin TTF fonts**: `[typography] font =
+  "assets/skin.ttf"` (fontdue rasterization into the colorless SDL glyph
+  cache via a new `SdiText::set_font` extension; whole-pixel advances
+  shared by measure and draw; per-character bitmap fallback; feature-gated
+  so PSP/WASM/UE5 keep the bitmap font).
+- **Runtime appearance editor**: skin serialization (`serialize` feature,
+  `Skin::to_toml_string`/`save_to_directory`), dark/light/high-contrast
+  variant derivation (`variants.rs`, WCAG-ratio enforced), a Settings
+  "Appearance" category (base-color editing, Apply preview via in-memory
+  swap, save-as-custom-skin), and `skin export` / `skin variant` commands.
+- **Accessibility**: WCAG contrast lint (9 derived color pairs, warn-only)
+  in `skin lint`; the previously dead `focus_ring_*` fields now render
+  through `FocusStyle::from_theme` (exact fallback keeps unset skins
+  pixel-identical).
+- **UI sound themes**: `[sounds]` table (click/open/close/error/toast/nav
+  WAV one-shots + volume), an 8-voice SFX mixer in oasis-audio on a
+  dedicated SDL stream, shell chokepoint hooks; silent by default.
+- **Widget completeness**: menu_bar derives from `ui::Theme` (defaults pin
+  the Win95 grays), dedicated slider fields, new `widget_states.menu` /
+  `widget_states.slider` slots.
+- **Terminal + shell holes**: 16-color `[palette]` ANSI table derived per
+  skin, SGR foreground-color runs in terminal output (`ls`/`tree`/errors
+  emit color), fully themeable boot splash (`[boot]`), themed procedural
+  cursor fill/outline, and themable fallback palettes (dashboard,
+  start menu, vector LED, background-layer line color).
+
+All M6 fields default to current behavior; existing skins render
+pixel-identically until they opt in (screenshot suite: 120 scenarios
+green).
+
 ## Goal
 
 Close the gap between OASIS_OS's current look — a uniform, centered icon grid
