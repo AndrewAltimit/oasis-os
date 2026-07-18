@@ -18,9 +18,15 @@ fn red_green_axis(c: Color) -> i32 {
 /// ends of the red/green axis are exactly what deuteranopia/protanopia collapse.
 fn red_green_opposed(a: Color, b: Color) -> bool {
     const MIN_AXIS: i32 = 40;
-    let da = red_green_axis(a);
-    let db = red_green_axis(b);
-    da.abs() >= MIN_AXIS && db.abs() >= MIN_AXIS && (da.signum() != db.signum())
+    // A color only sits on the red/green confusion axis when blue is not its
+    // dominant channel. Without this guard a blue such as #4488CC (where the
+    // green channel exceeds red purely by channel math) is misread as
+    // "green-dominant" and falsely paired with a red -- deuteranopia does not
+    // collapse blue against red.
+    let on_axis = |c: Color| {
+        red_green_axis(c).abs() >= MIN_AXIS && i32::from(c.b) <= i32::from(c.r).max(i32::from(c.g))
+    };
+    on_axis(a) && on_axis(b) && (red_green_axis(a).signum() != red_green_axis(b).signum())
 }
 
 impl Skin {

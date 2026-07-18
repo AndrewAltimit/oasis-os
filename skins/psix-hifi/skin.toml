@@ -1,0 +1,10 @@
+name = "psix-hifi"
+version = "1.0"
+author = "OASIS_OS"
+description = "High-fidelity PSIX homebrew tribute: baked ribbon wallpaper, bold psix wordmark, left-column desktop icons, media-dock footer"
+screen_width = 480
+screen_height = 272
+# Builds on the classic base like psix-tribute, but pushes for maximum
+# visual fidelity to the PSIX 1.1 desktop: image wallpaper + wordmark,
+# column icon flow, and the media-dock bottom bar.
+inherits = "classic"

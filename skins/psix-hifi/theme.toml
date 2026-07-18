@@ -1,0 +1,117 @@
+# psix-hifi theme -- maximum-fidelity PSIX 1.1 desktop.
+# Baked ribbon wallpaper (image, not procedural), bold centered "psix"
+# wordmark watermark, glossy shaped chrome, column desktop icons, and the
+# media-dock footer. Exercises the M1 asset pipeline + the new column /
+# media_dock engine features.
+
+# -- 9 base colors --
+background = "#141416"
+primary = "#F5820F"
+secondary = "#5A6B1E"
+text = "#F5F5EC"
+dim_text = "#8A8A84"
+status_bar = "#1A1A1E"
+prompt = "#8CEB32"
+output = "#D8D8D0"
+error = "#FF5040"
+
+# Extended palette
+accent = "#F5820F"
+success = "#8CEB32"
+warning = "#FFC81E"
+border_radius = 3
+shadow_intensity = 1
+gradient_enabled = true
+
+# -- Baked orange -> lime ribbon wallpaper (512x512 asset, cover fit) --
+[wallpaper]
+style = "image"
+source = "assets/wall.png"
+fit = "cover"
+
+# -- Bold "psix" wordmark, large and centred in the field (PSIX signature) --
+[[background_layers]]
+kind = "image"
+source = "assets/wordmark.png"
+alpha = 200
+
+[background_layers.position]
+anchor = "center"
+offset_x = 0.14
+offset_y = 0.06
+
+[background_layers.animation]
+pulse_speed = 0.15
+pulse_min_alpha = 0.85
+drift_x = 2.0
+
+# -- Motion language: PSIX assemble entrance + sliding pages --
+[transition]
+entrance = "assemble"
+entrance_ms = 750
+page_style = "slide"
+easing = "ease_out_cubic"
+fade_color = "#0A0A0C"
+
+# -- Bars: shaped chrome textures in layout.toml; tab pills + dock here --
+[bar_overrides]
+tab_texture_active = "assets/tab_active.png"
+tab_texture_inactive = "assets/tab_inactive.png"
+text_shadow = true
+text_shadow_color = "#000000B0"
+# Chrome art bakes its own accent edge; hide the procedural separator.
+separator_color = "#00000000"
+# Media-dock palette: dark transport pills, orange progress, lime volume.
+dock_button_fill = "#00000055"
+dock_button_glyph = "#F5F5EC"
+dock_progress_track = "#FFFFFF22"
+dock_progress_fill = "#F5820F"
+dock_vol_track = "#FFFFFF22"
+dock_vol_fill = "#8CEB32"
+
+# -- Themed software cursor (white arrow) --
+[cursor]
+texture = "assets/cursor.png"
+hotspot = [1, 1]
+
+# -- PSIX document icons: light page bodies, dark outline, dark labels --
+[icon_overrides]
+icon_style = "document"
+body_color = "#F0F0E8"
+fold_color = "#C8C8BE"
+outline_color = "#2A2A2E"
+label_color = "#141416"
+cursor_style = "stroke"
+cursor_color = "#F5820F"
+cursor_stroke_width = 2
+
+[geometry]
+statusbar_height = 28
+bottombar_height = 36
+tab_row_height = 16
+# Small icons so the left column stays sparse and PSIX-like.
+icon_width = 28
+icon_height = 32
+icon_stripe_h = 14
+icon_fold_size = 9
+focus_ring_color = "#F5820FAA"
+
+# -- Interactive widget states --
+[widget_states.button]
+normal_bg = "#3A3A40"
+hover_bg = "#55555C"
+pressed_bg = "#2A2A2E"
+disabled_bg = "#26262A"
+
+[widget_states.toggle]
+track_off = "#FFFFFF14"
+track_on = "#F5820F"
+thumb = "#F5F5EC"
+
+[widget_states.input]
+focus_border = "#F5820F"
+
+# -- App palettes --
+[app_themes.tv_guide]
+selected_bg = "#F5820F"
+live_badge = "#8CEB32"

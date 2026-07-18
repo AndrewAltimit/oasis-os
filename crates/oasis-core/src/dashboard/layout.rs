@@ -57,11 +57,22 @@ impl DashboardState {
         // Column layout (and any skin that sets `free_icon_cols`) caps the
         // auto-flow to a small number of columns so icons stack down the
         // left edge instead of spreading across the whole content area.
-        let cols = match self.config.free_cols {
-            Some(cap) => (cap.max(1) as usize).min(fit_cols),
-            None => fit_cols,
+        // When capped, use as many rows as needed to hold every icon within
+        // those columns -- icons keep stacking DOWN rather than spilling into
+        // extra columns off the right edge (which would defeat the cap). The
+        // skin controls how many fit cleanly per page via `icons_per_page`.
+        let (cols, rows) = match self.config.free_cols {
+            Some(cap) => {
+                let cols = (cap.max(1) as usize).min(fit_cols);
+                let rows = count.max(1).div_ceil(cols);
+                (cols, rows)
+            },
+            None => {
+                let cols = fit_cols;
+                let rows = ((self.config.grid_h as i32 / ch).max(1)) as usize;
+                (cols, rows)
+            },
         };
-        let rows = ((self.config.grid_h as i32 / ch).max(1)) as usize;
 
         // Pass 1: place icons with stored positions and mark the flow
         // cell nearest each one as occupied so auto-flow steers around it.
@@ -239,35 +250,37 @@ mod tests {
 
     #[test]
     fn column_layout_stacks_single_left_column() {
-        // grid_h=200 / cell 80 => 2 rows; free_cols=1 caps to one column,
-        // so five apps stack down the left edge (overflow into a 2nd column
-        // only once the first is full).
+        // free_cols=1 caps to a single column, so every icon stacks straight
+        // down the left edge -- the row count expands to hold them all
+        // (`ceil(count / cols)`) rather than spilling into a 2nd column once
+        // the height-derived rows are full.
         let dash = DashboardState::new(column_config(), test_apps(3));
         let origins = dash.page_cell_origins();
         assert_eq!(origins[0], (16, 48));
         assert_eq!(origins[1], (16, 128));
-        // Third icon overflows past the single column's 2 rows.
-        assert_eq!(origins[2].0, 16 + 80);
-        // All requested icons within the column share the left x.
-        let two = DashboardState::new(column_config(), test_apps(2)).page_cell_origins();
-        assert!(two.iter().all(|&(x, _)| x == 16));
+        // Third icon keeps stacking in the SAME single column, not a 2nd one.
+        assert_eq!(origins[2], (16, 208));
+        assert!(origins.iter().all(|&(x, _)| x == 16));
     }
 
     #[test]
     fn free_icon_cols_caps_free_layout() {
-        // A free skin that sets free_icon_cols=2 flows into 2 columns even
-        // though the 400px area fits 5.
+        // A free skin that sets free_icon_cols=2 flows into exactly 2 columns
+        // even though the 400px area fits 5 across; the rows expand so all
+        // icons stay within the capped columns.
         let mut cfg = free_config();
         cfg.free_cols = Some(2);
         cfg.icons_per_page = 5;
         let dash = DashboardState::new(cfg, test_apps(5));
         let origins = dash.page_cell_origins();
-        // 2 rows per column: col0 rows, col1 rows, then col2 overflow.
+        // ceil(5/2)=3 rows per column: col0 fills first, then col1.
         assert_eq!(origins[0], (16, 48));
         assert_eq!(origins[1], (16, 128));
-        assert_eq!(origins[2], (96, 48));
-        assert_eq!(origins[3], (96, 128));
-        assert_eq!(origins[4], (16 + 2 * 80, 48));
+        assert_eq!(origins[2], (16, 208));
+        assert_eq!(origins[3], (96, 48));
+        assert_eq!(origins[4], (96, 128));
+        // Never spills past the 2-column cap.
+        assert!(origins.iter().all(|&(x, _)| x == 16 || x == 96));
     }
 
     #[test]

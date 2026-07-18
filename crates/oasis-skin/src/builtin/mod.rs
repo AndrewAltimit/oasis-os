@@ -106,6 +106,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "highcontrast",
         "altimit",
         "psix-tribute",
+        "psix-hifi",
     ]
 }
 
@@ -299,11 +300,11 @@ mod tests {
 
     #[test]
     fn no_builtin_has_inherits_by_default() {
-        // Legacy built-in skins don't use inheritance; psix-tribute is the
-        // showcase for the `inherits` authoring pattern (based on classic).
+        // Legacy built-in skins don't use inheritance; the psix-* tributes
+        // are the showcase for the `inherits` authoring pattern (on classic).
         for name in builtin_names() {
             let skin = load_builtin(name).unwrap();
-            if *name == "psix-tribute" {
+            if *name == "psix-tribute" || *name == "psix-hifi" {
                 assert_eq!(skin.manifest.inherits.as_deref(), Some("classic"));
             } else {
                 assert!(

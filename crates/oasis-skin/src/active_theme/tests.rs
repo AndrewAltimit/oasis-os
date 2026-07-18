@@ -778,7 +778,7 @@ focus_ring_offset = 4
     fn cross_skin_palette_snapshot() {
         use crate::builtin::{builtin_names, load_builtin};
 
-        // Expected palette fingerprints. Pinned 2026-05-02. Regenerate
+        // Expected palette fingerprints. Pinned 2026-07-18. Regenerate
         // by uncommenting the print below and running once.
         let expected: &[(&str, &str)] = &[
             (
@@ -844,6 +844,10 @@ focus_ring_offset = 4
             (
                 "psix-tribute",
                 "#1A1A1E50|#1A1A1E5A|#F8A757FF|#F5820F1E|#F0F0E8FF|#F0F0E8FF|#F5820FFF|#ECECE4FF|#141423DC|#F5820FC8|#18181AFF|#262628FF|#F5820FDC",
+            ),
+            (
+                "psix-hifi",
+                "#1A1A1E50|#1A1A1E5A|#F8A757FF|#F5820F1E|#F5F5ECFF|#F5F5ECFF|#F5820FFF|#F0F0E8FF|#141423DC|#F5820FC8|#18181AFF|#262628FF|#F5820FDC",
             ),
         ];
 
