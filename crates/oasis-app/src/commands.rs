@@ -4,7 +4,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{SdiCore, SdiText};
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
+use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, resolve_skin};
@@ -179,7 +179,12 @@ pub fn process_command_output(
             return skin_swap;
         },
         Err(e) => {
-            state.terminal.output_lines.push(format!("error: {e}"));
+            // Red via the skin's ANSI palette (SGR 31); the terminal
+            // renderer resolves the escape into a themed colored run.
+            state
+                .terminal
+                .output_lines
+                .push(oasis_core::ansi::colorize(&format!("error: {e}"), 31));
         },
     }
     None
@@ -213,7 +218,13 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
 
             let dash_config =
                 DashboardConfig::from_features(&swapped.features, &state.active_theme);
-            let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
+            let apps = discover_apps_themed(
+                vfs,
+                "/apps",
+                Some("OASISOS"),
+                &state.active_theme.icon.fallback_colors,
+            )
+            .unwrap_or_default();
             state.ui.dashboard = DashboardState::new(dash_config, apps);
             crate::icon_drag::load_icon_positions(
                 &state.settings,
@@ -612,7 +623,13 @@ pub fn apply_resolution_change(
 
     // Rebuild dashboard + bars for the new layout grid.
     let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
-    let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
+    let apps = discover_apps_themed(
+        vfs,
+        "/apps",
+        Some("OASISOS"),
+        &state.active_theme.icon.fallback_colors,
+    )
+    .unwrap_or_default();
     state.ui.dashboard = DashboardState::new(dash_config, apps);
     crate::icon_drag::load_icon_positions(
         &state.settings,
@@ -1120,7 +1137,10 @@ mod tests {
         let result = process_command_output(Err(err), &mut state);
         assert!(result.is_none());
         assert_eq!(state.terminal.output_lines.len(), 1);
-        assert!(state.terminal.output_lines[0].starts_with("error:"));
+        // Errors are wrapped in a red SGR sequence for the terminal UI.
+        let line = &state.terminal.output_lines[0];
+        assert!(line.starts_with("\u{1b}[31m"));
+        assert!(oasis_core::ansi::strip_sgr(line).starts_with("error:"));
     }
 
     #[test]

@@ -29,6 +29,22 @@ The terminal in `oasis-terminal/src/` supports:
 `Environment::profile_paths()` and `populate_profile()` honour shell-like
 startup files for site-local aliases.
 
+### SGR color output
+
+Command output may embed ANSI SGR **foreground color** escape sequences,
+which the terminal renderer resolves against the active skin's 16-slot
+`[palette]` (see `docs/skin-authoring.md`):
+
+- `ESC[30m`..`ESC[37m` — normal colors, `ESC[90m`..`ESC[97m` — bright colors
+- `ESC[39m` — reset foreground to the default output color
+- `ESC[0m` / `ESC[m` — full reset
+
+This is deliberately **not** a VT100 emulator: bold, underline, background
+colors, 256-color/truecolor extensions, and cursor-movement sequences are
+ignored (non-SGR escape sequences are stripped). Built-in emitters today:
+`ls` and `tree` color directories bright blue (SGR 94), and the desktop
+shell prints command errors in red (SGR 31).
+
 ## Core filesystem (`oasis-terminal/src/core_commands.rs`)
 
 | Command | Usage | Description |

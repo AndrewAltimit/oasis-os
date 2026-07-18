@@ -15,13 +15,98 @@ use crate::SkinTheme;
 use crate::theme::parse_hex_color;
 
 use super::{
-    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme, ScrollbarTheme,
-    StartMenuTheme, ToastTheme, WallpaperTheme,
+    ActiveTheme, AnsiPalette, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme,
+    ScrollbarTheme, StartMenuTheme, ToastTheme, WallpaperTheme,
 };
 
 /// Parse an optional hex color override, falling back to `fallback`.
 fn ov(opt: Option<&String>, fallback: Color) -> Color {
     opt.and_then(|s| parse_hex_color(s)).unwrap_or(fallback)
+}
+
+/// Default mouse cursor arrow fill (matches the legacy white fill).
+pub(crate) const CURSOR_FILL_DEFAULT: Color = Color::rgb(255, 255, 255);
+/// Default mouse cursor arrow outline (matches the legacy black outline).
+pub(crate) const CURSOR_OUTLINE_DEFAULT: Color = Color::rgb(0, 0, 0);
+/// Default LED accent on the vector "data" icon.
+pub(crate) const DATA_LED_DEFAULT: Color = Color::rgb(0, 200, 100);
+/// Default start-menu item fallback color.
+pub(crate) const ITEM_FALLBACK_DEFAULT: Color = Color::rgb(100, 100, 100);
+/// Default background layer color when a layer omits `color`.
+pub(crate) const LAYER_COLOR_DEFAULT: Color = Color::rgba(255, 255, 255, 18);
+
+/// Default fallback colors cycled for discovered apps without an ICON0.
+/// Must stay identical to the historical `FALLBACK_COLORS` literals.
+pub(crate) fn default_app_fallback_colors() -> Vec<Color> {
+    vec![
+        Color::rgb(70, 130, 180),
+        Color::rgb(60, 179, 113),
+        Color::rgb(218, 165, 32),
+        Color::rgb(178, 102, 178),
+        Color::rgb(205, 92, 92),
+        Color::rgb(100, 149, 237),
+    ]
+}
+
+/// Derive a 16-color ANSI palette from the skin's base colors.
+///
+/// Deterministic and simple: the six chromatic hues use the standard
+/// ANSI hue angles (red 0°, yellow 60°, green 120°, cyan 180°,
+/// blue 240°, magenta 300°) tinted toward the skin — saturation comes
+/// from the primary color, lightness from the terminal output color
+/// (both clamped into readable bands). Bright variants lift lightness.
+/// `black`/`bright_black` are primary-tinted darks; `white` is the
+/// terminal output color and `bright_white` the skin text color.
+pub(crate) fn derive_ansi_palette(primary: Color, output: Color, text: Color) -> AnsiPalette {
+    use oasis_types::color::{hsl_to_rgb, rgb_to_hsl};
+
+    let (ph, ps, _) = rgb_to_hsl(primary);
+    let (_, _, ol) = rgb_to_hsl(output);
+
+    // Clamp so grey primaries still yield distinguishable hues and dim
+    // or very bright output colors stay readable.
+    let s = ps.clamp(0.45, 0.90);
+    let l = ol.clamp(0.35, 0.65);
+    let lb = (l + 0.15).min(0.80);
+
+    let normal = |h: f32| hsl_to_rgb(h, s, l);
+    let bright = |h: f32| hsl_to_rgb(h, s, lb);
+
+    AnsiPalette {
+        colors: [
+            hsl_to_rgb(ph, s * 0.5, 0.10), // black
+            normal(0.0),                   // red
+            normal(120.0),                 // green
+            normal(60.0),                  // yellow
+            normal(240.0),                 // blue
+            normal(300.0),                 // magenta
+            normal(180.0),                 // cyan
+            output,                        // white
+            hsl_to_rgb(ph, s * 0.5, 0.35), // bright_black
+            bright(0.0),                   // bright_red
+            bright(120.0),                 // bright_green
+            bright(60.0),                  // bright_yellow
+            bright(240.0),                 // bright_blue
+            bright(300.0),                 // bright_magenta
+            bright(180.0),                 // bright_cyan
+            text,                          // bright_white
+        ],
+    }
+}
+
+/// Apply `[palette]` overrides on top of a derived ANSI palette.
+fn apply_palette_overrides(
+    mut palette: AnsiPalette,
+    overrides: Option<&crate::theme::PaletteOverrides>,
+) -> AnsiPalette {
+    if let Some(p) = overrides {
+        for (idx, slot) in palette.colors.iter_mut().enumerate() {
+            if let Some(c) = p.slot(idx).and_then(|s| parse_hex_color(s)) {
+                *slot = c;
+            }
+        }
+    }
+    palette
 }
 
 impl ActiveTheme {
@@ -59,7 +144,16 @@ impl ActiveTheme {
             with_alpha(primary, 100),
         );
 
+        let ansi = apply_palette_overrides(
+            derive_ansi_palette(primary, skin.output_color(), text),
+            skin.palette.as_ref(),
+        );
+        let cur = skin.cursor.as_ref();
+
         Self {
+            ansi,
+            cursor_fill: ov(cur.and_then(|c| c.fill.as_ref()), CURSOR_FILL_DEFAULT),
+            cursor_outline: ov(cur.and_then(|c| c.outline.as_ref()), CURSOR_OUTLINE_DEFAULT),
             bar,
             icon,
             menu,
@@ -580,6 +674,20 @@ impl ActiveTheme {
                 .and_then(|i| i.icon_container.clone())
                 .unwrap_or_else(|| "none".to_string()),
             container_padding: ico.and_then(|i| i.icon_container_padding).unwrap_or(3),
+            data_led_color: ov(
+                ico.and_then(|i| i.data_led_color.as_ref()),
+                DATA_LED_DEFAULT,
+            ),
+            fallback_colors: ico
+                .and_then(|i| i.fallback_colors.as_ref())
+                .map(|colors| {
+                    colors
+                        .iter()
+                        .filter_map(|s| parse_hex_color(s))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(default_app_fallback_colors),
         }
     }
 
@@ -669,6 +777,10 @@ impl ActiveTheme {
             button_x: sm.and_then(|s| s.button_x).unwrap_or(4),
             panel_x: sm.and_then(|s| s.panel_x).unwrap_or(2),
             item_separator: sm.and_then(|s| s.item_separator).unwrap_or(false),
+            item_fallback_color: ov(
+                sm.and_then(|s| s.item_fallback_color.as_ref()),
+                ITEM_FALLBACK_DEFAULT,
+            ),
             item_separator_color: {
                 let border = ov(
                     sm.and_then(|s| s.panel_border.as_ref()),
@@ -989,13 +1101,17 @@ impl ActiveTheme {
     ) -> Vec<oasis_vector::BackgroundLayer> {
         let bg_perf = skin.background_performance.as_ref();
         let bg_max_layers = bg_perf.and_then(|p| p.max_layers).unwrap_or(8);
+        let default_color = ov(
+            bg_perf.and_then(|p| p.default_layer_color.as_ref()),
+            LAYER_COLOR_DEFAULT,
+        );
 
         layers
             .map(|layers| {
                 layers
                     .iter()
                     .take(bg_max_layers as usize)
-                    .filter_map(|cfg| Self::convert_background_layer(cfg, &ov))
+                    .filter_map(|cfg| Self::convert_background_layer(cfg, default_color, &ov))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
@@ -1104,6 +1220,8 @@ impl ActiveTheme {
             blink_interval: 45,
             container_style: "none".to_string(),
             container_padding: 3,
+            data_led_color: DATA_LED_DEFAULT,
+            fallback_colors: default_app_fallback_colors(),
         };
 
         // -- Start menu theme --
@@ -1145,6 +1263,7 @@ impl ActiveTheme {
             panel_x: 2,
             item_separator: false,
             item_separator_color: with_alpha(with_alpha(text, 40), 64),
+            item_fallback_color: ITEM_FALLBACK_DEFAULT,
         };
 
         // -- App screen theme --
@@ -1373,6 +1492,9 @@ impl ActiveTheme {
             cursor_scale: 1,
             cursor_texture: None,
             cursor_hotspot: (0, 0),
+            cursor_fill: CURSOR_FILL_DEFAULT,
+            cursor_outline: CURSOR_OUTLINE_DEFAULT,
+            ansi: derive_ansi_palette(primary, output, text),
             transition_fade_color: darken(background, 0.3),
             transition_entrance: "fade".to_string(),
             transition_entrance_frames: 45,
@@ -1401,11 +1523,12 @@ impl ActiveTheme {
     /// Convert a TOML background layer config to a runtime `BackgroundLayer`.
     fn convert_background_layer(
         cfg: &crate::theme::BackgroundLayerConfig,
+        default_color: Color,
         ov_fn: &dyn Fn(Option<&String>, Color) -> Color,
     ) -> Option<oasis_vector::BackgroundLayer> {
         use oasis_vector::background::{BackgroundLayer, LayerKind};
 
-        let color = ov_fn(cfg.color.as_ref(), Color::rgba(255, 255, 255, 18));
+        let color = ov_fn(cfg.color.as_ref(), default_color);
 
         let kind = match cfg.kind.as_str() {
             "grid" => LayerKind::Grid {

@@ -51,6 +51,7 @@ pub use oasis_wm as wm;
 // -----------------------------------------------------------------------
 
 pub mod agent;
+pub mod ansi;
 pub mod apps;
 pub mod bottombar;
 pub mod cursor;

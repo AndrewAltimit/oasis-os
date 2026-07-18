@@ -36,7 +36,7 @@ use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::CursorState;
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
+use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
@@ -118,10 +118,11 @@ fn main() -> Result<()> {
     let mut splash: Option<boot_splash::BootSplash> = if skip_splash {
         None
     } else {
-        match boot_splash::BootSplash::start(
+        match boot_splash::BootSplash::start_themed(
             &mut backend,
             config.screen_width,
             config.screen_height,
+            boot_splash::SplashTheme::from_skin_theme(&skin.theme),
         ) {
             Ok(s) => Some(s),
             Err(e) => {
@@ -318,7 +319,12 @@ fn main() -> Result<()> {
 
     // Discover apps and merge plugin-registered apps.
     splash_status!("Indexing dashboard apps...");
-    let mut apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
+    let mut apps = discover_apps_themed(
+        &vfs,
+        "/apps",
+        Some("OASISOS"),
+        &active_theme.icon.fallback_colors,
+    )?;
     for reg in plugin_manager.plugin_apps() {
         apps.push(reg.to_app_entry());
     }

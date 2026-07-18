@@ -43,12 +43,13 @@ define_command!(
         }
         let mut lines = Vec::new();
         for e in &entries {
-            let suffix = if e.kind == EntryKind::Directory {
-                "/"
+            if e.kind == EntryKind::Directory {
+                // Directories render in the skin's bright-blue ANSI slot
+                // (SGR 94); the shell UI resolves it via the ANSI palette.
+                lines.push(format!("\u{1b}[94m{}/\u{1b}[0m", e.name));
             } else {
-                ""
-            };
-            lines.push(format!("{}{suffix}", e.name));
+                lines.push(e.name.clone());
+            }
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }

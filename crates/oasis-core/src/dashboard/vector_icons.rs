@@ -69,9 +69,9 @@ fn altimit_icon(color: Color, index: usize, frame: u32, cfg: &IconTheme) -> Icon
         4 => icons::icon_audio(color),
         _ if cfg.blink_enabled && frame > 0 => {
             let visible = anim::blink_visible(frame, cfg.blink_interval);
-            icons::icon_data_animated(color, Color::rgb(0, 200, 100), visible)
+            icons::icon_data_animated(color, cfg.data_led_color, visible)
         },
-        _ => icons::icon_data(color, Color::rgb(0, 200, 100)),
+        _ => icons::icon_data(color, cfg.data_led_color),
     }
 }
 

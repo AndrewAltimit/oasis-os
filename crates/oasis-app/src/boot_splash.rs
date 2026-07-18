@@ -64,6 +64,101 @@ const DEFAULT_BIOS_LINES: [&str; 7] = [
     "STARTING DISPLAY MANAGER",
 ];
 
+/// Colors used by the boot splash, extracted from the historical
+/// hardcoded PSIX-purple literals.
+///
+/// Defaults are byte-identical to the previous hardcoded values, so a
+/// skin without a `[boot]` theme table renders exactly as before. The
+/// skin is resolved *before* the splash starts (see `main()`), so the
+/// full boot sequence — BIOS banner and synthwave splash — can be
+/// themed from `theme.toml`.
+#[derive(Debug, Clone)]
+pub struct SplashTheme {
+    /// Sky gradient stop colors, top to bottom (positions fixed at
+    /// 0.0, 0.2, 0.5, 0.8, 0.95, 1.0).
+    pub sky_stops: [Color; 6],
+    /// Ground gradient stop colors, top to bottom (positions fixed at
+    /// 0.0, 0.05, 0.3, 1.0).
+    pub ground_stops: [Color; 4],
+    /// BIOS banner interior fill (alpha is animated at render time).
+    pub banner_bg: Color,
+    /// BIOS banner border color.
+    pub banner_border: Color,
+    /// Chrome accents: status-line prefix and phase progress bar.
+    pub chrome: Color,
+    /// Status line text color.
+    pub text: Color,
+    /// BIOS log line + banner subtitle text color.
+    pub bios_text: Color,
+}
+
+impl Default for SplashTheme {
+    fn default() -> Self {
+        Self {
+            sky_stops: [
+                Color::rgb(2, 0, 26),
+                Color::rgb(5, 0, 68),
+                Color::rgb(21, 0, 136),
+                Color::rgb(85, 0, 204),
+                Color::rgb(170, 85, 255),
+                Color::rgb(255, 255, 255),
+            ],
+            ground_stops: [
+                Color::rgb(255, 255, 255),
+                Color::rgb(106, 0, 204),
+                Color::rgb(21, 0, 136),
+                Color::rgb(2, 0, 26),
+            ],
+            banner_bg: Color::rgb(18, 14, 36),
+            banner_border: Color::rgb(170, 136, 255),
+            chrome: Color::rgb(170, 136, 255),
+            text: Color::rgb(230, 220, 255),
+            bios_text: Color::rgb(204, 204, 204),
+        }
+    }
+}
+
+impl SplashTheme {
+    /// Build a splash theme from the skin's optional `[boot]` overrides.
+    ///
+    /// Unset fields keep the default PSIX-purple values.
+    pub fn from_skin_theme(theme: &oasis_core::skin::SkinTheme) -> Self {
+        use oasis_core::skin::parse_hex_color;
+
+        let mut t = Self::default();
+        let Some(ref boot) = theme.boot else {
+            return t;
+        };
+
+        let ov = |slot: &mut Color, value: &Option<String>| {
+            if let Some(c) = value.as_deref().and_then(parse_hex_color) {
+                *slot = c;
+            }
+        };
+        ov(&mut t.banner_bg, &boot.banner_bg);
+        ov(&mut t.banner_border, &boot.banner_border);
+        ov(&mut t.chrome, &boot.chrome);
+        ov(&mut t.text, &boot.text);
+        ov(&mut t.bios_text, &boot.bios_text);
+
+        if let Some(ref stops) = boot.sky_stops {
+            for (slot, s) in t.sky_stops.iter_mut().zip(stops.iter()) {
+                if let Some(c) = parse_hex_color(s) {
+                    *slot = c;
+                }
+            }
+        }
+        if let Some(ref stops) = boot.ground_stops {
+            for (slot, s) in t.ground_stops.iter_mut().zip(stops.iter()) {
+                if let Some(c) = parse_hex_color(s) {
+                    *slot = c;
+                }
+            }
+        }
+        t
+    }
+}
+
 /// Pre-computed GPU textures for splash effects.
 struct SplashTextures {
     /// Full-screen CRT vignette (dark edges, clear center).
@@ -150,16 +245,25 @@ pub struct BootSplash {
     /// Live "currently loading" status line below the BIOS block.
     /// Updates freely — shows in-flight work with a rotating spinner.
     status_line: String,
+    /// Skin-derived splash colors (defaults to the PSIX-purple look).
+    theme: SplashTheme,
     skipped: bool,
 }
 
 impl BootSplash {
-    /// Start the splash. Pre-computes GPU textures for the animation.
+    /// Start the splash with skin-derived colors (pass
+    /// `SplashTheme::default()` for the classic PSIX-purple look).
+    /// Pre-computes GPU textures for the animation.
     ///
     /// The caller should call [`run_until`](Self::run_until) repeatedly,
     /// interleaving real init work between calls. When done (or skipped),
     /// call [`finish`](Self::finish) to fade out and release textures.
-    pub fn start(backend: &mut impl SdiBackend, screen_w: u32, screen_h: u32) -> Result<Self> {
+    pub fn start_themed(
+        backend: &mut impl SdiBackend,
+        screen_w: u32,
+        screen_h: u32,
+        theme: SplashTheme,
+    ) -> Result<Self> {
         let sx = screen_w as f32 / 1280.0;
         let sy = screen_h as f32 / 720.0;
         let scale = sx.min(sy);
@@ -175,6 +279,7 @@ impl BootSplash {
             textures,
             bios_lines: DEFAULT_BIOS_LINES.map(String::from),
             status_line: String::new(),
+            theme,
             skipped: false,
         })
     }
@@ -321,6 +426,7 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.textures,
+                &self.theme,
             )?;
             paint_bios_screen(
                 backend,
@@ -329,6 +435,7 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.bios_lines,
+                &self.theme,
             )?;
             paint_bios_status_line(
                 backend,
@@ -338,6 +445,7 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.status_line,
+                &self.theme,
             )?;
         }
 
@@ -372,6 +480,7 @@ impl BootSplash {
                 self.sy,
                 self.scale,
                 &self.textures,
+                &self.theme,
             )?;
         }
 
@@ -645,9 +754,10 @@ fn paint_bios_screen(
     sy: f32,
     scale: f32,
     lines: &[String; 7],
+    theme: &SplashTheme,
 ) -> Result<()> {
     let fs = (22.0 * scale).max(8.0) as u16;
-    let c = Color::rgb(204, 204, 204);
+    let c = theme.bios_text;
 
     let x = (40.0 * sx) as i32;
     let y_positions = [60.0, 95.0, 150.0, 185.0, 220.0, 275.0, 310.0];
@@ -695,6 +805,7 @@ fn paint_bios_screen(
 
 /// Paint the BIOS header banner: miniature \[OASIS\] glyph, subtitle, and
 /// a phase progress bar. Fades in over the first 0.2s of boot.
+#[allow(clippy::too_many_arguments)]
 fn paint_bios_banner(
     backend: &mut impl SdiBackend,
     elapsed: f32,
@@ -703,6 +814,7 @@ fn paint_bios_banner(
     sy: f32,
     scale: f32,
     textures: &SplashTextures,
+    theme: &SplashTheme,
 ) -> Result<()> {
     // Banner fades in over the first 0.2s so it feels like the monitor
     // warming up before the kernel starts printing.
@@ -718,16 +830,17 @@ fn paint_bios_banner(
     let bh = (44.0 * sy) as u32;
 
     // Subtle dark fill for the banner interior.
+    let bg = theme.banner_bg;
     backend.fill_rect(
         bx,
         by,
         bw,
         bh,
-        Color::rgba(18, 14, 36, (banner_alpha * 180.0) as u8),
+        Color::rgba(bg.r, bg.g, bg.b, (banner_alpha * 180.0) as u8),
     )?;
 
     // 1px top border + 2px bottom border (retro CRT frame).
-    let border_c = apply_alpha(Color::rgb(170, 136, 255), banner_alpha);
+    let border_c = apply_alpha(theme.banner_border, banner_alpha);
     backend.fill_rect(bx, by, bw, 1, border_c)?;
     backend.fill_rect(bx, by + bh as i32 - 2, bw, 2, border_c)?;
     // Left/right edge accents.
@@ -758,7 +871,7 @@ fn paint_bios_banner(
     // Right-side subtitle.
     let subtitle = "BIOS / RUNTIME SERVICES CORE v7.0.4";
     let sub_fs = (14.0 * scale).max(6.0) as u16;
-    let sub_c = apply_alpha(Color::rgb(204, 204, 204), banner_alpha);
+    let sub_c = apply_alpha(theme.bios_text, banner_alpha);
     let sub_w = backend.measure_text(subtitle, sub_fs) as i32;
     let sub_x = bx + bw as i32 - sub_w - (16.0 * sx) as i32;
     let sub_y = by + (bh as i32 - sub_fs as i32) / 2;
@@ -772,12 +885,13 @@ fn paint_bios_banner(
     let bar_full_w = bw.saturating_sub(4);
     let bar_fill_w = (bar_full_w as f32 * phase_t) as u32;
     // Track: faint background.
+    let chrome = theme.chrome;
     backend.fill_rect(
         bx + 2,
         bar_y,
         bar_full_w,
         bar_h,
-        Color::rgba(170, 136, 255, (banner_alpha * 40.0) as u8),
+        Color::rgba(chrome.r, chrome.g, chrome.b, (banner_alpha * 40.0) as u8),
     )?;
     // Fill: bright.
     if bar_fill_w > 0 {
@@ -786,7 +900,7 @@ fn paint_bios_banner(
             bar_y,
             bar_fill_w,
             bar_h,
-            Color::rgba(170, 136, 255, (banner_alpha * 220.0) as u8),
+            Color::rgba(chrome.r, chrome.g, chrome.b, (banner_alpha * 220.0) as u8),
         )?;
     }
 
@@ -900,6 +1014,7 @@ fn paint_bios_status_line(
     sy: f32,
     scale: f32,
     status: &str,
+    theme: &SplashTheme,
 ) -> Result<()> {
     if status.is_empty() {
         return Ok(());
@@ -907,8 +1022,8 @@ fn paint_bios_status_line(
     let fs = (18.0 * scale).max(7.0) as u16;
     let x = (40.0 * sx) as i32;
     let y = (360.0 * sy) as i32;
-    let chrome_c = Color::rgb(170, 136, 255);
-    let text_c = Color::rgb(230, 220, 255);
+    let chrome_c = theme.chrome;
+    let text_c = theme.text;
 
     // Rotating spinner glyph — cycles ASCII style so it renders via the
     // bitmap font without needing unicode block chars.
@@ -964,38 +1079,38 @@ fn paint_splash_screen(
     sy: f32,
     scale: f32,
     textures: &SplashTextures,
+    theme: &SplashTheme,
 ) -> Result<()> {
     let splash_t = elapsed - 3.5;
     let splash_opacity = (splash_t / 0.01).clamp(0.0, 1.0); // instant reveal
 
-    // Sky gradient (6 stops, vertical).
+    // Sky gradient (6 stops, vertical). Stop positions are fixed; the
+    // colors come from the splash theme (`[boot] sky_stops`).
     let sky_h = (500.0 * sy) as u32;
-    let sky_stops: &[(f32, Color)] = &[
-        (0.00, Color::rgb(2, 0, 26)),
-        (0.20, Color::rgb(5, 0, 68)),
-        (0.50, Color::rgb(21, 0, 136)),
-        (0.80, Color::rgb(85, 0, 204)),
-        (0.95, Color::rgb(170, 85, 255)),
-        (1.00, Color::rgb(255, 255, 255)),
-    ];
-    paint_vertical_gradient(backend, 0, 0, screen_w, sky_h, sky_stops, splash_opacity)?;
+    const SKY_POSITIONS: [f32; 6] = [0.00, 0.20, 0.50, 0.80, 0.95, 1.00];
+    let sky_stops: Vec<(f32, Color)> = SKY_POSITIONS
+        .iter()
+        .zip(theme.sky_stops.iter())
+        .map(|(&p, &c)| (p, c))
+        .collect();
+    paint_vertical_gradient(backend, 0, 0, screen_w, sky_h, &sky_stops, splash_opacity)?;
 
     // Ground gradient (4 stops, vertical) — extends to screen bottom.
     let ground_y = sky_h as i32;
     let ground_h = screen_h.saturating_sub(sky_h);
-    let ground_stops: &[(f32, Color)] = &[
-        (0.00, Color::rgb(255, 255, 255)),
-        (0.05, Color::rgb(106, 0, 204)),
-        (0.30, Color::rgb(21, 0, 136)),
-        (1.00, Color::rgb(2, 0, 26)),
-    ];
+    const GROUND_POSITIONS: [f32; 4] = [0.00, 0.05, 0.30, 1.00];
+    let ground_stops: Vec<(f32, Color)> = GROUND_POSITIONS
+        .iter()
+        .zip(theme.ground_stops.iter())
+        .map(|(&p, &c)| (p, c))
+        .collect();
     paint_vertical_gradient(
         backend,
         0,
         ground_y,
         screen_w,
         ground_h,
-        ground_stops,
+        &ground_stops,
         splash_opacity,
     )?;
 

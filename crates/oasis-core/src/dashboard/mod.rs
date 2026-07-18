@@ -9,7 +9,7 @@ mod labels;
 mod layout;
 mod vector_icons;
 
-pub use discovery::{AppEntry, discover_apps};
+pub use discovery::{AppEntry, discover_apps, discover_apps_themed};
 
 use std::collections::HashMap;
 

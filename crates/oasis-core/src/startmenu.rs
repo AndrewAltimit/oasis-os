@@ -143,7 +143,7 @@ impl StartMenuState {
             colors
                 .get(idx)
                 .copied()
-                .unwrap_or(Color::rgb(100, 100, 100))
+                .unwrap_or(at.menu.item_fallback_color)
         };
         vec![
             StartMenuItem {

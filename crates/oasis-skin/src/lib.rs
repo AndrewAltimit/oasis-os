@@ -15,8 +15,8 @@ pub mod strings;
 pub mod theme;
 
 pub use active_theme::{
-    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme, ScrollbarTheme,
-    StartMenuTheme, ToastTheme, WallpaperTheme,
+    ActiveTheme, AnsiPalette, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme,
+    ScrollbarTheme, StartMenuTheme, ToastTheme, WallpaperTheme,
 };
 pub use assets::SkinAsset;
 pub use corrupted::{CorruptedModifiers, SimpleRng};
@@ -24,8 +24,8 @@ pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};
 pub use strings::SkinStrings;
 pub use theme::{
-    AppOverrides, BarOverrides, BrowserOverrides, IconOverrides, OskOverrides, SkinTheme,
-    WmThemeOverrides,
+    AppOverrides, BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, IconOverrides,
+    OskOverrides, PaletteOverrides, SkinTheme, WmThemeOverrides, parse_hex_color,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

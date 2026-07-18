@@ -69,11 +69,32 @@ const FALLBACK_COLORS: &[Color] = &[
 /// the directory name as the title.
 ///
 /// `skip_self` is the directory name to exclude (the OS's own directory).
+/// Uses the built-in fallback color cycle; see [`discover_apps_themed`]
+/// for skin-driven colors.
 pub fn discover_apps(
     vfs: &dyn Vfs,
     scan_path: &str,
     skip_self: Option<&str>,
 ) -> Result<Vec<AppEntry>> {
+    discover_apps_themed(vfs, scan_path, skip_self, FALLBACK_COLORS)
+}
+
+/// Scan a VFS directory for applications with themed fallback colors.
+///
+/// Same as [`discover_apps`], but apps without an ICON0 cycle through
+/// `fallback_colors` (`ActiveTheme::icon.fallback_colors`). An empty
+/// slice falls back to the built-in cycle.
+pub fn discover_apps_themed(
+    vfs: &dyn Vfs,
+    scan_path: &str,
+    skip_self: Option<&str>,
+    fallback_colors: &[Color],
+) -> Result<Vec<AppEntry>> {
+    let fallback_colors = if fallback_colors.is_empty() {
+        FALLBACK_COLORS
+    } else {
+        fallback_colors
+    };
     let entries = vfs.readdir(scan_path)?;
     let mut apps = Vec::new();
     let mut color_idx = 0;
@@ -95,7 +116,7 @@ pub fn discover_apps(
         };
 
         let eboot_path = format!("{dir_path}/EBOOT.PBP");
-        let color = FALLBACK_COLORS[color_idx % FALLBACK_COLORS.len()];
+        let color = fallback_colors[color_idx % fallback_colors.len()];
         color_idx += 1;
 
         if vfs.exists(&eboot_path) {

@@ -73,6 +73,8 @@ impl Default for ActiveTheme {
                 blink_interval: 45,
                 container_style: "none".to_string(),
                 container_padding: 3,
+                data_led_color: super::derive::DATA_LED_DEFAULT,
+                fallback_colors: super::derive::default_app_fallback_colors(),
             },
             menu: StartMenuTheme {
                 panel_bg: Color::rgba(20, 20, 35, 220),
@@ -119,6 +121,7 @@ impl Default for ActiveTheme {
                 panel_x: 2,
                 item_separator: false,
                 item_separator_color: Color::rgba(255, 255, 255, 40),
+                item_fallback_color: super::derive::ITEM_FALLBACK_DEFAULT,
             },
             app: AppScreenTheme {
                 bg: Color::rgb(12, 12, 20),
@@ -244,6 +247,13 @@ impl Default for ActiveTheme {
             cursor_scale: 1,
             cursor_texture: None,
             cursor_hotspot: (0, 0),
+            cursor_fill: super::derive::CURSOR_FILL_DEFAULT,
+            cursor_outline: super::derive::CURSOR_OUTLINE_DEFAULT,
+            ansi: super::derive::derive_ansi_palette(
+                Color::rgb(0x32, 0x64, 0xC8),
+                Color::rgb(204, 204, 204),
+                Color::WHITE,
+            ),
             transition_fade_color: Color::BLACK,
             transition_entrance: "fade".to_string(),
             transition_entrance_frames: 45,

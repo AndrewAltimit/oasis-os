@@ -124,6 +124,9 @@ pub fn hide_media_page(sdi: &mut SdiRegistry) {
     }
 }
 
+/// Maximum extra colored-run objects per terminal line (`term_line_{i}_r{j}`).
+const MAX_LINE_RUNS: usize = 8;
+
 /// Set terminal-mode SDI objects visible/hidden.
 pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
@@ -137,6 +140,16 @@ pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
         }
         if let Ok(obj) = sdi.get_mut(&name) {
             obj.visible = visible;
+        }
+        // Extra colored-run objects for this line (SGR spans).
+        for j in 1..=MAX_LINE_RUNS {
+            let run_name = format!("term_line_{i}_r{j}");
+            if !sdi.contains(&run_name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&run_name) {
+                obj.visible = visible;
+            }
         }
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
@@ -182,23 +195,101 @@ pub fn setup_terminal_objects(
     }
 
     // Show visible lines from the scrollback buffer, offset by scroll.
+    //
+    // Lines containing SGR escape sequences (see [`crate::ansi`]) are
+    // split into colored runs: the first run reuses the `term_line_{i}`
+    // object; subsequent runs get `term_line_{i}_r{j}` objects offset by
+    // the measured width of the preceding text. Plain lines behave
+    // exactly as before (single object, theme output color).
+    //
+    // Run offsets use the shared bitmap-font metrics
+    // (`bitmap_measure_text`) since no backend is available here. On
+    // backends that render with a different font (skin TTF fonts, PSP
+    // system font) colored runs may drift by a few pixels; plain lines
+    // are unaffected.
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
     let output_color = colors.output;
     for i in 0..visible_lines {
         let name = format!("term_line_{i}");
+        let line_x = margin + 4;
+        let line_y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
         if !sdi.contains(&name) {
             let obj = sdi.create(&name);
-            obj.x = margin + 4;
-            obj.y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
+            obj.x = line_x;
+            obj.y = line_y;
             obj.font_size = at.font_body;
             obj.text_color = output_color;
             obj.w = 0;
             obj.h = 0;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.text = output_lines.get(start + i).cloned();
-            obj.visible = true;
+
+        let raw = output_lines.get(start + i);
+        let mut extra_runs = 0usize;
+        match raw {
+            Some(line) if crate::ansi::has_sgr(line) => {
+                let runs = crate::ansi::parse_runs(line);
+                let run_color = |c: Option<u8>| match c {
+                    Some(slot) => at.ansi.color(slot as usize),
+                    None => output_color,
+                };
+                let mut x = line_x;
+                for (j, run) in runs.iter().enumerate() {
+                    let width = crate::backend::bitmap_measure_text(run.text, at.font_body) as i32;
+                    if j == 0 {
+                        if let Ok(obj) = sdi.get_mut(&name) {
+                            obj.text = Some(run.text.to_string());
+                            obj.text_color = run_color(run.color);
+                            obj.x = x;
+                            obj.visible = true;
+                        }
+                    } else if j <= MAX_LINE_RUNS {
+                        let run_name = format!("term_line_{i}_r{j}");
+                        if !sdi.contains(&run_name) {
+                            let obj = sdi.create(&run_name);
+                            obj.font_size = at.font_body;
+                            obj.w = 0;
+                            obj.h = 0;
+                        }
+                        if let Ok(obj) = sdi.get_mut(&run_name) {
+                            obj.x = x;
+                            obj.y = line_y;
+                            obj.text = Some(run.text.to_string());
+                            obj.text_color = run_color(run.color);
+                            obj.visible = true;
+                        }
+                        extra_runs = j;
+                    } else {
+                        // Beyond the run budget: append to the last object.
+                        let run_name = format!("term_line_{i}_r{MAX_LINE_RUNS}");
+                        if let Ok(obj) = sdi.get_mut(&run_name)
+                            && let Some(ref mut text) = obj.text
+                        {
+                            text.push_str(run.text);
+                        }
+                    }
+                    x += width;
+                }
+            },
+            _ => {
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.text = raw.cloned();
+                    obj.text_color = output_color;
+                    obj.x = line_x;
+                    obj.visible = true;
+                }
+            },
+        }
+
+        // Hide leftover run objects from a previous, more colorful frame.
+        for j in (extra_runs + 1)..=MAX_LINE_RUNS {
+            let run_name = format!("term_line_{i}_r{j}");
+            if !sdi.contains(&run_name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&run_name) {
+                obj.visible = false;
+            }
         }
     }
 
@@ -515,6 +606,65 @@ mod tests {
             sdi.get("term_prompt").unwrap().text.as_deref(),
             Some("/tmp> b_")
         );
+    }
+
+    // -- SGR colored runs --
+
+    #[test]
+    fn setup_terminal_objects_sgr_runs() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let lines = vec![format!("\u{1b}[94mdir/\u{1b}[0m file")];
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+
+        // First run lives in term_line_0 with the bright-blue slot color.
+        let first = sdi.get("term_line_0").unwrap();
+        assert_eq!(first.text.as_deref(), Some("dir/"));
+        assert_eq!(first.text_color, at.ansi.color(12));
+
+        // Second run gets its own object at an x offset, default color.
+        let second = sdi.get("term_line_0_r1").unwrap();
+        assert!(second.visible);
+        assert_eq!(second.text.as_deref(), Some(" file"));
+        assert_eq!(
+            second.text_color,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+        assert!(second.x > first.x);
+        assert_eq!(second.y, first.y);
+    }
+
+    #[test]
+    fn setup_terminal_objects_sgr_runs_cleared_on_plain_line() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let colored = vec![format!("\u{1b}[31merr\u{1b}[0m rest")];
+        setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
+        assert!(sdi.get("term_line_0_r1").unwrap().visible);
+
+        // Replacing with a plain line hides the leftover run object and
+        // restores the default output color.
+        let plain = vec!["plain".to_string()];
+        setup_terminal_objects(&mut sdi, &plain, "/", "", 0, &at, true);
+        assert!(!sdi.get("term_line_0_r1").unwrap().visible);
+        let first = sdi.get("term_line_0").unwrap();
+        assert_eq!(first.text.as_deref(), Some("plain"));
+        assert_eq!(
+            first.text_color,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+    }
+
+    #[test]
+    fn set_terminal_visible_hides_run_objects() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let colored = vec![format!("\u{1b}[32mok\u{1b}[0m done")];
+        setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
+        assert!(sdi.get("term_line_0_r1").unwrap().visible);
+
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.get("term_line_0_r1").unwrap().visible);
     }
 
     #[test]
