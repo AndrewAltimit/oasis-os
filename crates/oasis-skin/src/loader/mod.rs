@@ -237,6 +237,11 @@ pub struct Skin {
     /// (e.g. `"assets/bar_top.png"`). Populated from the skin directory's
     /// `assets/` folder or embedded bytes for built-in skins.
     pub assets: HashMap<String, SkinAsset>,
+    /// Raw TTF/OTF font bytes keyed by skin-relative path
+    /// (e.g. `"assets/skin.ttf"`) — the string `[typography] font` uses to
+    /// reference them. Kept undecoded: parsing happens in the backend's
+    /// rasterizer (and, feature-gated, in validation).
+    pub font_assets: HashMap<String, Vec<u8>>,
 }
 
 /// Parse a TOML document, collecting any keys the target type ignores.
@@ -322,6 +327,7 @@ impl Skin {
             corrupted_modifiers,
             schema_warnings,
             assets: HashMap::new(),
+            font_assets: HashMap::new(),
         })
     }
 
@@ -333,6 +339,21 @@ impl Skin {
             .map_err(|e| OasisError::Config(format!("{name}: {e}").into()))?;
         self.assets.insert(name.to_string(), asset);
         Ok(())
+    }
+
+    /// Register raw TTF/OTF bytes as a named font asset (e.g.
+    /// `"assets/skin.ttf"`). Bytes are stored as-is; parse errors surface
+    /// through `validate()` (feature `ttf`) and the backend rasterizer.
+    pub fn add_asset_font(&mut self, name: &str, bytes: Vec<u8>) {
+        self.font_assets.insert(name.to_string(), bytes);
+    }
+
+    /// The raw bytes of the font selected by `[typography] font`, if the
+    /// skin sets one and the referenced asset was loaded. This is what the
+    /// app hands to `SdiText::set_font` on skin swap.
+    pub fn active_font_bytes(&self) -> Option<&[u8]> {
+        let path = self.theme.typography.as_ref()?.font.as_ref()?;
+        self.font_assets.get(path).map(Vec::as_slice)
     }
 
     /// Upload layout-referenced textures and attach them to their SDI
@@ -493,21 +514,23 @@ impl Skin {
         Ok(skin)
     }
 
-    /// Decode every `*.png` in an assets directory into `self.assets`,
-    /// keyed `"assets/<file>"`. Files that fail to decode are recorded as
-    /// schema warnings instead of failing the whole skin load.
+    /// Decode every `*.png` in an assets directory into `self.assets` and
+    /// slurp every `*.ttf`/`*.otf` into `self.font_assets`, keyed
+    /// `"assets/<file>"`. Files that fail to decode are recorded as schema
+    /// warnings instead of failing the whole skin load.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_assets_from(&mut self, assets_dir: &Path) {
         let Ok(entries) = std::fs::read_dir(assets_dir) else {
             return; // No assets/ directory -- nothing to do.
         };
+        let ext_is = |p: &Path, wanted: &str| {
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(wanted))
+        };
         let mut files: Vec<PathBuf> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| {
-                p.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            })
+            .filter(|p| ext_is(p, "png") || ext_is(p, "ttf") || ext_is(p, "otf"))
             .collect();
         files.sort();
         for path in files {
@@ -518,8 +541,12 @@ impl Skin {
             let key = format!("assets/{file_name}");
             match std::fs::read(&path) {
                 Ok(bytes) => {
-                    if let Err(e) = self.add_asset_png(&key, &bytes) {
-                        self.schema_warnings.push(format!("{key}: {e}"));
+                    if ext_is(&path, "png") {
+                        if let Err(e) = self.add_asset_png(&key, &bytes) {
+                            self.schema_warnings.push(format!("{key}: {e}"));
+                        }
+                    } else {
+                        self.add_asset_font(&key, bytes);
                     }
                 },
                 Err(e) => {
@@ -684,6 +711,13 @@ impl Skin {
         for (name, asset) in &parent.assets {
             if !self.assets.contains_key(name) {
                 self.assets.insert(name.clone(), asset.clone());
+            }
+        }
+
+        // Same for font assets, so an inherited `[typography] font` resolves.
+        for (name, bytes) in &parent.font_assets {
+            if !self.font_assets.contains_key(name) {
+                self.font_assets.insert(name.clone(), bytes.clone());
             }
         }
     }
@@ -2127,5 +2161,136 @@ fit = "tile"
             !warnings.iter().any(|w| w.contains("accent_hover")),
             "unexpected accent_hover warning: {warnings:?}"
         );
+    }
+
+    // -- Typography font asset tests --
+
+    const FONT_THEME: &str = r#"
+[typography]
+font = "assets/skin.ttf"
+"#;
+
+    /// The oasis-browser web-font test fixture: a tiny but valid TTF.
+    const TEST_TTF: &[u8] = include_bytes!("../../../oasis-browser/test_data/minimal.ttf");
+
+    #[test]
+    fn typography_font_key_parses_without_warning() {
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        assert_eq!(
+            skin.theme
+                .typography
+                .as_ref()
+                .and_then(|t| t.font.as_deref()),
+            Some("assets/skin.ttf")
+        );
+        // The key is a real schema field, not an unknown-key warning.
+        assert!(
+            !skin.schema_warnings.iter().any(|w| w.contains("font")),
+            "{:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn active_font_bytes_resolves_registered_font() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        assert!(skin.active_font_bytes().is_none(), "font not loaded yet");
+        skin.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+        assert_eq!(skin.active_font_bytes(), Some(TEST_TTF));
+    }
+
+    #[test]
+    fn active_font_bytes_none_without_typography() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        assert!(skin.active_font_bytes().is_none());
+    }
+
+    #[test]
+    fn validate_missing_font_asset_warns() {
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("missing")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_registered_font_ok() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        skin.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+        let warnings = skin.validate();
+        assert!(
+            !warnings.iter().any(|w| w.contains("typography.font")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_font_over_budget_warns() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        // Valid header so the (feature-gated) parse check isn't what fires,
+        // padded past the budget.
+        let mut bytes = TEST_TTF.to_vec();
+        bytes.resize(crate::assets::FONT_BUDGET_BYTES + 1, 0);
+        skin.add_asset_font("assets/skin.ttf", bytes);
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("budget")),
+            "{warnings:?}"
+        );
+    }
+
+    #[cfg(feature = "ttf")]
+    #[test]
+    fn validate_unparseable_font_warns() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        skin.add_asset_font("assets/skin.ttf", b"not a font at all".to_vec());
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("failed to parse")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn from_directory_loads_font_assets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path();
+        std::fs::write(path.join("skin.toml"), MANIFEST).expect("skin.toml");
+        std::fs::write(path.join("layout.toml"), LAYOUT).expect("layout.toml");
+        std::fs::write(path.join("features.toml"), FEATURES).expect("features.toml");
+        std::fs::write(path.join("theme.toml"), FONT_THEME).expect("theme.toml");
+        std::fs::create_dir(path.join("assets")).expect("assets dir");
+        std::fs::write(path.join("assets/skin.ttf"), TEST_TTF).expect("font file");
+
+        let skin = Skin::from_directory(path).expect("skin loads");
+        assert_eq!(skin.active_font_bytes(), Some(TEST_TTF));
+        assert!(
+            !skin
+                .validate()
+                .iter()
+                .any(|w| w.contains("typography.font")),
+            "{:?}",
+            skin.validate()
+        );
+    }
+
+    #[test]
+    fn merge_theme_fills_font_assets() {
+        let mut parent = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        parent.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+
+        let mut child = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        child.merge_theme_from(&parent);
+        // Child inherits both the typography table and the font bytes it
+        // references.
+        assert_eq!(child.active_font_bytes(), Some(TEST_TTF));
     }
 }

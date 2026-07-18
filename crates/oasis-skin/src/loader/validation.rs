@@ -315,6 +315,44 @@ impl Skin {
             }
         }
 
+        // Typography font: the reference must resolve to loaded TTF/OTF
+        // bytes, stay inside the size budget, and (when the `ttf` feature is
+        // on) actually parse as a font.
+        if let Some(ref typo) = self.theme.typography
+            && let Some(ref font) = typo.font
+        {
+            match self.font_assets.get(font) {
+                None => {
+                    warnings.push(format!(
+                        "typography.font: missing font asset \"{font}\" \
+                         (expected a .ttf/.otf under assets/)"
+                    ));
+                },
+                Some(bytes) => {
+                    if bytes.len() > crate::assets::FONT_BUDGET_BYTES {
+                        warnings.push(format!(
+                            "typography.font: \"{font}\" is {} KB, over the {} KB budget \
+                             (subset the font)",
+                            bytes.len() / 1024,
+                            crate::assets::FONT_BUDGET_BYTES / 1024
+                        ));
+                    }
+                    #[cfg(feature = "ttf")]
+                    {
+                        let settings = fontdue::FontSettings {
+                            collection_index: 0,
+                            scale: 40.0,
+                            load_substitutions: true,
+                        };
+                        if let Err(e) = fontdue::Font::from_bytes(bytes.as_slice(), settings) {
+                            warnings
+                                .push(format!("typography.font: \"{font}\" failed to parse: {e}"));
+                        }
+                    }
+                },
+            }
+        }
+
         // Typography: a zero font size renders nothing, and the bitmap font is
         // unreadable past a few dozen pixels — both are almost always typos.
         if let Some(ref typo) = self.theme.typography {

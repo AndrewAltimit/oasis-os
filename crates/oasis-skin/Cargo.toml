@@ -8,8 +8,16 @@ repository.workspace = true
 authors.workspace = true
 documentation = "https://docs.rs/oasis-skin"
 
+[features]
+# Validate `[typography] font` assets by actually parsing them with fontdue.
+# Off by default so the PSP build (oasis-core with default-features = false)
+# never compiles fontdue; without it validation still checks existence and
+# size budget.
+ttf = ["dep:fontdue"]
+
 [dependencies]
 oasis-types = { workspace = true }
+fontdue = { workspace = true, optional = true }
 oasis-sdi = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-vector = { workspace = true }

@@ -117,6 +117,22 @@ impl SdiCore for SdlBackend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        // Mirror the draw path's per-character font choice (TTF glyph when
+        // the skin font has one, bitmap fallback otherwise) with the same
+        // whole-pixel advances, so measurement and rendering always agree.
+        if let Some(ttf) = &self.ttf_font {
+            let px = font_size.max(1) as f32;
+            return text
+                .chars()
+                .map(|ch| {
+                    if ttf.has_glyph(ch) {
+                        ttf.advance(ch, px).max(0) as u32
+                    } else {
+                        oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as u32
+                    }
+                })
+                .sum();
+        }
         oasis_core::backend::bitmap_measure_text(text, font_size)
     }
 

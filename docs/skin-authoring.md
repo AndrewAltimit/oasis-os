@@ -873,3 +873,34 @@ Run it:
 ```bash
 OASIS_SKIN=neon cargo run -p oasis-app
 ```
+
+## Custom Fonts
+
+Skins may replace the built-in 8×8 bitmap font with a TrueType/OpenType
+font. Drop the font file in the skin's `assets/` directory and reference
+it from `theme.toml`:
+
+```toml
+[typography]
+font = "assets/skin.ttf"
+```
+
+Behavior:
+
+- **Per-character fallback** — any character the font lacks (for
+  example the `▲`/`▼` status-bar triangles) keeps its bitmap glyph, so
+  UI symbols never render as tofu.
+- **Measurement stays exact** — glyph advances are rounded to whole
+  pixels once and shared by both text measurement and drawing, so
+  layouts cannot drift.
+- **Backend support** — the SDL desktop backend rasterizes the font via
+  `fontdue`; backends without a TTF rasterizer (WASM, UE5, PSP) ignore
+  the field and keep the bitmap font. Omitting `font` keeps the bitmap
+  font everywhere, pixel-identical to previous releases.
+- **Formats** — raw `.ttf`/`.otf` only (no WOFF/WOFF2 containers).
+
+`skin lint` validates the reference: the file must exist under
+`assets/`, parse as a font, and stay within a 512 KB budget (subset
+large fonts — an unsubsetted CJK face will blow the budget and slow
+every skin swap). Only ship fonts whose license permits redistribution
+(OFL or public-domain faces are safe choices).

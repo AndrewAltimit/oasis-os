@@ -22,8 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-run if any skin file changes.
     println!("cargo::rerun-if-changed={}", skins_dir.display());
 
-    // (dir_name, fn_name, asset file names)
-    let mut skins: Vec<(String, String, Vec<String>)> = Vec::new();
+    // (dir_name, fn_name, png asset file names, font asset file names)
+    #[allow(clippy::type_complexity)]
+    let mut skins: Vec<(String, String, Vec<String>, Vec<String>)> = Vec::new();
 
     if let Ok(entries) = fs::read_dir(&skins_dir) {
         let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).collect();
@@ -61,27 +62,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("cargo::rerun-if-changed={}", fp.display());
             }
 
-            // Collect PNG assets from the skin's assets/ subdirectory.
+            // Collect PNG and font assets from the skin's assets/ subdirectory.
             let assets_dir = path.join("assets");
             let mut assets: Vec<String> = Vec::new();
+            let mut fonts: Vec<String> = Vec::new();
             if let Ok(asset_entries) = fs::read_dir(&assets_dir) {
                 for ae in asset_entries.filter_map(|e| e.ok()) {
                     let ap = ae.path();
-                    let is_png = ap
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
-                    if is_png {
+                    let ext_is = |wanted: &str| {
+                        ap.extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case(wanted))
+                    };
+                    if ext_is("png") {
                         println!("cargo::rerun-if-changed={}", ap.display());
                         assets.push(ae.file_name().to_string_lossy().to_string());
+                    } else if ext_is("ttf") || ext_is("otf") {
+                        println!("cargo::rerun-if-changed={}", ap.display());
+                        fonts.push(ae.file_name().to_string_lossy().to_string());
                     }
                 }
                 assets.sort();
+                fonts.sort();
             }
 
             // Convert directory name to a valid Rust identifier.
             // e.g., "retro-cga" -> "retro_cga"
             let fn_name = dir_name.replace('-', "_");
-            skins.push((dir_name, fn_name, assets));
+            skins.push((dir_name, fn_name, assets, fonts));
         }
     }
 
@@ -98,11 +105,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "use crate::loader::Skin;")?;
     writeln!(out)?;
 
-    for (dir_name, fn_name, assets) in &skins {
+    for (dir_name, fn_name, assets, fonts) in &skins {
+        let no_assets = assets.is_empty() && fonts.is_empty();
         writeln!(out, "/// Load the `{dir_name}` skin (generated from TOML).")?;
         writeln!(out, "#[allow(dead_code)]")?;
         writeln!(out, "pub fn gen_{fn_name}_skin() -> Result<Skin> {{")?;
-        if assets.is_empty() {
+        if no_assets {
             // No assets: the parse result is the tail expression.
             writeln!(out, "    Skin::from_toml_full(")?;
         } else {
@@ -133,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "        include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
              \"/../../skins/{dir_name}/strings.toml\")),"
         )?;
-        writeln!(out, "    ){}", if assets.is_empty() { "" } else { "?;" })?;
+        writeln!(out, "    ){}", if no_assets { "" } else { "?;" })?;
         for asset in assets {
             writeln!(
                 out,
@@ -142,7 +150,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  \"/../../skins/{dir_name}/assets/{asset}\")))?;"
             )?;
         }
-        if !assets.is_empty() {
+        for font in fonts {
+            writeln!(
+                out,
+                "    skin.add_asset_font(\"assets/{font}\", \
+                 include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
+                 \"/../../skins/{dir_name}/assets/{font}\")).to_vec());"
+            )?;
+        }
+        if !no_assets {
             writeln!(out, "    Ok(skin)")?;
         }
         writeln!(out, "}}")?;
@@ -153,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "/// Names of skins generated from TOML directories.")?;
     writeln!(out, "#[allow(dead_code)]")?;
     writeln!(out, "pub const GENERATED_SKIN_NAMES: &[&str] = &[")?;
-    for (dir_name, _, _) in &skins {
+    for (dir_name, _, _, _) in &skins {
         writeln!(out, "    \"{dir_name}\",")?;
     }
     writeln!(out, "];")?;
@@ -167,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "pub fn load_generated_skin(name: &str) -> Option<Result<Skin>> {{"
     )?;
     writeln!(out, "    match name {{")?;
-    for (dir_name, fn_name, _) in &skins {
+    for (dir_name, fn_name, _, _) in &skins {
         writeln!(out, "        \"{dir_name}\" => Some(gen_{fn_name}_skin()),")?;
     }
     writeln!(out, "        _ => None,")?;

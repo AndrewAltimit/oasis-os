@@ -1,7 +1,7 @@
 use oasis_backend_sdl::SdlBackend;
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::SdiCore;
+use oasis_core::backend::{SdiCore, SdiText};
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
@@ -339,6 +339,11 @@ pub fn refresh_wallpaper_if_pending(
 /// Rebuild backend-side skin assets: layout `texture =` uploads and image
 /// background layers. Destroys the previous skin's textures first.
 pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend: &mut SdlBackend) {
+    // Install the skin's `[typography] font` (or restore the bitmap font).
+    // This also flushes the backend glyph cache, whose textures belong to
+    // the outgoing font.
+    backend.set_font(state.skin.active_font_bytes());
+
     for tex in state.skin_layout_textures.drain(..) {
         let _ = backend.destroy_texture(tex);
     }

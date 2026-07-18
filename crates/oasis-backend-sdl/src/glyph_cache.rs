@@ -14,8 +14,9 @@
 //! pixels — see `SdlBackend::tints_at_blit`.
 
 use oasis_core::backend::{BackendErrExt, Color, SdiText};
-use oasis_core::error::Result;
+use oasis_core::error::{OasisError, Result};
 use oasis_rasterize::GlyphCacheKey;
+use oasis_rasterize::ttf::TtfFont;
 use sdl3::pixels::PixelFormat;
 use sdl3::render::Texture;
 
@@ -36,12 +37,24 @@ const EVICT_DIVISOR: usize = 4;
 /// `Texture::query()` (an FFI round-trip) per glyph per frame.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GlyphEntry {
-    /// Texture id in `SdlBackend::textures`.
+    /// Texture id in `SdlBackend::textures`. `0` means "no pixels" (e.g. a
+    /// TTF space glyph): the id counter starts at 1, so the blit lookup
+    /// misses and only the advance is applied.
     pub(crate) texture: u64,
     /// Rasterized width in pixels.
     pub(crate) w: u32,
     /// Rasterized height in pixels.
     pub(crate) h: u32,
+    /// Blit offset from the pen position (bitmap glyphs: 0).
+    pub(crate) off_x: i32,
+    /// Blit offset from the top of the line box (bitmap glyphs: 0).
+    pub(crate) off_y: i32,
+    /// Pen advance in pixels. For bitmap glyphs this is exactly
+    /// `glyph_advance_scaled`, so the no-font path stays pixel-identical;
+    /// for TTF glyphs it is the font's rounded advance. `measure_text`
+    /// accumulates the same integers, keeping layout and drawing in
+    /// agreement.
+    pub(crate) advance: i32,
     /// Value of `glyph_access_counter` at the last hit (LRU timestamp).
     pub(crate) last_used: u64,
 }
@@ -125,6 +138,12 @@ impl SdlBackend {
             }
         }
 
+        let id = self.upload_glyph_rgba(&rgba, gw, gh)?;
+        Ok((id, gw, gh))
+    }
+
+    /// Upload a glyph RGBA buffer as a blended SDL texture and return its id.
+    fn upload_glyph_rgba(&mut self, rgba: &[u8], gw: u32, gh: u32) -> Result<u64> {
         let mut texture = self
             .texture_creator
             .create_texture_streaming(PixelFormat::ABGR8888, gw, gh)
@@ -150,7 +169,67 @@ impl SdlBackend {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
         self.textures.insert(id, texture);
-        Ok((id, gw, gh))
+        Ok(id)
+    }
+
+    /// Rasterize a glyph from the active TTF font into a texture. Returns
+    /// `(texture_id, w, h, off_x, off_y, advance)`; empty glyphs (spaces)
+    /// return texture id 0 with only the advance populated.
+    ///
+    /// Faux-bold is baked into the coverage as a 1px double-strike so the
+    /// draw loop stays identical for both font paths; faux-italic is not
+    /// applied (a real italic face belongs in the font file).
+    fn render_ttf_glyph(
+        &mut self,
+        ch: char,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+    ) -> Result<(u64, u32, u32, i32, i32, i32)> {
+        let px = font_size.max(1) as f32;
+        let Some(ttf) = self.ttf_font.as_ref() else {
+            return Err(OasisError::Backend(
+                "render_ttf_glyph without a font".into(),
+            ));
+        };
+        let glyph = ttf.rasterize(ch, px);
+        let ascent = ttf.ascent(px);
+        let off_x = glyph.xmin;
+        let off_y = ascent - glyph.ymin - glyph.height as i32;
+        let advance = glyph.advance;
+
+        if glyph.width == 0 || glyph.height == 0 {
+            return Ok((0, 0, 0, off_x, off_y, advance));
+        }
+
+        let (coverage, gw) = if bold {
+            // Double-strike: max of the coverage with itself shifted 1px.
+            let w2 = glyph.width + 1;
+            let mut out = vec![0u8; (w2 * glyph.height) as usize];
+            for y in 0..glyph.height as usize {
+                for x in 0..glyph.width as usize {
+                    let v = glyph.coverage[y * glyph.width as usize + x];
+                    let i = y * w2 as usize + x;
+                    out[i] = out[i].max(v);
+                    out[i + 1] = v;
+                }
+            }
+            (out, w2)
+        } else {
+            (glyph.coverage, glyph.width)
+        };
+        let gh = glyph.height;
+
+        let mut rgba = Vec::with_capacity(coverage.len() * 4);
+        for &cov in &coverage {
+            rgba.push(color.r);
+            rgba.push(color.g);
+            rgba.push(color.b);
+            rgba.push(((cov as u16 * color.a as u16) / 255) as u8);
+        }
+
+        let id = self.upload_glyph_rgba(&rgba, gw, gh)?;
+        Ok((id, gw, gh, off_x, off_y, advance))
     }
 
     /// Look up a glyph, rendering and caching it on miss. Returns the entry.
@@ -190,11 +269,24 @@ impl SdlBackend {
         } else {
             color
         };
-        let (texture, w, h) = self.render_glyph_texture(ch, font_size, raster, bold, italic)?;
+        // A skin TTF font takes over any character it has a glyph for;
+        // everything else (e.g. the ▲/▼ UI triangles) falls back to the
+        // bitmap font. `measure_text` makes the same per-character choice.
+        let use_ttf = self.ttf_font.as_ref().is_some_and(|f| f.has_glyph(ch));
+        let (texture, w, h, off_x, off_y, advance) = if use_ttf {
+            self.render_ttf_glyph(ch, font_size, raster, bold)?
+        } else {
+            let (texture, w, h) = self.render_glyph_texture(ch, font_size, raster, bold, italic)?;
+            let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+            (texture, w, h, 0, 0, advance)
+        };
         let entry = GlyphEntry {
             texture,
             w,
             h,
+            off_x,
+            off_y,
+            advance,
             last_used: stamp,
         };
         self.glyph_cache.insert(key, entry);
@@ -287,22 +379,51 @@ impl SdiText for SdlBackend {
                     // White glyph, tinted to the requested color by SDL.
                     texture.set_color_mod(color.r, color.g, color.b);
                 }
-                let _ = self
-                    .canvas
-                    .copy(texture, None, frect(cx, ty, entry.w, entry.h));
+                let _ = self.canvas.copy(
+                    texture,
+                    None,
+                    frect(cx + entry.off_x, ty + entry.off_y, entry.w, entry.h),
+                );
             }
-            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+            // Bitmap entries carry `glyph_advance_scaled` here, so the
+            // no-font path advances exactly as before.
+            cx += entry.advance;
         }
         Ok(())
     }
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
+        if let Some(ttf) = &self.ttf_font {
+            // Same pixel size the rasterizer uses, so line boxes and
+            // baseline placement come from one set of metrics.
+            return ttf.line_height(font_size.max(1) as f32);
+        }
         // Match WASM: font_size * 1.2 (the actual rendered row height).
         (f64::from(font_size.max(8)) * 1.2).ceil() as u32
     }
 
     fn font_ascent(&self, font_size: u16) -> u32 {
+        if let Some(ttf) = &self.ttf_font {
+            return ttf.ascent(font_size.max(1) as f32).max(0) as u32;
+        }
         // Match WASM: font_size * 0.85 (baseline offset from top).
         (f64::from(font_size.max(8)) * 0.85).ceil() as u32
+    }
+
+    fn set_font(&mut self, font: Option<&[u8]>) {
+        if font.is_none() && self.ttf_font.is_none() {
+            return; // Bitmap → bitmap: keep the warm glyph cache.
+        }
+        // Cached glyph textures belong to the outgoing font.
+        for (_, entry) in self.glyph_cache.drain() {
+            self.textures.remove(&entry.texture);
+        }
+        self.ttf_font = font.and_then(|bytes| match TtfFont::from_bytes(bytes) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                log::warn!("skin font rejected, keeping bitmap font: {e}");
+                None
+            },
+        });
     }
 }

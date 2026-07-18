@@ -15,6 +15,9 @@
 mod texture_dedup;
 pub use texture_dedup::TextureDedup;
 
+#[cfg(feature = "ttf")]
+pub mod ttf;
+
 use oasis_types::backend::{Color, GradientStyle};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
