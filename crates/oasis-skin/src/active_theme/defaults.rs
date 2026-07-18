@@ -20,6 +20,7 @@ impl Default for ActiveTheme {
                 battery_color: Color::rgb(120, 255, 120),
                 version_color: Color::WHITE,
                 clock_color: Color::WHITE,
+                clock_offset_y: 0,
                 url_color: Color::rgb(200, 200, 200),
                 usb_color: Color::rgb(140, 140, 140),
                 tab_active_fill: Color::rgba(255, 255, 255, 30),

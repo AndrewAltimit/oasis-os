@@ -511,6 +511,7 @@ impl ActiveTheme {
                 bar_ov.and_then(|b| b.clock_color.as_ref()).or(bar_text),
                 text,
             ),
+            clock_offset_y: bar_ov.and_then(|b| b.clock_offset_y).unwrap_or(0),
             url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()).or(bar_text), dim),
             usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()).or(bar_text), dim),
             tab_active_fill: ov(
@@ -1206,6 +1207,7 @@ impl ActiveTheme {
             battery_color: lighten(primary, 0.3),
             version_color: text,
             clock_color: text,
+            clock_offset_y: 0,
             url_color: dim,
             usb_color: dim,
             tab_active_fill: with_alpha(primary, 30),

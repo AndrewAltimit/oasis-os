@@ -161,6 +161,11 @@ pub struct BarOverrides {
     pub version_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_color: Option<String>,
+    /// Vertical pixel offset for the bottom-bar clock text (default 0).
+    /// Positive moves the clock down — for shaped bar textures whose
+    /// clock shelf sits lower than the bar's vertical midline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_offset_y: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

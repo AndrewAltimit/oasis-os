@@ -74,6 +74,9 @@ fade_color = "#0A0A0C"
 [bar_overrides]
 tab_texture_active = "assets/tab_active.png"
 tab_texture_inactive = "assets/tab_inactive.png"
+# The bar_bottom silhouette steps down ~10px on the right into a clock
+# shelf; drop the clock so it sits inside the shelf, not across its edge.
+clock_offset_y = 6
 text_shadow = true
 text_shadow_color = "#000000A0"
 # The bar textures bake their own orange accent edge; hide the

@@ -4,12 +4,15 @@
 # notched PSIX silhouettes (M1 texture pipeline).
 
 # Translucent smoked-glass content backdrop: the PSIX orange->lime
-# wallpaper shows through while icons and labels stay legible.
+# wallpaper shows through while icons and labels stay legible. Spans the
+# full screen (not just the content strip) so the wallpaper seen through
+# the bars' transparent notch cutouts carries the same tint — otherwise
+# the notches read as bright patches against the smoked content area.
 [content_bg]
 x = 0
-y = 28
+y = 0
 w = 480
-h = 216
+h = 272
 color = "#0A0A0C50"
 
 [bar_top]

@@ -69,6 +69,10 @@ pub struct BarTheme {
     pub version_color: Color,
     /// Clock text color.
     pub clock_color: Color,
+    /// Vertical pixel offset for the bottom-bar clock text. Positive moves
+    /// the clock down from its vertically-centered position — for shaped
+    /// bar textures whose clock shelf sits lower than the bar's midline.
+    pub clock_offset_y: i32,
     /// URL label color.
     pub url_color: Color,
     /// USB indicator color.

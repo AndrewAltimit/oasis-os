@@ -281,6 +281,10 @@ tab_active_alpha = 200
 tab_inactive_alpha = 80
 page_dot_active = "#FFFFFFC8"
 page_dot_inactive = "#FFFFFF32"
+# Vertical pixel offset for the bottom-bar clock (default 0). Positive
+# moves the clock down — for shaped bar textures whose clock shelf sits
+# lower than the bar's vertical midline.
+clock_offset_y = 6
 # Also: separator_color, version_color, clock_color, url_color,
 #   usb_color, media_tab_active, media_tab_inactive, pipe_color,
 #   r_hint_color, category_label_color

@@ -328,16 +328,21 @@ impl BottomBar {
         let right_edge = if features.clock_in_bottombar {
             let clock_w = text_px(&self.clock_display, font_small);
             let cx = screen_w as i32 - clock_w - 8;
+            // Skins with shaped bar art can nudge the clock into a shelf
+            // that sits below the bar's midline (clock_offset_y).
+            let clock_y = text_y + at.bar.clock_offset_y;
             ensure_text(
                 sdi,
                 "bar_bottom_clock",
                 cx,
-                text_y,
+                clock_y,
                 font_small,
                 at.bar.clock_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
                 obj.set_text(&self.clock_display);
+                obj.x = cx;
+                obj.y = clock_y;
                 obj.visible = true;
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
@@ -548,16 +553,20 @@ impl BottomBar {
         let right_edge = if features.clock_in_bottombar {
             let clock_w = text_px(&self.clock_display, font_small);
             let cx = screen_w as i32 - clock_w - 8;
+            // Same shelf nudge as the classic path (clock_offset_y).
+            let clock_y = text_y + at.bar.clock_offset_y;
             ensure_text(
                 sdi,
                 "bar_bottom_clock",
                 cx,
-                text_y,
+                clock_y,
                 font_small,
                 at.bar.clock_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_bottom_clock") {
                 obj.set_text(&self.clock_display);
+                obj.x = cx;
+                obj.y = clock_y;
                 obj.visible = true;
                 if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
