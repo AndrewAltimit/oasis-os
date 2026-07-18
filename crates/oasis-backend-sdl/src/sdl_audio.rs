@@ -156,6 +156,12 @@ pub struct SdlAudioBackend {
     /// boundaries, so the device always sees a single 48 kHz stream
     /// even when the source rate (22.05/44.1/48 kHz …) varies.
     resampler: LinearResampler,
+    /// Dedicated stream for one-shot UI sound effects. SDL mixes it with
+    /// the music stream at the device level, so short samples play over
+    /// whatever is queued without touching the music pipeline.
+    sfx_stream: Option<sdl3::audio::AudioStreamOwner>,
+    /// Reusable staging buffer for volume-scaled SFX PCM.
+    sfx_scratch: Vec<i16>,
     /// Loaded non-streaming tracks (raw MP3 data).
     tracks: HashMap<u64, Vec<u8>>,
     /// Next track ID to assign.
@@ -195,6 +201,8 @@ impl SdlAudioBackend {
             pcm_staging: Vec::new(),
             pcm_resampled: Vec::new(),
             resampler: LinearResampler::new(OUTPUT_SAMPLE_RATE),
+            sfx_stream: None,
+            sfx_scratch: Vec::new(),
             tracks: HashMap::new(),
             next_id: 0,
             current_track: None,
@@ -209,9 +217,13 @@ impl SdlAudioBackend {
         }
     }
 
-    /// Open an SDL3 audio device and stream with the given sample rate and
-    /// channels.
-    fn open_device(&mut self, sample_rate: i32, channels: u8) -> Result<()> {
+    /// Open a playback stream on the default device with the given format.
+    /// Used by both the music stream (`open_device`) and the SFX stream.
+    fn create_stream(
+        &self,
+        sample_rate: i32,
+        channels: u8,
+    ) -> Result<sdl3::audio::AudioStreamOwner> {
         let audio = self
             .audio_subsystem
             .as_ref()
@@ -231,6 +243,13 @@ impl SdlAudioBackend {
         stream
             .resume()
             .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        Ok(stream)
+    }
+
+    /// Open an SDL3 audio device and stream with the given sample rate and
+    /// channels.
+    fn open_device(&mut self, sample_rate: i32, channels: u8) -> Result<()> {
+        let stream = self.create_stream(sample_rate, channels)?;
         self.sample_rate = sample_rate;
         self.channels = channels as usize;
         log::info!(
@@ -256,6 +275,43 @@ impl SdlAudioBackend {
     /// Get the number of bytes currently queued in the audio stream.
     fn queued_bytes(&self) -> u32 {
         self.stream_owner
+            .as_ref()
+            .and_then(|s| s.queued_bytes().ok())
+            .unwrap_or(0) as u32
+    }
+
+    /// Queue one-shot UI sound PCM (interleaved stereo i16 at 48 kHz —
+    /// the mix `oasis_audio::sfx::SfxPlayer::render` produces).
+    ///
+    /// Opens a dedicated SFX stream lazily; SDL mixes it with the music
+    /// stream at the device level. The global volume (0-100) is applied
+    /// here, matching the music paths, so a muted system stays silent.
+    /// No-op in headless environments (no audio subsystem).
+    pub fn queue_sfx(&mut self, pcm: &[i16]) -> Result<()> {
+        if pcm.is_empty() || self.audio_subsystem.is_none() {
+            return Ok(());
+        }
+        if self.sfx_stream.is_none() {
+            let stream = self.create_stream(OUTPUT_SAMPLE_RATE as i32, 2)?;
+            log::info!("SDL3 SFX stream opened: {OUTPUT_SAMPLE_RATE}Hz, 2 channels");
+            self.sfx_stream = Some(stream);
+        }
+        let vol = self.volume as i32;
+        self.sfx_scratch.clear();
+        self.sfx_scratch
+            .extend(pcm.iter().map(|&s| ((s as i32 * vol) / 100) as i16));
+        if let Some(ref stream) = self.sfx_stream {
+            stream
+                .put_data_i16(&self.sfx_scratch)
+                .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        }
+        Ok(())
+    }
+
+    /// Bytes currently queued in the SFX stream (0 when it isn't open).
+    /// The shell uses this to keep a small fixed backlog of mixed SFX.
+    pub fn sfx_queued_bytes(&self) -> u32 {
+        self.sfx_stream
             .as_ref()
             .and_then(|s| s.queued_bytes().ok())
             .unwrap_or(0) as u32
@@ -698,6 +754,8 @@ impl AudioBackend for SdlAudioBackend {
     fn shutdown(&mut self) -> Result<()> {
         self.stop()?;
         self.stream_owner = None;
+        self.sfx_stream = None;
+        self.sfx_scratch.clear();
         self.audio_subsystem = None;
         self.tracks.clear();
         self.stream_track = None;
@@ -1226,5 +1284,34 @@ mod tests {
     fn position_ms_is_zero_before_playback() {
         let backend = init_backend();
         assert_eq!(backend.position_ms(), 0);
+    }
+
+    // ---------------------------------------------------------------
+    // SFX one-shot tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn queue_sfx_never_errors_headless() {
+        let mut backend = init_backend();
+        // With no audio hardware (CI) this is a silent no-op; with
+        // hardware it opens the SFX stream. Either way: no error.
+        backend.queue_sfx(&[100, -100, 200, -200]).unwrap();
+        backend.queue_sfx(&[]).unwrap();
+        let _ = backend.sfx_queued_bytes();
+    }
+
+    #[test]
+    fn sfx_queued_bytes_zero_when_closed() {
+        let backend = SdlAudioBackend::new();
+        assert_eq!(backend.sfx_queued_bytes(), 0);
+    }
+
+    #[test]
+    fn shutdown_closes_sfx_stream() {
+        let mut backend = init_backend();
+        backend.queue_sfx(&[1, 2, 3, 4]).unwrap();
+        backend.shutdown().unwrap();
+        assert!(backend.sfx_stream.is_none());
+        assert_eq!(backend.sfx_queued_bytes(), 0);
     }
 }

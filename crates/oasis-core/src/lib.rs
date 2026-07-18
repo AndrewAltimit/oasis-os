@@ -69,6 +69,7 @@ pub mod terminal_sdi;
 pub mod toast;
 pub mod transfer;
 pub mod transition;
+pub mod ui_sound;
 pub mod update;
 pub mod vector_overlay;
 pub mod wallpaper;

@@ -13,6 +13,7 @@ pub mod null_backend;
 pub mod ogg;
 pub mod playlist;
 pub mod radio;
+pub mod sfx;
 pub mod types;
 pub mod wav;
 

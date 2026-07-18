@@ -242,6 +242,11 @@ pub struct Skin {
     /// reference them. Kept undecoded: parsing happens in the backend's
     /// rasterizer (and, feature-gated, in validation).
     pub font_assets: HashMap<String, Vec<u8>>,
+    /// Raw WAV sound assets keyed by skin-relative path
+    /// (e.g. `"assets/click.wav"`), referenced by the theme's `[sounds]`
+    /// table. Decoding to PCM happens at playback-load time in the shell,
+    /// so `oasis-skin` only stores and header-validates the bytes.
+    pub sound_assets: HashMap<String, Vec<u8>>,
 }
 
 /// Parse a TOML document, collecting any keys the target type ignores.
@@ -328,6 +333,7 @@ impl Skin {
             schema_warnings,
             assets: HashMap::new(),
             font_assets: HashMap::new(),
+            sound_assets: HashMap::new(),
         })
     }
 
@@ -354,6 +360,20 @@ impl Skin {
     pub fn active_font_bytes(&self) -> Option<&[u8]> {
         let path = self.theme.typography.as_ref()?.font.as_ref()?;
         self.font_assets.get(path).map(Vec::as_slice)
+    }
+
+    /// Register raw WAV bytes as a named sound asset (e.g.
+    /// `"assets/click.wav"`). The header is checked here so obviously
+    /// broken files fail loudly at load time; full decode happens in the
+    /// shell's SFX player.
+    pub fn add_asset_wav(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        if super::assets::probe_wav(bytes).is_none() {
+            return Err(OasisError::Config(
+                format!("{name}: not an uncompressed PCM WAV").into(),
+            ));
+        }
+        self.sound_assets.insert(name.to_string(), bytes.to_vec());
+        Ok(())
     }
 
     /// Upload layout-referenced textures and attach them to their SDI
@@ -514,10 +534,11 @@ impl Skin {
         Ok(skin)
     }
 
-    /// Decode every `*.png` in an assets directory into `self.assets` and
-    /// slurp every `*.ttf`/`*.otf` into `self.font_assets`, keyed
-    /// `"assets/<file>"`. Files that fail to decode are recorded as schema
-    /// warnings instead of failing the whole skin load.
+    /// Decode every `*.png` (images) and `*.wav` (UI sounds) in an assets
+    /// directory into `self.assets` / `self.sound_assets`, and slurp every
+    /// `*.ttf`/`*.otf` into `self.font_assets`, keyed `"assets/<file>"`.
+    /// Files that fail to decode are recorded as schema warnings instead of
+    /// failing the whole skin load.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_assets_from(&mut self, assets_dir: &Path) {
         let Ok(entries) = std::fs::read_dir(assets_dir) else {
@@ -530,7 +551,9 @@ impl Skin {
         let mut files: Vec<PathBuf> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| ext_is(p, "png") || ext_is(p, "ttf") || ext_is(p, "otf"))
+            .filter(|p| {
+                ext_is(p, "png") || ext_is(p, "ttf") || ext_is(p, "otf") || ext_is(p, "wav")
+            })
             .collect();
         files.sort();
         for path in files {
@@ -541,12 +564,16 @@ impl Skin {
             let key = format!("assets/{file_name}");
             match std::fs::read(&path) {
                 Ok(bytes) => {
-                    if ext_is(&path, "png") {
-                        if let Err(e) = self.add_asset_png(&key, &bytes) {
-                            self.schema_warnings.push(format!("{key}: {e}"));
-                        }
+                    let result = if ext_is(&path, "png") {
+                        self.add_asset_png(&key, &bytes)
+                    } else if ext_is(&path, "wav") {
+                        self.add_asset_wav(&key, &bytes)
                     } else {
                         self.add_asset_font(&key, bytes);
+                        Ok(())
+                    };
+                    if let Err(e) = result {
+                        self.schema_warnings.push(format!("{key}: {e}"));
                     }
                 },
                 Err(e) => {
@@ -718,6 +745,17 @@ impl Skin {
         for (name, bytes) in &parent.font_assets {
             if !self.font_assets.contains_key(name) {
                 self.font_assets.insert(name.clone(), bytes.clone());
+            }
+        }
+
+        // Merge UI sounds the same way: the parent's [sounds] table fills
+        // in when the child has none, and parent WAVs back inherited paths.
+        if ct.sounds.is_none() {
+            ct.sounds.clone_from(&pt.sounds);
+        }
+        for (name, bytes) in &parent.sound_assets {
+            if !self.sound_assets.contains_key(name) {
+                self.sound_assets.insert(name.clone(), bytes.clone());
             }
         }
     }

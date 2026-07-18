@@ -59,6 +59,10 @@ impl Toast {
 #[derive(Debug)]
 pub struct ToastManager {
     toasts: VecDeque<Toast>,
+    /// Monotonic count of toasts ever shown (for UI sound derivation).
+    shown_total: u64,
+    /// Monotonic count of `ToastLevel::Error` toasts ever shown.
+    shown_errors: u64,
 }
 
 impl Default for ToastManager {
@@ -71,11 +75,24 @@ impl ToastManager {
     pub fn new() -> Self {
         Self {
             toasts: VecDeque::new(),
+            shown_total: 0,
+            shown_errors: 0,
         }
+    }
+
+    /// Monotonic `(total, errors)` counters of toasts ever shown. The UI
+    /// sound queue diffs these once per frame to fire Toast/Error sounds
+    /// without instrumenting every `show()` call site.
+    pub fn shown_counts(&self) -> (u64, u64) {
+        (self.shown_total, self.shown_errors)
     }
 
     /// Enqueue a new toast.
     pub fn show(&mut self, msg: impl Into<String>, level: ToastLevel, ttl: u32) {
+        self.shown_total += 1;
+        if level == ToastLevel::Error {
+            self.shown_errors += 1;
+        }
         self.toasts.push_back(Toast {
             message: msg.into(),
             level,
@@ -245,6 +262,21 @@ mod tests {
         };
         // Near start -- should be fading in.
         assert!(t2.alpha(10) < 255);
+    }
+
+    #[test]
+    fn shown_counts_track_levels() {
+        let mut tm = ToastManager::new();
+        assert_eq!(tm.shown_counts(), (0, 0));
+        tm.show("info", ToastLevel::Info, 60);
+        tm.show("boom", ToastLevel::Error, 60);
+        tm.show("warn", ToastLevel::Warning, 60);
+        assert_eq!(tm.shown_counts(), (3, 1));
+        // Counters are monotonic: expiry doesn't rewind them.
+        for _ in 0..120 {
+            tm.tick();
+        }
+        assert_eq!(tm.shown_counts(), (3, 1));
     }
 
     #[test]

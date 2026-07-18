@@ -7,6 +7,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
 use oasis_core::terminal::Environment;
 use oasis_core::transition;
+use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WmEvent;
 
@@ -46,6 +47,7 @@ fn launch_dashboard_icon(
         &state.plugin_manager,
     );
     launch::apply_launch(result, &mut state.mode);
+    state.ui_sounds.push(UiSound::Open);
     if fade {
         state.active_transition = Some(launch::make_transition(
             state.config.screen_width,
@@ -176,6 +178,7 @@ pub fn handle_desktop_input(
             // time `state.wm.window_count() > 0`.
             if state.skin.features.start_menu && state.ui.start_menu.hit_test_button(*x, *y) {
                 state.ui.start_menu.toggle();
+                state.ui_sounds.push(UiSound::Click);
                 return InputResult::Continue;
             }
             if state.ui.start_menu.open {
@@ -205,6 +208,7 @@ pub fn handle_desktop_input(
             // Check taskbar hit before WM (taskbar sits above bottom bar).
             if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y) {
                 let win_id = win_id.to_string();
+                state.ui_sounds.push(UiSound::Click);
                 if state.wm.active_window() == Some(win_id.as_str()) {
                     // Active window -- minimize it.
                     let _ = state.wm.minimize_window(&win_id, sdi);
@@ -226,6 +230,7 @@ pub fn handle_desktop_input(
                 .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, sdi);
             match wm_event {
                 WmEvent::WindowClosed(id) => {
+                    state.ui_sounds.push(UiSound::Close);
                     if state.content.fullscreen_app.as_deref() == Some(id.as_str()) {
                         state.content.fullscreen_app = None;
                     }
@@ -326,6 +331,7 @@ pub fn handle_desktop_input(
         },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                state.ui_sounds.push(UiSound::Close);
                 // If closing the fullscreen window, clear fullscreen state first.
                 if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                     let _ = state.wm.exit_fullscreen(&active_id, sdi);
@@ -463,6 +469,7 @@ pub fn handle_desktop_input(
                 {
                     match runner.handle_input(btn, vfs) {
                         AppAction::Exit => {
+                            state.ui_sounds.push(UiSound::Close);
                             if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                                 let _ = state.wm.exit_fullscreen(&active_id, sdi);
                                 state.content.fullscreen_app = None;
@@ -532,6 +539,7 @@ pub fn handle_app_input(
                 let is_music = runner.title == "Music Player";
                 match runner.handle_input(btn, vfs) {
                     AppAction::Exit => {
+                        state.ui_sounds.push(UiSound::Close);
                         AppRunner::hide_sdi(sdi);
                         state.content.app_runner = None;
                         state.mode = Mode::Dashboard;
@@ -606,6 +614,7 @@ pub fn handle_default_input(
                     &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
+                state.ui_sounds.push(UiSound::Open);
                 state.active_transition = Some(launch::make_transition(
                     state.config.screen_width,
                     state.config.screen_height,
@@ -618,6 +627,7 @@ pub fn handle_default_input(
         InputEvent::PointerClick { x, y } if state.mode == Mode::Dashboard => {
             if state.ui.start_menu.hit_test_button(*x, *y) {
                 state.ui.start_menu.toggle();
+                state.ui_sounds.push(UiSound::Click);
                 return InputResult::Continue;
             }
             if state.ui.start_menu.open {
@@ -712,6 +722,9 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(btn)
             if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
         {
+            if matches!(btn, Button::Up | Button::Down) {
+                state.ui_sounds.push_nav(state.frame_counter);
+            }
             let action = state.ui.start_menu.handle_input(btn);
             if action == StartMenuAction::Exit {
                 return InputResult::Quit;
@@ -727,15 +740,18 @@ pub fn handle_default_input(
                 if state.ui.bottom_bar.active_tab == MediaTab::None =>
             {
                 state.ui.dashboard.handle_input(btn);
+                state.ui_sounds.push_nav(state.frame_counter);
             },
             Button::Triangle if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.next_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                state.ui_sounds.push_nav(state.frame_counter);
                 apply_page_change_fade(state);
             },
             Button::Square if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.prev_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                state.ui_sounds.push_nav(state.frame_counter);
                 apply_page_change_fade(state);
             },
             _ => {},
@@ -783,6 +799,7 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.mode = Mode::Dashboard;
+            state.ui_sounds.push(UiSound::Close);
         },
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
@@ -834,6 +851,7 @@ fn handle_start_menu_action(
                     &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
+                state.ui_sounds.push(UiSound::Open);
                 state.active_transition = Some(launch::make_transition(
                     state.config.screen_width,
                     state.config.screen_height,
@@ -843,6 +861,7 @@ fn handle_start_menu_action(
         },
         StartMenuAction::OpenTerminal => {
             state.mode = Mode::Terminal;
+            state.ui_sounds.push(UiSound::Open);
         },
         StartMenuAction::Exit => {
             log::info!("Start menu: Exit requested");
@@ -976,6 +995,8 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
             toasts: oasis_core::toast::ToastManager::new(),
+            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            sfx: oasis_audio::sfx::SfxPlayer::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),

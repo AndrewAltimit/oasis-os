@@ -138,6 +138,12 @@ pub struct AppState {
     pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
     pub audio_backend: SdlAudioBackend,
     pub toasts: ToastManager,
+    /// UI sound events queued by input/toast chokepoints this frame,
+    /// drained once per frame by `ui_sfx::tick`.
+    pub ui_sounds: oasis_core::ui_sound::UiSoundQueue,
+    /// Skin-defined one-shot UI samples (loaded on skin swap; empty for
+    /// skins without a `[sounds]` table).
+    pub sfx: oasis_audio::sfx::SfxPlayer,
     pub pending_tv_catalog_fetch: Option<
         mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>,
     >,

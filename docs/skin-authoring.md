@@ -942,3 +942,49 @@ Behavior:
 large fonts — an unsubsetted CJK face will blow the budget and slow
 every skin swap). Only ship fonts whose license permits redistribution
 (OFL or public-domain faces are safe choices).
+
+## [sounds] — UI Sound Themes
+
+Skins can ship short WAV one-shots that play on interface events —
+clicks, app launches, window closes, toasts, and cursor navigation.
+Add a `[sounds]` table to `theme.toml` and drop the WAV files in the
+skin's `assets/` directory alongside its images:
+
+```toml
+[sounds]
+click = "assets/click.wav"   # button / interactive element click
+open = "assets/open.wav"     # app launch / window open
+close = "assets/close.wav"   # app / window close
+error = "assets/error.wav"   # error toasts
+toast = "assets/toast.wav"   # non-error toast notifications
+nav = "assets/nav.wav"       # d-pad / cursor move between icons
+volume = 0.8                 # master volume for UI sounds, 0.0-1.0 (default 1.0)
+```
+
+Every key is optional — omit an event and it stays silent. A skin
+without a `[sounds]` table is fully silent (the default for all
+built-in skins).
+
+Behavior and constraints:
+
+- **Format**: uncompressed PCM WAV, mono or stereo, 8- or 16-bit, any
+  sample rate (resampled to the 48 kHz mix rate at load time).
+- **Length**: keep sounds under 2 seconds — these are one-shots, not
+  loops. `skin lint` warns about longer files.
+- **Polyphony**: up to 8 simultaneous voices; triggering a 9th steals
+  the oldest. Sounds mix *over* music/radio playback without
+  interrupting it.
+- **Rate limiting**: the `nav` sound is throttled (~12 Hz) so holding
+  a d-pad direction doesn't machine-gun the sample.
+- **Volume**: the `[sounds] volume` master scales all UI sounds, and
+  the system audio volume (the same one the `audio vol` command sets,
+  0-100) applies on top — a muted system plays no UI sounds.
+- **Lifecycle**: sounds load on skin swap-in and are freed on
+  swap-out, exactly like image assets. Sound bytes count toward the
+  same per-skin asset budget as decoded images.
+- **Inheritance**: a child skin with no `[sounds]` table inherits the
+  parent's table and WAV assets (`inherits = "..."` in `skin.toml`).
+
+`skin lint` validates the table: referenced files must exist in
+`assets/`, must parse as PCM WAV, and `volume` must be within
+0.0-1.0.
