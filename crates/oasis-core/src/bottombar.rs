@@ -574,8 +574,10 @@ impl BottomBar {
 
         // Media tab strip is forced on in dock mode (regardless of
         // `show_media_tabs`) so the dock always carries the AUDIO/VIDEO/
-        // IMAGE/FILE selector.
+        // IMAGE/FILE selector. The classic chrome bezel is hidden: dock
+        // skins bake their own tab-shelf chrome into the bar texture.
         let tabs_x = self.draw_media_tabs(sdi, at, right_edge);
+        hide_bezel(sdi, "bar_tab_bezel");
 
         // USB indicator to the left of the tab strip.
         let usb_w = text_px("USB", font_small);

@@ -52,10 +52,12 @@ page_style = "slide"
 easing = "ease_out_cubic"
 fade_color = "#0A0A0C"
 
-# -- Bars: thin dark status chrome up top, silver footer band below.
-# Top tab row copies the reference: active tab is a dark box with white
-# text, inactive tabs are white boxes with gray text (tab_text_* decouple
-# the top row from the dark-on-silver bottom media-tab strip).
+# -- Bars: thin dark status chrome up top, slim dark footer band below
+# with a raised tab shelf on the right (baked into bar_bottom.png, so the
+# menu bars read as different widths/heights like the reference, not one
+# uniform slab). Top tab row copies the reference: active tab is a dark
+# box with white text, inactive tabs are white boxes with gray text
+# (tab_text_* decouple the top row from the bottom media-tab strip).
 [bar_overrides]
 version_text = "Version 0.1 Public"
 version_color = "#FFFFFF"
@@ -66,24 +68,17 @@ tab_texture_active = "assets/tab_active.png"
 tab_texture_inactive = "assets/tab_inactive.png"
 tab_text_active = "#FFFFFF"
 tab_text_inactive = "#6E6E6E"
-# Bottom strip sits on the silver band: dark text, gray inactive.
-media_tab_active = "#1E1E1E"
-media_tab_inactive = "#8A8A8A"
-url_text = "HTTP://PSIXONLINE.COM"
-url_color = "#5A5A5A"
-usb_color = "#2E2E2E"
-pipe_color = "#B0B0B0"
 text_shadow = false
 # Chrome art bakes its own accent edge; hide the procedural separator.
 separator_color = "#00000000"
-# Media-dock palette: dark transport squares, orange progress, cyan volume
-# (the reference's level meter is cyan).
-dock_button_fill = "#3A3A3AE6"
+# Media-dock palette on the dark band: translucent pills, orange
+# progress, lime volume (the original dark psix-hifi palette).
+dock_button_fill = "#00000055"
 dock_button_glyph = "#F5F5EC"
-dock_progress_track = "#00000026"
+dock_progress_track = "#FFFFFF22"
 dock_progress_fill = "#F5820F"
-dock_vol_track = "#00000026"
-dock_vol_fill = "#25B4E8"
+dock_vol_track = "#FFFFFF22"
+dock_vol_fill = "#8CEB32"
 
 # -- Themed software cursor (white arrow) --
 [cursor]
@@ -105,10 +100,10 @@ cursor_color = "#FFFFFFE0"
 cursor_stroke_width = 2
 
 [geometry]
-# Thin PSIX chrome: 14px status bar + 14px tab row, 36px footer.
+# Thin PSIX chrome: 14px status bar + 14px tab row, slim 30px footer.
 statusbar_height = 14
 tab_row_height = 14
-bottombar_height = 36
+bottombar_height = 30
 tab_w = 34
 tab_h = 13
 tab_gap = 3

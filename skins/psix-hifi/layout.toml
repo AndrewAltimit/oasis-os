@@ -10,7 +10,7 @@
 x = 0
 y = 28
 w = 480
-h = 208
+h = 214
 color = "#00000000"
 
 # Thin dark status bar (reference: ~13px gray gradient strip).
@@ -21,12 +21,13 @@ w = 480
 h = 14
 texture = "assets/bar_top.png"
 
-# Silver footer band housing the media dock (URL plate + transport +
-# progress + volume + tab strip). Height matches [geometry]
-# bottombar_height in theme.toml.
+# Slim dark footer band with a raised right tab shelf baked into the
+# texture (transparent top-left: the wallpaper shows through, so the bar
+# reads as two different widths like the reference). Height matches
+# [geometry] bottombar_height in theme.toml.
 [bar_bottom]
 x = 0
-y = 236
+y = 242
 w = 480
-h = 36
+h = 30
 texture = "assets/bar_bottom.png"
