@@ -85,6 +85,10 @@ pub struct BarTheme {
     pub media_tab_active: Color,
     /// Inactive media tab text color.
     pub media_tab_inactive: Color,
+    /// Active top-tab-row text color (defaults to `media_tab_active`).
+    pub tab_text_active: Color,
+    /// Inactive top-tab-row text color (defaults to `media_tab_inactive`).
+    pub tab_text_inactive: Color,
     /// Pipe separator color.
     pub pipe_color: Color,
     /// R-shoulder hint color.
@@ -563,6 +567,16 @@ pub struct ActiveTheme {
     pub(crate) tab_gap_override: Option<i32>,
     /// Explicit tab start X override (None = auto-scaled).
     pub(crate) tab_start_x_override: Option<i32>,
+    /// Explicit icon stripe height override (None = auto-scaled).
+    pub(crate) icon_stripe_h_override: Option<u32>,
+    /// Explicit icon fold size override (None = auto-scaled).
+    pub(crate) icon_fold_size_override: Option<u32>,
+    /// Explicit icon graphic height override (None = auto-scaled).
+    pub(crate) icon_gfx_h_override: Option<u32>,
+    /// Explicit icon graphic padding override (None = auto-scaled).
+    pub(crate) icon_gfx_pad_override: Option<u32>,
+    /// Explicit icon label padding override (None = auto-scaled).
+    pub(crate) icon_label_pad_override: Option<i32>,
 
     // -- Screen dimensions --
     /// Screen width (default 480, PSP native).

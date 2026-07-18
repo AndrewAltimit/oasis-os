@@ -183,6 +183,14 @@ pub struct BarOverrides {
     pub media_tab_active: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_tab_inactive: Option<String>,
+    /// Active top-tab-row text color. Defaults to `media_tab_active`; set
+    /// both to decouple the top tab row from the bottom media-tab strip
+    /// (e.g. white-on-dark top tabs over a light footer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_text_active: Option<String>,
+    /// Inactive top-tab-row text color (defaults to `media_tab_inactive`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_text_inactive: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipe_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

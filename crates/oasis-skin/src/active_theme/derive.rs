@@ -291,6 +291,11 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.icon_label_pad)
                 .unwrap_or(4),
+            icon_stripe_h_override: skin.geometry.as_ref().and_then(|g| g.icon_stripe_h),
+            icon_fold_size_override: skin.geometry.as_ref().and_then(|g| g.icon_fold_size),
+            icon_gfx_h_override: skin.geometry.as_ref().and_then(|g| g.icon_gfx_h),
+            icon_gfx_pad_override: skin.geometry.as_ref().and_then(|g| g.icon_gfx_pad),
+            icon_label_pad_override: skin.geometry.as_ref().and_then(|g| g.icon_label_pad),
             tab_w_override: skin
                 .geometry
                 .as_ref()
@@ -517,6 +522,16 @@ impl ActiveTheme {
             tab_inactive_alpha: bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
             media_tab_active: ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
             media_tab_inactive: ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
+            // Top tab-row text follows the media-tab colors unless a skin
+            // decouples them (e.g. dark top tabs over a light footer).
+            tab_text_active: ov(
+                bar_ov.and_then(|b| b.tab_text_active.as_ref()),
+                ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
+            ),
+            tab_text_inactive: ov(
+                bar_ov.and_then(|b| b.tab_text_inactive.as_ref()),
+                ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
+            ),
             pipe_color: ov(
                 bar_ov.and_then(|b| b.pipe_color.as_ref()).or(bar_text),
                 with_alpha(text, 60),
@@ -1196,6 +1211,8 @@ impl ActiveTheme {
             tab_inactive_alpha: 60,
             media_tab_active: text,
             media_tab_inactive: dim,
+            tab_text_active: text,
+            tab_text_inactive: dim,
             pipe_color: with_alpha(text, 60),
             r_hint_color: with_alpha(text, 140),
             category_label_color: with_alpha(text, 220),
@@ -1523,6 +1540,11 @@ impl ActiveTheme {
             tab_h_override: None,
             tab_gap_override: None,
             tab_start_x_override: None,
+            icon_stripe_h_override: None,
+            icon_fold_size_override: None,
+            icon_gfx_h_override: None,
+            icon_gfx_pad_override: None,
+            icon_label_pad_override: None,
             screen_w: 480,
             screen_h: 272,
             clear_color: darken(background, 0.5),

@@ -32,7 +32,7 @@ use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::{self, CursorState};
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
+use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
@@ -693,7 +693,15 @@ fn run_skin_scenario(
     let mut vfs = MemoryVfs::new();
     populate_demo_vfs(&mut vfs);
 
-    let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
+    // Themed discovery mirrors the real shell (main.rs); the default
+    // fallback table matches `discover_apps`, so goldens for skins without
+    // a `fallback_colors` override are unchanged.
+    let apps = discover_apps_themed(
+        &vfs,
+        "/apps",
+        Some("OASISOS"),
+        &active_theme.icon.fallback_colors,
+    )?;
     let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
     let mut dashboard = DashboardState::new(dash_config, apps);
     let mut status_bar = StatusBar::new();

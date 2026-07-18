@@ -26,7 +26,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::cursor::{self, CursorState};
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
+use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
@@ -89,7 +89,16 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         .with_screen_size(w, h)
         .with_features(&skin.features);
 
-    let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
+    // Themed discovery mirrors the real shell (main.rs): skins overriding
+    // `icon_overrides.fallback_colors` get their emblem palette here too.
+    // The default table matches `discover_apps`, so other skins are
+    // pixel-identical.
+    let apps = discover_apps_themed(
+        &vfs,
+        "/apps",
+        Some("OASISOS"),
+        &active_theme.icon.fallback_colors,
+    )?;
     let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
     let mut dashboard = DashboardState::new(dash_config, apps);
     let mut status_bar = StatusBar::new();

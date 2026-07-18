@@ -539,9 +539,9 @@ impl BottomBar {
             at.bar.separator_color,
         );
 
-        // Classic-only elements the dock replaces or omits.
-        hide_objects(sdi, &["bar_url", "bar_r_hint"]);
-        hide_bezel(sdi, "bar_url_bezel");
+        // Classic-only elements the dock omits (the URL plate is kept:
+        // PSIX's footer leads with its site plate at the left edge).
+        hide_objects(sdi, &["bar_r_hint"]);
         hide_objects(sdi, &PAGE_DOT_NAMES);
 
         // Right side: clock (optional), then media tabs, then USB.
@@ -590,13 +590,56 @@ impl BottomBar {
             }
         }
 
-        // Left side: transport pills with primitive triangle glyphs.
-        let left = if features.start_menu {
+        // Left side: URL plate (PSIX site plate) followed by transport
+        // pills. The plate reuses the classic footer's objects so switching
+        // bottombar styles never leaks a stale copy.
+        let url_offset = if features.start_menu {
             at.menu.button_width as i32 + 10
         } else {
-            8
+            0
         };
-        let pill_h = (bar_h as i32 - 8).max(10);
+        let bz_y = bar_y + 2;
+        let bz_h = bar_h.saturating_sub(4);
+        let left = if at.bar.url_text.is_empty() {
+            if let Ok(obj) = sdi.get_mut("bar_url") {
+                obj.visible = false;
+            }
+            hide_bezel(sdi, "bar_url_bezel");
+            url_offset + 8
+        } else {
+            let end = 8 + url_offset + text_px(&at.bar.url_text, font_small);
+            ensure_text(
+                sdi,
+                "bar_url",
+                8 + url_offset,
+                text_y,
+                font_small,
+                at.bar.url_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_url") {
+                obj.set_text(&at.bar.url_text);
+                obj.visible = true;
+                if at.bar.text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
+                }
+            }
+            let url_bx = 2i32 + url_offset;
+            let url_bw = (end + 6 - url_bx).max(60) as u32;
+            ensure_chrome_bezel(
+                sdi,
+                "bar_url_bezel",
+                url_bx,
+                bz_y,
+                url_bw,
+                bz_h,
+                &BezelStyle::chrome(),
+            );
+            end + 6
+        };
+        // Compact transport pills (~1/3 bar height): PSIX's transports are
+        // small chrome squares, not full-height buttons.
+        let pill_h = (bar_h as i32 / 3).max(10);
         let pill_w = pill_h + 6;
         let gap = 4;
         let by = bar_y + (bar_h as i32 - pill_h) / 2;

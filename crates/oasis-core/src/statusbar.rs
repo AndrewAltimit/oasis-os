@@ -411,14 +411,14 @@ impl StatusBar {
                 tx.max(x + 2),
                 tab_text_y,
                 font_small,
-                at.bar.media_tab_inactive,
+                at.bar.tab_text_inactive,
             );
             if let Ok(obj) = sdi.get_mut(name) {
                 obj.set_text(tab.label());
                 obj.text_color = if is_active {
-                    at.bar.media_tab_active
+                    at.bar.tab_text_active
                 } else {
-                    at.bar.media_tab_inactive
+                    at.bar.tab_text_inactive
                 };
             }
         }

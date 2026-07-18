@@ -1,27 +1,29 @@
-# psix-hifi layout -- glossy alpha-silhouette chrome bars.
+# psix-hifi layout -- thin dark status chrome + silver footer band.
 # The status/bottom bar modules own these SDI objects; assigning a
 # texture replaces their procedural fill with the PSIX chrome art.
 # No dark content backdrop here (unlike psix-tribute): icons and labels
 # sit directly on the bright ribbon wallpaper, PSIX-style, staying legible
-# via icon outlines + label text shadows. The base layout ships an OPAQUE
+# via icon outlines + label drop shadows. The base layout ships an OPAQUE
 # content_bg (derived from the theme); override it to fully transparent so
 # the wallpaper + wordmark show through the whole desktop.
 [content_bg]
 x = 0
-y = 24
+y = 28
 w = 480
-h = 224
+h = 208
 color = "#00000000"
 
+# Thin dark status bar (reference: ~13px gray gradient strip).
 [bar_top]
 x = 0
 y = 0
 w = 480
-h = 28
+h = 14
 texture = "assets/bar_top.png"
 
-# Taller footer to house the media dock (transport + progress + volume
-# + tab strip). Height matches [geometry] bottombar_height in theme.toml.
+# Silver footer band housing the media dock (URL plate + transport +
+# progress + volume + tab strip). Height matches [geometry]
+# bottombar_height in theme.toml.
 [bar_bottom]
 x = 0
 y = 236

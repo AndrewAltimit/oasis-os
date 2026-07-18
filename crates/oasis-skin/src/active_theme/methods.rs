@@ -27,11 +27,13 @@ impl ActiveTheme {
         self.tab_start_x = self.tab_start_x_override.unwrap_or_else(|| scale(34));
         self.pipe_gap = scale(5);
         self.r_hint_w = scale(28);
-        self.icon_stripe_h = scale_u(12);
-        self.icon_fold_size = scale_u(10);
-        self.icon_gfx_h = scale_u(22);
-        self.icon_gfx_pad = scale_u(4);
-        self.icon_label_pad = scale(4);
+        // Icon anatomy honours explicit `[geometry]` overrides like the tab
+        // fields above; only unset values fall back to the scaled defaults.
+        self.icon_stripe_h = self.icon_stripe_h_override.unwrap_or_else(|| scale_u(12));
+        self.icon_fold_size = self.icon_fold_size_override.unwrap_or_else(|| scale_u(10));
+        self.icon_gfx_h = self.icon_gfx_h_override.unwrap_or_else(|| scale_u(22));
+        self.icon_gfx_pad = self.icon_gfx_pad_override.unwrap_or_else(|| scale_u(4));
+        self.icon_label_pad = self.icon_label_pad_override.unwrap_or_else(|| scale(4));
 
         // Scale dashboard grid and icon dimensions.
         self.grid_padding_x = scale(self.grid_padding_x as i32) as u16;

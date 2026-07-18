@@ -12,7 +12,8 @@ dashboard_pages = 3
 icons_per_page = 3
 grid_cols = 5
 grid_rows = 3
-start_menu = true
+# No START pill: the reference footer leads with the URL plate instead.
+start_menu = false
 show_tabs = true
 # PSIX puts the clock TOP-RIGHT (not in the dock). Keeping it out of the
 # footer also frees ~120px so the media dock's transport + progress +

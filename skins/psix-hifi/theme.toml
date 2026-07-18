@@ -1,8 +1,8 @@
 # psix-hifi theme -- maximum-fidelity PSIX 1.1 desktop.
-# Baked ribbon wallpaper (image, not procedural), bold centered "psix"
-# wordmark watermark, glossy shaped chrome, column desktop icons, and the
-# media-dock footer. Exercises the M1 asset pipeline + the new column /
-# media_dock engine features.
+# Baked ribbon wallpaper (image, not procedural) with ripple rings, a
+# tone-on-tone "psix" wordmark right of centre, thin dark status chrome
+# over a silver footer band, uniform red icon emblems, and the media-dock
+# footer. Exercises the M1 asset pipeline + column / media_dock features.
 
 # -- 9 base colors --
 background = "#141416"
@@ -23,27 +23,26 @@ border_radius = 3
 shadow_intensity = 1
 gradient_enabled = true
 
-# -- Baked orange -> lime ribbon wallpaper (512x512 asset, cover fit) --
+# -- Baked orange -> green ribbon wallpaper (512x512 asset, cover fit) --
 [wallpaper]
 style = "image"
 source = "assets/wall.png"
 fit = "cover"
 
-# -- Bold "psix" wordmark, large and centred in the field (PSIX signature) --
+# -- "psix" wordmark: modest, tone-on-tone, right of centre (PSIX 1.1) --
 [[background_layers]]
 kind = "image"
 source = "assets/wordmark.png"
-alpha = 200
+alpha = 215
 
 [background_layers.position]
 anchor = "center"
-offset_x = 0.14
-offset_y = 0.06
+offset_x = 0.29
+offset_y = -0.02
 
 [background_layers.animation]
 pulse_speed = 0.15
-pulse_min_alpha = 0.85
-drift_x = 2.0
+pulse_min_alpha = 0.92
 
 # -- Motion language: PSIX assemble entrance + sliding pages --
 [transition]
@@ -53,47 +52,74 @@ page_style = "slide"
 easing = "ease_out_cubic"
 fade_color = "#0A0A0C"
 
-# -- Bars: shaped chrome textures in layout.toml; tab pills + dock here --
+# -- Bars: thin dark status chrome up top, silver footer band below.
+# Top tab row copies the reference: active tab is a dark box with white
+# text, inactive tabs are white boxes with gray text (tab_text_* decouple
+# the top row from the dark-on-silver bottom media-tab strip).
 [bar_overrides]
+version_text = "Version 0.1 Public"
+version_color = "#FFFFFF"
+battery_color = "#9A9A9A"
+clock_color = "#B8B8B8"
+category_label_color = "#2E2E2E"
 tab_texture_active = "assets/tab_active.png"
 tab_texture_inactive = "assets/tab_inactive.png"
-text_shadow = true
-text_shadow_color = "#000000B0"
+tab_text_active = "#FFFFFF"
+tab_text_inactive = "#6E6E6E"
+# Bottom strip sits on the silver band: dark text, gray inactive.
+media_tab_active = "#1E1E1E"
+media_tab_inactive = "#8A8A8A"
+url_text = "HTTP://PSIXONLINE.COM"
+url_color = "#5A5A5A"
+usb_color = "#2E2E2E"
+pipe_color = "#B0B0B0"
+text_shadow = false
 # Chrome art bakes its own accent edge; hide the procedural separator.
 separator_color = "#00000000"
-# Media-dock palette: dark transport pills, orange progress, lime volume.
-dock_button_fill = "#00000055"
+# Media-dock palette: dark transport squares, orange progress, cyan volume
+# (the reference's level meter is cyan).
+dock_button_fill = "#3A3A3AE6"
 dock_button_glyph = "#F5F5EC"
-dock_progress_track = "#FFFFFF22"
+dock_progress_track = "#00000026"
 dock_progress_fill = "#F5820F"
-dock_vol_track = "#FFFFFF22"
-dock_vol_fill = "#8CEB32"
+dock_vol_track = "#00000026"
+dock_vol_fill = "#25B4E8"
 
 # -- Themed software cursor (white arrow) --
 [cursor]
 texture = "assets/cursor.png"
 hotspot = [1, 1]
 
-# -- PSIX document icons: light page bodies, dark outline, dark labels --
+# -- PSIX document icons: white page bodies, uniform red emblem, white
+# labels with auto drop shadow (reference: red-ribbon pages, white text) --
 [icon_overrides]
 icon_style = "document"
-body_color = "#F0F0E8"
-fold_color = "#C8C8BE"
-outline_color = "#2A2A2E"
-label_color = "#141416"
+body_color = "#F8F8F4"
+fold_color = "#D8D8D2"
+outline_color = "#55554E"
+label_color = "#FFFFFF"
+fallback_colors = ["#C83223"]
 cursor_style = "stroke"
-cursor_color = "#F5820F"
+# White ring: an orange ring vanishes into the orange half of the ribbon.
+cursor_color = "#FFFFFFE0"
 cursor_stroke_width = 2
 
 [geometry]
-statusbar_height = 28
+# Thin PSIX chrome: 14px status bar + 14px tab row, 36px footer.
+statusbar_height = 14
+tab_row_height = 14
 bottombar_height = 36
-tab_row_height = 16
-# Small icons so the left column stays sparse and PSIX-like.
-icon_width = 28
-icon_height = 32
-icon_stripe_h = 14
-icon_fold_size = 9
+tab_w = 34
+tab_h = 13
+tab_gap = 3
+tab_start_x = 34
+# Small page icons; no top stripe, small red emblem pane.
+icon_width = 26
+icon_height = 30
+icon_stripe_h = 0
+icon_fold_size = 8
+icon_gfx_h = 10
+icon_gfx_pad = 8
 focus_ring_color = "#F5820FAA"
 
 # -- Interactive widget states --
