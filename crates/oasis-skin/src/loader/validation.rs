@@ -291,6 +291,23 @@ impl Skin {
                 ("input", &["bg", "border", "focus_border"]),
                 ("toggle", &["track_off", "track_on", "thumb"]),
                 ("scrollbar", &["track", "thumb", "thumb_hover"]),
+                ("slider", &["track", "fill", "thumb"]),
+                (
+                    "menu",
+                    &[
+                        "bg",
+                        "border",
+                        "text",
+                        "hover_bg",
+                        "hover_text",
+                        "dropdown_bg",
+                        "dropdown_border_light",
+                        "dropdown_border_dark",
+                        "item_text",
+                        "disabled_text",
+                        "separator",
+                    ],
+                ),
             ];
             let mut widgets: Vec<&String> = states.keys().collect();
             widgets.sort();
@@ -298,7 +315,7 @@ impl Skin {
                 match KNOWN.iter().find(|(w, _)| w == widget) {
                     None => warnings.push(format!(
                         "widget_states.{widget}: unknown widget (expected one of: \
-                         button, input, toggle, scrollbar)"
+                         button, input, toggle, scrollbar, slider, menu)"
                     )),
                     Some((_, keys)) => {
                         let mut slots: Vec<&String> = states[widget].keys().collect();

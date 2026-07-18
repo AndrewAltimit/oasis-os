@@ -169,7 +169,9 @@ impl Widget for ColorPicker {
         }
         ctx.backend.stroke_rect(x, y, SV_SIZE, SV_SIZE, 1, border)?;
 
-        // Cursor in SV area.
+        // Cursor in SV area. Deliberately not themed: the marker sits
+        // on top of arbitrary hues from the HSV gradient, so a fixed
+        // white outline is a color-neutral choice, not a palette color.
         let cur_x = x + (self.saturation * (SV_SIZE - 1) as f32) as i32;
         let cur_y = y + ((1.0 - self.value) * (SV_SIZE - 1) as f32) as i32;
         ctx.backend
@@ -189,7 +191,7 @@ impl Widget for ColorPicker {
         ctx.backend
             .stroke_rect(hue_x, y, HUE_BAR_WIDTH, SV_SIZE, 1, border)?;
 
-        // Hue cursor.
+        // Hue cursor (white for the same color-neutral reason as above).
         let hue_cursor_y = y + (self.hue / 360.0 * (SV_SIZE - 1) as f32) as i32;
         ctx.backend
             .fill_rect(hue_x - 1, hue_cursor_y, HUE_BAR_WIDTH + 2, 2, Color::WHITE)?;

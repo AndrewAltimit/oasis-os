@@ -98,6 +98,24 @@ impl SkinTheme {
             toggle_track_off: Color::rgba(255, 255, 255, 10),
             toggle_track_on: accent,
             toggle_thumb: text,
+            // Slider slots default to the fields the widget used to
+            // borrow (input_bg / accent / surface).
+            slider_track: darken(bg, 0.8),
+            slider_fill: accent,
+            slider_thumb: surface,
+            // Menu slots keep the MenuBar widget's classic Win95 grays
+            // until a skin overrides `[widget_states.menu]`.
+            menu_bg: Color::rgb(240, 240, 240),
+            menu_border: Color::rgb(180, 180, 180),
+            menu_text: Color::rgb(30, 30, 30),
+            menu_hover_bg: Color::rgb(49, 106, 197),
+            menu_hover_text: Color::rgb(255, 255, 255),
+            menu_dropdown_bg: Color::rgb(236, 236, 236),
+            menu_dropdown_border_light: Color::rgb(255, 255, 255),
+            menu_dropdown_border_dark: Color::rgb(105, 105, 105),
+            menu_item_text: Color::rgb(20, 20, 20),
+            menu_disabled_text: Color::rgb(150, 150, 150),
+            menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: lighten(bg, 0.15),
             tooltip_text: text,
 
@@ -240,6 +258,10 @@ fn apply_typography(theme: &mut Theme, typo: &super::TypographyOverrides) {
 /// - `input`: `bg`, `border`, `focus_border`
 /// - `toggle`: `track_off`, `track_on`, `thumb`
 /// - `scrollbar`: `track`, `thumb`, `thumb_hover`
+/// - `slider`: `track`, `fill`, `thumb`
+/// - `menu`: `bg`, `border`, `text`, `hover_bg`, `hover_text`,
+///   `dropdown_bg`, `dropdown_border_light`, `dropdown_border_dark`,
+///   `item_text`, `disabled_text`, `separator`
 fn apply_widget_states(
     theme: &mut Theme,
     states: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
@@ -265,6 +287,28 @@ fn apply_widget_states(
         (&mut theme.scrollbar_track, "scrollbar", "track"),
         (&mut theme.scrollbar_thumb, "scrollbar", "thumb"),
         (&mut theme.scrollbar_thumb_hover, "scrollbar", "thumb_hover"),
+        (&mut theme.slider_track, "slider", "track"),
+        (&mut theme.slider_fill, "slider", "fill"),
+        (&mut theme.slider_thumb, "slider", "thumb"),
+        (&mut theme.menu_bg, "menu", "bg"),
+        (&mut theme.menu_border, "menu", "border"),
+        (&mut theme.menu_text, "menu", "text"),
+        (&mut theme.menu_hover_bg, "menu", "hover_bg"),
+        (&mut theme.menu_hover_text, "menu", "hover_text"),
+        (&mut theme.menu_dropdown_bg, "menu", "dropdown_bg"),
+        (
+            &mut theme.menu_dropdown_border_light,
+            "menu",
+            "dropdown_border_light",
+        ),
+        (
+            &mut theme.menu_dropdown_border_dark,
+            "menu",
+            "dropdown_border_dark",
+        ),
+        (&mut theme.menu_item_text, "menu", "item_text"),
+        (&mut theme.menu_disabled_text, "menu", "disabled_text"),
+        (&mut theme.menu_separator, "menu", "separator"),
     ] {
         if let Some(c) = get(key, widget_key) {
             *slot = c;
