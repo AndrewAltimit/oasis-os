@@ -249,9 +249,6 @@ impl Default for ActiveTheme {
             transition_entrance_frames: 45,
             transition_page_style: "slide".to_string(),
             transition_easing: String::new(),
-            focus_ring_color: Color::rgba(100, 200, 255, 180),
-            focus_ring_width: 2,
-            focus_ring_offset: 2,
             font_body: 12,
             font_hint: 10,
             font_heading: 14,
@@ -268,7 +265,6 @@ impl Default for ActiveTheme {
             app_themes: std::collections::HashMap::new(),
             gradients: std::collections::HashMap::new(),
             animations: std::collections::HashMap::new(),
-            widget_states: std::collections::HashMap::new(),
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }

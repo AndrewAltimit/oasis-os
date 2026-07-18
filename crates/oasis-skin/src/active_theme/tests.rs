@@ -233,13 +233,9 @@ easing = "ease_out_cubic"
     }
 
     #[test]
-    fn widget_state_color_returns_none_by_default() {
-        let at = ActiveTheme::default();
-        assert!(at.widget_state_color("button", "hover_bg").is_none());
-    }
-
-    #[test]
-    fn widget_state_color_from_theme_toml() {
+    fn widget_states_baked_into_ui_theme() {
+        // `[widget_states.*]` has no separate ActiveTheme accessor: the
+        // overrides are baked into the embedded `ui_theme` at derivation.
         let toml = r##"
 [widget_states.button]
 normal_bg = "#505050"
@@ -249,16 +245,39 @@ disabled_text = "#555555"
 "##;
         let skin: SkinTheme = toml::from_str(toml).unwrap();
         let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ui_theme.button_bg, Color::rgb(0x50, 0x50, 0x50));
+        assert_eq!(at.ui_theme.button_bg_hover, Color::rgb(0x65, 0x65, 0x65));
+        assert_eq!(at.ui_theme.button_bg_pressed, Color::rgb(0x35, 0x35, 0x35));
+        assert_eq!(at.ui_theme.text_disabled, Color::rgb(0x55, 0x55, 0x55));
+    }
+
+    #[test]
+    fn focus_ring_geometry_baked_into_ui_theme() {
+        let toml = r##"
+[geometry]
+focus_ring_color = "#FF00FFA0"
+focus_ring_width = 3
+focus_ring_offset = 4
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
         assert_eq!(
-            at.widget_state_color("button", "hover_bg"),
-            Some(Color::rgb(0x65, 0x65, 0x65))
+            at.ui_theme.focus_ring_color,
+            Some(Color::rgba(0xFF, 0x00, 0xFF, 0xA0))
         );
-        assert_eq!(
-            at.widget_state_color("button", "disabled_text"),
-            Some(Color::rgb(0x55, 0x55, 0x55))
-        );
-        assert!(at.widget_state_color("button", "missing_key").is_none());
-        assert!(at.widget_state_color("slider", "hover_bg").is_none());
+        assert_eq!(at.ui_theme.focus_ring_width, Some(3));
+        assert_eq!(at.ui_theme.focus_ring_offset, Some(4));
+    }
+
+    #[test]
+    fn focus_ring_unset_stays_none_in_ui_theme() {
+        // Skins that don't author focus_ring_* must leave the ui_theme
+        // fields unset so FocusStyle keeps its accent derivation.
+        let skin = SkinTheme::default();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ui_theme.focus_ring_color, None);
+        assert_eq!(at.ui_theme.focus_ring_width, None);
+        assert_eq!(at.ui_theme.focus_ring_offset, None);
     }
 
     #[test]

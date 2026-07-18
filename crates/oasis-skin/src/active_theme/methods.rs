@@ -114,17 +114,6 @@ impl ActiveTheme {
         }
     }
 
-    /// Look up a per-widget state color override.
-    ///
-    /// Returns `Some(color)` if `[widget_states.<widget>]` defines the key,
-    /// or `None` to fall back to the computed value.
-    pub fn widget_state_color(&self, widget: &str, state_key: &str) -> Option<Color> {
-        self.widget_states
-            .get(widget)
-            .and_then(|m| m.get(state_key))
-            .copied()
-    }
-
     /// Apply the system-wide font scale factor to a raw font size.
     ///
     /// Returns the scaled font size as a `u16`, clamped to at least 1.

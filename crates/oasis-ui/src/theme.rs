@@ -114,6 +114,18 @@ pub struct Theme {
     /// Tooltip text color.
     pub tooltip_text: Color,
 
+    /// Focus ring color override for keyboard-focus indicators.
+    ///
+    /// `None` means "not themed": `FocusStyle` derives the ring color
+    /// from `accent` exactly as it always has. Skins set this via
+    /// `[geometry] focus_ring_color`.
+    pub focus_ring_color: Option<Color>,
+    /// Focus ring stroke width override in pixels (`None` = default).
+    pub focus_ring_width: Option<u16>,
+    /// Focus ring offset from the widget edge in pixels
+    /// (`None` = default).
+    pub focus_ring_offset: Option<i32>,
+
     /// Extra-small font size.
     pub font_size_xs: u16,
     /// Small font size.
@@ -281,6 +293,10 @@ impl Theme {
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
 
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
+
             font_size_xs: 8,
             font_size_sm: 8,
             font_size_md: 8,
@@ -366,6 +382,10 @@ impl Theme {
             menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(40, 40, 50),
             tooltip_text: Color::rgb(240, 240, 245),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -471,6 +491,10 @@ impl Theme {
             menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(0, 0, 0),
             tooltip_text: Color::rgb(255, 255, 255),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -599,6 +623,10 @@ impl Theme {
             menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,

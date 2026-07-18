@@ -466,13 +466,20 @@ pub struct GeometryOverrides {
     /// Press flash duration in frames (default 6; 0 = disabled).
     #[serde(default)]
     pub press_flash_duration: Option<u32>,
-    /// Focus ring color (hex, default: derived from primary).
+    /// Focus ring color (hex) for widget keyboard-focus indicators.
+    ///
+    /// Applies to `oasis-ui` widget focus rings (via
+    /// `ui::Theme::focus_ring_color` / `FocusStyle::from_theme`), not
+    /// to the dashboard icon cursor/glow, which keeps its own
+    /// `[icon_overrides]` `focus_glow_*` theming. When unset, focus
+    /// rings derive from the accent color.
     #[serde(default)]
     pub focus_ring_color: Option<String>,
-    /// Focus ring stroke width in pixels (default 2).
+    /// Focus ring stroke width in pixels (widget focus only).
     #[serde(default)]
     pub focus_ring_width: Option<u16>,
-    /// Focus ring offset from element edge in pixels (default 2).
+    /// Focus ring offset from the widget edge in pixels
+    /// (widget focus only).
     #[serde(default)]
     pub focus_ring_offset: Option<i32>,
     /// Cursor highlight padding around icon (default 3).
