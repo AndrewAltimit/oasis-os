@@ -45,8 +45,13 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 ## Generating Screenshots
 
 ```bash
-# All skins
-for skin in classic xp modern desktop corrupted macos gnome balatro retro-cga paper win95 solarized vaporwave highcontrast altimit; do
+# All skins (captures every built-in + external skin, incl. psix-tribute)
+cargo run -p oasis-app --bin oasis-screenshot --all
+
+# ...or one skin at a time
+for skin in classic xp modern desktop corrupted macos gnome balatro \
+            retro-cga paper win95 solarized vaporwave highcontrast \
+            altimit psix-tribute; do
   cargo run -p oasis-app --bin oasis-screenshot "$skin"
 done
 ```
