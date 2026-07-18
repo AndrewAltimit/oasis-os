@@ -26,6 +26,8 @@ pub struct Toggle {
     pub on: bool,
     /// Animation progress (0.0 = off, 1.0 = on).
     pub progress: f32,
+    /// Whether the toggle has keyboard focus (draws a focus ring).
+    pub focused: bool,
 }
 
 impl Toggle {
@@ -34,6 +36,7 @@ impl Toggle {
         Self {
             on,
             progress: if on { 1.0 } else { 0.0 },
+            focused: false,
         }
     }
 
@@ -299,6 +302,11 @@ impl Widget for Toggle {
         let thumb_y = y + h as i32 / 2;
         ctx.backend
             .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.toggle_thumb)?;
+
+        // Keyboard focus ring around the track.
+        if self.focused {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
         Ok(())
     }
 }

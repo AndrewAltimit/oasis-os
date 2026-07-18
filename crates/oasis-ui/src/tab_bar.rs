@@ -26,6 +26,8 @@ pub struct TabBar {
     pub style: TabStyle,
     /// Whether the tab bar is disabled (non-interactive).
     pub disabled: bool,
+    /// Whether the tab bar has keyboard focus (rings the active tab).
+    pub focused: bool,
 }
 
 impl TabBar {
@@ -36,6 +38,7 @@ impl TabBar {
             active: 0,
             style: TabStyle::Underline,
             disabled: false,
+            focused: false,
         }
     }
 
@@ -262,6 +265,17 @@ impl Widget for TabBar {
                         )?;
                     }
                 },
+            }
+
+            // Keyboard focus ring around the active tab.
+            if active && self.focused && !self.disabled {
+                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                    ctx.backend,
+                    tx,
+                    y,
+                    this_tab_w,
+                    h,
+                )?;
             }
 
             let text_w = ctx.backend.measure_text(tab, fs);

@@ -51,6 +51,15 @@ the same branch, closing the gaps a post-M5 audit surfaced:
 - **Widget completeness**: menu_bar derives from `ui::Theme` (defaults pin
   the Win95 grays), dedicated slider fields, new `widget_states.menu` /
   `widget_states.slider` slots.
+- **Uniform widget interaction states + focus rings**: a single
+  `WidgetStateColors` resolver (`oasis-ui/src/states.rs`) maps the
+  `WidgetState` (Disabled > Pressed > Hover > Normal) onto the existing
+  `ui::Theme` interaction fields, so `[widget_states.*]` overrides recolor
+  button / checkbox / radio / toggle / slider / spin box / dropdown /
+  tab bar / input field consistently instead of per-widget hardcoding.
+  Each of those focusable widgets now also draws a keyboard focus ring via
+  `FocusStyle::from_theme`. Pure rename for the default theme (rings only
+  show in the focused state) — screenshots unchanged.
 - **Terminal + shell holes**: 16-color `[palette]` ANSI table derived per
   skin, SGR foreground-color runs in terminal output (`ls`/`tree`/errors
   emit color), fully themeable boot splash (`[boot]`), themed procedural

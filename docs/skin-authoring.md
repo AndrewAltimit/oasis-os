@@ -748,6 +748,30 @@ defaults are the classic Win95 grays the menu bar widget has always
 used, so skins that never touch `[widget_states.menu]` render exactly
 as before.
 
+### Widget interaction states
+
+The `[widget_states.button]` and `[widget_states.input]` slots above are
+routed into every interactive widget through a single resolver,
+`WidgetStateColors` (in `oasis-ui/src/states.rs`). A widget collapses its
+hover / pressed / disabled booleans into a `WidgetState`
+(priority `Disabled > Pressed > Hover > Normal`) and asks the resolver for
+the background, text, and border color to paint. Buttons, the shared
+button/accent fills used by many widgets, and the interaction-colored
+controls all share this one mapping, so overriding `hover_bg`,
+`pressed_bg`, `disabled_bg`, or `disabled_text` recolors them uniformly
+rather than per-widget.
+
+With no `[widget_states.*]` overrides the resolver reproduces each
+widget's previous colors byte-for-byte — it is a pure rename of the
+`Theme` fields the widgets already referenced — so default skins render
+identically.
+
+Focusable widgets (button, checkbox, radio, toggle, slider, spin box,
+dropdown, tab bar, input field) additionally draw a keyboard **focus
+ring** when focused, using `FocusStyle::from_theme`. The ring honors the
+`[geometry] focus_ring_*` overrides (color / width / offset) and only
+appears in the focused state, so resting screenshots are unaffected.
+
 Unknown widget or slot names are flagged by `skin lint`.
 
 ## Per-App Palettes (app_themes)

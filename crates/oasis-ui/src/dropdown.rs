@@ -28,6 +28,8 @@ pub struct Dropdown {
     pub open: bool,
     /// Placeholder text shown when no option is selected.
     pub placeholder: String,
+    /// Whether the dropdown has keyboard focus (rings the header row).
+    pub focused: bool,
 }
 
 impl Dropdown {
@@ -38,6 +40,7 @@ impl Dropdown {
             selected: 0,
             open: false,
             placeholder: String::new(),
+            focused: false,
         }
     }
 
@@ -281,6 +284,11 @@ impl Widget for Dropdown {
             .fill_rounded_rect(x, y, w, row_h, radius, ctx.theme.input_bg)?;
         ctx.backend
             .stroke_rounded_rect(x, y, w, row_h, radius, 1, ctx.theme.input_border)?;
+
+        // Keyboard focus ring around the header row.
+        if self.focused {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, row_h)?;
+        }
 
         let label = self.selected_text();
         ctx.backend.draw_text_ellipsis(

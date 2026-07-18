@@ -47,6 +47,8 @@ pub struct Slider {
     pub show_value_label: bool,
     /// Thumb diameter in pixels.
     pub thumb_size: u16,
+    /// Whether the slider has keyboard focus (rings the thumb).
+    pub focused: bool,
 }
 
 impl Slider {
@@ -65,6 +67,7 @@ impl Slider {
             disabled: false,
             show_value_label: false,
             thumb_size: 12,
+            focused: false,
         }
     }
 
@@ -264,6 +267,17 @@ impl Widget for Slider {
                         .fill_circle(thumb_cx, thumb_cy, thumb_r - 1, thumb_fill)?;
                 }
 
+                // Keyboard focus ring around the thumb.
+                if self.focused && !self.disabled {
+                    crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                        ctx.backend,
+                        thumb_cx - thumb_r as i32,
+                        thumb_cy - thumb_r as i32,
+                        ts,
+                        ts,
+                    )?;
+                }
+
                 // Value label.
                 if self.show_value_label {
                     let label = format_display_value(self.display_value());
@@ -313,6 +327,17 @@ impl Widget for Slider {
                 if thumb_r > 1 {
                     ctx.backend
                         .fill_circle(thumb_cx, thumb_cy, thumb_r - 1, thumb_fill)?;
+                }
+
+                // Keyboard focus ring around the thumb.
+                if self.focused && !self.disabled {
+                    crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                        ctx.backend,
+                        thumb_cx - thumb_r as i32,
+                        thumb_cy - thumb_r as i32,
+                        ts,
+                        ts,
+                    )?;
                 }
 
                 // Value label (below the slider).

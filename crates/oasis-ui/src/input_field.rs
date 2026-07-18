@@ -383,6 +383,11 @@ impl Widget for InputField {
         };
         ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
 
+        // Keyboard focus ring (in addition to the focus-colored border).
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
+
         // Text or placeholder.
         let fs = ctx.theme.font_size_md;
         let text_h = ctx.backend.measure_text_height(fs);
