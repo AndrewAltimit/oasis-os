@@ -22,6 +22,7 @@ pub use parsing::{SkinLayout, SkinObjectDef};
 
 /// Top-level skin manifest (`skin.toml`).
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinManifest {
     /// Human-readable skin name.
     pub name: String,
@@ -42,16 +43,16 @@ pub struct SkinManifest {
     pub screen_height: u32,
     /// Desktop render width override (default: PSP-native 480x272 skins
     /// are upscaled to 1280x720 on desktop; other sizes render as-is).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_width: Option<u32>,
     /// Desktop render height override (see `desktop_width`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_height: Option<u32>,
     /// Parent skin to inherit from (built-in name).
     ///
     /// Child skin only needs to specify overrides; non-overridden fields
     /// come from the parent. Max depth 3 to prevent infinite recursion.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherits: Option<String>,
 }
 
@@ -67,6 +68,7 @@ fn default_height() -> u32 {
 
 /// Feature gates controlling which capabilities a skin exposes.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinFeatures {
     /// Whether the dashboard icon grid is shown.
     #[serde(default = "yes")]
@@ -148,10 +150,10 @@ pub struct SkinFeatures {
     #[serde(default = "yes")]
     pub clock_in_bottombar: bool,
     /// Custom fade transition duration in frames (default 15).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_fade_frames: Option<u32>,
     /// Custom slide transition duration in frames (default 20).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_slide_frames: Option<u32>,
     /// Disable animations for accessibility (defaults to false).
     #[serde(default)]

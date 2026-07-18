@@ -11,8 +11,11 @@ pub mod corrupted;
 pub mod effects;
 pub mod legacy_theme;
 mod loader;
+#[cfg(feature = "serialize")]
+mod serialize;
 pub mod strings;
 pub mod theme;
+mod variants;
 
 pub use active_theme::{
     ActiveTheme, AnsiPalette, AppScreenTheme, BarTheme, IconTheme, ImageLayerTheme, OskTheme,
@@ -22,11 +25,14 @@ pub use assets::SkinAsset;
 pub use corrupted::{CorruptedModifiers, SimpleRng};
 pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};
+#[cfg(feature = "serialize")]
+pub use serialize::SkinTomlParts;
 pub use strings::SkinStrings;
 pub use theme::{
     AppOverrides, BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, IconOverrides,
     OskOverrides, PaletteOverrides, SkinTheme, WmThemeOverrides, parse_hex_color,
 };
+pub use variants::{SkinVariant, VARIANT_REQUEST_PREFIX, resolve_skin_request};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;

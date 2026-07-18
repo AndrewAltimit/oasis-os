@@ -10,7 +10,9 @@ use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
-use oasis_types::backend::SdiBackend;
+use oasis_skin::theme::parse_hex_color;
+use oasis_skin::{SkinTheme, SkinVariant, resolve_skin};
+use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -20,6 +22,17 @@ pub use colors::SettingsColors;
 
 /// VFS IPC path used to request a skin change.
 pub const SKIN_CHANGE_REQUEST_PATH: &str = "/system/ipc/skin-change";
+
+/// VFS IPC path used to request an in-memory theme preview ("Apply" in the
+/// Appearance editor). The payload is a serialized `SkinTheme` TOML document;
+/// the shell keeps the current skin's layout/features and swaps only the
+/// theme, without writing anything to disk.
+pub const SKIN_APPLY_THEME_REQUEST_PATH: &str = "/system/ipc/skin-apply-theme";
+
+/// VFS IPC path used to save the edited theme as a custom skin. The payload
+/// is `<name>\n<theme toml>`; the shell writes `skins/<name>/` in the
+/// standard directory format and then swaps to it by name.
+pub const SKIN_SAVE_CUSTOM_REQUEST_PATH: &str = "/system/ipc/skin-save-custom";
 
 /// VFS IPC path used to request a resolution change.
 ///
@@ -53,6 +66,7 @@ pub const RESOLUTION_PRESETS: &[(u32, u32)] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
     Display,
+    Appearance,
     Resolution,
     Audio,
     System,
@@ -60,8 +74,9 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 5] = [
+    const ALL: [Category; 6] = [
         Category::Display,
+        Category::Appearance,
         Category::Resolution,
         Category::Audio,
         Category::System,
@@ -71,11 +86,94 @@ impl Category {
     fn label(self) -> &'static str {
         match self {
             Category::Display => "Display",
+            Category::Appearance => "Appearance",
             Category::Resolution => "Resolution",
             Category::Audio => "Audio",
             Category::System => "System",
             Category::About => "About",
         }
+    }
+}
+
+/// Labels for the 9 editable base palette colors, in `SkinTheme` order.
+const BASE_COLOR_LABELS: [&str; 9] = [
+    "Background",
+    "Primary",
+    "Secondary",
+    "Text",
+    "Dim Text",
+    "Status Bar",
+    "Prompt",
+    "Output",
+    "Error",
+];
+
+/// Number of action rows after the 9 color rows in the Appearance list
+/// (Apply, Save, and one row per variant).
+const APPEARANCE_ACTIONS: usize = 2 + SkinVariant::ALL.len();
+
+/// Format a color as `#RRGGBB`.
+fn hex(c: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
+}
+
+/// State for the Appearance base-color editor.
+#[derive(Debug)]
+struct AppearanceState {
+    /// The 9 editable base palette colors (order matches
+    /// [`BASE_COLOR_LABELS`]).
+    colors: [Color; 9],
+    /// Which skin the palette was loaded from (reloaded when the shell
+    /// publishes a different active skin).
+    loaded_for: String,
+    /// Active channel while editing a color row (0 = R, 1 = G, 2 = B).
+    /// `None` when not in edit mode.
+    editing_channel: Option<u8>,
+    /// Color value before edit mode was entered, for Cancel-revert.
+    edit_backup: Color,
+}
+
+impl Default for AppearanceState {
+    fn default() -> Self {
+        Self {
+            colors: [Color::BLACK; 9],
+            loaded_for: String::new(),
+            editing_channel: None,
+            edit_backup: Color::BLACK,
+        }
+    }
+}
+
+impl AppearanceState {
+    /// Load the palette from a skin's theme.
+    fn load_from_theme(&mut self, theme: &SkinTheme, skin_name: &str) {
+        let parse = |s: &str, fallback: Color| parse_hex_color(s).unwrap_or(fallback);
+        self.colors = [
+            parse(&theme.background, Color::BLACK),
+            parse(&theme.primary, Color::rgb(50, 100, 200)),
+            parse(&theme.secondary, Color::rgb(80, 80, 80)),
+            parse(&theme.text, Color::WHITE),
+            parse(&theme.dim_text, Color::rgb(128, 128, 128)),
+            parse(&theme.status_bar, Color::rgb(40, 60, 90)),
+            parse(&theme.prompt, Color::rgb(0, 255, 0)),
+            parse(&theme.output, Color::rgb(204, 204, 204)),
+            parse(&theme.error, Color::rgb(255, 68, 68)),
+        ];
+        self.loaded_for = skin_name.to_string();
+        self.editing_channel = None;
+    }
+
+    /// Write the palette into a theme's 9 base color fields.
+    fn write_to_theme(&self, theme: &mut SkinTheme) {
+        theme.background = hex(self.colors[0]);
+        theme.primary = hex(self.colors[1]);
+        theme.secondary = hex(self.colors[2]);
+        theme.text = hex(self.colors[3]);
+        theme.dim_text = hex(self.colors[4]);
+        theme.status_bar = hex(self.colors[5]);
+        theme.prompt = hex(self.colors[6]);
+        theme.output = hex(self.colors[7]);
+        theme.error = hex(self.colors[8]);
     }
 }
 
@@ -97,6 +195,8 @@ pub struct SettingsApp {
     backend_name: String,
     /// Audio volume level (0-100).
     volume: u32,
+    /// Appearance editor state (base palette, edit mode).
+    appearance: AppearanceState,
 }
 
 impl SettingsApp {
@@ -115,6 +215,7 @@ impl SettingsApp {
             height,
             backend_name: backend_name.to_string(),
             volume: 80,
+            appearance: AppearanceState::default(),
         };
         // Align the cursor with the currently active skin so the highlight
         // starts on the running skin rather than always on the first entry.
@@ -175,6 +276,7 @@ impl SettingsApp {
 
         match self.category {
             Category::Display => self.build_display_lines(&mut lines),
+            Category::Appearance => self.build_appearance_lines(&mut lines),
             Category::Resolution => self.build_resolution_lines(&mut lines),
             Category::Audio => self.build_audio_lines(&mut lines),
             Category::System => self.build_system_lines(&mut lines),
@@ -205,6 +307,176 @@ impl SettingsApp {
 
         lines.push(String::new());
         lines.push(format!("  Resolution: {} x {}", self.width, self.height));
+    }
+
+    /// Build lines for the Appearance category (base-color editor).
+    ///
+    /// Layout mirrors the other list categories: header at line 2, blank at
+    /// line 3, selectable items from [`Self::ITEMS_START`] on. Items are the
+    /// 9 base colors followed by the action rows (Apply / Save / variants),
+    /// with no gaps so `item_cursor` maps 1:1 to lines.
+    fn build_appearance_lines(&self, lines: &mut Vec<String>) {
+        lines.push("  Appearance - Base Colors".to_string());
+        lines.push(String::new());
+
+        for (i, label) in BASE_COLOR_LABELS.iter().enumerate() {
+            let c = self.appearance.colors[i];
+            if self.item_cursor == i && self.appearance.editing_channel.is_some() {
+                let ch = self.appearance.editing_channel.unwrap_or(0);
+                let mark = |idx: u8, name: char, v: u8| {
+                    if ch == idx {
+                        format!("[{name}:{v:3}]")
+                    } else {
+                        format!(" {name}:{v:3} ")
+                    }
+                };
+                lines.push(format!(
+                    "   {label:<11} {} {}{}{}",
+                    hex(c),
+                    mark(0, 'R', c.r),
+                    mark(1, 'G', c.g),
+                    mark(2, 'B', c.b),
+                ));
+            } else {
+                lines.push(format!("   {label:<11} {}", hex(c)));
+            }
+        }
+
+        lines.push("   [ Apply (preview) ]".to_string());
+        lines.push(format!("   [ Save as '{}' ]", self.custom_skin_name()));
+        for v in SkinVariant::ALL {
+            lines.push(format!("   [ Variant: {} ]", v.label()));
+        }
+
+        lines.push(String::new());
+        if self.appearance.editing_channel.is_some() {
+            lines.push("  [U/D]=Value  [L/R]=Channel".to_string());
+            lines.push("  [Confirm]=Done  [Cancel]=Revert".to_string());
+        } else {
+            lines.push("  [Confirm]=Edit color / activate".to_string());
+        }
+    }
+
+    /// Name used by "Save as custom skin": `custom-<base>` where `<base>` is
+    /// the current skin without any existing `custom-` prefix or variant
+    /// suffix, so repeated saves don't stack prefixes.
+    fn custom_skin_name(&self) -> String {
+        let base = self
+            .current_skin
+            .strip_prefix("custom-")
+            .unwrap_or(&self.current_skin);
+        format!("custom-{base}")
+    }
+
+    /// Ensure the Appearance palette reflects the currently active skin.
+    fn ensure_appearance_palette(&mut self) {
+        if self.appearance.loaded_for == self.current_skin {
+            return;
+        }
+        let name = self.current_skin.clone();
+        match resolve_skin(&name) {
+            Ok(skin) => self.appearance.load_from_theme(&skin.theme, &name),
+            Err(_) => {
+                let default_theme = SkinTheme::default();
+                self.appearance.load_from_theme(&default_theme, &name);
+            },
+        }
+    }
+
+    /// The theme to apply/save: the active skin's theme with the edited
+    /// palette written over its 9 base colors.
+    fn edited_theme(&self) -> SkinTheme {
+        let mut theme = resolve_skin(&self.current_skin)
+            .map(|s| s.theme)
+            .unwrap_or_default();
+        self.appearance.write_to_theme(&mut theme);
+        theme
+    }
+
+    /// Handle Confirm on an Appearance row.
+    fn appearance_confirm(&mut self) {
+        if self.item_cursor < BASE_COLOR_LABELS.len() {
+            // Enter edit mode on a color row.
+            self.appearance.editing_channel = Some(0);
+            self.appearance.edit_backup = self.appearance.colors[self.item_cursor];
+            self.refresh_lines();
+            self.sync_content_cursor();
+            return;
+        }
+        let action = self.item_cursor - BASE_COLOR_LABELS.len();
+        match action {
+            // Apply (preview): send the edited theme for an in-memory swap.
+            0 => {
+                if let Ok(toml_doc) = self.edited_theme().to_toml_string() {
+                    self.content.pending_vfs_request =
+                        Some((SKIN_APPLY_THEME_REQUEST_PATH.to_string(), toml_doc));
+                }
+            },
+            // Save as custom skin: the shell writes skins/<name>/ and swaps.
+            1 => {
+                if let Ok(toml_doc) = self.edited_theme().to_toml_string() {
+                    let payload = format!("{}\n{toml_doc}", self.custom_skin_name());
+                    self.content.pending_vfs_request =
+                        Some((SKIN_SAVE_CUSTOM_REQUEST_PATH.to_string(), payload));
+                }
+            },
+            // Variant rows: transform the local palette, then auto-preview so
+            // the variant is immediately visible (and saveable afterwards).
+            n => {
+                if let Some(&variant) = SkinVariant::ALL.get(n - 2) {
+                    let variant_theme = self.edited_theme().derive_variant(variant);
+                    let loaded_for = self.appearance.loaded_for.clone();
+                    self.appearance.load_from_theme(&variant_theme, &loaded_for);
+                    if let Ok(toml_doc) = variant_theme.to_toml_string() {
+                        self.content.pending_vfs_request =
+                            Some((SKIN_APPLY_THEME_REQUEST_PATH.to_string(), toml_doc));
+                    }
+                    self.refresh_lines();
+                }
+            },
+        }
+    }
+
+    /// Handle input while a color row is in edit mode. Returns the action to
+    /// bubble up (always `None`; Cancel exits edit mode, not the app).
+    fn handle_appearance_edit(&mut self, button: &Button) -> AppAction {
+        let Some(channel) = self.appearance.editing_channel else {
+            return AppAction::None;
+        };
+        let idx = self.item_cursor.min(BASE_COLOR_LABELS.len() - 1);
+        match button {
+            Button::Left => {
+                self.appearance.editing_channel = Some((channel + 2) % 3);
+            },
+            Button::Right => {
+                self.appearance.editing_channel = Some((channel + 1) % 3);
+            },
+            Button::Up | Button::Down => {
+                let c = &mut self.appearance.colors[idx];
+                let field = match channel {
+                    0 => &mut c.r,
+                    1 => &mut c.g,
+                    _ => &mut c.b,
+                };
+                const STEP: u8 = 8;
+                *field = if matches!(button, Button::Up) {
+                    field.saturating_add(STEP)
+                } else {
+                    field.saturating_sub(STEP)
+                };
+            },
+            Button::Confirm | Button::Triangle => {
+                self.appearance.editing_channel = None;
+            },
+            Button::Cancel => {
+                self.appearance.colors[idx] = self.appearance.edit_backup;
+                self.appearance.editing_channel = None;
+            },
+            _ => return AppAction::None,
+        }
+        self.refresh_lines();
+        self.sync_content_cursor();
+        AppAction::None
     }
 
     /// Build lines for the Resolution category.
@@ -286,6 +558,13 @@ impl SettingsApp {
             && skin != self.current_skin
         {
             self.current_skin = skin;
+            if self.category == Category::Appearance {
+                // The shell swapped skins under us -- reload the palette so
+                // the editor reflects the actually-running theme (unless the
+                // swap was our own preview, which keeps the same skin name
+                // and therefore doesn't reach this branch).
+                self.ensure_appearance_palette();
+            }
             if self.category == Category::Display {
                 let names = builtin_names();
                 if let Some(idx) = names.iter().position(|n| *n == self.current_skin) {
@@ -352,7 +631,10 @@ impl SettingsApp {
     /// that actually have a list of selectable items — scrollable text
     /// categories leave content.cursor alone.
     fn sync_content_cursor(&mut self) {
-        if !matches!(self.category, Category::Display | Category::Resolution) {
+        if !matches!(
+            self.category,
+            Category::Display | Category::Appearance | Category::Resolution
+        ) {
             return;
         }
         let target = Self::ITEMS_START + self.item_cursor;
@@ -369,6 +651,7 @@ impl SettingsApp {
     fn item_count(&self) -> usize {
         match self.category {
             Category::Display => builtin_names().len(),
+            Category::Appearance => BASE_COLOR_LABELS.len() + APPEARANCE_ACTIONS,
             Category::Resolution => RESOLUTION_PRESETS.len(),
             // No selectable items -- Audio uses Up/Down for volume directly.
             Category::Audio | Category::System | Category::About => 0,
@@ -394,12 +677,7 @@ impl SettingsApp {
             .position(|c| *c == self.category)
             .unwrap_or(0);
         let next = (idx + 1) % Category::ALL.len();
-        self.category = Category::ALL[next];
-        self.item_cursor = self.cursor_for_category(self.category);
-        self.content.scroll = 0;
-        self.content.cursor = 0;
-        self.refresh_lines();
-        self.sync_content_cursor();
+        self.enter_category(Category::ALL[next]);
     }
 
     /// Switch to the previous category (left).
@@ -413,8 +691,18 @@ impl SettingsApp {
         } else {
             idx - 1
         };
-        self.category = Category::ALL[prev];
-        self.item_cursor = self.cursor_for_category(self.category);
+        self.enter_category(Category::ALL[prev]);
+    }
+
+    /// Common category-switch bookkeeping.
+    fn enter_category(&mut self, category: Category) {
+        // Leaving the Appearance editor always drops edit mode.
+        self.appearance.editing_channel = None;
+        self.category = category;
+        if category == Category::Appearance {
+            self.ensure_appearance_palette();
+        }
+        self.item_cursor = self.cursor_for_category(category);
         self.content.scroll = 0;
         self.content.cursor = 0;
         self.refresh_lines();
@@ -424,6 +712,7 @@ impl SettingsApp {
     /// Handle confirm action in the current category.
     fn handle_confirm(&mut self) {
         match self.category {
+            Category::Appearance => self.appearance_confirm(),
             Category::Display => {
                 let names = builtin_names();
                 if self.item_cursor < names.len() {
@@ -609,6 +898,13 @@ impl App for SettingsApp {
         // a pending change.
         self.sync_from_vfs(vfs);
 
+        // Color-edit mode captures all input (Left/Right cycle channels
+        // instead of switching categories; Cancel reverts instead of
+        // exiting the app).
+        if self.category == Category::Appearance && self.appearance.editing_channel.is_some() {
+            return self.handle_appearance_edit(button);
+        }
+
         match button {
             Button::Cancel => AppAction::Exit,
 
@@ -628,7 +924,7 @@ impl App for SettingsApp {
                         self.volume = (self.volume + 5).min(100);
                         self.refresh_lines();
                     },
-                    Category::Display | Category::Resolution => {
+                    Category::Display | Category::Appearance | Category::Resolution => {
                         if self.item_cursor > 0 {
                             self.item_cursor -= 1;
                             self.refresh_lines();
@@ -650,7 +946,7 @@ impl App for SettingsApp {
                         self.volume = self.volume.saturating_sub(5);
                         self.refresh_lines();
                     },
-                    Category::Display | Category::Resolution => {
+                    Category::Display | Category::Appearance | Category::Resolution => {
                         let count = self.item_count();
                         if count > 0 && self.item_cursor + 1 < count {
                             self.item_cursor += 1;
@@ -713,6 +1009,12 @@ impl App for SettingsApp {
                     self.refresh_lines();
                     self.sync_content_cursor();
                 }
+            },
+            Category::Appearance if item_idx < self.item_count() => {
+                self.item_cursor = item_idx;
+                self.handle_confirm();
+                self.refresh_lines();
+                self.sync_content_cursor();
             },
             Category::Resolution if item_idx < RESOLUTION_PRESETS.len() => {
                 self.item_cursor = item_idx;
@@ -826,7 +1128,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         app.handle_input(&Button::Right, &vfs);
-        assert_eq!(app.category, Category::Resolution);
+        assert_eq!(app.category, Category::Appearance);
     }
 
     #[test]
@@ -893,8 +1195,9 @@ mod tests {
     fn audio_volume_up() {
         let vfs = make_vfs();
         let mut app = make_app();
-        for _ in 0..2 {
-            app.handle_input(&Button::Right, &vfs); // Display -> Resolution -> Audio
+        for _ in 0..3 {
+            // Display -> Appearance -> Resolution -> Audio
+            app.handle_input(&Button::Right, &vfs);
         }
         assert_eq!(app.category, Category::Audio);
         let before = app.volume;
@@ -906,7 +1209,7 @@ mod tests {
     fn audio_volume_down() {
         let vfs = make_vfs();
         let mut app = make_app();
-        for _ in 0..2 {
+        for _ in 0..3 {
             app.handle_input(&Button::Right, &vfs);
         }
         let before = app.volume;
@@ -918,7 +1221,7 @@ mod tests {
     fn audio_volume_clamped_at_100() {
         let vfs = make_vfs();
         let mut app = make_app();
-        for _ in 0..2 {
+        for _ in 0..3 {
             app.handle_input(&Button::Right, &vfs);
         }
         app.volume = 100;
@@ -930,7 +1233,7 @@ mod tests {
     fn audio_volume_clamped_at_0() {
         let vfs = make_vfs();
         let mut app = make_app();
-        for _ in 0..2 {
+        for _ in 0..3 {
             app.handle_input(&Button::Right, &vfs);
         }
         app.volume = 0;
@@ -943,7 +1246,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         // Navigate to System.
-        for _ in 0..3 {
+        for _ in 0..4 {
             app.handle_input(&Button::Right, &vfs);
         }
         assert_eq!(app.category, Category::System);
@@ -957,7 +1260,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         // Navigate to About.
-        for _ in 0..4 {
+        for _ in 0..5 {
             app.handle_input(&Button::Right, &vfs);
         }
         assert_eq!(app.category, Category::About);
@@ -1010,7 +1313,7 @@ mod tests {
     fn audio_lines_contain_volume() {
         let vfs = make_vfs();
         let mut app = make_app();
-        for _ in 0..2 {
+        for _ in 0..3 {
             app.handle_input(&Button::Right, &vfs);
         }
         let lines = app.lines();
@@ -1024,6 +1327,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         app.handle_input(&Button::Right, &vfs);
+        app.handle_input(&Button::Right, &vfs);
         assert_eq!(app.category, Category::Resolution);
         let lines = app.lines();
         assert!(lines.iter().any(|l| l.contains("480x272")));
@@ -1034,6 +1338,7 @@ mod tests {
     fn resolution_current_is_marked() {
         let vfs = make_vfs();
         let mut app = make_app();
+        app.handle_input(&Button::Right, &vfs);
         app.handle_input(&Button::Right, &vfs);
         let lines = app.lines();
         assert!(
@@ -1051,6 +1356,7 @@ mod tests {
         // being aligned rather than just defaulting to 0.
         let mut app = SettingsApp::new("/apps/settings", "classic", 1280, 720, "SDL3");
         app.handle_input(&Button::Right, &vfs);
+        app.handle_input(&Button::Right, &vfs);
         assert_eq!(app.category, Category::Resolution);
         // 1280x720 is index 3 in RESOLUTION_PRESETS.
         assert_eq!(app.item_cursor, 3);
@@ -1060,7 +1366,8 @@ mod tests {
     fn confirm_resolution_writes_request() {
         let vfs = make_vfs();
         let mut app = make_app();
-        // Display -> Resolution.
+        // Display -> Appearance -> Resolution.
+        app.handle_input(&Button::Right, &vfs);
         app.handle_input(&Button::Right, &vfs);
         // Move from 480x272 (idx 0) to 1280x720 (idx 3).
         for _ in 0..3 {
@@ -1078,6 +1385,7 @@ mod tests {
     fn confirm_same_resolution_no_request() {
         let vfs = make_vfs();
         let mut app = make_app();
+        app.handle_input(&Button::Right, &vfs);
         app.handle_input(&Button::Right, &vfs);
         // Cursor starts on the active resolution, so Confirm should no-op.
         app.handle_input(&Button::Confirm, &vfs);
@@ -1148,7 +1456,6 @@ mod tests {
 
     #[test]
     fn click_on_skin_row_applies() {
-        let vfs = make_vfs();
         let mut app = make_app();
         // Items render starting at line 4 (tabs + separator + header + blank).
         // Renderer uses title_bar_height = 20 + line_h = 14, so line 4 lives
@@ -1186,6 +1493,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         // Navigate to Resolution category.
+        app.handle_input(&Button::Right, &vfs);
         app.handle_input(&Button::Right, &vfs);
         assert_eq!(app.category, Category::Resolution);
         // Click the 4th preset (1280x720, index 3 → content line 4+3=7 →
@@ -1319,5 +1627,157 @@ mod tests {
         // Slots without overrides keep the theme default.
         let title = sdi.get("app_title_bg").expect("app_title_bg exists");
         assert_eq!(title.color, at.app.title_bar_bg);
+    }
+
+    // -- Appearance editor --
+
+    /// Navigate a fresh app to the Appearance category.
+    fn appearance_app(vfs: &MemoryVfs) -> SettingsApp {
+        let mut app = make_app();
+        app.handle_input(&Button::Right, vfs);
+        assert_eq!(app.category, Category::Appearance);
+        app
+    }
+
+    #[test]
+    fn appearance_lists_base_colors_and_actions() {
+        let vfs = make_vfs();
+        let app = appearance_app(&vfs);
+        let lines = app.lines();
+        for label in BASE_COLOR_LABELS {
+            assert!(
+                lines.iter().any(|l| l.contains(label)),
+                "missing color row {label}"
+            );
+        }
+        assert!(lines.iter().any(|l| l.contains("Apply")));
+        assert!(lines.iter().any(|l| l.contains("custom-classic")));
+        assert!(lines.iter().any(|l| l.contains("Variant: Dark")));
+        assert!(lines.iter().any(|l| l.contains("Variant: High Contrast")));
+    }
+
+    #[test]
+    fn appearance_palette_matches_current_skin() {
+        let vfs = make_vfs();
+        let app = appearance_app(&vfs);
+        let classic = resolve_skin("classic").expect("classic resolves");
+        let expected = parse_hex_color(&classic.theme.background).expect("valid hex");
+        assert_eq!(app.appearance.colors[0], expected);
+    }
+
+    #[test]
+    fn appearance_edit_adjusts_channel() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        let before = app.appearance.colors[0];
+        // Enter edit mode on Background, bump R by one step, commit.
+        app.handle_input(&Button::Confirm, &vfs);
+        assert!(app.appearance.editing_channel.is_some());
+        app.handle_input(&Button::Up, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        assert!(app.appearance.editing_channel.is_none());
+        assert_eq!(app.appearance.colors[0].r, before.r.saturating_add(8));
+        assert_eq!(app.appearance.colors[0].g, before.g);
+    }
+
+    #[test]
+    fn appearance_edit_cancel_reverts() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        let before = app.appearance.colors[0];
+        app.handle_input(&Button::Confirm, &vfs);
+        app.handle_input(&Button::Up, &vfs);
+        app.handle_input(&Button::Up, &vfs);
+        // Cancel exits edit mode and restores the color (not the app).
+        let action = app.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::None);
+        assert!(app.appearance.editing_channel.is_none());
+        assert_eq!(app.appearance.colors[0], before);
+    }
+
+    #[test]
+    fn appearance_edit_captures_left_right() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        // Left/Right cycle channels instead of switching categories.
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.category, Category::Appearance);
+        assert_eq!(app.appearance.editing_channel, Some(1));
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.appearance.editing_channel, Some(0));
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.appearance.editing_channel, Some(2));
+    }
+
+    #[test]
+    fn appearance_apply_posts_theme_toml() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        // Move to the "Apply" row (first action after the 9 colors).
+        for _ in 0..BASE_COLOR_LABELS.len() {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, payload) = app.take_pending_request().expect("apply posts IPC");
+        assert_eq!(path, SKIN_APPLY_THEME_REQUEST_PATH);
+        let theme = SkinTheme::from_toml_str(&payload).expect("payload is a valid theme");
+        assert_eq!(
+            parse_hex_color(&theme.background),
+            Some(app.appearance.colors[0])
+        );
+    }
+
+    #[test]
+    fn appearance_save_posts_named_payload() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        for _ in 0..BASE_COLOR_LABELS.len() + 1 {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, payload) = app.take_pending_request().expect("save posts IPC");
+        assert_eq!(path, SKIN_SAVE_CUSTOM_REQUEST_PATH);
+        let (name, theme_toml) = payload.split_once('\n').expect("name line present");
+        assert_eq!(name, "custom-classic");
+        assert!(SkinTheme::from_toml_str(theme_toml).is_ok());
+    }
+
+    #[test]
+    fn appearance_variant_transforms_palette_and_previews() {
+        let vfs = make_vfs();
+        let mut app = appearance_app(&vfs);
+        // classic is dark; the Light variant row should flip the background
+        // into the light half and immediately post a preview.
+        let light_row = BASE_COLOR_LABELS.len() + 2 + 1; // Apply, Save, Dark, Light
+        for _ in 0..light_row {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, _) = app.take_pending_request().expect("variant posts preview");
+        assert_eq!(path, SKIN_APPLY_THEME_REQUEST_PATH);
+        let bg = app.appearance.colors[0];
+        let luma = 0.2126 * bg.r as f32 + 0.7152 * bg.g as f32 + 0.0722 * bg.b as f32;
+        assert!(luma > 127.0, "light variant background not light: {bg:?}");
+    }
+
+    #[test]
+    fn custom_skin_name_does_not_stack_prefix() {
+        let app = SettingsApp::new("/apps/settings", "custom-classic", 480, 272, "SDL3");
+        assert_eq!(app.custom_skin_name(), "custom-classic");
+    }
+
+    #[test]
+    fn appearance_palette_reload_on_external_skin_change() {
+        let mut vfs = MemoryVfs::new();
+        let mut app = appearance_app(&vfs);
+        let before = app.appearance.colors[0];
+        // Shell swaps to paper (a light skin) behind our back.
+        vfs.mkdir("/system").unwrap();
+        vfs.mkdir("/system/state").unwrap();
+        vfs.write(SKIN_STATE_PATH, b"paper").unwrap();
+        app.handle_input(&Button::Down, &vfs);
+        assert_eq!(app.appearance.loaded_for, "paper");
+        assert_ne!(app.appearance.colors[0], before);
     }
 }

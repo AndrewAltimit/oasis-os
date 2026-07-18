@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 /// User-facing text strings for a skin.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinStrings {
     /// Boot sequence text lines (displayed during startup animation).
     #[serde(default)]

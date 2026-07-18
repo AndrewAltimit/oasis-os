@@ -9,6 +9,13 @@ authors.workspace = true
 documentation = "https://docs.rs/oasis-skin"
 
 [features]
+default = ["serialize"]
+# Enable writing skins back to TOML (`Serialize` derives on the skin structs
+# plus the `Skin::to_toml_*` writers). Default-on for desktop / WASM / UE5.
+# Lean targets (e.g. a future PSP path that pulls oasis-skin with
+# `default-features = false`) can drop it to keep the compile surface
+# deserialization-only.
+serialize = []
 # Validate `[typography] font` assets by actually parsing them with fontdue.
 # Off by default so the PSP build (oasis-core with default-features = false)
 # never compiles fontdue; without it validation still checks existence and

@@ -22,6 +22,7 @@ pub use overrides::{
 
 /// Color scheme for a skin.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinTheme {
     /// Main background color.
     #[serde(default = "default_bg")]
@@ -53,62 +54,62 @@ pub struct SkinTheme {
 
     // -- Extended visual fields (optional, for modern rendering) --
     /// Surface color override (default: derived from background).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<String>,
     /// Accent color override (default: same as primary). Drives the UI
     /// accent family (hover/pressed/subtle) when set, letting a skin use
     /// a highlight color distinct from its primary.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
     /// Accent hover color override (default: derived from the accent).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_hover: Option<String>,
     /// Success/positive color override (toasts, status badges).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub success: Option<String>,
     /// Warning/caution color override (toasts, status badges).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
     /// Default border radius for UI elements (pixels).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_radius: Option<u16>,
     /// Shadow intensity (0 = none, 1 = subtle, 2 = medium, 3 = heavy).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_intensity: Option<u8>,
     /// Whether gradient fills are enabled for this skin.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient_enabled: Option<bool>,
 
     /// Whether the WM is visually themed by this skin.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wm_theme: Option<WmThemeOverrides>,
 
     /// Per-element color overrides for status/bottom bars.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_overrides: Option<BarOverrides>,
 
     /// Per-element color overrides for dashboard icons.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_overrides: Option<IconOverrides>,
 
     /// Per-element color overrides for browser chrome.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_overrides: Option<BrowserOverrides>,
 
     /// Per-element color overrides for app screens.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_overrides: Option<AppOverrides>,
 
     /// Per-element color overrides for the on-screen keyboard.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osk_overrides: Option<OskOverrides>,
 
     /// Per-element color overrides for the start menu popup.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_menu_overrides: Option<StartMenuOverrides>,
 
     /// Wallpaper generation configuration.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<WallpaperConfig>,
 
     /// Software mouse cursor theming (texture + hotspot + procedural
@@ -119,23 +120,23 @@ pub struct SkinTheme {
     /// fill = "#FFFFFF"
     /// outline = "#000000"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<CursorConfig>,
 
     /// Geometry overrides (bar heights, icon sizes, font sizes).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<GeometryOverrides>,
 
     /// Typography scale for the widget toolkit (font-size ladder + spacing).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typography: Option<TypographyOverrides>,
 
     /// Transition effect overrides.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionOverrides>,
 
     /// Per-element overrides for scrollbar appearance.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
 
     /// 16-slot ANSI terminal palette overrides.
@@ -147,7 +148,7 @@ pub struct SkinTheme {
     /// ```
     ///
     /// Unset slots derive from the skin's base colors.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub palette: Option<PaletteOverrides>,
 
     /// Boot splash color overrides.
@@ -157,7 +158,7 @@ pub struct SkinTheme {
     /// banner_border = "#AA88FF"
     /// sky_stops = ["#02001A", "#050044", "#150088", "#5500CC", "#AA55FF", "#FFFFFF"]
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot: Option<BootOverrides>,
 
     /// Background decoration layers for the dashboard.
@@ -168,7 +169,7 @@ pub struct SkinTheme {
     /// spacing = 30
     /// color = "#FFFFFF12"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_layers: Option<Vec<BackgroundLayerConfig>>,
 
     /// Chrome decoration layers rendered in the overlay pass — on top of
@@ -184,11 +185,11 @@ pub struct SkinTheme {
     /// color = "#FFFFFF30"
     /// position = { anchor = "top_right", offset_x = -0.05, offset_y = 0.04 }
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chrome_layers: Option<Vec<BackgroundLayerConfig>>,
 
     /// Performance settings for background layers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_performance: Option<BackgroundPerformanceConfig>,
 
     /// Per-app color overrides keyed by app name.
@@ -202,7 +203,7 @@ pub struct SkinTheme {
     /// bg = "#0A1628"
     /// grid_line = "#1A3A5C"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_themes:
         Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 
@@ -213,7 +214,7 @@ pub struct SkinTheme {
     /// from = "#0066FF"
     /// to = "#0044AA"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradients: Option<std::collections::HashMap<String, GradientPreset>>,
 
     /// Named animation timing presets.
@@ -223,7 +224,7 @@ pub struct SkinTheme {
     /// duration_ms = 100
     /// easing = "ease_out_quad"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animations: Option<std::collections::HashMap<String, AnimationPreset>>,
 
     /// Per-widget state color overrides.
@@ -236,7 +237,7 @@ pub struct SkinTheme {
     /// disabled_bg = "#3A3A3A"
     /// disabled_text = "#555555"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget_states:
         Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 
@@ -248,7 +249,7 @@ pub struct SkinTheme {
     /// nav = "assets/nav.wav"
     /// volume = 0.8
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sounds: Option<SkinSounds>,
 }
 
@@ -256,27 +257,28 @@ pub struct SkinTheme {
 /// asset by skin-relative path (e.g. `"assets/click.wav"`). Omitted events
 /// stay silent; a skin without a `[sounds]` table is fully silent.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinSounds {
     /// Button / interactive element click.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub click: Option<String>,
     /// App launch / window open.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<String>,
     /// App / window close.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<String>,
     /// Error feedback (error toasts).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Non-error toast notification.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toast: Option<String>,
     /// Cursor / d-pad navigation between icons (rate-limited).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nav: Option<String>,
     /// Master volume for UI sounds, 0.0–1.0 (default 1.0).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<f32>,
 }
 
@@ -383,6 +385,12 @@ impl Default for SkinTheme {
 }
 
 impl SkinTheme {
+    /// Parse a theme from a TOML string (the body of a `theme.toml`).
+    pub fn from_toml_str(toml_str: &str) -> oasis_types::error::Result<Self> {
+        toml::from_str(toml_str)
+            .map_err(|e| oasis_types::error::OasisError::Config(format!("theme: {e}").into()))
+    }
+
     /// Parse the background color string to a `Color`.
     pub fn background_color(&self) -> Color {
         parse_hex_color(&self.background).unwrap_or(Color::BLACK)

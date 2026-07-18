@@ -1639,8 +1639,11 @@ impl OasisWasm {
     }
 
     /// Apply a skin swap.
+    ///
+    /// `name` may also be a variant request (`"@variant:dark"`) that derives
+    /// a Dark / Light / High-contrast variant of the currently active skin.
     fn apply_skin_swap(&mut self, name: &str) {
-        match oasis_skin::resolve_skin(name) {
+        match oasis_skin::resolve_skin_request(name, &self.skin) {
             Ok(new_skin) => {
                 let swapped =
                     Skin::swap_scaled(&self.skin, new_skin, &mut self.sdi, self.width, self.height);

@@ -7,7 +7,7 @@ use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::{Skin, resolve_skin};
+use oasis_core::skin::{Skin, SkinTheme, resolve_skin, resolve_skin_request};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
 use oasis_core::terminal_sdi;
@@ -191,88 +191,102 @@ pub fn process_command_output(
 }
 
 /// Apply a skin swap after the Environment borrow has been dropped.
+///
+/// `name` may also be a variant request (`"@variant:dark"`), which derives
+/// a Dark / Light / High-contrast variant of the currently active skin.
 pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
-    match resolve_skin(name) {
-        Ok(new_skin) => {
-            let sw = state.active_theme.screen_w;
-            let sh = state.active_theme.screen_h;
-            let swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
-            state.active_theme = ActiveTheme::from_skin(&swapped.theme)
-                .with_screen_size(sw, sh)
-                .with_features(&swapped.features);
-            state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-            state.wm.set_theme(swapped.theme.build_wm_theme());
-
-            // Component SDI objects (dashboard icons, status/bottom bar,
-            // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
-            // `Skin::swap_scaled` didn't destroy them. Their decorative
-            // attributes (gradient_top/bottom, text_shadow_*, stroke_*,
-            // shadow_level, border_radius, …) persist from the previous
-            // skin because each component's `update_sdi` only writes the
-            // attributes the *current* skin needs. That bleed-through is
-            // what caused icon labels to render invisibly (e.g. stale
-            // gradient fill on the label object from a prior skin). Drop
-            // those objects here so every component rebuilds them cleanly
-            // on the next frame.
-            clear_component_sdi_objects(sdi);
-
-            let dash_config =
-                DashboardConfig::from_features(&swapped.features, &state.active_theme);
-            let apps = discover_apps_themed(
-                vfs,
-                "/apps",
-                Some("OASISOS"),
-                &state.active_theme.icon.fallback_colors,
-            )
-            .unwrap_or_default();
-            state.ui.dashboard = DashboardState::new(dash_config, apps);
-            crate::icon_drag::load_icon_positions(
-                &state.settings,
-                &swapped.manifest.name,
-                &mut state.ui.dashboard,
-            );
-            state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
-            state.ui.bottom_bar.current_page = 0;
-            state.ui.start_menu = StartMenuState::new_with_theme(
-                StartMenuState::default_items(&state.active_theme),
-                &state.active_theme,
-            );
-            state.ui.status_bar = oasis_core::statusbar::StatusBar::new();
-            state.ui.taskbar = oasis_core::taskbar::Taskbar::new();
-
-            // Mirror the parts of startup (`main()`) that depend on the
-            // theme rather than on the window surface: clear color and
-            // cursor scale are derived from the active theme, so they
-            // have to be re-read whenever the theme changes.
-            state.bg_color = state.active_theme.clear_color;
-            state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
-
-            state
-                .terminal
-                .output_lines
-                .push(format!("Switched to skin: {}", swapped.manifest.name));
-            state.skin = swapped;
-            // Swap-out frees the old skin's decoded SFX samples and loads
-            // the new skin's [sounds] WAVs (mirrors image asset lifecycle).
-            crate::ui_sfx::reload_for_skin(state);
-            // The wallpaper texture was generated against the previous theme
-            // (grid color, gradient stops, shader-layer visibility). The main
-            // loop holds the backend needed to upload a fresh texture, so
-            // flag it here and let `refresh_wallpaper_if_pending` do the work.
-            state.pending_wallpaper_refresh = true;
-            // Play the new skin's entrance so swaps feel like PSIX theme
-            // loads (also masks the wallpaper regeneration pop).
-            state.active_transition = crate::launch::make_entrance(
-                &state.active_theme,
-                state.skin.features.transition_fade_frames.unwrap_or(15),
-                sw,
-                sh,
-            );
-        },
+    match resolve_skin_request(name, &state.skin) {
+        Ok(new_skin) => apply_skin_object(new_skin, state, sdi, vfs),
         Err(e) => {
             state.terminal.output_lines.push(format!("Skin error: {e}"));
         },
     }
+}
+
+/// Apply an already-resolved skin to the running session.
+///
+/// This is the in-memory swap entry point: it never touches the skin
+/// registry on disk, so it also serves as the "Apply" (preview without
+/// saving) path for the Settings Appearance editor.
+pub fn apply_skin_object(
+    new_skin: Skin,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) {
+    let sw = state.active_theme.screen_w;
+    let sh = state.active_theme.screen_h;
+    let swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
+    state.active_theme = ActiveTheme::from_skin(&swapped.theme)
+        .with_screen_size(sw, sh)
+        .with_features(&swapped.features);
+    state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+    state.wm.set_theme(swapped.theme.build_wm_theme());
+
+    // Component SDI objects (dashboard icons, status/bottom bar,
+    // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
+    // `Skin::swap_scaled` didn't destroy them. Their decorative
+    // attributes (gradient_top/bottom, text_shadow_*, stroke_*,
+    // shadow_level, border_radius, …) persist from the previous
+    // skin because each component's `update_sdi` only writes the
+    // attributes the *current* skin needs. That bleed-through is
+    // what caused icon labels to render invisibly (e.g. stale
+    // gradient fill on the label object from a prior skin). Drop
+    // those objects here so every component rebuilds them cleanly
+    // on the next frame.
+    clear_component_sdi_objects(sdi);
+
+    let dash_config = DashboardConfig::from_features(&swapped.features, &state.active_theme);
+    let apps = discover_apps_themed(
+        vfs,
+        "/apps",
+        Some("OASISOS"),
+        &state.active_theme.icon.fallback_colors,
+    )
+    .unwrap_or_default();
+    state.ui.dashboard = DashboardState::new(dash_config, apps);
+    crate::icon_drag::load_icon_positions(
+        &state.settings,
+        &swapped.manifest.name,
+        &mut state.ui.dashboard,
+    );
+    state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
+    state.ui.bottom_bar.current_page = 0;
+    state.ui.start_menu = StartMenuState::new_with_theme(
+        StartMenuState::default_items(&state.active_theme),
+        &state.active_theme,
+    );
+    state.ui.status_bar = oasis_core::statusbar::StatusBar::new();
+    state.ui.taskbar = oasis_core::taskbar::Taskbar::new();
+
+    // Mirror the parts of startup (`main()`) that depend on the
+    // theme rather than on the window surface: clear color and
+    // cursor scale are derived from the active theme, so they
+    // have to be re-read whenever the theme changes.
+    state.bg_color = state.active_theme.clear_color;
+    state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
+
+    state
+        .terminal
+        .output_lines
+        .push(format!("Switched to skin: {}", swapped.manifest.name));
+    state.skin = swapped;
+    // Swap-out frees the old skin's decoded SFX samples and loads
+    // the new skin's [sounds] WAVs (mirrors image asset lifecycle).
+    crate::ui_sfx::reload_for_skin(state);
+    // The wallpaper texture was generated against the previous theme
+    // (grid color, gradient stops, shader-layer visibility). The main
+    // loop holds the backend needed to upload a fresh texture, so
+    // flag it here and let `refresh_wallpaper_if_pending` do the work.
+    state.pending_wallpaper_refresh = true;
+    // Play the new skin's entrance so swaps feel like PSIX theme
+    // loads (also masks the wallpaper regeneration pop).
+    state.active_transition = crate::launch::make_entrance(
+        &state.active_theme,
+        state.skin.features.transition_fade_frames.unwrap_or(15),
+        sw,
+        sh,
+    );
 }
 
 /// Destroy every SDI object owned by a UI component (dashboard icons,
@@ -734,10 +748,82 @@ pub fn poll_settings_ipc(
         }
     }
 
+    // "Apply" from the Settings Appearance editor: an in-memory theme
+    // preview. The payload is a serialized `SkinTheme` TOML document; the
+    // current skin's layout/features/strings are kept and only the theme is
+    // replaced. Nothing is written to disk.
+    let mut theme_preview: Option<SkinTheme> = None;
+    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH) {
+        let req = String::from_utf8_lossy(&data).to_string();
+        let _ = vfs.write(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH, b"");
+        if !req.trim().is_empty() {
+            match SkinTheme::from_toml_str(&req) {
+                Ok(theme) => theme_preview = Some(theme),
+                Err(e) => {
+                    state
+                        .terminal
+                        .output_lines
+                        .push(format!("Ignoring malformed theme preview: {e}"));
+                },
+            }
+        }
+    }
+
+    // "Save as custom skin" from the Settings Appearance editor. Payload is
+    // `<name>\n<theme toml>`; the skin is written to `skins/<name>/` in the
+    // standard directory format and then swapped in by name through the
+    // normal resolution path (which validates the save round-trips).
+    let mut save_custom: Option<(String, SkinTheme)> = None;
+    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH) {
+        let req = String::from_utf8_lossy(&data).to_string();
+        let _ = vfs.write(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH, b"");
+        if !req.trim().is_empty() {
+            match parse_save_custom_request(&req) {
+                Ok(parsed) => save_custom = Some(parsed),
+                Err(e) => {
+                    state
+                        .terminal
+                        .output_lines
+                        .push(format!("Ignoring malformed save-custom request: {e}"));
+                },
+            }
+        }
+    }
+
     let mut changed = false;
     if let Some(name) = skin_request {
         apply_skin_swap(&name, state, sdi, vfs);
         changed = true;
+    }
+    if let Some(theme) = theme_preview {
+        let mut preview = state.skin.clone();
+        preview.theme = theme;
+        apply_skin_object(preview, state, sdi, vfs);
+        changed = true;
+    }
+    if let Some((name, theme)) = save_custom {
+        let mut custom = state.skin.clone();
+        custom.theme = theme;
+        custom.manifest.name.clone_from(&name);
+        let dir = std::path::Path::new("skins").join(&name);
+        match custom.save_to_directory(&dir) {
+            Ok(()) => {
+                state
+                    .terminal
+                    .output_lines
+                    .push(format!("Saved custom skin to {}", dir.display()));
+                // Swap by name through the normal resolution path so the
+                // running session uses exactly what was written to disk.
+                apply_skin_swap(&name, state, sdi, vfs);
+                changed = true;
+            },
+            Err(e) => {
+                state
+                    .terminal
+                    .output_lines
+                    .push(format!("Failed to save custom skin: {e}"));
+            },
+        }
     }
     if let Some((w, h)) = resolution_request {
         apply_resolution_change(w, h, state, sdi, backend, shader_bridge, vfs);
@@ -747,6 +833,28 @@ pub fn poll_settings_ipc(
     if changed {
         publish_runtime_state(state, backend_name, vfs);
     }
+}
+
+/// Parse a save-custom-skin IPC payload (`<name>\n<theme toml>`).
+///
+/// The name is restricted to `[A-Za-z0-9_-]` so it stays a safe directory
+/// name under `skins/`.
+fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
+    let (name, theme_toml) = req
+        .split_once('\n')
+        .ok_or_else(|| "missing name line".to_string())?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("empty skin name".to_string());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("invalid skin name '{name}'"));
+    }
+    let theme = SkinTheme::from_toml_str(theme_toml).map_err(|e| e.to_string())?;
+    Ok((name.to_string(), theme))
 }
 
 /// Format a remote command result as a response string, applying side effects
@@ -788,21 +896,23 @@ fn format_remote_response(
             };
             format!("Browser sandbox: {st}")
         },
-        Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => match resolve_skin(&name) {
-            Ok(new_skin) => {
-                let sw = active_theme.screen_w;
-                let sh = active_theme.screen_h;
-                let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
-                *active_theme = ActiveTheme::from_skin(&swapped.theme)
-                    .with_screen_size(sw, sh)
-                    .with_features(&swapped.features);
-                *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-                wm.set_theme(swapped.theme.build_wm_theme());
-                let msg = format!("Switched to skin: {}", swapped.manifest.name);
-                *skin = swapped;
-                msg
-            },
-            Err(e) => format!("Skin error: {e}"),
+        Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
+            match resolve_skin_request(&name, skin) {
+                Ok(new_skin) => {
+                    let sw = active_theme.screen_w;
+                    let sh = active_theme.screen_h;
+                    let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
+                    *active_theme = ActiveTheme::from_skin(&swapped.theme)
+                        .with_screen_size(sw, sh)
+                        .with_features(&swapped.features);
+                    *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+                    wm.set_theme(swapped.theme.build_wm_theme());
+                    let msg = format!("Switched to skin: {}", swapped.manifest.name);
+                    *skin = swapped;
+                    msg
+                },
+                Err(e) => format!("Skin error: {e}"),
+            }
         },
         Ok(CommandOutput::Multi(outputs)) => {
             let mut parts = Vec::new();

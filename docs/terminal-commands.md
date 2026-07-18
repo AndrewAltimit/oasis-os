@@ -158,7 +158,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `skin` | `skin [list\|current\|<name>]` | List, show, or switch skins. |
+| `skin` | `skin [list\|current\|lint <name>\|export <name> [file]\|variant <dark\|light\|high-contrast>\|<name>]` | List, show, lint, switch, export, or derive variants of skins. `export` writes the skin as a single re-loadable TOML document to the VFS; `variant` applies a Dark / Light / High-contrast derivation of the currently active skin. |
 
 ## Audio (`oasis-terminal/src/audio_commands.rs`, `radio_commands.rs`)
 
