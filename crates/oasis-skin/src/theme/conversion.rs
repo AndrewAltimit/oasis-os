@@ -167,6 +167,26 @@ impl SkinTheme {
         if let Some(ref states) = self.widget_states {
             apply_widget_states(&mut theme, states);
         }
+
+        // Density scales the resolved spacing ladder only; `comfortable`
+        // (the default) is an exact integer identity, so unset skins are
+        // pixel-identical.
+        let density = self.density_preset();
+        theme.spacing_xs = density.scale(theme.spacing_xs);
+        theme.spacing_sm = density.scale(theme.spacing_sm);
+        theme.spacing_md = density.scale(theme.spacing_md);
+        theme.spacing_lg = density.scale(theme.spacing_lg);
+        theme.spacing_xl = density.scale(theme.spacing_xl);
+
+        // Accessibility `text_scale` multiplies the resolved font-size ladder
+        // globally. At the default `1.0` these are unchanged.
+        theme.font_size_xs = self.scale_font(theme.font_size_xs);
+        theme.font_size_sm = self.scale_font(theme.font_size_sm);
+        theme.font_size_md = self.scale_font(theme.font_size_md);
+        theme.font_size_lg = self.scale_font(theme.font_size_lg);
+        theme.font_size_xl = self.scale_font(theme.font_size_xl);
+        theme.font_size_xxl = self.scale_font(theme.font_size_xxl);
+
         theme
     }
 

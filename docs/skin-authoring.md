@@ -695,6 +695,53 @@ first glyph could be rasterized. The `@font-face` pipeline in `oasis-browser`
 (fontdue) already does this for *page* content, and is the model to follow if
 the shell ever grows the same capability.
 
+## Accessibility & Density
+
+Three top-level `theme.toml` keys tune size and spacing globally. Each defaults
+to a pixel-identity no-op, so an existing skin is unchanged.
+
+```toml
+text_scale = 1.0        # accessibility text multiplier (default 1.0)
+density = "comfortable" # "compact" | "comfortable" | "spacious" (default comfortable)
+```
+
+- **`text_scale`** multiplies the *resolved* font-size ladder (`font_size_*`)
+  and the shell text sizes (`font_body`/`font_hint`/`font_heading`). `1.0` is
+  identity; the value is clamped to `0.5..=3.0` and each result is at least 1px.
+  It is orthogonal to `[geometry] font_scale` (the render-time multiplier) and
+  composes multiplicatively with it, and with any `[typography]` overrides.
+- **`density`** scales the *spacing* tokens only — `comfortable` is an exact
+  integer identity, `compact` is ×0.85, `spacious` is ×1.15 (rounded to the
+  nearest pixel). Font sizes are untouched. Unknown values fall back to
+  `comfortable`.
+
+## Elevation (semantic shadow ladder)
+
+`[elevation]` overrides the six-step shadow ladder (levels 0–5) used by cards,
+dropdowns, modals, tooltips, dashboard icons, the start-menu panel, and toasts.
+Any level you omit falls back to the built-in shadow for that level, so an empty
+or absent table reproduces today's shadows byte-for-byte. Each level is a list
+of layers drawn back-to-front:
+
+```toml
+[[elevation.level_2]]
+offset_x = 2
+offset_y = 4
+spread = 2
+alpha = 50
+color = "#000000"   # optional, defaults to black
+
+[[elevation.level_2]]
+offset_x = 2
+offset_y = 4
+spread = 5
+alpha = 20
+```
+
+Runtime code resolves a level through `ActiveTheme::resolve_shadow(level)`,
+which honors these overrides and otherwise delegates to the built-in
+`Shadow::elevation` ladder.
+
 ## Widget States
 
 `[widget_states.*]` overrides interactive widget colors (buttons, inputs,

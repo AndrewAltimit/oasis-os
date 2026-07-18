@@ -644,4 +644,11 @@ pub struct ActiveTheme {
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     pub ui_theme: oasis_ui::theme::Theme,
+
+    // -- Semantic elevation ladder --
+    /// Semantic shadow ladder (levels 0..=5). Built from the skin's
+    /// `[elevation]` table; unset levels fall back to the built-in
+    /// [`oasis_types::shadow::Shadow::elevation`] ladder. Resolve a level to a
+    /// concrete shadow with [`ActiveTheme::resolve_shadow`].
+    pub elevation: oasis_types::shadow::ElevationLadder,
 }

@@ -61,6 +61,30 @@ All M6 fields default to current behavior; existing skins render
 pixel-identically until they opt in (screenshot suite: 120 scenarios
 green).
 
+**M7 (accessibility + semantic tokens) has landed** on the same branch,
+extending the theme engine with five opt-in, default-identity deltas:
+
+- **Elevation ladder**: an `[elevation]` table overrides the six-step
+  shadow ladder (levels 0–5); `ActiveTheme::resolve_shadow(level)` resolves
+  through `ElevationLadder`, delegating un-overridden levels to the built-in
+  `Shadow::elevation` (default ladder is byte-for-byte identical).
+- **Density scale**: `density = "compact" | "comfortable" | "spacious"`
+  multiplies the spacing tokens only (×0.85 / ×1.0 / ×1.15); `comfortable`
+  is an exact integer identity.
+- **`text_scale`**: a `0.5..=3.0`-clamped accessibility multiplier over the
+  resolved `font_size_*` ladder plus `font_body/hint/heading`, composing
+  multiplicatively with `geometry.font_scale`.
+- **Extended `reduced_motion` gating**: `[features] reduced_motion` now also
+  forces icon idle-float/spin/pulse/blink off, entrance style to `"none"`,
+  focus glow off, and background layers frozen.
+- **Colorblind lint**: `skin lint` warns (advisory) on semantic
+  foreground pairs (prompt/output/primary vs error) that collapse under
+  deuteranopia/protanopia — red-vs-green opposed with < 1.5:1 luminance
+  separation.
+
+All M7 fields default to current behavior; the default palette produces
+zero new lint warnings.
+
 ## Goal
 
 Close the gap between OASIS_OS's current look — a uniform, centered icon grid
