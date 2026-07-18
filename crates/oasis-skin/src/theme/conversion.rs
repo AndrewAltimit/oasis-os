@@ -49,6 +49,16 @@ impl SkinTheme {
         let radius = self.border_radius.unwrap_or(4);
         let shadow_level = self.shadow_intensity.unwrap_or(1);
 
+        // Focus ring: only explicit `[geometry]` values flow through.
+        // Unset fields stay `None` so `FocusStyle` keeps deriving from
+        // the accent color, exactly as before this field existed.
+        let geometry = self.geometry.as_ref();
+        let focus_ring_color = geometry
+            .and_then(|g| g.focus_ring_color.as_ref())
+            .and_then(|s| parse_hex_color(s));
+        let focus_ring_width = geometry.and_then(|g| g.focus_ring_width);
+        let focus_ring_offset = geometry.and_then(|g| g.focus_ring_offset);
+
         let success = self
             .success
             .as_ref()
@@ -100,6 +110,10 @@ impl SkinTheme {
             toggle_thumb: text,
             tooltip_bg: lighten(bg, 0.15),
             tooltip_text: text,
+
+            focus_ring_color,
+            focus_ring_width,
+            focus_ring_offset,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -473,29 +487,28 @@ fn apply_wm_overrides(theme: &mut WmTheme, ov: &WmThemeOverrides) {
     }
 }
 
-/// Compute the WCAG 2.0 relative luminance of a color.
-///
-/// See <https://www.w3.org/TR/WCAG20/#relativeluminancedef>.
-fn relative_luminance(c: Color) -> f64 {
-    fn linearize(val: u8) -> f64 {
-        let s = val as f64 / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    0.2126 * linearize(c.r) + 0.7152 * linearize(c.g) + 0.0722 * linearize(c.b)
-}
-
-/// Compute the WCAG 2.0 contrast ratio between two colors.
+/// Compute the WCAG 2.x contrast ratio between two colors.
 ///
 /// Returns a value between 1.0 (identical) and 21.0 (black vs white).
+/// Alpha is ignored; composite translucent colors over their backdrop
+/// with [`composite_over`] first.
 pub fn contrast_ratio(a: Color, b: Color) -> f64 {
-    let la = relative_luminance(a);
-    let lb = relative_luminance(b);
-    let (lighter, darker) = if la > lb { (la, lb) } else { (lb, la) };
-    (lighter + 0.05) / (darker + 0.05)
+    oasis_types::color::contrast_ratio(a, b)
+}
+
+/// Alpha-composite `fg` over an opaque `bg` (source-over).
+///
+/// Used to resolve translucent theme colors (bar backgrounds, selection
+/// highlights) to the effective on-screen color before measuring
+/// contrast. The result is opaque.
+pub fn composite_over(fg: Color, bg: Color) -> Color {
+    if fg.a == 255 {
+        return Color::rgb(fg.r, fg.g, fg.b);
+    }
+    let a = fg.a as u32;
+    let inv = 255 - a;
+    let blend = |f: u8, b: u8| ((f as u32 * a + b as u32 * inv + 127) / 255) as u8;
+    Color::rgb(blend(fg.r, bg.r), blend(fg.g, bg.g), blend(fg.b, bg.b))
 }
 
 /// A contrast warning for a text/background color pair.
@@ -505,26 +518,70 @@ pub struct ContrastWarning {
     pub pair: String,
     /// The computed contrast ratio.
     pub ratio: f64,
-    /// WCAG AA minimum (4.5 for normal text, 3.0 for large text).
+    /// WCAG AA minimum (4.5 for body text, 3.0 for large/secondary text).
     pub required: f64,
 }
 
 impl SkinTheme {
-    /// Validate key text/background pairs against WCAG AA contrast minimums.
+    /// Validate key text/background pairs against WCAG AA contrast
+    /// minimums (4.5:1 for body text, 3:1 for large/secondary text).
     ///
-    /// Returns a list of warnings for pairs that fail the 4.5:1 ratio.
+    /// Checks the base palette plus the derived surfaces that actually
+    /// render text: buttons (`ui::Theme`), the selection highlight and
+    /// status/bottom bars (`ActiveTheme`). Translucent colors are
+    /// composited over their backdrop first.
+    ///
+    /// These are advisory: stylized skins may fail intentionally, so
+    /// callers surface them as warnings, never errors.
     pub fn validate_contrast(&self) -> Vec<ContrastWarning> {
         let bg = self.background_color();
-        let pairs: &[(&str, Color, f64)] = &[
-            ("text on background", self.text_color(), 4.5),
-            ("dim_text on background", self.dim_text_color(), 3.0),
-            ("prompt on background", self.prompt_color(), 3.0),
-            ("error on background", self.error_color(), 3.0),
+        let ui = self.to_ui_theme();
+        let at = crate::active_theme::ActiveTheme::from_skin(self);
+
+        // Effective (opaque) backdrops for surfaces with alpha.
+        let statusbar_bg = composite_over(at.bar.statusbar_bg, bg);
+        let bottombar_bg = composite_over(at.bar.bg, bg);
+        let selection_bg = composite_over(at.app.selected_bg, composite_over(at.app.bg, bg));
+
+        let pairs: &[(&str, Color, Color, f64)] = &[
+            // Base palette on the shell background.
+            ("text on background", self.text_color(), bg, 4.5),
+            ("dim_text on background", self.dim_text_color(), bg, 3.0),
+            ("output on background", self.output_color(), bg, 4.5),
+            ("prompt on background", self.prompt_color(), bg, 3.0),
+            ("error on background", self.error_color(), bg, 3.0),
+            // Derived widget surfaces.
+            (
+                "button text on button background",
+                ui.text_primary,
+                ui.button_bg,
+                4.5,
+            ),
+            // Selection rows carry a non-color cue (the highlight fill
+            // and accent bar), so hold them to the large-text minimum.
+            (
+                "selected text on selection highlight",
+                at.app.selected_text,
+                selection_bg,
+                3.0,
+            ),
+            (
+                "status bar text on status bar",
+                at.bar.clock_color,
+                statusbar_bg,
+                3.0,
+            ),
+            (
+                "bottom bar text on bottom bar",
+                at.bar.url_color,
+                bottombar_bg,
+                3.0,
+            ),
         ];
 
         let mut warnings = Vec::new();
-        for &(label, fg, required) in pairs {
-            let ratio = contrast_ratio(fg, bg);
+        for &(label, fg, backdrop, required) in pairs {
+            let ratio = contrast_ratio(composite_over(fg, backdrop), backdrop);
             if ratio < required {
                 warnings.push(ContrastWarning {
                     pair: label.to_string(),

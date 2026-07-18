@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use oasis_types::backend::Color;
 
-pub use conversion::{ContrastWarning, contrast_ratio};
+pub use conversion::{ContrastWarning, composite_over, contrast_ratio};
 pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
@@ -782,6 +782,87 @@ text = "#909090"
         let warnings = skin.validate_contrast();
         assert!(!warnings.is_empty(), "should warn on low contrast");
         assert!(warnings.iter().any(|w| w.pair.contains("text")));
+    }
+
+    #[test]
+    fn contrast_ratio_known_gray_pair() {
+        // #767676 on white is the canonical ~4.54:1 AA boundary pair.
+        let ratio = contrast_ratio(Color::rgb(0x76, 0x76, 0x76), Color::WHITE);
+        assert!((ratio - 4.54).abs() < 0.02, "got {ratio}");
+    }
+
+    #[test]
+    fn composite_over_opaque_passthrough() {
+        let fg = Color::rgb(10, 20, 30);
+        let out = composite_over(fg, Color::WHITE);
+        assert_eq!((out.r, out.g, out.b), (10, 20, 30));
+        assert_eq!(out.a, 255);
+    }
+
+    #[test]
+    fn composite_over_blends_alpha() {
+        // 50% black over white -> mid gray.
+        let out = composite_over(Color::rgba(0, 0, 0, 128), Color::WHITE);
+        assert!((out.r as i32 - 127).abs() <= 1, "got {}", out.r);
+        // Fully transparent -> backdrop.
+        let out = composite_over(Color::rgba(255, 0, 0, 0), Color::rgb(1, 2, 3));
+        assert_eq!((out.r, out.g, out.b), (1, 2, 3));
+    }
+
+    #[test]
+    fn contrast_warns_on_low_button_pair() {
+        // Button text is the base text color; button bg derives from
+        // `secondary`. Near-identical values must trip the 4.5:1 check.
+        let toml = r##"
+background = "#101010"
+text = "#5A5A5A"
+secondary = "#4A4A4A"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.pair.contains("button") && w.required == 4.5),
+            "missing button contrast warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn contrast_warns_on_low_bar_pair() {
+        // Clock text matches the status bar backdrop -> unreadable.
+        let toml = r##"
+background = "#202020"
+status_bar = "#303030"
+
+[bar_overrides]
+statusbar_bg = "#303030"
+clock_color = "#3A3A3A"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.pair.contains("status bar") && w.required == 3.0),
+            "missing status bar contrast warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn contrast_ratio_included_in_warning() {
+        let toml = r##"
+background = "#808080"
+text = "#909090"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        let text_warning = warnings
+            .iter()
+            .find(|w| w.pair == "text on background")
+            .expect("text pair should warn");
+        assert!(text_warning.ratio >= 1.0 && text_warning.ratio < 4.5);
+        assert_eq!(text_warning.required, 4.5);
     }
 
     #[test]

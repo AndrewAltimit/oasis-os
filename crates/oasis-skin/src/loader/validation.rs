@@ -163,6 +163,16 @@ impl Skin {
         // -- Asset checks --
         self.validate_assets(&mut warnings);
 
+        // -- Accessibility: WCAG AA contrast (advisory) --
+        // Stylized skins may fail these on purpose; the lint informs
+        // authors and never blocks loading.
+        for c in self.theme.validate_contrast() {
+            warnings.push(format!(
+                "contrast: {} is {:.2}:1, below the WCAG AA recommendation of {}:1",
+                c.pair, c.ratio, c.required
+            ));
+        }
+
         // -- Feature flag checks --
         if !matches!(self.features.icon_layout.as_str(), "grid" | "free") {
             warnings.push(format!(

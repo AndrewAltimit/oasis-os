@@ -553,8 +553,14 @@ icon_gfx_h = 22            # graphic area height
 icon_gfx_pad = 4           # padding around the graphic
 icon_label_pad = 4         # gap between icon and label
 # Also: tab_w, tab_h, tab_gap, tab_start_x, font_small/body/hint/heading,
-#   focus_ring_color/width/offset, cursor_pad, toast_* sizing,
-#   scrollbar_width, terminal_line_height, page_slide_duration, …
+#   cursor_pad, toast_* sizing, scrollbar_width, terminal_line_height,
+#   page_slide_duration, …
+# Widget keyboard-focus rings (oasis-ui, via the derived ui theme):
+focus_ring_color = "#3264C8B0"  # default: derived from the accent color
+focus_ring_width = 2            # stroke width in px
+focus_ring_offset = 2           # gap from the widget edge in px
+# These style widget focus indicators only; the dashboard icon cursor
+# keeps its own [icon_overrides] focus_glow_* theming.
 ```
 
 ## Typography
@@ -728,10 +734,18 @@ silently do nothing:
   inconsistencies (e.g. `icons_per_page` exceeding the grid capacity),
   and asset problems (missing `texture`/`source` references,
   non-power-of-two images, decoded size over the per-skin budget).
+- The lint also runs WCAG AA contrast checks over the pairs that
+  actually render text: `text`/`dim_text`/`output`/`prompt`/`error` on
+  the background, button text on the button background, selected text
+  on the selection highlight, and status/bottom bar text on their bar
+  backgrounds. Body text is held to 4.5:1, secondary/large text to
+  3:1; translucent colors are composited over their backdrop first.
+  These are advisory — deliberately stylized palettes (`corrupted`,
+  `win95`) fail some of them by design and still load normally.
 
 Lint your skin whenever a field appears to have no effect — a
 misspelled key is the most common cause. All shipped skins are kept
-lint-clean by a CI test (`all_shipped_skins_lint_clean`).
+free of schema warnings by a CI test (`all_shipped_skins_lint_clean`).
 
 ## Transitions & Motion
 

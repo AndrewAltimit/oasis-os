@@ -229,22 +229,6 @@ impl ActiveTheme {
                 .and_then(|c| c.hotspot)
                 .map(|[x, y]| (x, y))
                 .unwrap_or((0, 0)),
-            focus_ring_color: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.focus_ring_color.as_ref())
-                .and_then(|s| parse_hex_color(s))
-                .unwrap_or_else(|| with_alpha(primary, 180)),
-            focus_ring_width: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.focus_ring_width)
-                .unwrap_or(2),
-            focus_ring_offset: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.focus_ring_offset)
-                .unwrap_or(2),
             transition_fade_color: skin
                 .transition
                 .as_ref()
@@ -373,23 +357,6 @@ impl ActiveTheme {
                 if let Some(ref anims) = skin.animations {
                     for (name, preset) in anims {
                         map.insert(name.clone(), (preset.duration_ms, preset.easing.clone()));
-                    }
-                }
-                map
-            },
-            widget_states: {
-                let mut map = std::collections::HashMap::new();
-                if let Some(ref states) = skin.widget_states {
-                    for (widget, colors) in states {
-                        let mut parsed = std::collections::HashMap::new();
-                        for (key, hex) in colors {
-                            if let Some(c) = parse_hex_color(hex) {
-                                parsed.insert(key.clone(), c);
-                            }
-                        }
-                        if !parsed.is_empty() {
-                            map.insert(widget.clone(), parsed);
-                        }
                     }
                 }
                 map
@@ -1302,6 +1269,9 @@ impl ActiveTheme {
             toggle_thumb: text,
             tooltip_bg: lighten(background, 0.15),
             tooltip_text: text,
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
             font_size_xs: 8,
             font_size_sm: 8,
             font_size_md: 8,
@@ -1389,9 +1359,6 @@ impl ActiveTheme {
             cursor_scale: 1,
             cursor_texture: None,
             cursor_hotspot: (0, 0),
-            focus_ring_color: with_alpha(primary, 180),
-            focus_ring_width: 2,
-            focus_ring_offset: 2,
             transition_fade_color: darken(background, 0.3),
             transition_entrance: "fade".to_string(),
             transition_entrance_frames: 45,
@@ -1413,7 +1380,6 @@ impl ActiveTheme {
             app_themes: std::collections::HashMap::new(),
             gradients: std::collections::HashMap::new(),
             animations: std::collections::HashMap::new(),
-            widget_states: std::collections::HashMap::new(),
             ui_theme,
         }
     }

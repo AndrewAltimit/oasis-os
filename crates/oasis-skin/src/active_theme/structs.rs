@@ -530,14 +530,6 @@ pub struct ActiveTheme {
     /// Easing curve name for entrance transitions ("" = built-in curve).
     pub transition_easing: String,
 
-    // -- Focus ring --
-    /// Focus ring/outline color for highlighted elements.
-    pub focus_ring_color: Color,
-    /// Focus ring stroke width (pixels).
-    pub focus_ring_width: u16,
-    /// Focus ring offset from element edge (pixels).
-    pub focus_ring_offset: i32,
-
     // -- Font sizes --
     /// Body text font size (terminal lines, app content).
     pub font_body: u16,
@@ -584,10 +576,6 @@ pub struct ActiveTheme {
     // -- Named animation presets --
     /// Named animation presets (name -> (duration_ms, easing)).
     pub animations: std::collections::HashMap<String, (u32, String)>,
-
-    // -- Widget state color overrides --
-    /// Per-widget state color overrides (widget_name -> (state_key -> Color)).
-    pub widget_states: std::collections::HashMap<String, std::collections::HashMap<String, Color>>,
 
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.

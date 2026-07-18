@@ -1701,6 +1701,32 @@ h = 50
     }
 
     #[test]
+    fn validate_low_contrast_theme_warns() {
+        // Contrast failures surface as advisory warnings with the
+        // computed ratio in the message.
+        let theme_toml = "background = \"#808080\"\ntext = \"#909090\"\n";
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        let w = warnings
+            .iter()
+            .find(|w| w.starts_with("contrast: text on background"))
+            .unwrap_or_else(|| panic!("missing contrast warning: {warnings:?}"));
+        assert!(w.contains(":1"), "ratio missing from message: {w}");
+        assert!(w.contains("4.5:1"), "threshold missing from message: {w}");
+    }
+
+    #[test]
+    fn validate_all_builtin_skins_contrast_lint_runs() {
+        // The contrast lint must never panic; warnings are fine
+        // (stylized skins like corrupted/vaporwave may fail on purpose).
+        for name in crate::builtin::builtin_names() {
+            let skin = crate::builtin::load_builtin(name)
+                .unwrap_or_else(|e| panic!("builtin '{name}' failed to load: {e}"));
+            let _warnings = skin.validate();
+        }
+    }
+
+    #[test]
     fn validate_empty_name() {
         let manifest = r#"name = """#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
