@@ -1,8 +1,27 @@
 //! Skin validation helpers.
 
-use crate::theme::parse_hex_color;
+use oasis_types::backend::Color;
+
+use crate::theme::{contrast_ratio, parse_hex_color};
 
 use super::Skin;
+
+/// Signed position of a color on the red-vs-green axis.
+///
+/// Positive => red-dominant, negative => green-dominant, near-zero => neutral.
+fn red_green_axis(c: Color) -> i32 {
+    i32::from(c.r) - i32::from(c.g)
+}
+
+/// Whether two colors are distinguished *primarily* by red-vs-green hue: one is
+/// clearly red-dominant and the other clearly green-dominant. Colors on opposite
+/// ends of the red/green axis are exactly what deuteranopia/protanopia collapse.
+fn red_green_opposed(a: Color, b: Color) -> bool {
+    const MIN_AXIS: i32 = 40;
+    let da = red_green_axis(a);
+    let db = red_green_axis(b);
+    da.abs() >= MIN_AXIS && db.abs() >= MIN_AXIS && (da.signum() != db.signum())
+}
 
 impl Skin {
     /// Validate a loaded skin and return a list of warnings.
@@ -246,6 +265,8 @@ impl Skin {
                 c.pair, c.ratio, c.required
             ));
         }
+        // Colorblind-unsafe semantic pairs (deuteranopia/protanopia), advisory.
+        self.check_colorblind_pairs(&mut warnings);
 
         // -- Feature flag checks --
         if !matches!(self.features.icon_layout.as_str(), "grid" | "free") {
@@ -282,6 +303,36 @@ impl Skin {
         }
 
         warnings
+    }
+
+    /// Flag semantic color pairs that a user must tell apart but which are
+    /// distinguished *only* by red-vs-green hue with little luminance
+    /// separation -- the classic deuteranopia/protanopia failure mode. Warn
+    /// only when the two colors are both red/green-opposed AND close in
+    /// luminance (inter-color contrast below 1.5:1), so a normal high-contrast
+    /// green/red pair (e.g. a bright prompt vs a dim error) does not warn.
+    ///
+    /// Advisory only: never blocks loading.
+    fn check_colorblind_pairs(&self, warnings: &mut Vec<String>) {
+        let error = self.theme.error_color();
+        // (label_a, color_a, label_b, color_b) -- pairs that carry meaning.
+        let pairs: &[(&str, Color, &str, Color)] = &[
+            ("prompt", self.theme.prompt_color(), "error", error),
+            ("output", self.theme.output_color(), "error", error),
+            ("primary", self.theme.primary_color(), "error", error),
+        ];
+
+        const MIN_LUMA_RATIO: f64 = 1.5;
+        for &(la, ca, lb, cb) in pairs {
+            if red_green_opposed(ca, cb) && contrast_ratio(ca, cb) < MIN_LUMA_RATIO {
+                warnings.push(format!(
+                    "accessibility: '{la}' and '{lb}' differ mainly by red/green hue \
+                     with low luminance separation ({:.2}:1); risky for \
+                     deuteranopia/protanopia",
+                    contrast_ratio(ca, cb)
+                ));
+            }
+        }
     }
 
     /// Asset-related validation: wallpaper/background sources must resolve,
@@ -733,6 +784,48 @@ click = "assets/click.wav"
         assert!(
             warnings.iter().any(|w| w.contains("per-skin budget")),
             "{warnings:?}"
+        );
+    }
+
+    // -- Colorblind (deuteranopia/protanopia) lint --
+
+    fn colorblind_warnings(theme_toml: &str) -> Vec<String> {
+        let skin = Skin::from_toml_full(MANIFEST, "", "", theme_toml, "").unwrap();
+        skin.validate()
+            .into_iter()
+            .filter(|w| w.contains("red/green hue"))
+            .collect()
+    }
+
+    #[test]
+    fn default_theme_has_no_colorblind_warnings() {
+        // The default palette (bright green prompt vs red error) is separable
+        // by luminance, so real skins inheriting it must not be spammed.
+        let warnings = colorblind_warnings("");
+        assert!(warnings.is_empty(), "default theme warned: {warnings:?}");
+    }
+
+    #[test]
+    fn red_green_low_luminance_pair_warns() {
+        // Pure red prompt vs a mid green error of similar luminance: a
+        // deuteranope/protanope cannot tell them apart.
+        let warnings = colorblind_warnings("prompt = \"#FF0000\"\nerror = \"#009000\"\n");
+        assert!(
+            warnings.iter().any(|w| w.contains("'prompt' and 'error'")),
+            "expected colorblind warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn high_luminance_red_green_pair_does_not_warn() {
+        // Bright green prompt vs dim red error: distinguishable by luminance
+        // even without hue, so the heuristic must NOT fire.
+        let warnings = colorblind_warnings(
+            "prompt = \"#00FF00\"\nerror = \"#440000\"\noutput = \"#00FF00\"\n",
+        );
+        assert!(
+            warnings.is_empty(),
+            "high-separation pair should not warn: {warnings:?}"
         );
     }
 

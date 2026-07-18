@@ -162,6 +162,57 @@ impl Shadow {
     }
 }
 
+/// A semantic elevation ladder mapping levels 0..=5 to concrete shadows.
+///
+/// Each level may be overridden with an explicit set of [`ShadowLayer`]s.
+/// Levels left unset resolve to the built-in [`Shadow::elevation`] ladder,
+/// so a [`Default`] ladder reproduces today's shadow appearance exactly.
+///
+/// Skins expose per-level overrides through the `[elevation]` TOML table;
+/// the resulting ladder is the single source of truth for every
+/// `*_shadow_level` field once it is threaded through the theme.
+#[derive(Debug, Clone, Default)]
+pub struct ElevationLadder {
+    /// Per-level overrides for levels 0..=5. `None` => built-in default.
+    overrides: [Option<Vec<ShadowLayer>>; 6],
+}
+
+impl ElevationLadder {
+    /// Number of semantic levels in the ladder (0..=5).
+    pub const LEVELS: u8 = 6;
+
+    /// Override the layers for a single level (clamped to 0..=5).
+    pub fn set_level(&mut self, level: u8, layers: Vec<ShadowLayer>) {
+        let idx = level.min(Self::LEVELS - 1) as usize;
+        self.overrides[idx] = Some(layers);
+    }
+
+    /// Builder variant of [`set_level`](Self::set_level).
+    pub fn with_level(mut self, level: u8, layers: Vec<ShadowLayer>) -> Self {
+        self.set_level(level, layers);
+        self
+    }
+
+    /// Returns `true` if no level has been customized (pure default ladder).
+    pub fn is_default(&self) -> bool {
+        self.overrides.iter().all(Option::is_none)
+    }
+
+    /// Resolve a semantic level to a concrete [`Shadow`].
+    ///
+    /// Falls back to [`Shadow::elevation`] for levels without an override,
+    /// so a default ladder is byte-for-byte identical to the built-in one.
+    pub fn resolve(&self, level: u8) -> Shadow {
+        let idx = level.min(Self::LEVELS - 1) as usize;
+        match &self.overrides[idx] {
+            Some(layers) => Shadow {
+                layers: layers.clone(),
+            },
+            None => Shadow::elevation(level),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +281,53 @@ mod tests {
         let s = Shadow::elevation(2);
         let s2 = s.clone();
         assert_eq!(s.layer_count(), s2.layer_count());
+    }
+
+    // -- ElevationLadder tests --
+
+    #[test]
+    fn default_ladder_reproduces_builtin_elevation() {
+        let ladder = ElevationLadder::default();
+        assert!(ladder.is_default());
+        for level in 0u8..=6 {
+            let from_ladder = ladder.resolve(level);
+            let builtin = Shadow::elevation(level);
+            assert_eq!(from_ladder.layer_count(), builtin.layer_count());
+            for (a, b) in from_ladder.layers.iter().zip(builtin.layers.iter()) {
+                assert_eq!(a.offset_x, b.offset_x);
+                assert_eq!(a.offset_y, b.offset_y);
+                assert_eq!(a.spread, b.spread);
+                assert_eq!(a.alpha, b.alpha);
+                assert_eq!(a.color, b.color);
+            }
+        }
+    }
+
+    #[test]
+    fn ladder_override_replaces_level() {
+        let custom = vec![ShadowLayer {
+            offset_x: 9,
+            offset_y: 9,
+            spread: 3,
+            alpha: 200,
+            color: Color::rgb(255, 0, 0),
+        }];
+        let ladder = ElevationLadder::default().with_level(2, custom);
+        assert!(!ladder.is_default());
+        let s = ladder.resolve(2);
+        assert_eq!(s.layer_count(), 1);
+        assert_eq!(s.layers[0].alpha, 200);
+        // Non-overridden levels still fall back to the built-in ladder.
+        assert_eq!(
+            ladder.resolve(1).layer_count(),
+            Shadow::elevation(1).layer_count()
+        );
+    }
+
+    #[test]
+    fn ladder_clamps_high_levels() {
+        let ladder = ElevationLadder::default().with_level(5, vec![]);
+        // Level 200 clamps to level 5 (empty override).
+        assert_eq!(ladder.resolve(200).layer_count(), 0);
     }
 }

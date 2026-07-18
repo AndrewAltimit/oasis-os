@@ -276,6 +276,7 @@ impl Default for ActiveTheme {
             gradients: std::collections::HashMap::new(),
             animations: std::collections::HashMap::new(),
             ui_theme: oasis_ui::theme::Theme::dark(),
+            elevation: oasis_types::shadow::ElevationLadder::default(),
         }
     }
 }

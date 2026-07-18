@@ -884,4 +884,89 @@ focus_ring_offset = 4
             updates.join("\n")
         );
     }
+
+    // -- reduced_motion gating (with_features) --
+
+    #[test]
+    fn reduced_motion_off_leaves_animations_untouched() {
+        let skin = SkinTheme::default();
+        let features = crate::loader::SkinFeatures {
+            reduced_motion: false,
+            ..Default::default()
+        };
+        let plain = ActiveTheme::from_skin(&skin);
+        let gated = ActiveTheme::from_skin(&skin).with_features(&features);
+        // Default is pixel-identical: nothing is forced off.
+        assert_eq!(gated.icon.idle_float, plain.icon.idle_float);
+        assert_eq!(gated.icon.spin_enabled, plain.icon.spin_enabled);
+        assert_eq!(gated.entrance_style, plain.entrance_style);
+        assert_eq!(gated.focus_glow, plain.focus_glow);
+        assert_eq!(
+            gated.background_reduced_motion,
+            plain.background_reduced_motion
+        );
+        assert!(!gated.ui_theme.reduced_motion);
+    }
+
+    #[test]
+    fn reduced_motion_on_forces_all_motion_off() {
+        // Start from a skin that opts into every animation.
+        let toml = r##"
+[icon_overrides]
+vector_idle_float = true
+vector_spin_enabled = true
+vector_pulse_enabled = true
+vector_blink_enabled = true
+entrance_style = "fade_in"
+focus_glow = true
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let features = crate::loader::SkinFeatures {
+            reduced_motion: true,
+            ..Default::default()
+        };
+        let gated = ActiveTheme::from_skin(&skin).with_features(&features);
+        assert!(!gated.icon.idle_float);
+        assert!(!gated.icon.spin_enabled);
+        assert!(!gated.icon.pulse_enabled);
+        assert!(!gated.icon.blink_enabled);
+        assert_eq!(gated.entrance_style, "none");
+        assert!(!gated.focus_glow);
+        assert!(gated.background_reduced_motion);
+        assert!(gated.ui_theme.reduced_motion);
+    }
+
+    // -- semantic elevation ladder --
+
+    #[test]
+    fn resolve_shadow_default_matches_builtin() {
+        let at = ActiveTheme::default();
+        for level in 0u8..=5 {
+            assert_eq!(
+                at.resolve_shadow(level).layers.len(),
+                oasis_types::shadow::Shadow::elevation(level).layers.len()
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_shadow_honors_elevation_overrides() {
+        let toml = r##"
+[[elevation.level_2]]
+offset_x = 4
+offset_y = 4
+spread = 1
+alpha = 120
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        let s = at.resolve_shadow(2);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].alpha, 120);
+        // Unset levels still resolve to the built-in ladder.
+        assert_eq!(
+            at.resolve_shadow(1).layers.len(),
+            oasis_types::shadow::Shadow::elevation(1).layers.len()
+        );
+    }
 }

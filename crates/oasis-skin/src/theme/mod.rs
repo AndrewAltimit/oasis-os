@@ -14,10 +14,11 @@ pub use conversion::{ContrastWarning, composite_over, contrast_ratio};
 pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
-    BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, GeometryOverrides, GradientPreset,
-    IconOverrides, LayerAnimationConfig, LayerPositionConfig, NinePatchDef, OskOverrides,
-    PaletteOverrides, ScrollbarOverrides, StartMenuOverrides, TransitionOverrides,
-    TypographyOverrides, WallpaperConfig, WmThemeOverrides,
+    BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, Density, ElevationLayerConfig,
+    ElevationOverrides, GeometryOverrides, GradientPreset, IconOverrides, LayerAnimationConfig,
+    LayerPositionConfig, NinePatchDef, OskOverrides, PaletteOverrides, ScrollbarOverrides,
+    StartMenuOverrides, TransitionOverrides, TypographyOverrides, WallpaperConfig,
+    WmThemeOverrides,
 };
 
 /// Color scheme for a skin.
@@ -79,6 +80,28 @@ pub struct SkinTheme {
     /// Whether gradient fills are enabled for this skin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient_enabled: Option<bool>,
+
+    /// Global accessibility text-size multiplier applied to the resolved UI
+    /// font-size ladder and text metrics. `1.0` = no change (pixel-identical);
+    /// values above `1.0` enlarge all text. Clamped to `0.5..=3.0` when applied.
+    ///
+    /// This is orthogonal to `geometry.font_scale`: it scales whatever the
+    /// resolved font sizes are, so the two compose multiplicatively.
+    #[serde(default = "default_text_scale")]
+    pub text_scale: f32,
+
+    /// UI density preset applied to spacing tokens only: `"compact"`,
+    /// `"comfortable"` (default), or `"spacious"`. Unset / unknown values are
+    /// treated as `comfortable`, which is an exact pixel-identity no-op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<String>,
+
+    /// Semantic elevation/shadow ladder overrides (`[elevation]` table).
+    ///
+    /// Levels left unset fall back to the built-in shadow ladder, so an empty
+    /// table renders shadows byte-for-byte identically to today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation: Option<ElevationOverrides>,
 
     /// Whether the WM is visually themed by this skin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,6 +359,9 @@ fn default_output() -> String {
 fn default_error() -> String {
     "#FF4444".to_string()
 }
+fn default_text_scale() -> f32 {
+    1.0
+}
 
 impl Default for SkinTheme {
     fn default() -> Self {
@@ -357,6 +383,9 @@ impl Default for SkinTheme {
             border_radius: None,
             shadow_intensity: None,
             gradient_enabled: None,
+            text_scale: default_text_scale(),
+            density: None,
+            elevation: None,
             wm_theme: None,
             bar_overrides: None,
             icon_overrides: None,
@@ -429,6 +458,43 @@ impl SkinTheme {
     /// Parse the dim_text color string to a `Color`.
     pub fn dim_text_color(&self) -> Color {
         parse_hex_color(&self.dim_text).unwrap_or(Color::rgb(128, 128, 128))
+    }
+
+    /// Parse the status_bar color string to a `Color`.
+    pub fn status_bar_color(&self) -> Color {
+        parse_hex_color(&self.status_bar).unwrap_or(Color::rgb(40, 60, 90))
+    }
+
+    /// The resolved UI density preset (spacing multiplier). Defaults to
+    /// `comfortable`, an exact pixel-identity no-op.
+    pub fn density_preset(&self) -> Density {
+        Density::parse(self.density.as_deref())
+    }
+
+    /// Clamped global accessibility text-size multiplier. `1.0` = no change.
+    ///
+    /// The raw `text_scale` field is clamped to `0.5..=3.0` so a malformed
+    /// skin cannot shrink text to nothing or blow it up unboundedly.
+    pub fn text_scale_factor(&self) -> f32 {
+        self.text_scale.clamp(0.5, 3.0)
+    }
+
+    /// Scale a base font size by the accessibility `text_scale`, rounded and
+    /// clamped to at least 1px. With `text_scale == 1.0` the input is returned
+    /// unchanged (pixel-identical to pre-`text_scale` behavior).
+    pub fn scale_font(&self, base: u16) -> u16 {
+        (f32::from(base) * self.text_scale_factor())
+            .round()
+            .max(1.0) as u16
+    }
+
+    /// Build the semantic elevation ladder from the `[elevation]` table, or a
+    /// default ladder (built-in shadows) when the table is absent.
+    pub fn elevation_ladder(&self) -> oasis_types::shadow::ElevationLadder {
+        self.elevation
+            .as_ref()
+            .map(ElevationOverrides::to_ladder)
+            .unwrap_or_default()
     }
 }
 
@@ -1064,6 +1130,129 @@ body_color = "#FF0000"
         let skin: SkinTheme = toml::from_str(toml).unwrap();
         let icons = skin.icon_overrides.unwrap();
         assert_eq!(icons.body_color.as_deref(), Some("#FF0000"));
+    }
+
+    // -- text_scale (accessibility) tests --
+
+    #[test]
+    fn default_text_scale_is_one() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.text_scale, 1.0);
+        assert_eq!(skin.text_scale_factor(), 1.0);
+    }
+
+    #[test]
+    fn text_scale_one_is_pixel_identical() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.scale_font(8), 8);
+        assert_eq!(skin.scale_font(16), 16);
+        assert_eq!(skin.scale_font(24), 24);
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.font_size_md, 8);
+        assert_eq!(ui.font_size_lg, 16);
+        assert_eq!(ui.font_size_xxl, 24);
+    }
+
+    #[test]
+    fn text_scale_multiplies_font_ladder() {
+        let skin: SkinTheme = toml::from_str("text_scale = 2.0\n").unwrap();
+        assert_eq!(skin.scale_font(8), 16);
+        assert_eq!(skin.scale_font(16), 32);
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.font_size_md, 16);
+        assert_eq!(ui.font_size_lg, 32);
+        assert_eq!(ui.font_size_xxl, 48);
+        // Spacing is untouched by text_scale.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(ui.spacing_md, plain.spacing_md);
+    }
+
+    #[test]
+    fn text_scale_composes_with_typography() {
+        // text_scale multiplies the resolved (typography-overridden) ladder.
+        let toml = "text_scale = 2.0\n[typography]\nfont_size_md = 10\n";
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        assert_eq!(skin.to_ui_theme().font_size_md, 20);
+    }
+
+    #[test]
+    fn text_scale_clamped_and_min_one_px() {
+        let skin: SkinTheme = toml::from_str("text_scale = 0.01\n").unwrap();
+        assert_eq!(skin.text_scale_factor(), 0.5);
+        assert!(skin.scale_font(1) >= 1);
+        let big: SkinTheme = toml::from_str("text_scale = 99.0\n").unwrap();
+        assert_eq!(big.text_scale_factor(), 3.0);
+    }
+
+    // -- density tests --
+
+    #[test]
+    fn density_default_is_comfortable_identity() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.density_preset(), overrides::Density::Comfortable);
+        let ui = skin.to_ui_theme();
+        // Exact legacy spacing ladder preserved.
+        assert_eq!(
+            (
+                ui.spacing_xs,
+                ui.spacing_sm,
+                ui.spacing_md,
+                ui.spacing_lg,
+                ui.spacing_xl
+            ),
+            (2, 4, 8, 12, 16)
+        );
+    }
+
+    #[test]
+    fn density_compact_shrinks_spacing_only() {
+        let skin: SkinTheme = toml::from_str("density = \"compact\"\n").unwrap();
+        let ui = skin.to_ui_theme();
+        let plain = SkinTheme::default().to_ui_theme();
+        // Spacing shrinks (0.85x rounded).
+        assert_eq!(ui.spacing_lg, 10); // 12 * 0.85 = 10.2 -> 10
+        assert_eq!(ui.spacing_xl, 14); // 16 * 0.85 = 13.6 -> 14
+        assert!(ui.spacing_xl < plain.spacing_xl);
+        // Font sizes are unaffected by density.
+        assert_eq!(ui.font_size_md, plain.font_size_md);
+        assert_eq!(ui.font_size_xxl, plain.font_size_xxl);
+    }
+
+    #[test]
+    fn density_spacious_grows_spacing() {
+        let skin: SkinTheme = toml::from_str("density = \"spacious\"\n").unwrap();
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.spacing_lg, 14); // 12 * 1.15 = 13.8 -> 14
+        assert_eq!(ui.spacing_xl, 18); // 16 * 1.15 = 18.4 -> 18
+    }
+
+    #[test]
+    fn density_unknown_falls_back_to_comfortable() {
+        let skin: SkinTheme = toml::from_str("density = \"cozy\"\n").unwrap();
+        assert_eq!(skin.density_preset(), overrides::Density::Comfortable);
+        assert_eq!(skin.to_ui_theme().spacing_xl, 16);
+    }
+
+    // -- elevation ladder tests --
+
+    #[test]
+    fn default_elevation_ladder_is_builtin() {
+        let skin = SkinTheme::default();
+        assert!(skin.elevation_ladder().is_default());
+    }
+
+    #[test]
+    fn elevation_table_builds_ladder() {
+        let toml = r##"
+[[elevation.level_1]]
+offset_x = 5
+offset_y = 5
+alpha = 90
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let ladder = skin.elevation_ladder();
+        assert!(!ladder.is_default());
+        assert_eq!(ladder.resolve(1).layers[0].alpha, 90);
     }
 
     #[test]

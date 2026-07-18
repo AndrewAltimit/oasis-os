@@ -47,9 +47,38 @@ impl ActiveTheme {
     }
 
     /// Apply skin feature flags (builder pattern).
+    ///
+    /// When `features.reduced_motion` is set, all decorative motion is
+    /// neutralized at the theme level so downstream render code falls through
+    /// to the static / final-frame path without any per-call-site checks:
+    /// dashboard icon `idle_float`/`spin`/`pulse`/`blink` are disabled, the
+    /// icon entrance animation becomes instant (`entrance_style = "none"`),
+    /// the focus glow pulse is dropped, and animated background layers are
+    /// frozen. `reduced_motion` defaults to `false`, so skins that do not opt
+    /// in stay pixel-identical.
     pub fn with_features(mut self, features: &crate::loader::SkinFeatures) -> Self {
         self.ui_theme.reduced_motion = features.reduced_motion;
+        if features.reduced_motion {
+            self.icon.idle_float = false;
+            self.icon.spin_enabled = false;
+            self.icon.pulse_enabled = false;
+            self.icon.blink_enabled = false;
+            self.entrance_style = "none".to_string();
+            self.focus_glow = false;
+            self.background_reduced_motion = true;
+        }
         self
+    }
+
+    /// Resolve a semantic elevation level (0..=5) to a concrete shadow,
+    /// honoring any `[elevation]` overrides on the active skin and falling
+    /// back to the built-in ladder otherwise.
+    ///
+    /// This is the single resolution point for the scattered `*_shadow_level`
+    /// fields (`icon.shadow_level`, `menu.panel_shadow_level`,
+    /// `toast.shadow_level`, …).
+    pub fn resolve_shadow(&self, level: u8) -> oasis_types::shadow::Shadow {
+        self.elevation.resolve(level)
     }
 
     /// Derive a gradient pair for a bar element.

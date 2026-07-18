@@ -350,21 +350,26 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|t| t.easing.clone())
                 .unwrap_or_default(),
-            font_body: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.font_body)
-                .unwrap_or(12),
-            font_hint: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.font_hint)
-                .unwrap_or(10),
-            font_heading: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.font_heading)
-                .unwrap_or(14),
+            // Accessibility `text_scale` multiplies the resolved font sizes
+            // globally. At the default `1.0` these are unchanged.
+            font_body: skin.scale_font(
+                skin.geometry
+                    .as_ref()
+                    .and_then(|g| g.font_body)
+                    .unwrap_or(12),
+            ),
+            font_hint: skin.scale_font(
+                skin.geometry
+                    .as_ref()
+                    .and_then(|g| g.font_hint)
+                    .unwrap_or(10),
+            ),
+            font_heading: skin.scale_font(
+                skin.geometry
+                    .as_ref()
+                    .and_then(|g| g.font_heading)
+                    .unwrap_or(14),
+            ),
             font_scale: skin
                 .geometry
                 .as_ref()
@@ -456,6 +461,7 @@ impl ActiveTheme {
                 map
             },
             ui_theme: skin.to_ui_theme(),
+            elevation: skin.elevation_ladder(),
         }
     }
 
@@ -1517,6 +1523,7 @@ impl ActiveTheme {
             gradients: std::collections::HashMap::new(),
             animations: std::collections::HashMap::new(),
             ui_theme,
+            elevation: oasis_types::shadow::ElevationLadder::default(),
         }
     }
 
