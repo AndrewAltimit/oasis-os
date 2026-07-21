@@ -317,24 +317,34 @@ impl RadioManager {
                 }
             },
             RadioState::Buffering | RadioState::Playing => {
-                // One poll per tick. Drain loops (earlier attempts at
-                // "pull many chunks per frame") produced sawtooth queue
-                // patterns that audibly interacted with SDL3 /
-                // PulseAudio's output pacing. A single 4 KB poll at
-                // 60 Hz = 240 KB/s of MP3, which is ~15× typical radio
-                // bitrate — more than enough headroom while keeping the
-                // delivery steady. Back-pressure via
-                // `streaming_can_accept` still throttles the network
-                // when the backend's queue is full.
+                // Pull until the backend's queue hysteresis says stop, up
+                // to a per-tick byte budget. Ingest must NOT be coupled to
+                // the tick rate: ticks come from the render loop, and a
+                // collapsed frame rate (occluded window, heavy scene)
+                // would otherwise drop delivery below the stream bitrate
+                // and starve playback ~25 s later (SDL queue + readahead
+                // runway) — heard as stutters that begin about a minute
+                // into a session. `streaming_can_accept`'s wide hysteresis
+                // band still paces delivery into infrequent bursts (the
+                // tight per-chunk back-pressure cycle that once upset
+                // SDL3/PulseAudio pacing stays gone); the budget merely
+                // caps how much MP3 one tick may decode so a burst can't
+                // hitch the render thread.
+                const MAX_FEED_PER_TICK: usize = 64 * 1024;
                 let mut ended = false;
                 let mut err: Option<OasisError> = None;
-                let can_pull = self
-                    .stream_track
-                    .map(|t| backend.streaming_can_accept(t))
-                    .unwrap_or(true);
-                if can_pull {
+                let mut fed = 0usize;
+                while fed < MAX_FEED_PER_TICK {
+                    let can_pull = self
+                        .stream_track
+                        .map(|t| backend.streaming_can_accept(t))
+                        .unwrap_or(true);
+                    if !can_pull {
+                        break;
+                    }
                     match src.poll() {
                         Ok(Some(chunk)) => {
+                            fed += chunk.data.len();
                             let should_start = self.feed_audio(&chunk, backend)?;
                             if should_start && self.state == RadioState::Buffering {
                                 self.start_playback(backend)?;
@@ -344,9 +354,11 @@ impl RadioManager {
                             if src.state() == SourceState::Ended {
                                 ended = true;
                             }
+                            break;
                         },
                         Err(e) => {
                             err = Some(e);
+                            break;
                         },
                     }
                 }

@@ -16,6 +16,8 @@ mod input;
 mod launch;
 mod media_controller;
 mod radio_controller;
+#[cfg(test)]
+mod radio_soak;
 mod render;
 mod sysinfo;
 mod tv_controller;

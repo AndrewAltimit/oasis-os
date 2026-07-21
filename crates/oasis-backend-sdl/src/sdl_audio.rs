@@ -308,6 +308,12 @@ impl SdlAudioBackend {
         Ok(())
     }
 
+    /// Bytes currently queued in the music/streaming SDL stream.
+    /// Diagnostic accessor: 0 means the device is starving (underrun).
+    pub fn music_queued_bytes(&self) -> u32 {
+        self.queued_bytes()
+    }
+
     /// Bytes currently queued in the SFX stream (0 when it isn't open).
     /// The shell uses this to keep a small fixed backlog of mixed SFX.
     pub fn sfx_queued_bytes(&self) -> u32 {

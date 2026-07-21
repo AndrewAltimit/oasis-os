@@ -128,10 +128,24 @@ impl Shared {
 /// Pump loop: poll the inner source, forward chunks, honour readahead
 /// backpressure and the stop flag.
 fn pump(mut inner: Box<dyn RadioSource + Send>, shared: &Shared, tx: &Sender<AudioChunk>) {
+    let mut total_bytes: u64 = 0;
+    let mut last_chunk = std::time::Instant::now();
+    let mut last_log = std::time::Instant::now();
     loop {
         if shared.stop.load(Ordering::Acquire) {
             inner.disconnect();
             return;
+        }
+        // Periodic telemetry: readahead level, cumulative bytes, and time
+        // since the network last produced data (stall detection).
+        if last_log.elapsed().as_secs() >= 2 {
+            last_log = std::time::Instant::now();
+            log::debug!(
+                "radio pump: buffered={}KB total={}KB last_data={}ms ago",
+                shared.buffered.load(Ordering::Acquire) / 1024,
+                total_bytes / 1024,
+                last_chunk.elapsed().as_millis(),
+            );
         }
         if shared.buffered.load(Ordering::Acquire) >= READAHEAD_BYTES {
             std::thread::sleep(FULL_BACKOFF);
@@ -142,6 +156,8 @@ fn pump(mut inner: Box<dyn RadioSource + Send>, shared: &Shared, tx: &Sender<Aud
                 if shared.state.load(Ordering::Acquire) == STATE_CONNECTING {
                     shared.state.store(STATE_ACTIVE, Ordering::Release);
                 }
+                total_bytes += chunk.data.len() as u64;
+                last_chunk = std::time::Instant::now();
                 shared
                     .buffered
                     .fetch_add(chunk.data.len(), Ordering::AcqRel);
