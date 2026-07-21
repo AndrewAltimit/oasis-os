@@ -679,7 +679,9 @@ impl FfmpegDecoder {
 
             // SAFETY: Reinterpreting f32 bytes. The resampler outputs f32 packed.
             let pcm_f32: Vec<f32> = data[..byte_len]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
 
