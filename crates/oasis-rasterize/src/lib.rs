@@ -225,7 +225,7 @@ impl SoftwareBuffer {
 
     /// Clear the entire buffer to the given color (no alpha blending).
     pub fn clear(&mut self, color: Color) {
-        for pixel in self.buffer.chunks_exact_mut(4) {
+        for pixel in self.buffer.as_chunks_mut::<4>().0.iter_mut() {
             pixel[0] = color.r;
             pixel[1] = color.g;
             pixel[2] = color.b;

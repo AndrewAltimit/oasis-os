@@ -12,11 +12,7 @@ impl CssParser {
 
     pub(super) fn parse_selector_list(&mut self) -> Option<SelectorList> {
         let mut selectors = Vec::new();
-        if let Some(sel) = self.parse_selector() {
-            selectors.push(sel);
-        } else {
-            return None;
-        }
+        selectors.push(self.parse_selector()?);
         loop {
             self.skip_whitespace();
             if self.peek() == &CssToken::Comma {

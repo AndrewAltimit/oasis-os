@@ -59,7 +59,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => {
             let mut out = Vec::with_capacity((w * h * 4) as usize);
-            for px in buf.chunks_exact(3) {
+            for px in buf.as_chunks::<3>().0.iter() {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out
@@ -73,7 +73,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         },
         png::ColorType::GrayscaleAlpha => {
             let mut out = Vec::with_capacity((w * h * 4) as usize);
-            for px in buf.chunks_exact(2) {
+            for px in buf.as_chunks::<2>().0.iter() {
                 out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
             }
             out
@@ -100,7 +100,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let rgba = match info.pixel_format {
         jpeg_decoder::PixelFormat::RGB24 => {
             let mut out = Vec::with_capacity((w * h * 4) as usize);
-            for px in pixels.chunks_exact(3) {
+            for px in pixels.as_chunks::<3>().0.iter() {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out

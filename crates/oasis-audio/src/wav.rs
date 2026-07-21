@@ -61,7 +61,9 @@ pub fn decode_wav(data: &[u8]) -> Option<WavData> {
     let samples = if bits_per_sample == 16 {
         // 16-bit signed little-endian.
         pcm_bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect()
     } else {

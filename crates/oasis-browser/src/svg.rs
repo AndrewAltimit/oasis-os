@@ -1091,7 +1091,11 @@ fn parse_point_list(s: &str) -> Vec<(f32, f32)> {
         .filter(|p| !p.is_empty())
         .filter_map(|p| p.parse::<f32>().ok())
         .collect();
-    nums.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    nums.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1]))
+        .collect()
 }
 
 /// Parse SVG path `d` attribute into commands, then flatten curves

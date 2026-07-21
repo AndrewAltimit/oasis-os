@@ -198,7 +198,7 @@ fn to_output_pcm(wav: &WavData) -> Vec<i16> {
             let frames = wav.samples.len() / 2;
             let mut left = Vec::with_capacity(frames);
             let mut right = Vec::with_capacity(frames);
-            for pair in wav.samples.chunks_exact(2) {
+            for pair in wav.samples.as_chunks::<2>().0.iter() {
                 left.push(pair[0]);
                 right.push(pair[1]);
             }

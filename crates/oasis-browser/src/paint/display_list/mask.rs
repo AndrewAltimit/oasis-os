@@ -119,7 +119,12 @@ pub(super) fn apply_mask(buf: &mut [u8], w: u32, h: u32, mask: &MaskParams) {
     // Combine per the `mask-composite` operator. The layer alpha `la`
     // starts as the already-painted layer's alpha; the mask alpha
     // `ma` comes from the rasterized buffer.
-    for (pixel, ma) in buf.chunks_exact_mut(4).zip(mask_alpha.iter().copied()) {
+    for (pixel, ma) in buf
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(mask_alpha.iter().copied())
+    {
         let la = pixel[3] as u16;
         let ma = ma as u16;
         let out = match mask.composite {

@@ -244,7 +244,7 @@ impl DisplayList {
                                         // Pre-multiply opacity into alpha.
                                         if (layer.opacity - 1.0).abs() > f32::EPSILON {
                                             let f = layer.opacity.clamp(0.0, 1.0);
-                                            for chunk in buf.chunks_exact_mut(4) {
+                                            for chunk in buf.as_chunks_mut::<4>().0.iter_mut() {
                                                 chunk[3] = ((chunk[3] as f32) * f).round() as u8;
                                             }
                                         }

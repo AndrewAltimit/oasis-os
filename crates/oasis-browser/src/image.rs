@@ -24,7 +24,7 @@ pub struct DecodedImage {
 
 impl DecodedImage {
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        let has_transparency = pixels.chunks_exact(4).any(|px| px[3] < 255);
+        let has_transparency = pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255);
         Self {
             width,
             height,
@@ -238,7 +238,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         png::ColorType::Rgba => bytes.to_vec(),
         png::ColorType::Rgb => {
             let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in bytes.chunks_exact(3) {
+            for chunk in bytes.as_chunks::<3>().0.iter() {
                 rgba.extend_from_slice(chunk);
                 rgba.push(255);
             }
@@ -246,7 +246,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         },
         png::ColorType::GrayscaleAlpha => {
             let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in bytes.chunks_exact(2) {
+            for chunk in bytes.as_chunks::<2>().0.iter() {
                 let g = chunk[0];
                 rgba.extend_from_slice(&[g, g, g, chunk[1]]);
             }
@@ -294,7 +294,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let pixels = match info.pixel_format {
         jpeg_decoder::PixelFormat::RGB24 => {
             let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in pixels_raw.chunks_exact(3) {
+            for chunk in pixels_raw.as_chunks::<3>().0.iter() {
                 rgba.extend_from_slice(chunk);
                 rgba.push(255);
             }
@@ -309,7 +309,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         },
         jpeg_decoder::PixelFormat::L16 => {
             let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in pixels_raw.chunks_exact(2) {
+            for chunk in pixels_raw.as_chunks::<2>().0.iter() {
                 let g = chunk[0]; // High byte of 16-bit grayscale
                 rgba.extend_from_slice(&[g, g, g, 255]);
             }
@@ -317,7 +317,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         },
         jpeg_decoder::PixelFormat::CMYK32 => {
             let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in pixels_raw.chunks_exact(4) {
+            for chunk in pixels_raw.as_chunks::<4>().0.iter() {
                 let c = chunk[0] as f32 / 255.0;
                 let m = chunk[1] as f32 / 255.0;
                 let y = chunk[2] as f32 / 255.0;
@@ -472,10 +472,9 @@ fn extract_length_attr(tag: &str, attr: &str) -> Option<f32> {
     let needle_s = format!("{attr}='");
     let (after, quote) = if let Some(idx) = tag.find(&needle_d) {
         (&tag[idx + needle_d.len()..], '"')
-    } else if let Some(idx) = tag.find(&needle_s) {
-        (&tag[idx + needle_s.len()..], '\'')
     } else {
-        return None;
+        let idx = tag.find(&needle_s)?;
+        (&tag[idx + needle_s.len()..], '\'')
     };
     let end = after.find(quote)?;
     let raw = after[..end].trim();

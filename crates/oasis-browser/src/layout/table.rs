@@ -153,9 +153,7 @@ pub fn layout_table(
         let avail =
             (containing_width - table_border_h - table_padding_h - total_spacing_fixed).max(0.0);
         let even_w = avail / tl.num_cols as f32;
-        for w in &mut tl.col_widths {
-            *w = even_w;
-        }
+        tl.col_widths.fill(even_w);
     } else {
         compute_column_widths(&mut tl);
     }
@@ -671,9 +669,7 @@ fn distribute_widths(tl: &mut TableLayout, available: f32) {
     if total_pref <= 0.0 {
         // No preferred widths: distribute evenly.
         let per_col = available / tl.num_cols as f32;
-        for w in &mut tl.col_widths {
-            *w = per_col;
-        }
+        tl.col_widths.fill(per_col);
         return;
     }
 
