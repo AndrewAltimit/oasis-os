@@ -79,6 +79,12 @@ pub(crate) struct StreamingInner {
     /// instead of blocking.  Used during symphonia's probe phase so
     /// ignore_bytes() can skip the mdat body without downloading it.
     pub(crate) probe_mode: std::sync::atomic::AtomicBool,
+    /// Whether sliding-window eviction is active. Starts `false` to allow
+    /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss;
+    /// enabled via [`Self::enable_eviction`] after the decoder's probe.
+    /// Eviction runs on the download thread inside [`Self::push`] so the
+    /// decoder's read path never pays for the multi-MB `copy_within`.
+    pub(crate) eviction_enabled: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(feature = "_video")]
@@ -101,7 +107,15 @@ impl StreamingInner {
             condvar: std::sync::Condvar::new(),
             decoder_pos: std::sync::atomic::AtomicU64::new(0),
             probe_mode: std::sync::atomic::AtomicBool::new(true),
+            eviction_enabled: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Enable sliding-window eviction (called once the demuxer no longer
+    /// needs to seek back to the start of the file).
+    pub(crate) fn enable_eviction(&self) {
+        self.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Append data from the download thread. Scans for top-level MP4 atoms
@@ -118,6 +132,18 @@ impl StreamingInner {
 
         // Scan for top-level MP4 atom headers in newly arrived data.
         Self::scan_atoms(&mut s);
+
+        // Evict data far behind the decoder while we already hold the lock.
+        // Doing this on the download thread keeps the multi-MB `copy_within`
+        // out of the decoder's read path (where it used to stall decode and
+        // block this thread's push at the same time).
+        if self
+            .eviction_enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Acquire);
+            Self::maybe_evict_locked(&mut s, decoder);
+        }
 
         // Log progress periodically (every 4MB).
         let buf_len = s.buf.len();
@@ -142,6 +168,37 @@ impl StreamingInner {
         }
 
         self.condvar.notify_all();
+    }
+
+    /// Evict data that is far behind `cursor` (the decoder's position),
+    /// except moov/header which are retained separately.  Caller must hold
+    /// the state lock.
+    ///
+    /// Uses a 2x RETAIN_BEHIND threshold to batch evictions: the cursor must
+    /// be at least 2 * RETAIN_BEHIND into the buffer before eviction
+    /// triggers, so each eviction shifts a larger block and the
+    /// `copy_within` cost is amortized.
+    pub(crate) fn maybe_evict_locked(s: &mut SlidingState, cursor: u64) {
+        let cursor_in_buf = cursor.saturating_sub(s.base_offset) as usize;
+        if cursor_in_buf > RETAIN_BEHIND * 2 {
+            let evict = cursor_in_buf - RETAIN_BEHIND;
+            let evict = evict.min(s.buf.len());
+            if evict > 0 {
+                // In-place shift: copy_within avoids the Drain iterator
+                // overhead and keeps the Vec's allocation stable.
+                let new_len = s.buf.len() - evict;
+                s.buf.copy_within(evict.., 0);
+                s.buf.truncate(new_len);
+                s.base_offset += evict as u64;
+                log::debug!(
+                    "TV: evicted {:.1}MB, window now {:.1}MB ({}-{})",
+                    evict as f64 / (1024.0 * 1024.0),
+                    s.buf.len() as f64 / (1024.0 * 1024.0),
+                    s.base_offset,
+                    s.base_offset + s.buf.len() as u64,
+                );
+            }
+        }
     }
 
     /// Scan top-level MP4 atoms starting from `atoms_scanned_to`.
@@ -496,20 +553,22 @@ pub(crate) fn should_throttle_pure(
 ///
 /// Implements `Read + Seek` with blocking semantics. Reads block until data
 /// is available at the current position or the download completes/errors.
-/// After each read, data far behind the cursor is evicted to bound memory
-/// usage. The moov atom is retained separately and never evicted.
+/// Data far behind the cursor is evicted by the download thread (inside
+/// `StreamingInner::push`) to bound memory usage. The moov atom is retained
+/// separately and never evicted.
 ///
-/// Eviction is disabled by default and must be enabled by setting the
-/// `eviction_enabled` flag after the demuxer has finished its initial
-/// full-file scan (avcC + probe). This prevents evicting data that the
-/// demuxer needs to seek back to during initialization.
+/// Eviction is disabled by default and must be enabled via
+/// `StreamingInner::enable_eviction` after the demuxer has finished its
+/// initial full-file scan (avcC + probe). This prevents evicting data that
+/// the demuxer needs to seek back to during initialization.
 #[cfg(feature = "_video")]
 pub(crate) struct StreamingBuffer {
     inner: std::sync::Arc<StreamingInner>,
     pub(crate) pos: u64,
-    /// Whether sliding-window eviction is active. Starts `false` to allow
-    /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss.
-    pub(crate) eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Read position at the last downloader wake-up.  Used to notify the
+    /// (possibly throttle-parked) download thread once the decoder has
+    /// consumed enough cumulative data to be worth waking it for.
+    last_notify_pos: u64,
     /// Last time a "waiting for data" message was logged (rate-limits spam).
     last_wait_log: Option<std::time::Instant>,
     /// Cached header (ftyp) data — once set it never changes, so reads from
@@ -526,54 +585,10 @@ impl StreamingBuffer {
         Self {
             inner,
             pos: 0,
-            eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_notify_pos: 0,
             last_wait_log: None,
             cached_header: None,
             cached_moov: None,
-        }
-    }
-
-    /// Evict data that is far behind the read cursor, except moov.
-    ///
-    /// Eviction is ONLY active after `on_init` enables it (post-demuxer probe).
-    /// During init the demuxer does `read_to_end()` + `seek(0)`, so ALL data
-    /// must remain in the buffer -- evicting early breaks format probing.
-    ///
-    /// Uses a 2x RETAIN_BEHIND threshold to batch evictions: the cursor must
-    /// be at least 2 * RETAIN_BEHIND into the buffer before eviction triggers.
-    /// This reduces lock acquisition frequency (evictions are ~50% less
-    /// frequent) and each eviction shifts a larger block, amortizing the
-    /// `copy_within` cost.
-    pub(crate) fn maybe_evict(&self) {
-        if !self
-            .eviction_enabled
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return;
-        }
-
-        let mut s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        let cursor_in_buf = self.pos.saturating_sub(s.base_offset) as usize;
-        // Only evict when cursor is 2x RETAIN_BEHIND into the buffer to
-        // batch evictions and reduce lock/memcpy frequency.
-        if cursor_in_buf > RETAIN_BEHIND * 2 {
-            let evict = cursor_in_buf - RETAIN_BEHIND;
-            let evict = evict.min(s.buf.len());
-            if evict > 0 {
-                // In-place shift: copy_within avoids the Drain iterator
-                // overhead and keeps the Vec's allocation stable.
-                let new_len = s.buf.len() - evict;
-                s.buf.copy_within(evict.., 0);
-                s.buf.truncate(new_len);
-                s.base_offset += evict as u64;
-                log::debug!(
-                    "TV: evicted {:.1}MB, window now {:.1}MB ({}-{})",
-                    evict as f64 / (1024.0 * 1024.0),
-                    s.buf.len() as f64 / (1024.0 * 1024.0),
-                    s.base_offset,
-                    s.base_offset + s.buf.len() as u64,
-                );
-            }
         }
     }
 }
@@ -738,25 +753,27 @@ impl std::io::Read for StreamingBuffer {
                 .unwrap_or_else(|e| e.into_inner());
         };
 
-        // Update decoder position and evict old data after successful read.
-        // Skip during probe_mode -- probe reads return zeros and don't
-        // represent real decoder progress.  Updating decoder_pos during
-        // probe would race with the download thread's seek-restart logic
-        // that resets decoder_pos to the Range start offset.
+        // Update decoder position after a successful read.  Skip during
+        // probe_mode -- probe reads return zeros and don't represent real
+        // decoder progress.  Updating decoder_pos during probe would race
+        // with the download thread's seek-restart logic that resets
+        // decoder_pos to the Range start offset.
         if n > 0
             && !self
                 .inner
                 .probe_mode
                 .load(std::sync::atomic::Ordering::Acquire)
         {
-            let old_pos = self
-                .inner
+            self.inner
                 .decoder_pos
-                .swap(self.pos, std::sync::atomic::Ordering::Release);
-            self.maybe_evict();
-            // Notify the download thread if decoder advanced significantly
-            // (>256KB) so throttle-sleeping threads wake up promptly.
-            if self.pos.saturating_sub(old_pos) > 256 * 1024 {
+                .store(self.pos, std::sync::atomic::Ordering::Release);
+            // Notify the download thread once the decoder has advanced
+            // >256KB cumulatively since the last wake-up, so a
+            // throttle-parked downloader resumes promptly.  (Comparing
+            // against the previous read's position never fired -- single
+            // reads advance only a few KB.)
+            if self.pos.saturating_sub(self.last_notify_pos) > 256 * 1024 {
+                self.last_notify_pos = self.pos;
                 self.inner.condvar.notify_all();
             }
         }
@@ -823,6 +840,9 @@ impl std::io::Seek for StreamingBuffer {
             self.inner
                 .decoder_pos
                 .store(self.pos, std::sync::atomic::Ordering::Release);
+            // Reset the cumulative-advance notify baseline to the new
+            // position so backward seeks don't suppress future wake-ups.
+            self.last_notify_pos = self.pos;
             // Wake the download thread so it can re-check throttle
             // with the updated decoder_pos.
             self.inner.condvar.notify_all();

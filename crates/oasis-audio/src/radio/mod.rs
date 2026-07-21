@@ -9,6 +9,7 @@ pub mod buffer;
 pub mod icy;
 pub mod source;
 pub mod station;
+pub mod threaded;
 
 use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
@@ -17,6 +18,7 @@ use oasis_vfs::Vfs;
 pub use archive::{ArchiveCatalog, ArchiveTrack};
 pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
 pub use station::{Station, StationRegistry};
+pub use threaded::ThreadedSource;
 
 /// VFS path where the radio manager publishes its status.
 pub const RADIO_STATUS_PATH: &str = "/var/radio/status";

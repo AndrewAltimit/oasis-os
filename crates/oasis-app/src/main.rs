@@ -981,10 +981,8 @@ fn is_archive_host(host: &str) -> bool {
 fn parse_stream_url(url: &str) -> Option<(String, u16, String, bool)> {
     let (remainder, tls) = if let Some(r) = url.strip_prefix("https://") {
         (r, true)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        (r, false)
     } else {
-        return None;
+        (url.strip_prefix("http://")?, false)
     };
     let (host_port, path) = if let Some(idx) = remainder.find('/') {
         (&remainder[..idx], remainder[idx..].to_string())
@@ -1238,7 +1236,12 @@ fn connect_archive_source(
                     Ok(Some(chunk)) => {
                         source.push_back_chunk(chunk);
                         log::info!("Archive source connected, audio data flowing");
-                        return Ok(Box::new(source));
+                        // Wrap in a ThreadedSource so steady-state socket
+                        // reads happen on a pump thread with a readahead
+                        // queue instead of the frame loop.
+                        return Ok(Box::new(oasis_audio::radio::ThreadedSource::spawn_from(
+                            Box::new(source),
+                        )));
                     },
                     Ok(None) => match source.state() {
                         SourceState::Ended => {

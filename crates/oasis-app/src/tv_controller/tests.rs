@@ -225,7 +225,7 @@ fn parse_moov_duration_too_short() {
 }
 
 // ---------------------------------------------------------------
-// maybe_evict tests (via StreamingBuffer)
+// Eviction tests (StreamingInner::maybe_evict_locked + push path)
 // ---------------------------------------------------------------
 
 #[test]
@@ -233,13 +233,9 @@ fn evict_small_buffer_no_eviction() {
     let inner = std::sync::Arc::new(StreamingInner::new());
     // Push less than RETAIN_BEHIND bytes.
     inner.push(&vec![0xAA; 1024]);
-    let sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    // Enable eviction.
-    sb.eviction_enabled
-        .store(true, std::sync::atomic::Ordering::Release);
-    sb.maybe_evict();
-    let s = inner.state.lock().unwrap();
+    let mut s = inner.state.lock().unwrap();
     // Nothing evicted -- cursor is at 0, not past RETAIN_BEHIND.
+    StreamingInner::maybe_evict_locked(&mut s, 0);
     assert_eq!(s.base_offset, 0);
     assert_eq!(s.buf.len(), 1024);
 }
@@ -250,13 +246,9 @@ fn evict_large_buffer_evicts_old_data() {
     // Must exceed 2 * RETAIN_BEHIND (batched eviction threshold).
     let data_size = RETAIN_BEHIND * 2 + 2 * 1024 * 1024;
     inner.push(&vec![0xBB; data_size]);
-    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    sb.eviction_enabled
-        .store(true, std::sync::atomic::Ordering::Release);
-    // Move cursor past 2 * RETAIN_BEHIND.
-    sb.pos = data_size as u64;
-    sb.maybe_evict();
-    let s = inner.state.lock().unwrap();
+    let mut s = inner.state.lock().unwrap();
+    // Cursor past 2 * RETAIN_BEHIND.
+    StreamingInner::maybe_evict_locked(&mut s, data_size as u64);
     // Some data should have been evicted.
     assert!(s.base_offset > 0, "expected eviction");
     // Remaining buffer should be approximately RETAIN_BEHIND.
@@ -270,11 +262,12 @@ fn evict_large_buffer_evicts_old_data() {
 fn evict_disabled_no_eviction() {
     let inner = std::sync::Arc::new(StreamingInner::new());
     let data_size = RETAIN_BEHIND + 2 * 1024 * 1024;
+    // eviction_enabled defaults to false: pushes with the decoder far
+    // ahead must not evict.
+    inner
+        .decoder_pos
+        .store(data_size as u64, std::sync::atomic::Ordering::Release);
     inner.push(&vec![0xCC; data_size]);
-    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    // eviction_enabled defaults to false.
-    sb.pos = data_size as u64;
-    sb.maybe_evict();
     let s = inner.state.lock().unwrap();
     assert_eq!(s.base_offset, 0, "eviction should be disabled");
     assert_eq!(s.buf.len(), data_size);
@@ -284,12 +277,9 @@ fn evict_disabled_no_eviction() {
 fn evict_cursor_at_start_no_eviction() {
     let inner = std::sync::Arc::new(StreamingInner::new());
     inner.push(&vec![0xDD; RETAIN_BEHIND + 1024]);
-    let sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    sb.eviction_enabled
-        .store(true, std::sync::atomic::Ordering::Release);
-    // pos=0 means cursor_in_buf=0, not > RETAIN_BEHIND.
-    sb.maybe_evict();
-    let s = inner.state.lock().unwrap();
+    let mut s = inner.state.lock().unwrap();
+    // cursor=0 means cursor_in_buf=0, not > RETAIN_BEHIND.
+    StreamingInner::maybe_evict_locked(&mut s, 0);
     assert_eq!(s.base_offset, 0);
 }
 
@@ -299,15 +289,28 @@ fn evict_preserves_data_near_cursor() {
     // 4 * RETAIN_BEHIND to ensure cursor exceeds 2x threshold.
     let total = RETAIN_BEHIND * 4;
     inner.push(&vec![0xEE; total]);
-    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    sb.eviction_enabled
-        .store(true, std::sync::atomic::Ordering::Release);
+    let mut s = inner.state.lock().unwrap();
     // Cursor at 3*RETAIN_BEHIND: evicts first 2*RETAIN_BEHIND.
-    sb.pos = (RETAIN_BEHIND * 3) as u64;
-    sb.maybe_evict();
-    let s = inner.state.lock().unwrap();
+    StreamingInner::maybe_evict_locked(&mut s, (RETAIN_BEHIND * 3) as u64);
     assert_eq!(s.base_offset, (RETAIN_BEHIND * 2) as u64);
     assert_eq!(s.buf.len(), RETAIN_BEHIND * 2);
+}
+
+#[test]
+fn evict_runs_on_push_when_enabled() {
+    let inner = std::sync::Arc::new(StreamingInner::new());
+    inner.enable_eviction();
+    let chunk = RETAIN_BEHIND * 2 + 1024 * 1024;
+    inner.push(&vec![0xAB; chunk]);
+    // Decoder has consumed past the batch threshold; the NEXT push must
+    // evict on the download thread's side.
+    inner
+        .decoder_pos
+        .store(chunk as u64, std::sync::atomic::Ordering::Release);
+    inner.push(&vec![0xCD; 1024]);
+    let s = inner.state.lock().unwrap();
+    assert!(s.base_offset > 0, "push should have evicted");
+    assert!(s.buf.len() < chunk, "window should have shrunk");
 }
 
 // ---------------------------------------------------------------
@@ -1345,23 +1348,24 @@ fn probe_mode_read_up_to_total_size() {
 #[test]
 fn multiple_evictions_advance_base_offset() {
     let inner = std::sync::Arc::new(StreamingInner::new());
+    inner.enable_eviction();
     // Chunk must exceed 2 * RETAIN_BEHIND for batched eviction.
     let chunk = RETAIN_BEHIND * 2 + 1024 * 1024;
     inner.push(&vec![0xAA; chunk]);
-    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
-    sb.eviction_enabled
-        .store(true, std::sync::atomic::Ordering::Release);
 
-    // First eviction.
-    sb.pos = chunk as u64;
-    sb.maybe_evict();
+    // First eviction: decoder consumed the first chunk, next push evicts.
+    inner
+        .decoder_pos
+        .store(chunk as u64, std::sync::atomic::Ordering::Release);
+    inner.push(&vec![0xBB; chunk]);
     let offset1 = inner.state.lock().unwrap().base_offset;
     assert!(offset1 > 0);
 
-    // Push more data and advance cursor.
-    inner.push(&vec![0xBB; chunk]);
-    sb.pos = (chunk * 2) as u64;
-    sb.maybe_evict();
+    // Second eviction: decoder consumed the second chunk too.
+    inner
+        .decoder_pos
+        .store((chunk * 2) as u64, std::sync::atomic::Ordering::Release);
+    inner.push(&vec![0xCC; 1024]);
     let offset2 = inner.state.lock().unwrap().base_offset;
     assert!(offset2 > offset1, "second eviction should advance further");
 }

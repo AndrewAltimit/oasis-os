@@ -66,6 +66,9 @@ impl NetworkBackend for StdNetworkBackend {
                 stream
                     .set_nonblocking(true)
                     .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
+                if let Err(e) = stream.set_nodelay(true) {
+                    log::warn!("set_nodelay failed for {addr}: {e}");
+                }
                 Ok(Some(Box::new(StdNetworkStream::new(stream))))
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
@@ -80,6 +83,12 @@ impl NetworkBackend for StdNetworkBackend {
         stream
             .set_nonblocking(true)
             .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
+        // Disable Nagle: streaming/RPC traffic is latency-sensitive and the
+        // request/response patterns here (HTTP headers, TLS handshakes, ICY
+        // polls) otherwise wait out delayed-ACK round trips.
+        if let Err(e) = stream.set_nodelay(true) {
+            log::warn!("set_nodelay failed for {addr}: {e}");
+        }
         log::info!("Connected to {addr}");
         Ok(Box::new(StdNetworkStream::new(stream)))
     }
