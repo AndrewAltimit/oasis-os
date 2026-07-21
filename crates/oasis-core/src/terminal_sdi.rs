@@ -210,8 +210,14 @@ pub fn setup_terminal_objects(
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
     let output_color = colors.output;
+    // Name buffers reused across the loop: this runs every frame, so a
+    // format! per line (plus one per colored run) is real churn.
+    use std::fmt::Write as _;
+    let mut name = String::with_capacity(16);
+    let mut run_name = String::with_capacity(20);
     for i in 0..visible_lines {
-        let name = format!("term_line_{i}");
+        name.clear();
+        let _ = write!(name, "term_line_{i}");
         let line_x = margin + 4;
         let line_y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
         if !sdi.contains(&name) {
@@ -238,13 +244,14 @@ pub fn setup_terminal_objects(
                     let width = crate::backend::bitmap_measure_text(run.text, at.font_body) as i32;
                     if j == 0 {
                         if let Ok(obj) = sdi.get_mut(&name) {
-                            obj.text = Some(run.text.to_string());
+                            obj.set_text(run.text);
                             obj.text_color = run_color(run.color);
                             obj.x = x;
                             obj.visible = true;
                         }
                     } else if j <= MAX_LINE_RUNS {
-                        let run_name = format!("term_line_{i}_r{j}");
+                        run_name.clear();
+                        let _ = write!(run_name, "term_line_{i}_r{j}");
                         if !sdi.contains(&run_name) {
                             let obj = sdi.create(&run_name);
                             obj.font_size = at.font_body;
@@ -254,14 +261,15 @@ pub fn setup_terminal_objects(
                         if let Ok(obj) = sdi.get_mut(&run_name) {
                             obj.x = x;
                             obj.y = line_y;
-                            obj.text = Some(run.text.to_string());
+                            obj.set_text(run.text);
                             obj.text_color = run_color(run.color);
                             obj.visible = true;
                         }
                         extra_runs = j;
                     } else {
                         // Beyond the run budget: append to the last object.
-                        let run_name = format!("term_line_{i}_r{MAX_LINE_RUNS}");
+                        run_name.clear();
+                        let _ = write!(run_name, "term_line_{i}_r{MAX_LINE_RUNS}");
                         if let Ok(obj) = sdi.get_mut(&run_name)
                             && let Some(ref mut text) = obj.text
                         {
@@ -273,7 +281,10 @@ pub fn setup_terminal_objects(
             },
             _ => {
                 if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.text = raw.cloned();
+                    match raw {
+                        Some(line) => obj.set_text(line),
+                        None => obj.text = None,
+                    }
                     obj.text_color = output_color;
                     obj.x = line_x;
                     obj.visible = true;
@@ -283,7 +294,8 @@ pub fn setup_terminal_objects(
 
         // Hide leftover run objects from a previous, more colorful frame.
         for j in (extra_runs + 1)..=MAX_LINE_RUNS {
-            let run_name = format!("term_line_{i}_r{j}");
+            run_name.clear();
+            let _ = write!(run_name, "term_line_{i}_r{j}");
             if !sdi.contains(&run_name) {
                 break;
             }
@@ -320,7 +332,11 @@ pub fn setup_terminal_objects(
     }
     if let Ok(obj) = sdi.get_mut("term_prompt") {
         let cursor_char = if cursor_visible { '_' } else { ' ' };
-        obj.text = Some(format!("{cwd}> {input_buf}{cursor_char}"));
+        // Rebuild the prompt in the object's own String to reuse its
+        // capacity instead of allocating a fresh one every frame.
+        let text = obj.text.get_or_insert_default();
+        text.clear();
+        let _ = write!(text, "{cwd}> {input_buf}{cursor_char}");
         obj.visible = true;
     }
 }

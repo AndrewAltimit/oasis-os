@@ -25,9 +25,9 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, BatchRect, BlendMode, Color, DashStyle, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiTextures, SdiVector,
-    StrokeStyle, TextureId,
+    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, DashStyle, RenderTargetId,
+    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector, StrokeStyle, TextureId,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
@@ -111,6 +111,10 @@ pub struct SdlBackend {
     pub(crate) translate_stack: TranslateStack,
     pub(crate) viewport_w: u32,
     pub(crate) viewport_h: u32,
+    /// Last color passed to `set_color`, to skip redundant SDL draw-color
+    /// and blend-mode calls. All canvas draw-color/blend changes must go
+    /// through `set_color` (or reset this to `None`) to stay coherent.
+    pub(crate) last_draw_color: Option<Color>,
 }
 
 impl SdlBackend {
@@ -164,6 +168,7 @@ impl SdlBackend {
             translate_stack: TranslateStack::new(),
             viewport_w: width,
             viewport_h: height,
+            last_draw_color: None,
         })
     }
 
@@ -209,7 +214,14 @@ impl SdlBackend {
     }
 
     /// Set the SDL draw color with optional blend mode.
+    ///
+    /// Skips the SDL calls entirely when the color (and therefore the
+    /// derived blend mode) matches the last one set — gradients and
+    /// batched chrome otherwise re-send identical state per scanline.
     pub(crate) fn set_color(&mut self, color: Color) {
+        if self.last_draw_color == Some(color) {
+            return;
+        }
         if color.a < 255 {
             self.canvas.set_blend_mode(sdl3::render::BlendMode::Blend);
         } else {
@@ -218,6 +230,7 @@ impl SdlBackend {
         self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
             color.r, color.g, color.b, color.a,
         ));
+        self.last_draw_color = Some(color);
     }
 }
 
@@ -587,6 +600,23 @@ impl SdiBatch for SdlBackend {
         if let Some(color) = group_color {
             self.set_color(color);
             self.canvas.fill_rects(&group).backend_err()?;
+        }
+        Ok(())
+    }
+
+    fn submit_text_batch(
+        &mut self,
+        texts: &[BatchText<'_>],
+        font_size: u16,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        // One styled pass per item: bold comes from the glyph cache's
+        // baked double-strike entries instead of the default impl's
+        // second shifted draw_text (which blits every glyph twice and
+        // double-blends antialiased TTF coverage).
+        for t in texts {
+            self.draw_text_styled(t.text, t.x, t.y, font_size, t.color, bold, italic)?;
         }
         Ok(())
     }

@@ -70,6 +70,13 @@ pub struct TerminalLayer {
     pub scroll_offset: usize,
     /// Set when output_lines or input_buf changes; cleared after sync.
     pub dirty: bool,
+    /// Signature of the content last synced to the windowed terminal
+    /// runner: (lines len, scroll offset, input buffer, first line, last
+    /// line). `dirty` is set on *any* input event as a catch-all, so
+    /// without this a mouse drag over the desktop would deep-clone the
+    /// whole scrollback every frame. First+last+len covers append,
+    /// cap-trim (`remove(0)`), and `clear`.
+    pub sync_signature: Option<(usize, usize, String, String, String)>,
 }
 
 /// Networking: TCP backend, remote listener/client, FTP, TLS.
@@ -287,6 +294,7 @@ mod tests {
             output_lines: Vec::new(),
             scroll_offset: 0,
             dirty: true,
+            sync_signature: None,
         };
 
         let _net = NetworkLayer {

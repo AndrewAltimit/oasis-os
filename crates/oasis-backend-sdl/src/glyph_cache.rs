@@ -57,6 +57,10 @@ pub(crate) struct GlyphEntry {
     pub(crate) advance: i32,
     /// Value of `glyph_access_counter` at the last hit (LRU timestamp).
     pub(crate) last_used: u64,
+    /// Color modulation currently set on the texture (SDL texture state
+    /// persists across frames). Tracked so the draw path only issues
+    /// `set_color_mod` when the tint actually changes for this glyph.
+    pub(crate) mod_rgb: (u8, u8, u8),
 }
 
 // -------------------------------------------------------------------
@@ -232,7 +236,9 @@ impl SdlBackend {
         Ok((id, gw, gh, off_x, off_y, advance))
     }
 
-    /// Look up a glyph, rendering and caching it on miss. Returns the entry.
+    /// Look up a glyph, rendering and caching it on miss. Returns the entry
+    /// plus whether the caller must re-apply `set_color_mod` before blitting
+    /// (i.e. the requested tint differs from what the texture last carried).
     ///
     /// Opaque text gets a color-independent entry (white pixels, tinted at
     /// blit); translucent text gets a color-keyed entry with the color baked
@@ -244,8 +250,9 @@ impl SdlBackend {
         color: Color,
         bold: bool,
         italic: bool,
-    ) -> Result<GlyphEntry> {
+    ) -> Result<(GlyphEntry, bool)> {
         let tinted = Self::tints_at_blit(color);
+        let rgb = (color.r, color.g, color.b);
         let key = if tinted {
             GlyphCacheKey::colorless(ch, font_size, bold, italic)
         } else {
@@ -257,7 +264,11 @@ impl SdlBackend {
         if let Some(entry) = self.glyph_cache.get_mut(&key) {
             // Cache hit: touch the in-entry LRU stamp (no second HashMap).
             entry.last_used = stamp;
-            return Ok(*entry);
+            let needs_mod = tinted && entry.mod_rgb != rgb;
+            if needs_mod {
+                entry.mod_rgb = rgb;
+            }
+            return Ok((*entry, needs_mod));
         }
 
         if self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
@@ -280,7 +291,8 @@ impl SdlBackend {
             let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
             (texture, w, h, 0, 0, advance)
         };
-        let entry = GlyphEntry {
+        // Fresh textures carry SDL's default modulation (white).
+        let mut entry = GlyphEntry {
             texture,
             w,
             h,
@@ -288,9 +300,14 @@ impl SdlBackend {
             off_y,
             advance,
             last_used: stamp,
+            mod_rgb: (255, 255, 255),
         };
+        let needs_mod = tinted && entry.mod_rgb != rgb;
+        if needs_mod {
+            entry.mod_rgb = rgb;
+        }
         self.glyph_cache.insert(key, entry);
-        Ok(entry)
+        Ok((entry, needs_mod))
     }
 
     /// Whether a glyph in this color is served from the color-independent
@@ -369,14 +386,15 @@ impl SdiText for SdlBackend {
         let (tx, ty) = self.translate(x, y);
         let mut cx = tx;
 
-        let tinted = Self::tints_at_blit(color);
         for ch in text.chars() {
-            let entry = self.glyph_entry(ch, font_size, color, bold, italic)?;
+            let (entry, set_mod) = self.glyph_entry(ch, font_size, color, bold, italic)?;
             // Dimensions come from the cache entry, not a `texture.query()`
             // FFI round-trip per glyph per frame.
             if let Some(texture) = self.textures.get_mut(&entry.texture) {
-                if tinted {
+                if set_mod {
                     // White glyph, tinted to the requested color by SDL.
+                    // Texture modulation persists, so this only fires when
+                    // the glyph's tracked tint actually changes.
                     texture.set_color_mod(color.r, color.g, color.b);
                 }
                 let _ = self.canvas.copy(

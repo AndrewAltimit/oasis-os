@@ -129,6 +129,7 @@ impl DashboardState {
             iy + icon_h as i32 + text_pad,
             &app.title,
             left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 
@@ -196,6 +197,7 @@ impl DashboardState {
             iy + icon_h as i32 + text_pad,
             &app.title,
             left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 
@@ -247,6 +249,7 @@ impl DashboardState {
             iy + icon_h as i32 + text_pad,
             &app.title,
             left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 }

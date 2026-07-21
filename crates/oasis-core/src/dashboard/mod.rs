@@ -261,6 +261,10 @@ pub struct DashboardState {
     /// `RefCell` because the render path borrows the dashboard immutably;
     /// single-threaded like the rest of the SDI pipeline.
     scene_cache: std::cell::RefCell<HashMap<usize, vector_icons::CachedIconScene>>,
+    /// Cached word-wrapped label lines per app title (see
+    /// [`labels::LabelWrapCache`]). `RefCell` for the same reason as
+    /// `scene_cache`: the icon draw methods borrow `self` immutably.
+    label_wrap_cache: labels::LabelWrapCache,
 }
 
 impl DashboardState {
@@ -282,6 +286,7 @@ impl DashboardState {
             positions: HashMap::new(),
             drag_index: None,
             scene_cache: std::cell::RefCell::new(HashMap::new()),
+            label_wrap_cache: labels::LabelWrapCache::default(),
         }
     }
 

@@ -91,18 +91,51 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             AppRunner::hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
 
-            // Sync terminal output to the windowed terminal runner (only when changed).
+            // Sync terminal output to the windowed terminal runner (only when
+            // changed). `dirty` is a catch-all set on any input event, so the
+            // content signature gates the expensive full-scrollback clone to
+            // frames where the terminal actually changed — a mouse drag over
+            // the desktop must not deep-copy 2000 lines per frame.
             if state.terminal.dirty {
+                let term = &state.terminal;
+                let changed = term.sync_signature.as_ref().is_none_or(|sig| {
+                    sig.0 != term.output_lines.len()
+                        || sig.1 != term.scroll_offset
+                        || sig.2 != term.input_buf
+                        || Some(sig.3.as_str()) != term.output_lines.first().map(String::as_str)
+                        || Some(sig.4.as_str()) != term.output_lines.last().map(String::as_str)
+                });
                 if let Some((_, runner)) = state
                     .content
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
+                    // A freshly (re)opened runner has not received this
+                    // content yet even if the signature matches — its line
+                    // count (scrollback + prompt) gives that away.
+                    && (changed || runner.lines.len() != state.terminal.output_lines.len() + 1)
                 {
                     let mut lines = state.terminal.output_lines.clone();
                     let prompt = format!("> {}", state.terminal.input_buf);
                     lines.push(prompt);
                     runner.set_lines(lines, state.terminal.scroll_offset);
+                    state.terminal.sync_signature = Some((
+                        state.terminal.output_lines.len(),
+                        state.terminal.scroll_offset,
+                        state.terminal.input_buf.clone(),
+                        state
+                            .terminal
+                            .output_lines
+                            .first()
+                            .cloned()
+                            .unwrap_or_default(),
+                        state
+                            .terminal
+                            .output_lines
+                            .last()
+                            .cloned()
+                            .unwrap_or_default(),
+                    ));
                 }
                 state.terminal.dirty = false;
             }

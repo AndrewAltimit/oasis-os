@@ -21,9 +21,9 @@ impl SdiCore for SdlBackend {
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
-        self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
-            color.r, color.g, color.b, color.a,
-        ));
+        // Goes through set_color so the cached draw-color state stays
+        // coherent (clear itself ignores the blend mode).
+        self.set_color(color);
         self.canvas.clear();
         Ok(())
     }

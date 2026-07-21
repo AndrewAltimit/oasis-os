@@ -445,8 +445,9 @@ impl SdlBackend {
         let y_min = translated.iter().map(|v| v.1).min().unwrap_or(0);
         let y_max = translated.iter().map(|v| v.1).max().unwrap_or(0);
 
+        let mut x_intersections = Vec::new();
         for y in y_min..=y_max {
-            let mut x_intersections = Vec::new();
+            x_intersections.clear();
             let n = translated.len();
             for i in 0..n {
                 let j = (i + 1) % n;

@@ -1122,6 +1122,7 @@ mod tests {
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,
+                sync_signature: None,
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
