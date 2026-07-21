@@ -13,7 +13,7 @@ oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }
 oasis-audio = { workspace = true }
-oasis-skin = { workspace = true }
+oasis-skin = { workspace = true, features = ["serialize"] }
 oasis-net = { workspace = true }
 log = { workspace = true }
 

@@ -4,6 +4,56 @@
 
 use oasis_types::backend::Color;
 
+/// 16-color ANSI terminal palette.
+///
+/// Slots 0-7 map to SGR foreground codes 30-37 (black, red, green,
+/// yellow, blue, magenta, cyan, white); slots 8-15 map to 90-97
+/// (bright variants). Derived from the skin's base colors unless a
+/// `[palette]` table overrides individual slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnsiPalette {
+    /// The 16 slot colors in SGR order.
+    pub colors: [Color; 16],
+}
+
+impl AnsiPalette {
+    /// Slot names in SGR order (used for TOML keys and validation).
+    pub const SLOT_NAMES: [&'static str; 16] = [
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white",
+    ];
+
+    /// Return the color for a palette slot (0-15). Out-of-range indices
+    /// wrap into the table.
+    pub fn color(&self, idx: usize) -> Color {
+        self.colors[idx & 15]
+    }
+
+    /// Map an SGR foreground code (30-37, 90-97) to a palette color.
+    /// Returns `None` for codes outside those ranges.
+    pub fn from_sgr_code(&self, code: u8) -> Option<Color> {
+        match code {
+            30..=37 => Some(self.colors[(code - 30) as usize]),
+            90..=97 => Some(self.colors[(code - 90 + 8) as usize]),
+            _ => None,
+        }
+    }
+}
+
 /// Status bar, bottom bar, tab pills, and page dot theme.
 #[derive(Debug, Clone)]
 pub struct BarTheme {
@@ -19,6 +69,10 @@ pub struct BarTheme {
     pub version_color: Color,
     /// Clock text color.
     pub clock_color: Color,
+    /// Vertical pixel offset for the bottom-bar clock text. Positive moves
+    /// the clock down from its vertically-centered position — for shaped
+    /// bar textures whose clock shelf sits lower than the bar's midline.
+    pub clock_offset_y: i32,
     /// URL label color.
     pub url_color: Color,
     /// USB indicator color.
@@ -35,6 +89,10 @@ pub struct BarTheme {
     pub media_tab_active: Color,
     /// Inactive media tab text color.
     pub media_tab_inactive: Color,
+    /// Active top-tab-row text color (defaults to `media_tab_active`).
+    pub tab_text_active: Color,
+    /// Inactive top-tab-row text color (defaults to `media_tab_inactive`).
+    pub tab_text_inactive: Color,
     /// Pipe separator color.
     pub pipe_color: Color,
     /// R-shoulder hint color.
@@ -67,6 +125,22 @@ pub struct BarTheme {
     pub tab_active_stroke: Color,
     /// Inactive tab pill stroke color.
     pub tab_inactive_stroke: Color,
+    /// Asset key for the active top-tab pill texture (None = pill fill).
+    pub tab_texture_active: Option<String>,
+    /// Asset key for inactive top-tab pill textures (None = pill fill).
+    pub tab_texture_inactive: Option<String>,
+    /// Media-dock transport button fill (`bottombar_style = "media_dock"`).
+    pub dock_button_fill: Color,
+    /// Media-dock transport glyph (triangle/rect) color.
+    pub dock_button_glyph: Color,
+    /// Media-dock progress track (background) color.
+    pub dock_progress_track: Color,
+    /// Media-dock progress fill (foreground) color.
+    pub dock_progress_fill: Color,
+    /// Media-dock volume track (background) color.
+    pub dock_vol_track: Color,
+    /// Media-dock volume fill (foreground) color.
+    pub dock_vol_fill: Color,
 }
 
 /// Dashboard icon rendering and cursor highlight theme.
@@ -96,6 +170,9 @@ pub struct IconTheme {
     pub style: String,
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     pub cursor_style: String,
+    /// Document-icon emblem anchor: "top" (default, inset block below the
+    /// stripe) or "badge" (overlapping the bottom-right corner, PSIX-style).
+    pub gfx_anchor: String,
     /// Dashboard icon shadow level (default 1).
     pub shadow_level: u8,
     /// Vector icon preset name (used when `style = "vector"`).
@@ -125,6 +202,10 @@ pub struct IconTheme {
     pub container_style: String,
     /// Padding (px) between the container edge and the glyph bounding box.
     pub container_padding: u16,
+    /// LED accent color on the vector "data" icon.
+    pub data_led_color: Color,
+    /// Fallback colors cycled for discovered apps without an ICON0.
+    pub fallback_colors: Vec<Color>,
 }
 
 /// Start button and popup panel theme.
@@ -204,6 +285,8 @@ pub struct StartMenuTheme {
     pub item_separator: bool,
     /// Item separator color.
     pub item_separator_color: Color,
+    /// Fallback color for items beyond the `item_colors` list.
+    pub item_fallback_color: Color,
 }
 
 /// App content area, title bar, terminal, and selection theme.
@@ -298,6 +381,27 @@ pub struct WallpaperTheme {
     pub noise_intensity: f32,
     /// Whether the wallpaper animates (wave phase shift).
     pub animated: bool,
+    /// Image asset key for `style = "image"` (e.g. `"assets/wall.png"`).
+    pub source: Option<String>,
+    /// Image fit mode: "cover" (default), "contain", "stretch", "tile".
+    pub fit: String,
+}
+
+/// An image background layer: a bitmap decal (watermark, logo) composited
+/// between the wallpaper and the icon layer, positioned by anchor and
+/// optionally drifting/pulsing via the shared layer animation system.
+#[derive(Debug, Clone)]
+pub struct ImageLayerTheme {
+    /// Asset key into `Skin::assets` (e.g. `"assets/logo.png"`).
+    pub source: String,
+    /// Anchor + fractional offset within the viewport.
+    pub position: oasis_vector::background::LayerPosition,
+    /// Drift / pulse animation parameters.
+    pub animation: oasis_vector::background::LayerAnimation,
+    /// Base opacity 0-255.
+    pub alpha: u8,
+    /// Whether the layer renders.
+    pub enabled: bool,
 }
 
 /// Toast notification theme.
@@ -364,6 +468,12 @@ pub struct ActiveTheme {
     // -- Background layers --
     /// Data-driven background decoration layers.
     pub background_layers: Vec<oasis_vector::BackgroundLayer>,
+    /// Chrome decoration layers rendered in the overlay pass (on top of
+    /// bars and windows) — procedurally shaped chrome without shipped art.
+    pub chrome_layers: Vec<oasis_vector::BackgroundLayer>,
+    /// Image decal layers (`kind = "image"`), rendered between the
+    /// wallpaper and the vector background pass.
+    pub image_layers: Vec<ImageLayerTheme>,
     /// Maximum number of background layers to render (default 8).
     pub background_max_layers: u8,
     /// Whether to suppress background layer animations (default false).
@@ -464,6 +574,16 @@ pub struct ActiveTheme {
     pub(crate) tab_gap_override: Option<i32>,
     /// Explicit tab start X override (None = auto-scaled).
     pub(crate) tab_start_x_override: Option<i32>,
+    /// Explicit icon stripe height override (None = auto-scaled).
+    pub(crate) icon_stripe_h_override: Option<u32>,
+    /// Explicit icon fold size override (None = auto-scaled).
+    pub(crate) icon_fold_size_override: Option<u32>,
+    /// Explicit icon graphic height override (None = auto-scaled).
+    pub(crate) icon_gfx_h_override: Option<u32>,
+    /// Explicit icon graphic padding override (None = auto-scaled).
+    pub(crate) icon_gfx_pad_override: Option<u32>,
+    /// Explicit icon label padding override (None = auto-scaled).
+    pub(crate) icon_label_pad_override: Option<i32>,
 
     // -- Screen dimensions --
     /// Screen width (default 480, PSP native).
@@ -481,18 +601,31 @@ pub struct ActiveTheme {
     // -- Cursor --
     /// Cursor scale factor (1 at <1920px, 2 at 1920px+).
     pub cursor_scale: u32,
+    /// Asset path for a themed software cursor bitmap (from `[cursor]`
+    /// in theme.toml). `None` = procedural arrow cursor.
+    pub cursor_texture: Option<String>,
+    /// Software cursor click hotspot (x, y) within the cursor image.
+    pub cursor_hotspot: (i32, i32),
+    /// Procedural mouse cursor arrow fill color (default white).
+    pub cursor_fill: Color,
+    /// Procedural mouse cursor arrow outline color (default black).
+    pub cursor_outline: Color,
+
+    // -- Terminal ANSI palette --
+    /// 16-color ANSI palette for SGR-colored terminal output.
+    pub ansi: AnsiPalette,
 
     // -- Transition --
     /// Transition fade overlay color (default: black).
     pub transition_fade_color: Color,
-
-    // -- Focus ring --
-    /// Focus ring/outline color for highlighted elements.
-    pub focus_ring_color: Color,
-    /// Focus ring stroke width (pixels).
-    pub focus_ring_width: u16,
-    /// Focus ring offset from element edge (pixels).
-    pub focus_ring_offset: i32,
+    /// Entrance transition on boot / skin swap: "fade", "assemble", "none".
+    pub transition_entrance: String,
+    /// Entrance duration in frames (used by "assemble"; default 45).
+    pub transition_entrance_frames: u32,
+    /// Dashboard page change style: "slide" (default) or "fade".
+    pub transition_page_style: String,
+    /// Easing curve name for entrance transitions ("" = built-in curve).
+    pub transition_easing: String,
 
     // -- Font sizes --
     /// Body text font size (terminal lines, app content).
@@ -541,11 +674,14 @@ pub struct ActiveTheme {
     /// Named animation presets (name -> (duration_ms, easing)).
     pub animations: std::collections::HashMap<String, (u32, String)>,
 
-    // -- Widget state color overrides --
-    /// Per-widget state color overrides (widget_name -> (state_key -> Color)).
-    pub widget_states: std::collections::HashMap<String, std::collections::HashMap<String, Color>>,
-
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     pub ui_theme: oasis_ui::theme::Theme,
+
+    // -- Semantic elevation ladder --
+    /// Semantic shadow ladder (levels 0..=5). Built from the skin's
+    /// `[elevation]` table; unset levels fall back to the built-in
+    /// [`oasis_types::shadow::Shadow::elevation`] ladder. Resolve a level to a
+    /// concrete shadow with [`ActiveTheme::resolve_shadow`].
+    pub elevation: oasis_types::shadow::ElevationLadder,
 }

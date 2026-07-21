@@ -70,6 +70,19 @@ pub struct TerminalLayer {
     pub scroll_offset: usize,
     /// Set when output_lines or input_buf changes; cleared after sync.
     pub dirty: bool,
+    /// Signature of the content last synced to the windowed terminal
+    /// runner: (lines len, scroll offset, input buffer, first line, last
+    /// line). `dirty` is set on *any* input event as a catch-all, so
+    /// without this a mouse drag over the desktop would deep-clone the
+    /// whole scrollback every frame. First+last+len covers append,
+    /// cap-trim (`remove(0)`), and `clear`.
+    pub sync_signature: Option<(usize, usize, String, String, String)>,
+    /// Hash of everything `setup_terminal_objects` renders from (visible
+    /// lines, prompt, scroll, blink state, theme geometry/colors). The
+    /// Terminal-mode SDI rebuild is skipped while it is unchanged; reset
+    /// to `None` whenever the mode is not Terminal so re-entry (and any
+    /// theme edit made in another mode) forces a rebuild.
+    pub sdi_signature: Option<u64>,
 }
 
 /// Networking: TCP backend, remote listener/client, FTP, TLS.
@@ -111,7 +124,26 @@ pub struct AppState {
     /// Set by `apply_skin_swap` when the wallpaper texture needs to be
     /// regenerated against the new skin's theme. Consumed by the main loop
     /// (which holds the backend needed to upload textures) and cleared.
+    /// Also triggers re-upload of skin layout textures and image layers.
     pub pending_wallpaper_refresh: bool,
+    /// Backend textures uploaded for the current skin's layout
+    /// `texture =` references. Destroyed and re-uploaded on skin swap.
+    pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
+    /// Image background layers (watermark decals) for the current skin.
+    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Cached ops for static `background_layers` (perf item D4).
+    /// Invalidated on skin swap / resolution change.
+    pub background_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Cached ops for static `chrome_layers` (perf item D4).
+    pub chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Armed or active desktop-icon drag (free icon layout only).
+    pub icon_drag: Option<crate::icon_drag::IconDrag>,
+    /// Software cursor texture (only when `features.software_cursor`).
+    /// Destroyed and re-uploaded on skin swap.
+    pub cursor_texture: Option<oasis_core::backend::TextureId>,
+    /// Persistent key-value settings (icon positions, ...), stored in the
+    /// VFS at `/system/settings.toml`.
+    pub settings: oasis_core::settings::SettingsStore,
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub archive_catalog: Option<ArchiveCatalog>,
@@ -119,6 +151,12 @@ pub struct AppState {
     pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
     pub audio_backend: SdlAudioBackend,
     pub toasts: ToastManager,
+    /// UI sound events queued by input/toast chokepoints this frame,
+    /// drained once per frame by `ui_sfx::tick`.
+    pub ui_sounds: oasis_core::ui_sound::UiSoundQueue,
+    /// Skin-defined one-shot UI samples (loaded on skin swap; empty for
+    /// skins without a `[sounds]` table).
+    pub sfx: oasis_audio::sfx::SfxPlayer,
     pub pending_tv_catalog_fetch: Option<
         mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>,
     >,
@@ -262,6 +300,8 @@ mod tests {
             output_lines: Vec::new(),
             scroll_offset: 0,
             dirty: true,
+            sync_signature: None,
+            sdi_signature: None,
         };
 
         let _net = NetworkLayer {

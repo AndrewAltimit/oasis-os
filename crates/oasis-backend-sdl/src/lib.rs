@@ -25,9 +25,9 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, BatchRect, BlendMode, Color, DashStyle, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiTextures, SdiVector,
-    StrokeStyle, TextureId,
+    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, DashStyle, RenderTargetId,
+    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector, StrokeStyle, TextureId,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
@@ -36,6 +36,7 @@ pub use oasis_types::geometry::ClipRect;
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
+use crate::glyph_cache::GlyphEntry;
 use oasis_rasterize::GlyphCacheKey;
 
 // Re-export input helpers for tests.
@@ -94,12 +95,15 @@ pub struct SdlBackend {
     pub(crate) current_render_target: Option<u64>,
     /// Monotonic counter for render-target ids.
     pub(crate) next_render_target_id: u64,
-    /// Maps glyph key to a cached SDL texture ID (lives in `textures`).
-    pub(crate) glyph_cache: HashMap<GlyphCacheKey, u64>,
-    /// LRU access timestamps for glyph cache eviction.
-    pub(crate) glyph_access: HashMap<GlyphCacheKey, u64>,
-    /// Monotonic counter for LRU access tracking.
+    /// Maps a color-independent glyph key to its cached texture and metrics.
+    /// Glyphs are rasterized white and tinted at blit time, so one entry
+    /// serves every color the shell draws that character in.
+    pub(crate) glyph_cache: HashMap<GlyphCacheKey, GlyphEntry>,
+    /// Monotonic counter for LRU access tracking (bumped on every glyph draw).
     pub(crate) glyph_access_counter: u64,
+    /// Active skin-provided TrueType font (`SdiText::set_font`). `None`
+    /// keeps the built-in bitmap font — the pixel-identical default path.
+    pub(crate) ttf_font: Option<oasis_rasterize::ttf::TtfFont>,
     // SAFETY: Must be declared after `textures` -- see comment above.
     pub(crate) texture_creator: TextureCreator<WindowContext>,
     pub(crate) next_texture_id: u64,
@@ -107,6 +111,20 @@ pub struct SdlBackend {
     pub(crate) translate_stack: TranslateStack,
     pub(crate) viewport_w: u32,
     pub(crate) viewport_h: u32,
+    /// Last color passed to `set_color`, to skip redundant SDL draw-color
+    /// and blend-mode calls. All canvas draw-color/blend changes must go
+    /// through `set_color` (or reset this to `None`) to stay coherent.
+    pub(crate) last_draw_color: Option<Color>,
+    /// Reusable scratch buffer for batched `draw_points` submissions
+    /// (circle / rounded-corner outlines plot hundreds of points per
+    /// call; one `SDL_RenderPoints` beats one FFI call per point).
+    pub(crate) point_batch: Vec<FPoint>,
+    /// Tracked color/alpha modulation per texture in `textures`, keyed by
+    /// texture id. Lets blit paths skip redundant `set_color_mod` /
+    /// `set_alpha_mod` calls (tinted blits previously set + reset four
+    /// mods on every call). All mod changes to `textures` entries must go
+    /// through `ensure_texture_mod` to stay coherent.
+    pub(crate) texture_mods: HashMap<u64, (u8, u8, u8, u8)>,
 }
 
 impl SdlBackend {
@@ -152,14 +170,17 @@ impl SdlBackend {
             current_render_target: None,
             next_render_target_id: 1,
             glyph_cache: HashMap::new(),
-            glyph_access: HashMap::new(),
             glyph_access_counter: 0,
+            ttf_font: None,
             texture_creator,
             next_texture_id: 1,
             clip_stack: ClipStack::new(width, height),
             translate_stack: TranslateStack::new(),
             viewport_w: width,
             viewport_h: height,
+            last_draw_color: None,
+            point_batch: Vec::new(),
+            texture_mods: HashMap::new(),
         })
     }
 
@@ -205,7 +226,14 @@ impl SdlBackend {
     }
 
     /// Set the SDL draw color with optional blend mode.
+    ///
+    /// Skips the SDL calls entirely when the color (and therefore the
+    /// derived blend mode) matches the last one set — gradients and
+    /// batched chrome otherwise re-send identical state per scanline.
     pub(crate) fn set_color(&mut self, color: Color) {
+        if self.last_draw_color == Some(color) {
+            return;
+        }
         if color.a < 255 {
             self.canvas.set_blend_mode(sdl3::render::BlendMode::Blend);
         } else {
@@ -214,6 +242,7 @@ impl SdlBackend {
         self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
             color.r, color.g, color.b, color.a,
         ));
+        self.last_draw_color = Some(color);
     }
 }
 
@@ -586,6 +615,23 @@ impl SdiBatch for SdlBackend {
         }
         Ok(())
     }
+
+    fn submit_text_batch(
+        &mut self,
+        texts: &[BatchText<'_>],
+        font_size: u16,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        // One styled pass per item: bold comes from the glyph cache's
+        // baked double-strike entries instead of the default impl's
+        // second shifted draw_text (which blits every glyph twice and
+        // double-blends antialiased TTF coverage).
+        for t in texts {
+            self.draw_text_styled(t.text, t.x, t.y, font_size, t.color, bold, italic)?;
+        }
+        Ok(())
+    }
 }
 
 // -------------------------------------------------------------------
@@ -833,7 +879,6 @@ impl Drop for SdlBackend {
         // declaration order), which is a fragile invariant. Clearing here makes
         // the safety guarantee explicit and immune to field reordering.
         self.glyph_cache.clear();
-        self.glyph_access.clear();
         self.textures.clear();
         // Render targets share the same lifetime-erasure pattern as
         // `textures` and must be dropped before `texture_creator`.
@@ -1382,7 +1427,6 @@ mod tests {
             None => return,
         };
         assert!(backend.glyph_cache.is_empty());
-        assert!(backend.glyph_access.is_empty());
         assert_eq!(backend.glyph_access_counter, 0);
     }
 
@@ -1400,7 +1444,6 @@ mod tests {
             .unwrap();
         // Two distinct characters should create two cache entries.
         assert_eq!(backend.glyph_cache.len(), 2);
-        assert_eq!(backend.glyph_access.len(), 2);
 
         // Drawing the same text again should not increase cache
         // size (cache hits).
@@ -1408,6 +1451,59 @@ mod tests {
             .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
             .unwrap();
         assert_eq!(backend.glyph_cache.len(), 2);
+    }
+
+    #[test]
+    #[ignore]
+    fn glyph_cache_is_color_independent() {
+        // Glyphs are rasterized white and tinted at blit time, so drawing the
+        // same character in a dozen colors (themes, hovers, fades) must reuse
+        // one cache entry — the whole point of D2.
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        for i in 0..12u8 {
+            let color = Color::rgb(i * 20, 255 - i * 20, 128);
+            backend
+                .draw_text_styled("A", 0, 0, 16, color, false, false)
+                .unwrap();
+        }
+        assert_eq!(backend.glyph_cache.len(), 1);
+
+        // Style variants still get their own entries.
+        backend
+            .draw_text_styled("A", 0, 0, 16, Color::WHITE, true, false)
+            .unwrap();
+        backend
+            .draw_text_styled("A", 0, 0, 24, Color::WHITE, false, false)
+            .unwrap();
+        assert_eq!(backend.glyph_cache.len(), 3);
+    }
+
+    #[test]
+    #[ignore]
+    fn glyph_cache_entry_carries_dimensions() {
+        // The draw path reads dimensions from the entry instead of calling
+        // Texture::query() per glyph per frame (D6).
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend
+            .draw_text_styled("A", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        let entry = *backend
+            .glyph_cache
+            .values()
+            .next()
+            .expect("one glyph cached");
+        assert_eq!(entry.h, 16);
+        assert!(entry.w > 0);
+        let texture = backend.textures.get(&entry.texture).expect("glyph texture");
+        let query = texture.query();
+        assert_eq!((entry.w, entry.h), (query.width, query.height));
     }
 
     /// Regression: a degenerate (zero-width or zero-height) clip rect
@@ -1440,5 +1536,110 @@ mod tests {
             pixels[0], 255,
             "zero-height clip should reject all fills, got {pixels:?}",
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Skin TTF font tests
+    // ---------------------------------------------------------------
+
+    /// The oasis-browser web-font test fixture: a tiny but valid TTF.
+    const TEST_TTF: &[u8] = include_bytes!("../../oasis-browser/test_data/minimal.ttf");
+
+    #[test]
+    fn set_font_installs_and_clears_ttf_state() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        assert!(backend.ttf_font.is_none());
+
+        // Garbage bytes are rejected; the bitmap font stays active.
+        backend.set_font(Some(b"not a font"));
+        assert!(backend.ttf_font.is_none());
+
+        backend.set_font(Some(TEST_TTF));
+        assert!(backend.ttf_font.is_some());
+
+        backend.set_font(None);
+        assert!(backend.ttf_font.is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn set_font_evicts_glyph_cache_textures() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        backend
+            .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        assert_eq!(backend.glyph_cache.len(), 2);
+        let glyph_textures: Vec<u64> = backend.glyph_cache.values().map(|e| e.texture).collect();
+
+        backend.set_font(Some(TEST_TTF));
+        assert!(backend.glyph_cache.is_empty());
+        for id in glyph_textures {
+            assert!(
+                !backend.textures.contains_key(&id),
+                "stale glyph texture {id} survived the font swap"
+            );
+        }
+    }
+
+    #[test]
+    fn ttf_measure_matches_per_char_advances() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Bitmap path is untouched without a font.
+        assert_eq!(
+            backend.measure_text("Hello", 16),
+            oasis_core::backend::bitmap_measure_text("Hello", 16)
+        );
+
+        backend.set_font(Some(TEST_TTF));
+        let ttf = backend.ttf_font.as_ref().expect("font installed");
+        // Whatever glyphs the fixture has, measurement must equal the same
+        // per-character integer advances the draw loop accumulates — with
+        // bitmap fallback for characters the font lacks.
+        let text = "Hello ▲▼ world";
+        let expected: u32 = text
+            .chars()
+            .map(|ch| {
+                if ttf.has_glyph(ch) {
+                    ttf.advance(ch, 16.0).max(0) as u32
+                } else {
+                    oasis_types::bitmap_font::glyph_advance_scaled(ch, 16) as u32
+                }
+            })
+            .sum();
+        assert_eq!(backend.measure_text(text, 16), expected);
+    }
+
+    #[test]
+    #[ignore]
+    fn ttf_draw_advances_agree_with_measure() {
+        use oasis_types::backend::SdiCore;
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.set_font(Some(TEST_TTF));
+        backend.clear(Color::BLACK).unwrap();
+        let text = "AV.";
+        backend
+            .draw_text_styled(text, 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        // Sum the advances of the entries the draw created, in draw order.
+        let drawn: i32 = text
+            .chars()
+            .map(|ch| backend.glyph_cache[&GlyphCacheKey::colorless(ch, 16, false, false)].advance)
+            .sum();
+        assert_eq!(drawn.max(0) as u32, backend.measure_text(text, 16));
     }
 }

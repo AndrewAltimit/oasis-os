@@ -19,20 +19,25 @@ EBOOT="$ROM_DIR/release/EBOOT.PBP"
 # PPSSPP SDL default QWERTY keyboard mappings (from PPSSPP source:
 # Core/KeyMapDefaults.cpp -> defaultQwertyKeyboardKeyMap).
 # Linux uses Enter for Select (Windows uses V).
-KEY_CROSS="z"
-KEY_CIRCLE="x"
-KEY_SQUARE="a"
-KEY_TRIANGLE="s"
-KEY_START="space"
-KEY_SELECT="Return"
-KEY_L="q"
-KEY_R="w"
-KEY_UP="Up"
-KEY_DOWN="Down"
-KEY_LEFT="Left"
-KEY_RIGHT="Right"
+#
+# This is the complete button map on purpose, so a new scenario can reach for
+# any button without re-deriving it; only the subset a scenario drives is read.
+# One `declare` so the SC2034 waiver covers the whole map.
+# shellcheck disable=SC2034
+declare \
+    KEY_CROSS="z" \
+    KEY_CIRCLE="x" \
+    KEY_SQUARE="a" \
+    KEY_TRIANGLE="s" \
+    KEY_START="space" \
+    KEY_SELECT="Return" \
+    KEY_L="q" \
+    KEY_R="w" \
+    KEY_UP="Up" \
+    KEY_DOWN="Down" \
+    KEY_LEFT="Left" \
+    KEY_RIGHT="Right"
 
-PPSSPP_PID=""
 PPSSPP_WID=""
 CONTAINER_NAME="osk-test-ppsspp"
 
@@ -155,7 +160,7 @@ ppsspp_alive() {
 
 if [[ ! -f "$EBOOT" ]]; then
     log "ERROR: EBOOT not found at $EBOOT"
-    log "Build with: cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release"
+    log "Build with: cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release"
     exit 1
 fi
 

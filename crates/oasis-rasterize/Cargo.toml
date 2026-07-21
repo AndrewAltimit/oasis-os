@@ -8,8 +8,14 @@ authors.workspace = true
 description = "Shared software rasterization primitives for OASIS_OS backends"
 documentation = "https://docs.rs/oasis-rasterize"
 
+[features]
+# TTF/OTF glyph rasterization via fontdue (per-skin fonts). Off by default
+# so PSP-adjacent builds never pull fontdue in.
+ttf = ["dep:fontdue"]
+
 [dependencies]
 oasis-types.workspace = true
+fontdue = { workspace = true, optional = true }
 
 [lints]
 workspace = true

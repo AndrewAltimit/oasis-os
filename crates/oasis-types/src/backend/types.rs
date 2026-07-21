@@ -248,7 +248,7 @@ impl BlendMode {
 /// Draw commands capture all parameters needed to replay a draw call. The
 /// batch renderer sorts commands to minimize GPU state changes before
 /// executing them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     FillRect {
         x: i32,

@@ -59,9 +59,13 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "vaporwave" => vaporwave_skin(),
         "highcontrast" => highcontrast_skin(),
         "altimit" => altimit_skin(),
-        _ => Err(oasis_types::error::OasisError::Config(
-            format!("unknown built-in skin: {name}").into(),
-        )),
+        // Pure-TOML skins (no handwritten loader) fall through to the
+        // build-time generated loaders from `skins/` directories.
+        _ => generated::load_generated_skin(name).unwrap_or_else(|| {
+            Err(oasis_types::error::OasisError::Config(
+                format!("unknown built-in skin: {name}").into(),
+            ))
+        }),
     }
 }
 
@@ -101,6 +105,8 @@ pub fn builtin_names() -> &'static [&'static str] {
         "vaporwave",
         "highcontrast",
         "altimit",
+        "psix-tribute",
+        "psix-hifi",
     ]
 }
 
@@ -294,13 +300,18 @@ mod tests {
 
     #[test]
     fn no_builtin_has_inherits_by_default() {
-        // Existing built-in skins don't use inheritance (none set `inherits`).
+        // Legacy built-in skins don't use inheritance; the psix-* tributes
+        // are the showcase for the `inherits` authoring pattern (on classic).
         for name in builtin_names() {
             let skin = load_builtin(name).unwrap();
-            assert!(
-                skin.manifest.inherits.is_none(),
-                "built-in skin '{name}' has unexpected inherits field"
-            );
+            if *name == "psix-tribute" || *name == "psix-hifi" {
+                assert_eq!(skin.manifest.inherits.as_deref(), Some("classic"));
+            } else {
+                assert!(
+                    skin.manifest.inherits.is_none(),
+                    "built-in skin '{name}' has unexpected inherits field"
+                );
+            }
         }
     }
 

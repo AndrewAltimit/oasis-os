@@ -244,7 +244,7 @@ impl WindowManager {
         window.fullscreen_kiosk = true;
 
         // Hide all decoration SDI objects (everything except "content").
-        for suffix in window.sdi_suffixes() {
+        for &suffix in window.sdi_suffixes() {
             if suffix != "content" {
                 let name = window.sdi_name(suffix);
                 if let Ok(obj) = sdi.get_mut(&name) {

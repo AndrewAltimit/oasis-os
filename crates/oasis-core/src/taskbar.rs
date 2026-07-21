@@ -21,16 +21,17 @@ fn text_px(s: &str, font_size: u16) -> i32 {
 }
 
 /// Truncate `title` so its rendered width fits within `max_px`, appending "..."
-/// if truncated.
-fn truncate_title(title: &str, font_size: u16, max_px: i32) -> String {
+/// if truncated. Borrows the title when it already fits (the common case,
+/// checked every frame per taskbar button) so no allocation happens.
+fn truncate_title(title: &str, font_size: u16, max_px: i32) -> std::borrow::Cow<'_, str> {
     let full_w = text_px(title, font_size);
     if full_w <= max_px {
-        return title.to_string();
+        return std::borrow::Cow::Borrowed(title);
     }
     let ellipsis_w = text_px("...", font_size);
     let target = max_px - ellipsis_w;
     if target <= 0 {
-        return "...".to_string();
+        return std::borrow::Cow::Borrowed("...");
     }
     let mut w = 0i32;
     let mut end = 0;
@@ -42,7 +43,7 @@ fn truncate_title(title: &str, font_size: u16, max_px: i32) -> String {
         w += cw;
         end = i + c.len_utf8();
     }
-    format!("{}...", &title[..end])
+    std::borrow::Cow::Owned(format!("{}...", &title[..end]))
 }
 
 /// Maximum number of taskbar buttons we create SDI objects for.
@@ -86,6 +87,25 @@ struct TaskbarButton {
     width: u32,
 }
 
+/// Pre-computed SDI object names for one taskbar button slot
+/// (avoids per-frame `format!` allocations in `update_sdi`).
+#[derive(Debug, Clone)]
+struct ButtonNames {
+    bg: String,
+    text: String,
+    ind: String,
+}
+
+impl ButtonNames {
+    fn new(i: usize) -> Self {
+        Self {
+            bg: format!("taskbar_btn_{i}"),
+            text: format!("taskbar_btn_{i}_text"),
+            ind: format!("taskbar_btn_{i}_ind"),
+        }
+    }
+}
+
 /// Runtime state for the desktop taskbar.
 #[derive(Debug)]
 pub struct Taskbar {
@@ -110,6 +130,8 @@ pub struct Taskbar {
     desktop_next_x: i32,
     /// Whether the desktop indicator is currently visible (>1 desktop).
     desktop_indicator_visible: bool,
+    /// Cached SDI names for the `MAX_BUTTONS` button slots.
+    button_names: Vec<ButtonNames>,
 }
 
 impl Taskbar {
@@ -126,6 +148,7 @@ impl Taskbar {
             desktop_prev_x: 0,
             desktop_next_x: 0,
             desktop_indicator_visible: false,
+            button_names: (0..MAX_BUTTONS).map(ButtonNames::new).collect(),
         }
     }
 
@@ -158,14 +181,13 @@ impl Taskbar {
             return;
         }
 
-        // Maintain stable insertion order: add new windows, remove closed ones.
-        let current_ids: Vec<&str> = windows.iter().map(|w| w.id.as_str()).collect();
-        // Remove closed windows.
-        self.order.retain(|id| current_ids.contains(&id.as_str()));
-        // Append newly opened windows (preserving existing order).
-        for id in &current_ids {
-            if !self.order.iter().any(|o| o == id) {
-                self.order.push(id.to_string());
+        // Maintain stable insertion order: add new windows, remove closed
+        // ones. Scans directly over `windows` (a handful of entries) so no
+        // id list is allocated per frame.
+        self.order.retain(|id| windows.iter().any(|w| &w.id == id));
+        for w in windows {
+            if !self.order.iter().any(|o| o == &w.id) {
+                self.order.push(w.id.to_string());
             }
         }
 
@@ -199,8 +221,10 @@ impl Taskbar {
             PREFERRED_WIDTH
         };
 
-        // Build button list and create SDI objects (stable order).
-        self.buttons.clear();
+        // Build button list and create SDI objects (stable order). The hit
+        // test entries are overwritten in place so their id Strings reuse
+        // capacity frame-over-frame.
+        let mut button_count = 0usize;
         let mut cx = start_x;
         for (i, win_id) in self.order.iter().take(MAX_BUTTONS).enumerate() {
             let win = match windows.iter().find(|w| w.id == *win_id) {
@@ -225,10 +249,10 @@ impl Taskbar {
             };
 
             // Button background (rendered on top of bottom bar).
-            let bg_name = format!("taskbar_btn_{i}");
+            let names = &self.button_names[i];
             ensure_rounded_fill(
                 sdi,
-                &bg_name,
+                &names.bg,
                 cx,
                 bar_y + 2,
                 btn_w as u32,
@@ -236,35 +260,33 @@ impl Taskbar {
                 btn_color,
                 2,
             );
-            if let Ok(obj) = sdi.get_mut(&bg_name) {
+            if let Ok(obj) = sdi.get_mut(&names.bg) {
                 obj.z = 901;
                 obj.overlay = true;
             }
 
             // Button text (truncated to fit).
-            let text_name = format!("taskbar_btn_{i}_text");
             let max_text_w = btn_w - BUTTON_PAD * 2;
             let label = truncate_title(&win.title, font, max_text_w);
             ensure_text(
                 sdi,
-                &text_name,
+                &names.text,
                 cx + BUTTON_PAD,
                 text_y,
                 font,
                 at.taskbar_text_color,
             );
-            if let Ok(obj) = sdi.get_mut(&text_name) {
-                obj.text = Some(label);
+            if let Ok(obj) = sdi.get_mut(&names.text) {
+                obj.set_text(&label);
                 obj.z = 902;
                 obj.overlay = true;
             }
 
             // Active indicator underline.
-            let ind_name = format!("taskbar_btn_{i}_ind");
             if is_active {
                 ensure_rounded_fill(
                     sdi,
-                    &ind_name,
+                    &names.ind,
                     cx + 2,
                     bar_y + bar_h as i32 - INDICATOR_H as i32 - 1,
                     (btn_w - 4).max(0) as u32,
@@ -272,28 +294,37 @@ impl Taskbar {
                     at.taskbar_indicator,
                     1,
                 );
-                if let Ok(obj) = sdi.get_mut(&ind_name) {
+                if let Ok(obj) = sdi.get_mut(&names.ind) {
                     obj.z = 902;
                     obj.overlay = true;
                 }
-            } else if let Ok(obj) = sdi.get_mut(&ind_name) {
+            } else if let Ok(obj) = sdi.get_mut(&names.ind) {
                 obj.visible = false;
             }
 
-            self.buttons.push(TaskbarButton {
-                window_id: win.id.to_string(),
-                x: cx,
-                width: btn_w as u32,
-            });
+            if let Some(btn) = self.buttons.get_mut(button_count) {
+                btn.window_id.clear();
+                btn.window_id.push_str(&win.id);
+                btn.x = cx;
+                btn.width = btn_w as u32;
+            } else {
+                self.buttons.push(TaskbarButton {
+                    window_id: win.id.to_string(),
+                    x: cx,
+                    width: btn_w as u32,
+                });
+            }
+            button_count += 1;
 
             cx += btn_w + BUTTON_GAP;
         }
+        self.buttons.truncate(button_count);
 
         // Hide any leftover buttons from a previous frame with more windows.
-        for i in count..self.sdi_count {
-            for suffix in &["", "_text", "_ind"] {
-                let name = format!("taskbar_btn_{i}{suffix}");
-                if let Ok(obj) = sdi.get_mut(&name) {
+        for i in count..self.sdi_count.min(MAX_BUTTONS) {
+            let names = &self.button_names[i];
+            for name in [&names.bg, &names.text, &names.ind] {
+                if let Ok(obj) = sdi.get_mut(name) {
                     obj.visible = false;
                 }
             }
@@ -305,10 +336,10 @@ impl Taskbar {
     pub fn hide_sdi(&mut self, sdi: &mut SdiRegistry) {
         // Legacy cleanup: hide old separate-bar objects if they exist.
         hide_objects(sdi, &["taskbar_bg", "taskbar_sep"]);
-        for i in 0..self.sdi_count {
-            for suffix in &["", "_text", "_ind"] {
-                let name = format!("taskbar_btn_{i}{suffix}");
-                if let Ok(obj) = sdi.get_mut(&name) {
+        for i in 0..self.sdi_count.min(MAX_BUTTONS) {
+            let names = &self.button_names[i];
+            for name in [&names.bg, &names.text, &names.ind] {
+                if let Ok(obj) = sdi.get_mut(name) {
                     obj.visible = false;
                 }
             }

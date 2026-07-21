@@ -1,10 +1,54 @@
 use crate::active_theme::ActiveTheme;
+use crate::backend::Color;
 use crate::backend::TextureId;
 use crate::bottombar::BottomBar;
 use crate::sdi::SdiRegistry;
 
 /// Maximum lines retained in the scrollback buffer.
 pub const MAX_OUTPUT_LINES: usize = 2000;
+
+/// Resolved terminal colors, honoring `[app_themes.terminal]` skin overrides.
+///
+/// Each slot falls back to the exact theme-derived color the terminal used
+/// before per-app overrides existed, so skins without an
+/// `[app_themes.terminal]` section render pixel-identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalColors {
+    /// Terminal background fill (key: `bg`).
+    pub bg: Color,
+    /// 1px border stroke around the terminal background (key: `border`).
+    pub border: Color,
+    /// Scrollback output text (key: `output`).
+    pub output: Color,
+    /// Input bar background (key: `input_bg`).
+    pub input_bg: Color,
+    /// Prompt line text: cwd, typed input, and cursor (key: `prompt`).
+    pub prompt: Color,
+    /// Scrollbar track (key: `scrollbar_track`).
+    pub scrollbar_track: Color,
+    /// Scrollbar thumb (key: `scrollbar_thumb`).
+    pub scrollbar_thumb: Color,
+}
+
+impl TerminalColors {
+    /// Build colors from the active theme, using `[app_themes.terminal]`
+    /// overrides where present.
+    pub fn from_theme(at: &ActiveTheme) -> Self {
+        let c = |key: &str, default: Color| at.app_color("terminal", key).unwrap_or(default);
+        Self {
+            bg: c("bg", at.app.bg),
+            border: c("border", at.bar.separator_color),
+            output: c(
+                "output",
+                oasis_types::color::with_alpha(at.app.terminal_output_color, 255),
+            ),
+            input_bg: c("input_bg", oasis_types::color::lighten(at.app.bg, 0.03)),
+            prompt: c("prompt", at.app.terminal_prompt_color),
+            scrollbar_track: c("scrollbar_track", at.scrollbar.track_color),
+            scrollbar_thumb: c("scrollbar_thumb", at.scrollbar.thumb_color),
+        }
+    }
+}
 
 /// Compute the number of visible output lines for the given theme.
 ///
@@ -80,6 +124,9 @@ pub fn hide_media_page(sdi: &mut SdiRegistry) {
     }
 }
 
+/// Maximum extra colored-run objects per terminal line (`term_line_{i}_r{j}`).
+const MAX_LINE_RUNS: usize = 8;
+
 /// Set terminal-mode SDI objects visible/hidden.
 pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
@@ -93,6 +140,16 @@ pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
         }
         if let Ok(obj) = sdi.get_mut(&name) {
             obj.visible = visible;
+        }
+        // Extra colored-run objects for this line (SGR spans).
+        for j in 1..=MAX_LINE_RUNS {
+            let run_name = format!("term_line_{i}_r{j}");
+            if !sdi.contains(&run_name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&run_name) {
+                obj.visible = visible;
+            }
         }
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
@@ -119,6 +176,7 @@ pub fn setup_terminal_objects(
     let bg_w = at.screen_w - (margin * 2) as u32;
     let bg_h = (bot_y - top_y) as u32;
     let visible_lines = visible_output_lines(at);
+    let colors = TerminalColors::from_theme(at);
 
     // Terminal background.
     if !sdi.contains("terminal_bg") {
@@ -127,33 +185,123 @@ pub fn setup_terminal_objects(
         obj.y = top_y;
         obj.w = bg_w;
         obj.h = bg_h;
-        obj.color = at.app.bg;
+        obj.color = colors.bg;
         obj.border_radius = Some(at.terminal_border_radius);
         obj.stroke_width = Some(1);
-        obj.stroke_color = Some(at.bar.separator_color);
+        obj.stroke_color = Some(colors.border);
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
     }
 
     // Show visible lines from the scrollback buffer, offset by scroll.
+    //
+    // Lines containing SGR escape sequences (see [`crate::ansi`]) are
+    // split into colored runs: the first run reuses the `term_line_{i}`
+    // object; subsequent runs get `term_line_{i}_r{j}` objects offset by
+    // the measured width of the preceding text. Plain lines behave
+    // exactly as before (single object, theme output color).
+    //
+    // Run offsets use the shared bitmap-font metrics
+    // (`bitmap_measure_text`) since no backend is available here. On
+    // backends that render with a different font (skin TTF fonts, PSP
+    // system font) colored runs may drift by a few pixels; plain lines
+    // are unaffected.
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
-    let output_color = oasis_types::color::with_alpha(at.app.terminal_output_color, 255);
+    let output_color = colors.output;
+    // Name buffers reused across the loop: this runs every frame, so a
+    // format! per line (plus one per colored run) is real churn.
+    use std::fmt::Write as _;
+    let mut name = String::with_capacity(16);
+    let mut run_name = String::with_capacity(20);
     for i in 0..visible_lines {
-        let name = format!("term_line_{i}");
+        name.clear();
+        let _ = write!(name, "term_line_{i}");
+        let line_x = margin + 4;
+        let line_y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
         if !sdi.contains(&name) {
             let obj = sdi.create(&name);
-            obj.x = margin + 4;
-            obj.y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
+            obj.x = line_x;
+            obj.y = line_y;
             obj.font_size = at.font_body;
             obj.text_color = output_color;
             obj.w = 0;
             obj.h = 0;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.text = output_lines.get(start + i).cloned();
-            obj.visible = true;
+
+        let raw = output_lines.get(start + i);
+        let mut extra_runs = 0usize;
+        match raw {
+            Some(line) if crate::ansi::has_sgr(line) => {
+                let runs = crate::ansi::parse_runs(line);
+                let run_color = |c: Option<u8>| match c {
+                    Some(slot) => at.ansi.color(slot as usize),
+                    None => output_color,
+                };
+                let mut x = line_x;
+                for (j, run) in runs.iter().enumerate() {
+                    let width = crate::backend::bitmap_measure_text(run.text, at.font_body) as i32;
+                    if j == 0 {
+                        if let Ok(obj) = sdi.get_mut(&name) {
+                            obj.set_text(run.text);
+                            obj.text_color = run_color(run.color);
+                            obj.x = x;
+                            obj.visible = true;
+                        }
+                    } else if j <= MAX_LINE_RUNS {
+                        run_name.clear();
+                        let _ = write!(run_name, "term_line_{i}_r{j}");
+                        if !sdi.contains(&run_name) {
+                            let obj = sdi.create(&run_name);
+                            obj.font_size = at.font_body;
+                            obj.w = 0;
+                            obj.h = 0;
+                        }
+                        if let Ok(obj) = sdi.get_mut(&run_name) {
+                            obj.x = x;
+                            obj.y = line_y;
+                            obj.set_text(run.text);
+                            obj.text_color = run_color(run.color);
+                            obj.visible = true;
+                        }
+                        extra_runs = j;
+                    } else {
+                        // Beyond the run budget: append to the last object.
+                        run_name.clear();
+                        let _ = write!(run_name, "term_line_{i}_r{MAX_LINE_RUNS}");
+                        if let Ok(obj) = sdi.get_mut(&run_name)
+                            && let Some(ref mut text) = obj.text
+                        {
+                            text.push_str(run.text);
+                        }
+                    }
+                    x += width;
+                }
+            },
+            _ => {
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    match raw {
+                        Some(line) => obj.set_text(line),
+                        None => obj.text = None,
+                    }
+                    obj.text_color = output_color;
+                    obj.x = line_x;
+                    obj.visible = true;
+                }
+            },
+        }
+
+        // Hide leftover run objects from a previous, more colorful frame.
+        for j in (extra_runs + 1)..=MAX_LINE_RUNS {
+            run_name.clear();
+            let _ = write!(run_name, "term_line_{i}_r{j}");
+            if !sdi.contains(&run_name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&run_name) {
+                obj.visible = false;
+            }
         }
     }
 
@@ -165,7 +313,7 @@ pub fn setup_terminal_objects(
         obj.y = input_y;
         obj.w = bg_w;
         obj.h = 20;
-        obj.color = oasis_types::color::lighten(at.app.bg, 0.03);
+        obj.color = colors.input_bg;
         obj.border_radius = Some(at.app.input_border_radius);
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
@@ -178,13 +326,17 @@ pub fn setup_terminal_objects(
         obj.x = margin + 4;
         obj.y = input_y + 2;
         obj.font_size = at.font_body;
-        obj.text_color = at.app.terminal_prompt_color;
+        obj.text_color = colors.prompt;
         obj.w = 0;
         obj.h = 0;
     }
     if let Ok(obj) = sdi.get_mut("term_prompt") {
         let cursor_char = if cursor_visible { '_' } else { ' ' };
-        obj.text = Some(format!("{cwd}> {input_buf}{cursor_char}"));
+        // Rebuild the prompt in the object's own String to reuse its
+        // capacity instead of allocating a fresh one every frame.
+        let text = obj.text.get_or_insert_default();
+        text.clear();
+        let _ = write!(text, "{cwd}> {input_buf}{cursor_char}");
         obj.visible = true;
     }
 }
@@ -203,6 +355,7 @@ pub fn paint_terminal_scrollbar(
     if total_lines <= visible_lines {
         return Ok(());
     }
+    let colors = TerminalColors::from_theme(at);
     let margin = 4i32;
     let top_y = at.statusbar_height as i32 + 2;
     let bot_y = at.screen_h as i32 - at.bottombar_height as i32;
@@ -215,7 +368,7 @@ pub fn paint_terminal_scrollbar(
     let track_h: u32 = bg_h;
 
     // Track.
-    backend.fill_rect(track_x, track_y, sb_w, track_h, at.scrollbar.track_color)?;
+    backend.fill_rect(track_x, track_y, sb_w, track_h, colors.scrollbar_track)?;
 
     // Thumb: proportional to visible/total ratio.
     let ratio = visible_lines as f32 / total_lines as f32;
@@ -228,7 +381,7 @@ pub fn paint_terminal_scrollbar(
         1.0
     };
     let thumb_y = track_y + (scrollable as f32 * frac) as i32;
-    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, at.scrollbar.thumb_color)?;
+    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, colors.scrollbar_thumb)?;
     Ok(())
 }
 
@@ -471,6 +624,65 @@ mod tests {
         );
     }
 
+    // -- SGR colored runs --
+
+    #[test]
+    fn setup_terminal_objects_sgr_runs() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let lines = vec![format!("\u{1b}[94mdir/\u{1b}[0m file")];
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+
+        // First run lives in term_line_0 with the bright-blue slot color.
+        let first = sdi.get("term_line_0").unwrap();
+        assert_eq!(first.text.as_deref(), Some("dir/"));
+        assert_eq!(first.text_color, at.ansi.color(12));
+
+        // Second run gets its own object at an x offset, default color.
+        let second = sdi.get("term_line_0_r1").unwrap();
+        assert!(second.visible);
+        assert_eq!(second.text.as_deref(), Some(" file"));
+        assert_eq!(
+            second.text_color,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+        assert!(second.x > first.x);
+        assert_eq!(second.y, first.y);
+    }
+
+    #[test]
+    fn setup_terminal_objects_sgr_runs_cleared_on_plain_line() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let colored = vec![format!("\u{1b}[31merr\u{1b}[0m rest")];
+        setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
+        assert!(sdi.get("term_line_0_r1").unwrap().visible);
+
+        // Replacing with a plain line hides the leftover run object and
+        // restores the default output color.
+        let plain = vec!["plain".to_string()];
+        setup_terminal_objects(&mut sdi, &plain, "/", "", 0, &at, true);
+        assert!(!sdi.get("term_line_0_r1").unwrap().visible);
+        let first = sdi.get("term_line_0").unwrap();
+        assert_eq!(first.text.as_deref(), Some("plain"));
+        assert_eq!(
+            first.text_color,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+    }
+
+    #[test]
+    fn set_terminal_visible_hides_run_objects() {
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let colored = vec![format!("\u{1b}[32mok\u{1b}[0m done")];
+        setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
+        assert!(sdi.get("term_line_0_r1").unwrap().visible);
+
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.get("term_line_0_r1").unwrap().visible);
+    }
+
     #[test]
     fn setup_terminal_objects_bg_uses_theme() {
         let mut sdi = SdiRegistry::new();
@@ -491,5 +703,65 @@ mod tests {
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/> _"));
+    }
+
+    // -- TerminalColors --
+
+    #[test]
+    fn terminal_colors_defaults_match_legacy() {
+        // Without [app_themes.terminal] every slot must equal the exact
+        // theme-derived color used before overrides existed (screenshot
+        // regression relies on this).
+        let at = ActiveTheme::default();
+        let colors = TerminalColors::from_theme(&at);
+        assert_eq!(colors.bg, at.app.bg);
+        assert_eq!(colors.border, at.bar.separator_color);
+        assert_eq!(
+            colors.output,
+            oasis_types::color::with_alpha(at.app.terminal_output_color, 255)
+        );
+        assert_eq!(
+            colors.input_bg,
+            oasis_types::color::lighten(at.app.bg, 0.03)
+        );
+        assert_eq!(colors.prompt, at.app.terminal_prompt_color);
+        assert_eq!(colors.scrollbar_track, at.scrollbar.track_color);
+        assert_eq!(colors.scrollbar_thumb, at.scrollbar.thumb_color);
+    }
+
+    #[test]
+    fn terminal_colors_override_applies() {
+        let mut at = ActiveTheme::default();
+        let prompt = Color::rgb(255, 0, 255);
+        let bg = Color::rgb(1, 2, 3);
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("prompt".to_string(), prompt);
+        overrides.insert("bg".to_string(), bg);
+        at.app_themes.insert("terminal".to_string(), overrides);
+
+        let colors = TerminalColors::from_theme(&at);
+        assert_eq!(colors.prompt, prompt);
+        assert_eq!(colors.bg, bg);
+        // Slots without an override keep their theme-derived defaults.
+        assert_eq!(
+            colors.output,
+            TerminalColors::from_theme(&ActiveTheme::default()).output
+        );
+        assert_eq!(colors.border, at.bar.separator_color);
+    }
+
+    #[test]
+    fn setup_terminal_objects_honors_app_theme_override() {
+        let mut at = ActiveTheme::default();
+        let prompt = Color::rgb(0, 128, 64);
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("prompt".to_string(), prompt);
+        at.app_themes.insert("terminal".to_string(), overrides);
+
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at, true);
+        assert_eq!(sdi.get("term_prompt").unwrap().text_color, prompt);
+        // Non-overridden slots keep the default color.
+        assert_eq!(sdi.get("terminal_bg").unwrap().color, at.app.bg);
     }
 }

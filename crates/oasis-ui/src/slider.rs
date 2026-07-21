@@ -47,6 +47,8 @@ pub struct Slider {
     pub show_value_label: bool,
     /// Thumb diameter in pixels.
     pub thumb_size: u16,
+    /// Whether the slider has keyboard focus (rings the thumb).
+    pub focused: bool,
 }
 
 impl Slider {
@@ -65,6 +67,7 @@ impl Slider {
             disabled: false,
             show_value_label: false,
             thumb_size: 12,
+            focused: false,
         }
     }
 
@@ -188,16 +191,23 @@ impl Widget for Slider {
     }
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let accent = ctx.theme.interactive_accent(self.disabled);
-        let track_bg = if self.disabled {
-            dim_color(ctx.theme.input_bg)
+        // Dedicated slider slots; their defaults equal the fields the
+        // slider historically borrowed (input_bg / accent / surface),
+        // so untouched themes render identically.
+        let accent = if self.disabled {
+            ctx.theme.text_disabled
         } else {
-            ctx.theme.input_bg
+            ctx.theme.slider_fill
+        };
+        let track_bg = if self.disabled {
+            dim_color(ctx.theme.slider_track)
+        } else {
+            ctx.theme.slider_track
         };
         let thumb_fill = if self.disabled {
-            dim_color(ctx.theme.surface)
+            dim_color(ctx.theme.slider_thumb)
         } else {
-            ctx.theme.surface
+            ctx.theme.slider_thumb
         };
         let thumb_border = ctx.theme.interactive_border(self.disabled, true);
 
@@ -257,6 +267,17 @@ impl Widget for Slider {
                         .fill_circle(thumb_cx, thumb_cy, thumb_r - 1, thumb_fill)?;
                 }
 
+                // Keyboard focus ring around the thumb.
+                if self.focused && !self.disabled {
+                    crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                        ctx.backend,
+                        thumb_cx - thumb_r as i32,
+                        thumb_cy - thumb_r as i32,
+                        ts,
+                        ts,
+                    )?;
+                }
+
                 // Value label.
                 if self.show_value_label {
                     let label = format_display_value(self.display_value());
@@ -306,6 +327,17 @@ impl Widget for Slider {
                 if thumb_r > 1 {
                     ctx.backend
                         .fill_circle(thumb_cx, thumb_cy, thumb_r - 1, thumb_fill)?;
+                }
+
+                // Keyboard focus ring around the thumb.
+                if self.focused && !self.disabled {
+                    crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                        ctx.backend,
+                        thumb_cx - thumb_r as i32,
+                        thumb_cy - thumb_r as i32,
+                        ts,
+                        ts,
+                    )?;
                 }
 
                 // Value label (below the slider).

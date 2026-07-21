@@ -58,7 +58,7 @@ Deploy as **two separate binaries**:
 
 - Both crates are excluded from the workspace (`exclude` in root `Cargo.toml`)
   since they require nightly + `cargo-psp` to build.
-- CI builds both independently with separate `cargo +nightly psp` commands.
+- CI builds both independently with separate `cargo psp` commands.
 - The PRX uses `psp::module_kernel!()` for kernel-mode module declaration.
 - The PRX uses `psp::hook::SyscallHook` to intercept display buffer swaps.
 - Lock-free communication (`psp::sync::SpscQueue`) bridges the display hook

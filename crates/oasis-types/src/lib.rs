@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod geometry;
 pub mod input;
+pub mod nine_patch;
 pub mod pbp;
 pub mod rasterize;
 pub mod shader;

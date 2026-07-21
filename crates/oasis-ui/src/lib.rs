@@ -38,6 +38,7 @@ pub mod slider;
 pub mod spin_box;
 pub mod spinner;
 pub mod split_pane;
+pub mod states;
 pub mod tab_bar;
 pub mod table;
 pub mod text_block;
@@ -53,5 +54,6 @@ pub(crate) mod test_utils;
 
 pub use context::DrawContext;
 pub use layout::{MeasureCache, Padding, cached_measure};
+pub use states::{WidgetState, WidgetStateColors};
 pub use theme::Theme;
 pub use widget::Widget;

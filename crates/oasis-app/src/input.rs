@@ -7,13 +7,68 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
 use oasis_core::terminal::Environment;
 use oasis_core::transition;
+use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WmEvent;
 
 use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
-use crate::{commands, launch};
+use crate::{commands, icon_drag, launch};
+
+/// Launch the dashboard app at page index `idx` as a floating window.
+///
+/// `fade` adds the fullscreen fade transition (used from dashboard mode
+/// where the screen is otherwise idle; desktop mode skips it so open
+/// windows aren't covered by the overlay).
+fn launch_dashboard_icon(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+    idx: usize,
+    fade: bool,
+) {
+    state.ui.dashboard.selected = idx;
+    let Some(app) = state.ui.dashboard.selected_app() else {
+        return;
+    };
+    log::info!("Click-launching app: {}", app.title);
+    let app = app.clone();
+    let result = launch::launch_app_window(
+        &app,
+        &mut state.wm,
+        sdi,
+        &mut state.content.open_runners,
+        &mut state.content.browser,
+        &state.browser_config,
+        vfs,
+        &state.net.tls_provider,
+        state.skin.features.window_manager,
+        &state.plugin_manager,
+    );
+    launch::apply_launch(result, &mut state.mode);
+    state.ui_sounds.push(UiSound::Open);
+    if fade {
+        state.active_transition = Some(launch::make_transition(
+            state.config.screen_width,
+            state.config.screen_height,
+            state.skin.features.transition_fade_frames.unwrap_or(15),
+        ));
+    }
+}
+
+/// Overlay a fade on dashboard page changes for skins with
+/// `[transition] page_style = "fade"` (the icon slide is suppressed by
+/// `DashboardConfig::page_style`). Default "slide" skins are untouched.
+fn apply_page_change_fade(state: &mut AppState) {
+    if state.active_theme.transition_page_style == "fade" {
+        state.active_transition = Some(transition::fade_in_custom(
+            state.config.screen_width,
+            state.config.screen_height,
+            state.active_theme.page_slide_duration.max(1),
+        ));
+    }
+}
 
 /// Tear down active radio playback and any pending network work.
 ///
@@ -123,6 +178,7 @@ pub fn handle_desktop_input(
             // time `state.wm.window_count() > 0`.
             if state.skin.features.start_menu && state.ui.start_menu.hit_test_button(*x, *y) {
                 state.ui.start_menu.toggle();
+                state.ui_sounds.push(UiSound::Click);
                 return InputResult::Continue;
             }
             if state.ui.start_menu.open {
@@ -152,6 +208,7 @@ pub fn handle_desktop_input(
             // Check taskbar hit before WM (taskbar sits above bottom bar).
             if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y) {
                 let win_id = win_id.to_string();
+                state.ui_sounds.push(UiSound::Click);
                 if state.wm.active_window() == Some(win_id.as_str()) {
                     // Active window -- minimize it.
                     let _ = state.wm.minimize_window(&win_id, sdi);
@@ -173,6 +230,7 @@ pub fn handle_desktop_input(
                 .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, sdi);
             match wm_event {
                 WmEvent::WindowClosed(id) => {
+                    state.ui_sounds.push(UiSound::Close);
                     if state.content.fullscreen_app.as_deref() == Some(id.as_str()) {
                         state.content.fullscreen_app = None;
                     }
@@ -216,45 +274,19 @@ pub fn handle_desktop_input(
                 WmEvent::DesktopClick(dx, dy) => {
                     if state.wm.window_count() == 0 {
                         state.mode = Mode::Dashboard;
-                    } else if state.ui.bottom_bar.active_tab == MediaTab::None {
-                        // Forward desktop clicks to dashboard icons. With the
-                        // selector box removed, clicks launch on the first
-                        // press — no prior selection required.
-                        let cfg = &state.ui.dashboard.config;
-                        let gx = dx - cfg.grid_x;
-                        let gy = dy - cfg.grid_y;
-                        if gx >= 0 && gy >= 0 {
-                            let col = gx as usize / cfg.cell_w as usize;
-                            let row = gy as usize / cfg.cell_h as usize;
-                            if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
-                                let idx = row * cfg.grid_cols as usize + col;
-                                let page_apps = state.ui.dashboard.current_page_apps().len();
-                                if idx < page_apps {
-                                    state.ui.dashboard.selected = idx;
-                                    if let Some(app) = state.ui.dashboard.selected_app() {
-                                        let app = app.clone();
-                                        let result = launch::launch_app_window(
-                                            &app,
-                                            &mut state.wm,
-                                            sdi,
-                                            &mut state.content.open_runners,
-                                            &mut state.content.browser,
-                                            &state.browser_config,
-                                            vfs,
-                                            &state.net.tls_provider,
-                                            state.skin.features.window_manager,
-                                            &state.plugin_manager,
-                                        );
-                                        // No fullscreen fade here: in desktop
-                                        // mode other windows are already on
-                                        // screen, and a fade overlay would
-                                        // briefly cover them. Dashboard-mode
-                                        // launches keep the transition because
-                                        // the screen is otherwise idle.
-                                        launch::apply_launch(result, &mut state.mode);
-                                    }
-                                }
-                            }
+                    } else if state.ui.bottom_bar.active_tab == MediaTab::None
+                        && let Some(idx) = state.ui.dashboard.icon_at(dx, dy)
+                    {
+                        // Forward desktop clicks to dashboard icons.
+                        if state.ui.dashboard.config.free_layout {
+                            icon_drag::begin(state, idx, dx, dy);
+                        } else {
+                            // No fullscreen fade here: in desktop mode other
+                            // windows are already on screen, and a fade
+                            // overlay would briefly cover them.
+                            // Dashboard-mode launches keep the transition
+                            // because the screen is otherwise idle.
+                            launch_dashboard_icon(state, sdi, vfs, idx, false);
                         }
                     }
                 },
@@ -264,11 +296,25 @@ pub fn handle_desktop_input(
         InputEvent::CursorMove { x, y } => {
             state.ui.taskbar.set_hover(*x, *y);
             state.ui.start_menu.set_hover(*x, *y);
+            if icon_drag::active(state) {
+                // Desktop-icon drag in progress: the press already missed
+                // every window, so the WM has nothing to track.
+                icon_drag::on_move(state, *x, *y);
+                return InputResult::Continue;
+            }
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
         },
         InputEvent::PointerRelease { x, y } => {
+            if icon_drag::active(state) {
+                if let icon_drag::ReleaseAction::Launch(idx) =
+                    icon_drag::on_release(state, vfs, *x, *y)
+                {
+                    launch_dashboard_icon(state, sdi, vfs, idx, false);
+                }
+                return InputResult::Continue;
+            }
             state
                 .wm
                 .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, sdi);
@@ -285,6 +331,7 @@ pub fn handle_desktop_input(
         },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                state.ui_sounds.push(UiSound::Close);
                 // If closing the fullscreen window, clear fullscreen state first.
                 if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                     let _ = state.wm.exit_fullscreen(&active_id, sdi);
@@ -422,6 +469,7 @@ pub fn handle_desktop_input(
                 {
                     match runner.handle_input(btn, vfs) {
                         AppAction::Exit => {
+                            state.ui_sounds.push(UiSound::Close);
                             if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                                 let _ = state.wm.exit_fullscreen(&active_id, sdi);
                                 state.content.fullscreen_app = None;
@@ -491,6 +539,7 @@ pub fn handle_app_input(
                 let is_music = runner.title == "Music Player";
                 match runner.handle_input(btn, vfs) {
                     AppAction::Exit => {
+                        state.ui_sounds.push(UiSound::Close);
                         AppRunner::hide_sdi(sdi);
                         state.content.app_runner = None;
                         state.mode = Mode::Dashboard;
@@ -565,6 +614,7 @@ pub fn handle_default_input(
                     &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
+                state.ui_sounds.push(UiSound::Open);
                 state.active_transition = Some(launch::make_transition(
                     state.config.screen_width,
                     state.config.screen_height,
@@ -577,6 +627,7 @@ pub fn handle_default_input(
         InputEvent::PointerClick { x, y } if state.mode == Mode::Dashboard => {
             if state.ui.start_menu.hit_test_button(*x, *y) {
                 state.ui.start_menu.toggle();
+                state.ui_sounds.push(UiSound::Click);
                 return InputResult::Continue;
             }
             if state.ui.start_menu.open {
@@ -591,43 +642,37 @@ pub fn handle_default_input(
                 }
                 return InputResult::Continue;
             }
-            if state.ui.bottom_bar.active_tab == MediaTab::None {
-                let cfg = &state.ui.dashboard.config;
-                let gx = *x - cfg.grid_x;
-                let gy = *y - cfg.grid_y;
-                if gx >= 0 && gy >= 0 {
-                    let col = gx as usize / cfg.cell_w as usize;
-                    let row = gy as usize / cfg.cell_h as usize;
-                    if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
-                        let idx = row * cfg.grid_cols as usize + col;
-                        let page_apps = state.ui.dashboard.current_page_apps().len();
-                        if idx < page_apps {
-                            state.ui.dashboard.selected = idx;
-                            if let Some(app) = state.ui.dashboard.selected_app() {
-                                log::info!("Click-launching app: {}", app.title);
-                                let app = app.clone();
-                                let result = launch::launch_app_window(
-                                    &app,
-                                    &mut state.wm,
-                                    sdi,
-                                    &mut state.content.open_runners,
-                                    &mut state.content.browser,
-                                    &state.browser_config,
-                                    vfs,
-                                    &state.net.tls_provider,
-                                    state.skin.features.window_manager,
-                                    &state.plugin_manager,
-                                );
-                                launch::apply_launch(result, &mut state.mode);
-                                state.active_transition = Some(launch::make_transition(
-                                    state.config.screen_width,
-                                    state.config.screen_height,
-                                    state.skin.features.transition_fade_frames.unwrap_or(15),
-                                ));
-                            }
-                        }
-                    }
+            if state.ui.bottom_bar.active_tab == MediaTab::None
+                && let Some(idx) = state.ui.dashboard.icon_at(*x, *y)
+            {
+                if state.ui.dashboard.config.free_layout {
+                    // Free layout: arm a drag; the release decides between
+                    // drop-commit, select, and launch.
+                    icon_drag::begin(state, idx, *x, *y);
+                } else {
+                    launch_dashboard_icon(state, sdi, vfs, idx, true);
                 }
+            }
+        },
+
+        // Free-layout icon drag tracking (no-ops when nothing is armed).
+        InputEvent::CursorMove { x, y } if state.mode == Mode::Dashboard => {
+            icon_drag::on_move(state, *x, *y);
+            // Hover focus (B6): in free layout the selection follows the
+            // pointer, driving the existing focus_scale / focus_glow /
+            // selection-highlight micro-motion. Grid skins keep their
+            // click/d-pad selection unchanged.
+            if state.ui.dashboard.config.free_layout
+                && !icon_drag::active(state)
+                && let Some(idx) = state.ui.dashboard.icon_at(*x, *y)
+            {
+                state.ui.dashboard.selected = idx;
+            }
+        },
+        InputEvent::PointerRelease { x, y } if state.mode == Mode::Dashboard => {
+            if let icon_drag::ReleaseAction::Launch(idx) = icon_drag::on_release(state, vfs, *x, *y)
+            {
+                launch_dashboard_icon(state, sdi, vfs, idx, true);
             }
         },
 
@@ -677,6 +722,9 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(btn)
             if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
         {
+            if matches!(btn, Button::Up | Button::Down) {
+                state.ui_sounds.push_nav(state.frame_counter);
+            }
             let action = state.ui.start_menu.handle_input(btn);
             if action == StartMenuAction::Exit {
                 return InputResult::Quit;
@@ -692,14 +740,19 @@ pub fn handle_default_input(
                 if state.ui.bottom_bar.active_tab == MediaTab::None =>
             {
                 state.ui.dashboard.handle_input(btn);
+                state.ui_sounds.push_nav(state.frame_counter);
             },
             Button::Triangle if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.next_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                state.ui_sounds.push_nav(state.frame_counter);
+                apply_page_change_fade(state);
             },
             Button::Square if state.ui.bottom_bar.active_tab == MediaTab::None => {
                 state.ui.dashboard.prev_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
+                state.ui_sounds.push_nav(state.frame_counter);
+                apply_page_change_fade(state);
             },
             _ => {},
         },
@@ -746,6 +799,7 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.mode = Mode::Dashboard;
+            state.ui_sounds.push(UiSound::Close);
         },
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
@@ -797,6 +851,7 @@ fn handle_start_menu_action(
                     &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
+                state.ui_sounds.push(UiSound::Open);
                 state.active_transition = Some(launch::make_transition(
                     state.config.screen_width,
                     state.config.screen_height,
@@ -806,6 +861,7 @@ fn handle_start_menu_action(
         },
         StartMenuAction::OpenTerminal => {
             state.mode = Mode::Terminal;
+            state.ui_sounds.push(UiSound::Open);
         },
         StartMenuAction::Exit => {
             log::info!("Start menu: Exit requested");
@@ -903,6 +959,8 @@ mod tests {
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,
+                sync_signature: None,
+                sdi_signature: None,
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
@@ -925,6 +983,13 @@ mod tests {
             active_transition: None,
             frame_counter: 0,
             pending_wallpaper_refresh: false,
+            skin_layout_textures: Vec::new(),
+            image_layers: Vec::new(),
+            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            icon_drag: None,
+            cursor_texture: None,
+            settings: oasis_core::settings::SettingsStore::new(),
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,
@@ -932,6 +997,8 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
             toasts: oasis_core::toast::ToastManager::new(),
+            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            sfx: oasis_audio::sfx::SfxPlayer::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),

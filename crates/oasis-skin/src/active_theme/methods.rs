@@ -27,11 +27,13 @@ impl ActiveTheme {
         self.tab_start_x = self.tab_start_x_override.unwrap_or_else(|| scale(34));
         self.pipe_gap = scale(5);
         self.r_hint_w = scale(28);
-        self.icon_stripe_h = scale_u(12);
-        self.icon_fold_size = scale_u(10);
-        self.icon_gfx_h = scale_u(22);
-        self.icon_gfx_pad = scale_u(4);
-        self.icon_label_pad = scale(4);
+        // Icon anatomy honours explicit `[geometry]` overrides like the tab
+        // fields above; only unset values fall back to the scaled defaults.
+        self.icon_stripe_h = self.icon_stripe_h_override.unwrap_or_else(|| scale_u(12));
+        self.icon_fold_size = self.icon_fold_size_override.unwrap_or_else(|| scale_u(10));
+        self.icon_gfx_h = self.icon_gfx_h_override.unwrap_or_else(|| scale_u(22));
+        self.icon_gfx_pad = self.icon_gfx_pad_override.unwrap_or_else(|| scale_u(4));
+        self.icon_label_pad = self.icon_label_pad_override.unwrap_or_else(|| scale(4));
 
         // Scale dashboard grid and icon dimensions.
         self.grid_padding_x = scale(self.grid_padding_x as i32) as u16;
@@ -47,9 +49,38 @@ impl ActiveTheme {
     }
 
     /// Apply skin feature flags (builder pattern).
+    ///
+    /// When `features.reduced_motion` is set, all decorative motion is
+    /// neutralized at the theme level so downstream render code falls through
+    /// to the static / final-frame path without any per-call-site checks:
+    /// dashboard icon `idle_float`/`spin`/`pulse`/`blink` are disabled, the
+    /// icon entrance animation becomes instant (`entrance_style = "none"`),
+    /// the focus glow pulse is dropped, and animated background layers are
+    /// frozen. `reduced_motion` defaults to `false`, so skins that do not opt
+    /// in stay pixel-identical.
     pub fn with_features(mut self, features: &crate::loader::SkinFeatures) -> Self {
         self.ui_theme.reduced_motion = features.reduced_motion;
+        if features.reduced_motion {
+            self.icon.idle_float = false;
+            self.icon.spin_enabled = false;
+            self.icon.pulse_enabled = false;
+            self.icon.blink_enabled = false;
+            self.entrance_style = "none".to_string();
+            self.focus_glow = false;
+            self.background_reduced_motion = true;
+        }
         self
+    }
+
+    /// Resolve a semantic elevation level (0..=5) to a concrete shadow,
+    /// honoring any `[elevation]` overrides on the active skin and falling
+    /// back to the built-in ladder otherwise.
+    ///
+    /// This is the single resolution point for the scattered `*_shadow_level`
+    /// fields (`icon.shadow_level`, `menu.panel_shadow_level`,
+    /// `toast.shadow_level`, …).
+    pub fn resolve_shadow(&self, level: u8) -> oasis_types::shadow::Shadow {
+        self.elevation.resolve(level)
     }
 
     /// Derive a gradient pair for a bar element.
@@ -112,17 +143,6 @@ impl ActiveTheme {
         } else {
             (default_ms, oasis_ui::animation::easing::linear)
         }
-    }
-
-    /// Look up a per-widget state color override.
-    ///
-    /// Returns `Some(color)` if `[widget_states.<widget>]` defines the key,
-    /// or `None` to fall back to the computed value.
-    pub fn widget_state_color(&self, widget: &str, state_key: &str) -> Option<Color> {
-        self.widget_states
-            .get(widget)
-            .and_then(|m| m.get(state_key))
-            .copied()
     }
 
     /// Apply the system-wide font scale factor to a raw font size.

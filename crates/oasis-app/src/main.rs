@@ -9,6 +9,9 @@
 mod app_state;
 mod boot_splash;
 mod commands;
+#[cfg(feature = "skin-dev")]
+mod hot_reload;
+mod icon_drag;
 mod input;
 mod launch;
 mod media_controller;
@@ -16,6 +19,7 @@ mod radio_controller;
 mod render;
 mod sysinfo;
 mod tv_controller;
+mod ui_sfx;
 mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
@@ -32,7 +36,7 @@ use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::CursorState;
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
+use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
@@ -73,8 +77,13 @@ fn main() -> Result<()> {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
 
-    // Desktop: scale up PSP-native skins (480x272) to a usable desktop resolution.
-    if config.screen_width == 480 && config.screen_height == 272 {
+    // Desktop: scale up PSP-native skins (480x272) to a usable desktop
+    // resolution. Skins can pin an explicit size via `desktop_width` /
+    // `desktop_height` in skin.toml.
+    if let (Some(dw), Some(dh)) = (skin.manifest.desktop_width, skin.manifest.desktop_height) {
+        config.screen_width = dw.max(1);
+        config.screen_height = dh.max(1);
+    } else if config.screen_width == 480 && config.screen_height == 272 {
         config.screen_width = 1280;
         config.screen_height = 720;
     }
@@ -109,10 +118,11 @@ fn main() -> Result<()> {
     let mut splash: Option<boot_splash::BootSplash> = if skip_splash {
         None
     } else {
-        match boot_splash::BootSplash::start(
+        match boot_splash::BootSplash::start_themed(
             &mut backend,
             config.screen_width,
             config.screen_height,
+            boot_splash::SplashTheme::from_skin_theme(&skin.theme),
         ) {
             Ok(s) => Some(s),
             Err(e) => {
@@ -309,7 +319,12 @@ fn main() -> Result<()> {
 
     // Discover apps and merge plugin-registered apps.
     splash_status!("Indexing dashboard apps...");
-    let mut apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
+    let mut apps = discover_apps_themed(
+        &vfs,
+        "/apps",
+        Some("OASISOS"),
+        &active_theme.icon.fallback_colors,
+    )?;
     for reg in plugin_manager.plugin_apps() {
         apps.push(reg.to_app_entry());
     }
@@ -330,13 +345,14 @@ fn main() -> Result<()> {
         skin.theme.build_wm_theme(),
     );
 
-    // Boot transition: fade in from black.
+    // Boot entrance: skin-selected ("fade" default, "assemble", "none").
     let fade_frames = skin.features.transition_fade_frames.unwrap_or(15);
-    let active_transition = Some(transition::fade_in_custom(
+    let active_transition = launch::make_entrance(
+        &active_theme,
+        fade_frames,
         config.screen_width,
         config.screen_height,
-        fade_frames,
-    ));
+    );
 
     let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
     mouse_cursor.scale = active_theme.cursor_scale;
@@ -372,6 +388,8 @@ fn main() -> Result<()> {
             ],
             scroll_offset: 0,
             dirty: true,
+            sync_signature: None,
+            sdi_signature: None,
         },
         net: NetworkLayer {
             backend: {
@@ -397,6 +415,13 @@ fn main() -> Result<()> {
         active_transition,
         frame_counter: 0,
         pending_wallpaper_refresh: false,
+        skin_layout_textures: Vec::new(),
+        image_layers: Vec::new(),
+        background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+        chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+        icon_drag: None,
+        cursor_texture: None,
+        settings: oasis_core::settings::SettingsStore::new(),
         radio_manager: RadioManager::new(),
         radio_source: None,
         archive_catalog: None,
@@ -408,6 +433,8 @@ fn main() -> Result<()> {
             ab
         },
         toasts: ToastManager::new(),
+        ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+        sfx: oasis_audio::sfx::SfxPlayer::new(),
         pending_tv_catalog_fetch: None,
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
@@ -431,6 +458,15 @@ fn main() -> Result<()> {
         tv_current_url: None,
     };
 
+    // Load persisted settings and apply per-skin icon positions (free
+    // icon layout). Missing files and grid-layout skins are no-ops.
+    state.settings.load(&vfs);
+    icon_drag::load_icon_positions(
+        &state.settings,
+        &state.skin.manifest.name,
+        &mut state.ui.dashboard,
+    );
+
     // Prime the status bar with real time + power info so the first frame
     // shows accurate values instead of the "--:--" / "--%" placeholders.
     splash_status!("Polling clock and power services...");
@@ -443,6 +479,9 @@ fn main() -> Result<()> {
             .update_info(time.as_ref(), power.as_ref());
         state.ui.bottom_bar.update_info(time.as_ref());
     }
+
+    // Load the startup skin's UI sounds (no-op for silent skins).
+    ui_sfx::reload_for_skin(&mut state);
 
     // Show a welcome toast.
     state.toasts.show(
@@ -486,10 +525,11 @@ fn main() -> Result<()> {
     // doing it here hides the cost under the splash animation.
     splash_status!("Generating wallpaper texture...");
     let wallpaper_tex = {
-        let wp_data = wallpaper::generate_from_config(
+        let wp_data = wallpaper::generate_with_assets(
             state.config.screen_width,
             state.config.screen_height,
             &state.active_theme,
+            &state.skin.assets,
         );
         backend.load_texture(
             state.config.screen_width,
@@ -508,6 +548,9 @@ fn main() -> Result<()> {
     {
         obj.visible = false;
     }
+    // Upload layout `texture =` references and image decal layers for the
+    // startup skin (skin swaps rebuild these via the pending-refresh path).
+    commands::refresh_skin_assets(&mut state, &mut sdi, &mut backend);
     log::info!("Wallpaper loaded");
     splash_wait!(5.2);
 
@@ -575,6 +618,9 @@ fn main() -> Result<()> {
             log::warn!("Boot splash finish failed: {e}");
         }
     }
+
+    #[cfg(feature = "skin-dev")]
+    let mut skin_watcher = hot_reload::SkinWatcher::new();
 
     'running: loop {
         state.frame_counter += 1;
@@ -662,15 +708,43 @@ fn main() -> Result<()> {
             "SDL3",
         );
 
+        // Dev-only: reload the active external skin when its files change
+        // on disk. Passing the directory path forces `resolve_skin` to
+        // re-read the TOML instead of hitting the compiled-in copy.
+        #[cfg(feature = "skin-dev")]
+        if state
+            .frame_counter
+            .is_multiple_of(hot_reload::POLL_INTERVAL_FRAMES)
+            && let Some(dir) = skin_watcher.poll(&state.skin.manifest.name)
+        {
+            log::info!("skin-dev: reloading skin from {}", dir.display());
+            commands::apply_skin_swap(&dir.to_string_lossy(), &mut state, &mut sdi, &vfs);
+        }
+
         // Any skin swap — whether from the Settings app above or a terminal
         // `skin` command processed in the input loop — sets the pending flag
         // so the wallpaper texture is regenerated against the new theme.
         commands::refresh_wallpaper_if_pending(&mut state, &mut sdi, &mut backend);
 
+        // Animate image decal layers (drift/pulse) by mutating their SDI
+        // objects; static layers cost nothing here.
+        if !state.image_layers.is_empty() {
+            oasis_core::image_layers::tick_image_layers(
+                &mut sdi,
+                &state.image_layers,
+                state.frame_counter as f32 / 60.0,
+                state.active_theme.background_reduced_motion,
+            );
+        }
+
         // Tick radio, music player, and TV subsystems.
         radio_controller::tick(&mut state, &mut vfs);
         media_controller::tick(&mut state, &mut vfs);
         tv_controller::tick(&mut state, &mut backend, &mut vfs);
+
+        // UI sound effects: fire queued events and pump mixed PCM into the
+        // dedicated SFX stream (no-op for skins without a [sounds] table).
+        ui_sfx::tick(&mut state);
 
         // Auto-exit timer for TV streaming tests.
         if let Some(timeout) = tv_timeout_secs {
@@ -688,6 +762,12 @@ fn main() -> Result<()> {
 
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
+
+        // Assemble entrance: slide the bars in and hide bar content while
+        // the transition runs (no-op for fade/none entrances).
+        if let Some(ref trans) = state.active_transition {
+            transition::apply_assemble(&mut sdi, &state.active_theme, trans);
+        }
 
         // Drive browser image streaming (progressive loading).
         if let Some(ref mut bw) = state.content.browser {
@@ -759,10 +839,11 @@ fn main() -> Result<()> {
             // Shader already rendered above as wallpaper.
             sdi.draw_base_layer(&mut backend)?;
 
-            oasis_core::vector_overlay::render_vector_background(
+            oasis_core::vector_overlay::render_vector_background_cached(
                 &mut backend,
                 &state.active_theme,
                 state.frame_counter as u32,
+                &mut state.background_layer_cache,
             )?;
             state.ui.dashboard.render_vector_icons(
                 &mut backend,
@@ -772,6 +853,17 @@ fn main() -> Result<()> {
             sdi.draw_overlay_layer(&mut backend)?;
         } else {
             sdi.draw(&mut backend)?;
+        }
+
+        // Vector chrome layers paint on top of the SDI scene (bars, tabs,
+        // windows) in every mode — procedurally shaped chrome accents.
+        if !state.active_theme.chrome_layers.is_empty() {
+            oasis_core::vector_overlay::render_vector_chrome(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+                &mut state.chrome_layer_cache,
+            )?;
         }
 
         // Paint terminal scrollbar when in terminal mode.

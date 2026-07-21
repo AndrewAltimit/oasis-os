@@ -10,6 +10,7 @@ use oasis_sdi::SdiRegistry;
 
 /// Configuration for corrupted visual modifiers.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct CorruptedModifiers {
     /// Maximum pixel jitter applied to object positions each frame.
     /// Objects shift by a random value in `[-jitter, +jitter]`.

@@ -37,10 +37,10 @@ cargo clippy --workspace -- -D warnings
 cargo deny check
 
 # PSP backend (excluded from workspace, requires nightly + cargo-psp)
-cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # PSP overlay plugin PRX (excluded from workspace, kernel mode)
-cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # UE5 FFI shared library
 cargo build --release -p oasis-ffi

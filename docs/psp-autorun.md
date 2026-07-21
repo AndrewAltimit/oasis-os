@@ -15,7 +15,7 @@ or in PPSSPP without any input simulation.
 
 ```bash
 cd crates/oasis-backend-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release --features autorun-script
+RUST_PSP_BUILD_STD=1 cargo psp --release --features autorun-script
 ```
 
 The feature is **off by default** so production EBOOTs don't pay the

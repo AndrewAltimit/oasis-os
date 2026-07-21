@@ -80,13 +80,8 @@ impl<'a> DrawContext<'a> {
         hover: bool,
         pressed: bool,
     ) -> Result<()> {
-        let color = if pressed {
-            self.theme.button_bg_pressed
-        } else if hover {
-            self.theme.button_bg_hover
-        } else {
-            self.theme.button_bg
-        };
+        let state = crate::states::WidgetState::from_flags(hover, pressed, false);
+        let color = crate::states::WidgetStateColors::neutral_bg(self.theme, state);
         let radius = self.theme.border_radius_md;
         self.backend.fill_rounded_rect(x, y, w, h, radius, color)
     }
@@ -101,13 +96,8 @@ impl<'a> DrawContext<'a> {
         hover: bool,
         pressed: bool,
     ) -> Result<()> {
-        let color = if pressed {
-            self.theme.accent_pressed
-        } else if hover {
-            self.theme.accent_hover
-        } else {
-            self.theme.accent
-        };
+        let state = crate::states::WidgetState::from_flags(hover, pressed, false);
+        let color = crate::states::WidgetStateColors::accent_bg(self.theme, state);
         let radius = self.theme.border_radius_md;
         self.backend.fill_rounded_rect(x, y, w, h, radius, color)
     }

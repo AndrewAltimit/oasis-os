@@ -1,0 +1,30 @@
+# psix-tribute layout -- shaped chrome via alpha-silhouette textures.
+# The status/bottom bar modules own their SDI objects; assigning textures
+# to bar_top / bar_bottom here replaces their procedural fills with the
+# notched PSIX silhouettes (M1 texture pipeline).
+
+# Translucent smoked-glass content backdrop: the PSIX orange->lime
+# wallpaper shows through while icons and labels stay legible. Spans the
+# full screen (not just the content strip) so the wallpaper seen through
+# the bars' transparent notch cutouts carries the same tint — otherwise
+# the notches read as bright patches against the smoked content area.
+[content_bg]
+x = 0
+y = 0
+w = 480
+h = 272
+color = "#0A0A0C50"
+
+[bar_top]
+x = 0
+y = 0
+w = 480
+h = 28
+texture = "assets/bar_top.png"
+
+[bar_bottom]
+x = 0
+y = 244
+w = 480
+h = 28
+texture = "assets/bar_bottom.png"

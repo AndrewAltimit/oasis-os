@@ -14,6 +14,184 @@ mod tests {
         assert_eq!(at.icon.cursor_border_radius, 6);
     }
 
+    // -- ANSI palette --
+
+    #[test]
+    fn ansi_palette_semantic_slots() {
+        let skin = SkinTheme::default();
+        let at = ActiveTheme::from_skin(&skin);
+        // white == terminal output color, bright_white == text color.
+        assert_eq!(at.ansi.color(7), skin.output_color());
+        assert_eq!(at.ansi.color(15), skin.text_color());
+        // Chromatic slots are distinct.
+        assert_ne!(at.ansi.color(1), at.ansi.color(2));
+        assert_ne!(at.ansi.color(4), at.ansi.color(5));
+        // Red slot is red-dominant, green slot green-dominant.
+        let red = at.ansi.color(1);
+        assert!(red.r > red.g && red.r > red.b);
+        let green = at.ansi.color(2);
+        assert!(green.g > green.r && green.g > green.b);
+        let blue = at.ansi.color(4);
+        assert!(blue.b > blue.r && blue.b > blue.g);
+    }
+
+    #[test]
+    fn ansi_palette_bright_variants_lighter() {
+        let at = ActiveTheme::default();
+        use oasis_types::color::rgb_to_hsl;
+        for slot in 1..7 {
+            let (_, _, l_normal) = rgb_to_hsl(at.ansi.color(slot));
+            let (_, _, l_bright) = rgb_to_hsl(at.ansi.color(slot + 8));
+            assert!(
+                l_bright > l_normal,
+                "bright slot {} should be lighter",
+                slot + 8
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_palette_default_matches_from_skin_default() {
+        // ActiveTheme::default() and from_skin(default) agree on the palette.
+        let a = ActiveTheme::default();
+        let b = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(a.ansi, b.ansi);
+    }
+
+    #[test]
+    fn ansi_palette_deterministic() {
+        let skin = SkinTheme::default();
+        let a = ActiveTheme::from_skin(&skin);
+        let b = ActiveTheme::from_skin(&skin);
+        assert_eq!(a.ansi, b.ansi);
+    }
+
+    #[test]
+    fn ansi_palette_overrides() {
+        let toml = r##"
+[palette]
+red = "#FF5555"
+bright_green = "#69FF94"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ansi.color(1), Color::rgb(0xFF, 0x55, 0x55));
+        assert_eq!(at.ansi.color(10), Color::rgb(0x69, 0xFF, 0x94));
+        // Unset slots keep the derived defaults.
+        let derived = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(at.ansi.color(4), derived.ansi.color(4));
+    }
+
+    #[test]
+    fn ansi_sgr_code_mapping() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.ansi.from_sgr_code(31), Some(at.ansi.color(1)));
+        assert_eq!(at.ansi.from_sgr_code(94), Some(at.ansi.color(12)));
+        assert_eq!(at.ansi.from_sgr_code(38), None);
+        assert_eq!(at.ansi.from_sgr_code(0), None);
+    }
+
+    // -- Cursor colors --
+
+    #[test]
+    fn cursor_colors_default_white_black() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.cursor_fill, Color::rgb(255, 255, 255));
+        assert_eq!(at.cursor_outline, Color::rgb(0, 0, 0));
+        let from_skin = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(from_skin.cursor_fill, at.cursor_fill);
+        assert_eq!(from_skin.cursor_outline, at.cursor_outline);
+    }
+
+    #[test]
+    fn cursor_colors_overridable() {
+        let toml = r##"
+[cursor]
+fill = "#00FF88"
+outline = "#112233"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.cursor_fill, Color::rgb(0, 255, 0x88));
+        assert_eq!(at.cursor_outline, Color::rgb(0x11, 0x22, 0x33));
+    }
+
+    // -- Hardcoded-color hole closure --
+
+    #[test]
+    fn data_led_color_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.icon.data_led_color, Color::rgb(0, 200, 100));
+
+        let toml = r##"
+[icon_overrides]
+data_led_color = "#FF00FF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.data_led_color, Color::rgb(255, 0, 255));
+    }
+
+    #[test]
+    fn app_fallback_colors_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.icon.fallback_colors.len(), 6);
+        assert_eq!(at.icon.fallback_colors[0], Color::rgb(70, 130, 180));
+        assert_eq!(at.icon.fallback_colors[5], Color::rgb(100, 149, 237));
+
+        let toml = r##"
+[icon_overrides]
+fallback_colors = ["#111111", "#222222"]
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.fallback_colors.len(), 2);
+        assert_eq!(at.icon.fallback_colors[1], Color::rgb(0x22, 0x22, 0x22));
+    }
+
+    #[test]
+    fn start_menu_item_fallback_default_and_override() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.menu.item_fallback_color, Color::rgb(100, 100, 100));
+
+        let toml = r##"
+[start_menu_overrides]
+item_fallback_color = "#ABCDEF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.menu.item_fallback_color, Color::rgb(0xAB, 0xCD, 0xEF));
+    }
+
+    #[test]
+    fn background_default_layer_color() {
+        let toml = r##"
+[[background_layers]]
+kind = "grid"
+spacing = 30
+
+[background_performance]
+default_layer_color = "#FF000080"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.background_layers.len(), 1);
+        assert_eq!(at.background_layers[0].color, Color::rgba(255, 0, 0, 128));
+
+        // Without the override, layers default to #FFFFFF12.
+        let toml = r##"
+[[background_layers]]
+kind = "grid"
+spacing = 30
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(
+            at.background_layers[0].color,
+            Color::rgba(255, 255, 255, 18)
+        );
+    }
+
     #[test]
     fn with_features_propagates_reduced_motion() {
         let skin = SkinTheme::default();
@@ -85,6 +263,64 @@ error = "#FF0000"
         // Text-derived fields should be green.
         assert_eq!(at.bar.clock_color, Color::rgb(0, 255, 0));
         assert_eq!(at.bar.media_tab_active, Color::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn from_skin_parses_chrome_layers() {
+        let toml = r##"
+[[chrome_layers]]
+kind = "crosshair"
+size = 12
+color = "#FFFFFF30"
+
+[[chrome_layers]]
+kind = "image"
+source = "assets/x.png"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        // "image" is not a vector kind and is dropped by the converter.
+        assert_eq!(at.chrome_layers.len(), 1);
+        assert!(matches!(
+            at.chrome_layers[0].kind,
+            oasis_vector::background::LayerKind::Crosshair { size: 12 }
+        ));
+        // Chrome layers never leak into the background list.
+        assert!(at.background_layers.is_empty());
+    }
+
+    #[test]
+    fn transition_entrance_config_parses() {
+        let toml = r##"
+[transition]
+entrance = "assemble"
+entrance_ms = 500
+page_style = "fade"
+easing = "ease_out_bounce"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.transition_entrance, "assemble");
+        assert_eq!(at.transition_entrance_frames, 30); // 500ms at 60fps
+        assert_eq!(at.transition_page_style, "fade");
+        assert_eq!(at.transition_easing, "ease_out_bounce");
+    }
+
+    #[test]
+    fn transition_entrance_defaults() {
+        let at = ActiveTheme::from_skin(&SkinTheme::default());
+        assert_eq!(at.transition_entrance, "fade");
+        assert_eq!(at.transition_entrance_frames, 45);
+        assert_eq!(at.transition_page_style, "slide");
+        assert!(at.transition_easing.is_empty());
+    }
+
+    #[test]
+    fn chrome_layers_default_empty() {
+        let at = ActiveTheme::default();
+        assert!(at.chrome_layers.is_empty());
+        let at = ActiveTheme::from_skin(&SkinTheme::default());
+        assert!(at.chrome_layers.is_empty());
     }
 
     #[test]
@@ -175,13 +411,9 @@ easing = "ease_out_cubic"
     }
 
     #[test]
-    fn widget_state_color_returns_none_by_default() {
-        let at = ActiveTheme::default();
-        assert!(at.widget_state_color("button", "hover_bg").is_none());
-    }
-
-    #[test]
-    fn widget_state_color_from_theme_toml() {
+    fn widget_states_baked_into_ui_theme() {
+        // `[widget_states.*]` has no separate ActiveTheme accessor: the
+        // overrides are baked into the embedded `ui_theme` at derivation.
         let toml = r##"
 [widget_states.button]
 normal_bg = "#505050"
@@ -191,16 +423,39 @@ disabled_text = "#555555"
 "##;
         let skin: SkinTheme = toml::from_str(toml).unwrap();
         let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ui_theme.button_bg, Color::rgb(0x50, 0x50, 0x50));
+        assert_eq!(at.ui_theme.button_bg_hover, Color::rgb(0x65, 0x65, 0x65));
+        assert_eq!(at.ui_theme.button_bg_pressed, Color::rgb(0x35, 0x35, 0x35));
+        assert_eq!(at.ui_theme.text_disabled, Color::rgb(0x55, 0x55, 0x55));
+    }
+
+    #[test]
+    fn focus_ring_geometry_baked_into_ui_theme() {
+        let toml = r##"
+[geometry]
+focus_ring_color = "#FF00FFA0"
+focus_ring_width = 3
+focus_ring_offset = 4
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
         assert_eq!(
-            at.widget_state_color("button", "hover_bg"),
-            Some(Color::rgb(0x65, 0x65, 0x65))
+            at.ui_theme.focus_ring_color,
+            Some(Color::rgba(0xFF, 0x00, 0xFF, 0xA0))
         );
-        assert_eq!(
-            at.widget_state_color("button", "disabled_text"),
-            Some(Color::rgb(0x55, 0x55, 0x55))
-        );
-        assert!(at.widget_state_color("button", "missing_key").is_none());
-        assert!(at.widget_state_color("slider", "hover_bg").is_none());
+        assert_eq!(at.ui_theme.focus_ring_width, Some(3));
+        assert_eq!(at.ui_theme.focus_ring_offset, Some(4));
+    }
+
+    #[test]
+    fn focus_ring_unset_stays_none_in_ui_theme() {
+        // Skins that don't author focus_ring_* must leave the ui_theme
+        // fields unset so FocusStyle keeps its accent derivation.
+        let skin = SkinTheme::default();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.ui_theme.focus_ring_color, None);
+        assert_eq!(at.ui_theme.focus_ring_width, None);
+        assert_eq!(at.ui_theme.focus_ring_offset, None);
     }
 
     #[test]
@@ -523,7 +778,7 @@ disabled_text = "#555555"
     fn cross_skin_palette_snapshot() {
         use crate::builtin::{builtin_names, load_builtin};
 
-        // Expected palette fingerprints. Pinned 2026-05-02. Regenerate
+        // Expected palette fingerprints. Pinned 2026-07-18. Regenerate
         // by uncommenting the print below and running once.
         let expected: &[(&str, &str)] = &[
             (
@@ -568,23 +823,31 @@ disabled_text = "#555555"
             ),
             (
                 "win95",
-                "#C0C0C0FF|#283C5A5A|#4C4CA6FF|#0000801E|#000000FF|#000000FF|#00008050|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#148A8AFF|#000080DC",
+                "#C0C0C0FF|#283C5A5A|#000000FF|#0000801E|#000000FF|#000000FF|#00008050|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#C0C0C0FF|#148A8AFF|#000080DC",
             ),
             (
                 "solarized",
-                "#073642FF|#283C5A5A|#67ADDFFF|#268BD21E|#839496FF|#839496FF|#268BD250|#073642FF|#073642FF|#268BD2FF|#002B36FF|#143B46FF|#268BD2DC",
+                "#073642FF|#283C5A5A|#93A1A1FF|#268BD21E|#93A1A1FF|#93A1A1FF|#268BD250|#073642FF|#073642FF|#268BD2FF|#002B36FF|#143B46FF|#268BD2DC",
             ),
             (
                 "vaporwave",
-                "#2D1B69FF|#283C5A5A|#FF9BDCFF|#FF71CE1E|#E0D0FFFF|#E0D0FFFF|#FF71CE50|#2D1B69FF|#2D1B69FF|#FF71CEFF|#1A0A2EFF|#2C1D3EFF|#FF71CEDC",
+                "#2D1B69FF|#283C5A5A|#E0D0FFFF|#FF71CE1E|#E0D0FFFF|#E0D0FFFF|#FF71CE50|#2D1B69FF|#2D1B69FF|#FF71CEFF|#1A0A2EFF|#2C1D3EFF|#FF71CEDC",
             ),
             (
                 "highcontrast",
-                "#1A1A1AFF|#283C5A5A|#FFFF4CFF|#FFFF001E|#FFFFFFFF|#FFFFFFFF|#FFFF0050|#1A1A1AFF|#1A1A1AFF|#FFFF00FF|#000000FF|#141414FF|#FFFF00DC",
+                "#1A1A1AFF|#283C5A5A|#FFFFFFFF|#FFFF001E|#FFFFFFFF|#FFFFFFFF|#FFFF0050|#1A1A1AFF|#1A1A1AFF|#FFFF00FF|#000000FF|#141414FF|#FFFF00DC",
             ),
             (
                 "altimit",
                 "#0A0A1A80|#080816FF|#00CC88FF|#00CC881E|#D0E8E0FF|#00CC88FF|#00CC8840|#0E0E22FF|#0A0A1AFF|#00CC8860|#080816FF|#0E0E22FF|#00CC88DC",
+            ),
+            (
+                "psix-tribute",
+                "#1A1A1E50|#1A1A1E5A|#F8A757FF|#F5820F1E|#F0F0E8FF|#F0F0E8FF|#F5820FFF|#ECECE4FF|#141423DC|#F5820FC8|#18181AFF|#262628FF|#F5820FDC",
+            ),
+            (
+                "psix-hifi",
+                "#1A1A1E50|#1A1A1E5A|#9A9A9AFF|#F5820F1E|#FFFFFFFF|#B8B8B8FF|#FFFFFFE0|#F8F8F4FF|#141423DC|#F5820FC8|#18181AFF|#262628FF|#F5820FDC",
             ),
         ];
 
@@ -623,6 +886,91 @@ disabled_text = "#555555"
             "palette derivation drifted for {} skin(s) -- new lines:\n{}",
             updates.len(),
             updates.join("\n")
+        );
+    }
+
+    // -- reduced_motion gating (with_features) --
+
+    #[test]
+    fn reduced_motion_off_leaves_animations_untouched() {
+        let skin = SkinTheme::default();
+        let features = crate::loader::SkinFeatures {
+            reduced_motion: false,
+            ..Default::default()
+        };
+        let plain = ActiveTheme::from_skin(&skin);
+        let gated = ActiveTheme::from_skin(&skin).with_features(&features);
+        // Default is pixel-identical: nothing is forced off.
+        assert_eq!(gated.icon.idle_float, plain.icon.idle_float);
+        assert_eq!(gated.icon.spin_enabled, plain.icon.spin_enabled);
+        assert_eq!(gated.entrance_style, plain.entrance_style);
+        assert_eq!(gated.focus_glow, plain.focus_glow);
+        assert_eq!(
+            gated.background_reduced_motion,
+            plain.background_reduced_motion
+        );
+        assert!(!gated.ui_theme.reduced_motion);
+    }
+
+    #[test]
+    fn reduced_motion_on_forces_all_motion_off() {
+        // Start from a skin that opts into every animation.
+        let toml = r##"
+[icon_overrides]
+vector_idle_float = true
+vector_spin_enabled = true
+vector_pulse_enabled = true
+vector_blink_enabled = true
+entrance_style = "fade_in"
+focus_glow = true
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let features = crate::loader::SkinFeatures {
+            reduced_motion: true,
+            ..Default::default()
+        };
+        let gated = ActiveTheme::from_skin(&skin).with_features(&features);
+        assert!(!gated.icon.idle_float);
+        assert!(!gated.icon.spin_enabled);
+        assert!(!gated.icon.pulse_enabled);
+        assert!(!gated.icon.blink_enabled);
+        assert_eq!(gated.entrance_style, "none");
+        assert!(!gated.focus_glow);
+        assert!(gated.background_reduced_motion);
+        assert!(gated.ui_theme.reduced_motion);
+    }
+
+    // -- semantic elevation ladder --
+
+    #[test]
+    fn resolve_shadow_default_matches_builtin() {
+        let at = ActiveTheme::default();
+        for level in 0u8..=5 {
+            assert_eq!(
+                at.resolve_shadow(level).layers.len(),
+                oasis_types::shadow::Shadow::elevation(level).layers.len()
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_shadow_honors_elevation_overrides() {
+        let toml = r##"
+[[elevation.level_2]]
+offset_x = 4
+offset_y = 4
+spread = 1
+alpha = 120
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        let s = at.resolve_shadow(2);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].alpha, 120);
+        // Unset levels still resolve to the built-in ladder.
+        assert_eq!(
+            at.resolve_shadow(1).layers.len(),
+            oasis_types::shadow::Shadow::elevation(1).layers.len()
         );
     }
 }

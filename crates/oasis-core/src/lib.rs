@@ -23,6 +23,7 @@ pub use oasis_types::tls;
 pub use oasis_types::bitmap_font;
 pub use oasis_types::color;
 pub use oasis_types::geometry;
+pub use oasis_types::nine_patch;
 #[doc(hidden)]
 pub use oasis_types::pbp;
 pub use oasis_types::shadow;
@@ -50,10 +51,12 @@ pub use oasis_wm as wm;
 // -----------------------------------------------------------------------
 
 pub mod agent;
+pub mod ansi;
 pub mod apps;
 pub mod bottombar;
 pub mod cursor;
 pub mod dashboard;
+pub mod image_layers;
 pub mod notifications;
 pub mod osk;
 pub mod plugin;
@@ -67,6 +70,7 @@ pub mod terminal_sdi;
 pub mod toast;
 pub mod transfer;
 pub mod transition;
+pub mod ui_sound;
 pub mod update;
 pub mod vector_overlay;
 pub mod wallpaper;

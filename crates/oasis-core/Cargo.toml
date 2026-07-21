@@ -13,8 +13,12 @@ documentation = "https://docs.rs/oasis-core"
 #   support via rustls for the SDL desktop backend. The PSP backend uses embedded-tls
 #   instead (pure Rust, no C/asm, works on mipsel-sony-psp).
 [features]
-default = ["tls-rustls"]
+default = ["tls-rustls", "skin-ttf"]
 tls-rustls = ["oasis-net/tls-rustls"]
+# Skin-font (fontdue) validation in oasis-skin. In default features so the
+# desktop `skin lint` catches unparseable fonts; the PSP build opts out via
+# default-features = false and never compiles fontdue.
+skin-ttf = ["oasis-skin/ttf"]
 javascript = ["oasis-browser/javascript"]
 wasm-youtube = []
 test-data = []
@@ -56,8 +60,14 @@ thiserror = { workspace = true }
 js-sys = { workspace = true }
 
 [dev-dependencies]
+oasis-test-backend = { workspace = true }
 tempfile = "3"
 proptest.workspace = true
+criterion = { workspace = true }
+
+[[bench]]
+name = "dashboard_frame"
+harness = false
 
 [lints]
 workspace = true

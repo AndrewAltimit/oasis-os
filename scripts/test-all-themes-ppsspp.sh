@@ -30,7 +30,7 @@ log "=== PSP All-Theme Dashboard Test ==="
 # Build EBOOT with autorun-script feature.
 log "Building EBOOT..."
 ( cd "$PSP_CRATE_DIR" \
-  && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release --features autorun-script ) \
+  && RUST_PSP_BUILD_STD=1 cargo psp --release --features autorun-script ) \
   > /tmp/eboot-build.log 2>&1 || {
     log "BUILD FAILED — see /tmp/eboot-build.log"
     tail -20 /tmp/eboot-build.log

@@ -27,6 +27,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         let r = at.icon.border_radius as u32;
         // Clamp sub-element sizes to fit within the icon body's rounded rect.
@@ -88,13 +89,35 @@ impl DashboardState {
             obj.text = None;
         }
         if let Ok(obj) = sdi.get_mut(&names.gfx) {
-            obj.x = ix + gfx_pad as i32;
-            obj.y = iy + stripe_h as i32 + gfx_gap as i32;
-            obj.w = gfx_w;
-            obj.h = gfx_h;
-            obj.visible = gfx_w > 0 && gfx_h > 0;
-            let c = app.color;
-            obj.color = oasis_types::color::with_alpha(oasis_types::color::lighten(c, 0.15), 200);
+            if at.icon.gfx_anchor == "badge" {
+                // PSIX-style emblem badge overlapping the document's
+                // bottom-right corner: a third hangs off the right edge,
+                // the bottom sits roughly flush with the document bottom.
+                let side = gfx_h.max(gfx_w.min(gfx_h + 2));
+                obj.x = ix + icon_w as i32 - (side as i32 * 2) / 3;
+                obj.y = iy + icon_h as i32 - side as i32 + 2;
+                obj.w = side;
+                obj.h = side;
+                obj.border_radius = Some(2);
+                // Solid saturated emblem with a dark edge (reference:
+                // opaque crimson badge over the white page; the legacy
+                // lighten+alpha tint washes out to salmon here).
+                obj.color = app.color;
+                obj.stroke_width = Some(1);
+                obj.stroke_color = Some(oasis_types::color::darken(app.color, 0.35));
+            } else {
+                obj.x = ix + gfx_pad as i32;
+                obj.y = iy + stripe_h as i32 + gfx_gap as i32;
+                obj.w = gfx_w;
+                obj.h = gfx_h;
+                obj.border_radius = None;
+                let c = app.color;
+                obj.color =
+                    oasis_types::color::with_alpha(oasis_types::color::lighten(c, 0.15), 200);
+                obj.stroke_width = None;
+                obj.stroke_color = None;
+            }
+            obj.visible = obj.w > 0 && obj.h > 0;
             obj.text = None;
         }
         super::labels::draw_label(
@@ -102,9 +125,11 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 
@@ -124,6 +149,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         use oasis_types::color::{darken, lighten};
 
@@ -167,9 +193,11 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 
@@ -189,6 +217,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
         // Hide document-specific sub-objects.
         for name in [&names.outline, &names.stripe, &names.fold, &names.gfx] {
@@ -216,9 +245,11 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
     }
 }

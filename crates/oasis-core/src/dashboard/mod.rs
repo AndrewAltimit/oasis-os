@@ -6,16 +6,31 @@
 mod discovery;
 mod icons;
 mod labels;
+mod layout;
 mod vector_icons;
 
-pub use discovery::{AppEntry, discover_apps};
+pub use discovery::{AppEntry, discover_apps, discover_apps_themed};
+
+use std::collections::HashMap;
 
 use crate::active_theme::ActiveTheme;
+use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::skin::SkinFeatures;
 use crate::ui::flex::GridLayout;
 use crate::ui::layout::Padding;
+
+/// Base-layer z for free-layout icons: above the skin's layout chrome
+/// (auto z stays in low single digits) and the selection highlight
+/// (`FREE_ICON_Z - 10`), below the overlay pass (bars, start menu).
+pub const FREE_ICON_Z: i32 = 50;
+/// z for the icon being dragged, raised above its siblings.
+pub const FREE_ICON_DRAG_Z: i32 = 60;
+
+/// Left padding (px) for column-layout icons and their labels, so the
+/// left-aligned column hugs the grid's left margin.
+pub(crate) const COLUMN_LEFT_PAD: i32 = 6;
 
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
@@ -43,6 +58,24 @@ pub struct DashboardConfig {
     pub page_slide_duration: u32,
     /// Press flash duration in frames (0 = disabled).
     pub press_flash_duration: u32,
+    /// Free (desktop-style) icon layout: per-icon positions with column
+    /// auto-flow instead of uniform grid cells.
+    pub free_layout: bool,
+    /// Fixed cell size in free mode (grid cells stretch to fill instead).
+    pub free_cell_w: u32,
+    pub free_cell_h: u32,
+    /// Cap free/column auto-flow to this many columns (`None` = as many as
+    /// fit the grid width). Set to `Some(1)` by `"column"` layout.
+    pub free_cols: Option<u32>,
+    /// Left-align icons (and their labels) within the cell instead of
+    /// centering. Enabled by the `"column"` layout for a sparse PSIX-style
+    /// left column.
+    pub left_align_icons: bool,
+    /// Snap dragged icons to the virtual grid on drop (free mode).
+    pub snap_to_grid: bool,
+    /// Page change style: "slide" (default) or "fade" (no icon slide; the
+    /// shell overlays a fade transition instead).
+    pub page_style: String,
 }
 
 impl DashboardConfig {
@@ -66,6 +99,33 @@ impl DashboardConfig {
 
         let grid_layout = GridLayout::new(cols).with_padding(Padding::ZERO);
 
+        // `"column"` layout: sparse PSIX-style single left column. Same
+        // interaction semantics as `"free"`, but auto-flow is capped to
+        // `free_icon_cols` columns (default 1) and icons hug the left edge.
+        let is_column = features.icon_layout == "column";
+        let free_layout = features.icon_layout == "free" || is_column;
+
+        // Free-mode cells are a fixed size derived from the theme's icon
+        // dimensions (2x leaves room for a two-line label) instead of
+        // stretching to fill the grid area like grid cells do.
+        let free_cell_w = (at.icon_width * 2).max(48);
+        let free_cell_h = if is_column {
+            // Taller pitch so the column reads sparse: icon + two label
+            // lines + a comfortable gap. Scales with the theme's icon size
+            // so a column skin with small icons still packs several rows.
+            (at.icon_height + at.icon_label_pad as u32 + (at.font_small as u32 + 1) * 2 + 8).max(48)
+        } else {
+            (at.icon_height * 2).max(48)
+        };
+
+        // Column mode caps auto-flow to `free_icon_cols` columns, defaulting
+        // to a single column. Free mode only honours an explicit cap.
+        let free_cols = if is_column {
+            Some(features.free_icon_cols.unwrap_or(1))
+        } else {
+            features.free_icon_cols
+        };
+
         Self {
             grid_cols: cols,
             grid_rows: rows,
@@ -82,6 +142,13 @@ impl DashboardConfig {
             cursor_lerp_speed: at.cursor_lerp_speed,
             page_slide_duration: at.page_slide_duration,
             press_flash_duration: at.press_flash_duration,
+            free_layout,
+            free_cell_w,
+            free_cell_h,
+            free_cols,
+            left_align_icons: is_column,
+            snap_to_grid: features.snap_to_grid,
+            page_style: at.transition_page_style.clone(),
         }
     }
 }
@@ -157,6 +224,9 @@ struct IconGeometry {
     icon_h: u32,
     cell_x: i32,
     text_pad: i32,
+    /// Left-align the label under the icon instead of centering it in the
+    /// cell (column layout).
+    left_align: bool,
 }
 
 /// Runtime state for the icon grid dashboard.
@@ -181,6 +251,20 @@ pub struct DashboardState {
     entrance_elapsed_ms: Option<u32>,
     /// Currently focused icon index within the page (for focus glow).
     selected_index: usize,
+    /// Free-layout icon positions: app path -> cell origin (screen coords).
+    /// Apps without an entry auto-flow top-to-bottom in columns.
+    pub positions: HashMap<String, (i32, i32)>,
+    /// Icon index (within the current page) being dragged, if any.
+    /// Rendering raises the dragged icon above its siblings.
+    pub drag_index: Option<usize>,
+    /// Cached scaled vector icon scenes keyed by global icon index.
+    /// `RefCell` because the render path borrows the dashboard immutably;
+    /// single-threaded like the rest of the SDI pipeline.
+    scene_cache: std::cell::RefCell<HashMap<usize, vector_icons::CachedIconScene>>,
+    /// Cached word-wrapped label lines per app title (see
+    /// [`labels::LabelWrapCache`]). `RefCell` for the same reason as
+    /// `scene_cache`: the icon draw methods borrow `self` immutably.
+    label_wrap_cache: labels::LabelWrapCache,
 }
 
 impl DashboardState {
@@ -199,6 +283,10 @@ impl DashboardState {
             icon_names,
             entrance_elapsed_ms: Some(1000),
             selected_index: 0,
+            positions: HashMap::new(),
+            drag_index: None,
+            scene_cache: std::cell::RefCell::new(HashMap::new()),
+            label_wrap_cache: labels::LabelWrapCache::default(),
         }
     }
 
@@ -270,7 +358,7 @@ impl DashboardState {
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
-        self.page_anim = Some(PageSlideAnim {
+        self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
             from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
@@ -292,7 +380,7 @@ impl DashboardState {
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
-        self.page_anim = Some(PageSlideAnim {
+        self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
             from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
@@ -349,6 +437,9 @@ impl DashboardState {
             0
         };
 
+        let origins = self.page_cell_origins();
+        let (cell_w, cell_h) = self.cell_size();
+
         let per_page = self.config.icons_per_page as usize;
         for i in 0..per_page {
             let names = &self.icon_names[i];
@@ -359,55 +450,109 @@ impl DashboardState {
                 }
             }
 
-            let cell = self.config.grid_layout.cell_rect(
-                i,
-                self.config.grid_x,
-                self.config.grid_y,
-                self.config.grid_w,
-                self.config.grid_h,
-                per_page,
-            );
-            let (cell_x, cell_y) = match cell {
-                Some(r) => (r.x + slide_offset, r.y),
-                None => continue,
-            };
-            let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-            let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
-
-            if i < page_apps.len() {
-                let geo = IconGeometry {
-                    ix,
-                    iy,
-                    icon_w,
-                    icon_h,
-                    cell_x,
-                    text_pad,
-                };
-                match at.icon.style.as_str() {
-                    "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
-                    "circle" => self.draw_circle_icon(sdi, at, names, geo, &page_apps[i]),
-                    "vector" => self.draw_vector_icon(sdi, at, names, geo, i, &page_apps[i]),
-                    _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
-                }
-            } else {
+            if i >= page_apps.len() {
                 for name in names.all() {
                     if let Ok(obj) = sdi.get_mut(name) {
                         obj.visible = false;
                     }
                 }
+                continue;
+            }
+
+            let (cell_x, cell_y) = (origins[i].0 + slide_offset, origins[i].1);
+            let left_align = self.config.left_align_icons;
+            let ix = if left_align {
+                cell_x + COLUMN_LEFT_PAD
+            } else {
+                cell_x + (cell_w as i32 - icon_w as i32) / 2
+            };
+            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4;
+
+            let geo = IconGeometry {
+                ix,
+                iy,
+                icon_w,
+                icon_h,
+                cell_x,
+                text_pad,
+                left_align,
+            };
+            match at.icon.style.as_str() {
+                "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
+                "circle" => self.draw_circle_icon(sdi, at, names, geo, &page_apps[i]),
+                "vector" => self.draw_vector_icon(sdi, at, names, geo, i, &page_apps[i]),
+                _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
+            }
+
+            // In free layout, lift icons into an explicit z band above the
+            // skin's base-layer chrome (layout objects take single-digit
+            // auto z), with the dragged icon raised above its siblings so
+            // it stays visible while crossing them.
+            if self.config.free_layout {
+                let z = if self.drag_index == Some(i) {
+                    FREE_ICON_DRAG_Z
+                } else {
+                    FREE_ICON_Z
+                };
+                for name in names.all() {
+                    if let Ok(obj) = sdi.get_mut(name) {
+                        obj.z = z;
+                    }
+                }
             }
         }
 
-        // Dashboard icons respond directly to clicks, matching desktop-icon
-        // conventions; no selection box is drawn. The `cursor_highlight`
-        // SDI object still exists (older code paths may touch it), but it
-        // is forced invisible regardless of skin cursor_style.
+        // Grid mode keeps the historical behaviour: icons respond directly
+        // to clicks and no selection box is drawn. Free layout shows a
+        // themed highlight behind the selected icon (skin `cursor_style`:
+        // "stroke" outlines it, "fill" paints a backdrop, "none" disables).
         let cursor_name = "cursor_highlight";
         if !sdi.contains(cursor_name) {
             sdi.create(cursor_name);
         }
+        let sel_rect = (self.config.free_layout
+            && at.icon.cursor_style != "none"
+            && self.drag_index.is_none()
+            && self.selected < page_apps.len())
+        .then(|| {
+            let (ox, oy) = origins[self.selected];
+            let pad = self.config.cursor_pad.max(0);
+            let ix = if self.config.left_align_icons {
+                ox + slide_offset + COLUMN_LEFT_PAD
+            } else {
+                ox + slide_offset + (cell_w as i32 - icon_w as i32) / 2
+            };
+            let iy = oy + (cell_h as i32 - icon_h as i32) / 4;
+            (
+                ix - pad,
+                iy - pad,
+                icon_w + 2 * pad as u32,
+                icon_h + 2 * pad as u32,
+            )
+        });
         if let Ok(cursor) = sdi.get_mut(cursor_name) {
-            cursor.visible = false;
+            match sel_rect {
+                Some((x, y, w, h)) => {
+                    cursor.visible = true;
+                    cursor.x = x;
+                    cursor.y = y;
+                    cursor.w = w;
+                    cursor.h = h;
+                    cursor.z = FREE_ICON_Z - 10;
+                    cursor.text = None;
+                    cursor.border_radius = Some(at.icon.cursor_border_radius);
+                    if at.icon.cursor_style == "fill" {
+                        cursor.color = at.icon.cursor_color;
+                        cursor.stroke_width = None;
+                        cursor.stroke_color = None;
+                    } else {
+                        cursor.color = Color::rgba(0, 0, 0, 0);
+                        cursor.stroke_width = Some(at.icon.cursor_stroke_width);
+                        cursor.stroke_color = Some(at.icon.cursor_color);
+                    }
+                },
+                None => cursor.visible = false,
+            }
         }
     }
 
@@ -427,11 +572,11 @@ impl DashboardState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::backend::Color;
 
-    fn test_config() -> DashboardConfig {
+    pub(crate) fn test_config() -> DashboardConfig {
         DashboardConfig {
             grid_cols: 2,
             grid_rows: 2,
@@ -448,10 +593,17 @@ mod tests {
             cursor_lerp_speed: 0.18,
             page_slide_duration: 12,
             press_flash_duration: 6,
+            free_layout: false,
+            free_cell_w: 80,
+            free_cell_h: 80,
+            free_cols: None,
+            left_align_icons: false,
+            snap_to_grid: true,
+            page_style: "slide".to_string(),
         }
     }
 
-    fn test_apps(n: usize) -> Vec<AppEntry> {
+    pub(crate) fn test_apps(n: usize) -> Vec<AppEntry> {
         (0..n)
             .map(|i| AppEntry {
                 title: format!("App {i}"),
@@ -520,6 +672,23 @@ mod tests {
     }
 
     #[test]
+    fn page_style_slide_animates_fade_does_not() {
+        let mut dash = DashboardState::new(test_config(), test_apps(6));
+        dash.next_page();
+        assert!(dash.page_anim.is_some(), "slide style animates");
+
+        let mut cfg = test_config();
+        cfg.page_style = "fade".to_string();
+        let mut dash = DashboardState::new(cfg, test_apps(6));
+        dash.next_page();
+        assert!(dash.page_anim.is_none(), "fade style suppresses the slide");
+        assert_eq!(dash.page, 1);
+        dash.prev_page();
+        assert!(dash.page_anim.is_none());
+        assert_eq!(dash.page, 0);
+    }
+
+    #[test]
     fn next_page_wraps() {
         let mut dash = DashboardState::new(test_config(), test_apps(6));
         assert_eq!(dash.page, 0);
@@ -558,6 +727,34 @@ mod tests {
     }
 
     #[test]
+    fn grid_layout_keeps_selection_highlight_hidden() {
+        let mut dash = DashboardState::new(test_config(), test_apps(3));
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        dash.update_sdi(&mut sdi, &at);
+        assert!(!sdi.get("cursor_highlight").unwrap().visible);
+    }
+
+    #[test]
+    fn free_layout_shows_selection_highlight() {
+        let mut config = test_config();
+        config.free_layout = true;
+        let mut dash = DashboardState::new(config, test_apps(3));
+        dash.selected = 1;
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        dash.update_sdi(&mut sdi, &at);
+        let cursor = sdi.get("cursor_highlight").unwrap();
+        assert!(cursor.visible);
+        // Default cursor_style is "stroke": outline only, transparent fill.
+        assert_eq!(cursor.stroke_width, Some(at.icon.cursor_stroke_width));
+        // Hidden again while a drag is in flight.
+        dash.drag_index = Some(1);
+        dash.update_sdi(&mut sdi, &at);
+        assert!(!sdi.get("cursor_highlight").unwrap().visible);
+    }
+
+    #[test]
     fn selected_clamps_on_page_switch() {
         let mut dash = DashboardState::new(test_config(), test_apps(5));
         // 5 apps, 4 per page: page 0 has 4, page 1 has 1.
@@ -591,6 +788,13 @@ mod tests {
             cursor_lerp_speed: 0.18,
             page_slide_duration: 12,
             press_flash_duration: 6,
+            free_layout: false,
+            free_cell_w: 68,
+            free_cell_h: 68,
+            free_cols: None,
+            left_align_icons: false,
+            snap_to_grid: true,
+            page_style: "slide".to_string(),
         }
     }
 

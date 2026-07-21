@@ -1,0 +1,13 @@
+boot_text = [
+    "OASIS_OS [psix-hifi]",
+    "Mounting ms0:/ ...",
+    "Wallpaper: psix ribbon",
+    "Desktop: column icons",
+    "Dock: online. Ready.",
+]
+prompt_format = "psix> "
+title = "OASIS_OS // PSIX HI-FI"
+home_label = "Desktop"
+welcome_message = "Welcome back. Type 'help' for commands."
+error_prefix = "err: "
+shutdown_message = "See you, space cowboy."

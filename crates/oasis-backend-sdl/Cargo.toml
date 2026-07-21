@@ -12,8 +12,8 @@ documentation = "https://docs.rs/oasis-backend-sdl"
 oasis-core = { workspace = true, features = ["tls-rustls", "javascript"] }
 oasis-audio = { workspace = true }
 oasis-types = { workspace = true }
-oasis-rasterize = { workspace = true }
-oasis-shader = { workspace = true, features = ["software"] }
+oasis-rasterize = { workspace = true, features = ["ttf"] }
+oasis-shader = { workspace = true, features = ["software", "parallel"] }
 sdl3 = { workspace = true }
 rmp3 = { workspace = true }
 log = { workspace = true }

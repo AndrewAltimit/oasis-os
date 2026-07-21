@@ -26,6 +26,8 @@ pub struct Toggle {
     pub on: bool,
     /// Animation progress (0.0 = off, 1.0 = on).
     pub progress: f32,
+    /// Whether the toggle has keyboard focus (draws a focus ring).
+    pub focused: bool,
 }
 
 impl Toggle {
@@ -34,6 +36,7 @@ impl Toggle {
         Self {
             on,
             progress: if on { 1.0 } else { 0.0 },
+            focused: false,
         }
     }
 
@@ -285,7 +288,11 @@ impl Widget for Toggle {
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let radius = h as u16 / 2;
-        let bg = lerp_color(ctx.theme.scrollbar_track, ctx.theme.accent, self.progress);
+        let bg = lerp_color(
+            ctx.theme.toggle_track_off,
+            ctx.theme.toggle_track_on,
+            self.progress,
+        );
         ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
 
         // Thumb circle.
@@ -294,7 +301,12 @@ impl Widget for Toggle {
         let thumb_x = x + h as i32 / 2 + (travel as f32 * self.progress) as i32;
         let thumb_y = y + h as i32 / 2;
         ctx.backend
-            .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.text_on_accent)?;
+            .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.toggle_thumb)?;
+
+        // Keyboard focus ring around the track.
+        if self.focused {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
         Ok(())
     }
 }

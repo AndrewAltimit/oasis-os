@@ -69,9 +69,9 @@ fn altimit_icon(color: Color, index: usize, frame: u32, cfg: &IconTheme) -> Icon
         4 => icons::icon_audio(color),
         _ if cfg.blink_enabled && frame > 0 => {
             let visible = anim::blink_visible(frame, cfg.blink_interval);
-            icons::icon_data_animated(color, Color::rgb(0, 200, 100), visible)
+            icons::icon_data_animated(color, cfg.data_led_color, visible)
         },
-        _ => icons::icon_data(color, Color::rgb(0, 200, 100)),
+        _ => icons::icon_data(color, cfg.data_led_color),
     }
 }
 
@@ -366,6 +366,67 @@ fn hud_icon(color: Color, index: usize) -> IconDef {
     }
 }
 
+/// A cached scaled icon scene plus the inputs it was built from.
+///
+/// Rebuilding every icon's op list each frame (tessellation-equivalent
+/// work) showed up in the pipeline audit; static icons only change when
+/// the preset, app color, or icon size changes, so the built scene is
+/// reused until its fingerprint goes stale.
+#[derive(Debug)]
+pub(super) struct CachedIconScene {
+    preset: String,
+    color: Color,
+    icon_w: u32,
+    icon_h: u32,
+    scene: VectorScene,
+}
+
+/// Whether an icon's glyph depends on the frame counter (spin / pulse /
+/// blink variants). Only the altimit preset (and unknown presets, which
+/// fall back to it) has animated variants.
+fn icon_is_animated(preset: &str, global_index: usize, cfg: &IconTheme) -> bool {
+    match preset {
+        "geometric" | "hud" | "outline" | "solid" | "pixel" => false,
+        _ => match global_index % 6 {
+            0 => cfg.spin_enabled,
+            4 => cfg.pulse_enabled,
+            5 => cfg.blink_enabled,
+            _ => false,
+        },
+    }
+}
+
+/// Build the scaled vector scene for one icon (glyph ops only; container
+/// backdrop and effects are applied at render time). The preset comes
+/// from `cfg.vector_preset`.
+fn build_icon_scene(
+    app: &AppEntry,
+    global_index: usize,
+    frame: u32,
+    cfg: &IconTheme,
+    icon_w: u32,
+    icon_h: u32,
+    flash_color: Option<Color>,
+) -> VectorScene {
+    let mut icon = icon_for_app(&cfg.vector_preset, app, global_index, frame, cfg);
+    if let Some(c) = flash_color {
+        icon.recolor(c);
+    }
+    // Icons are 22x22 base, scale to icon_w x icon_h.
+    let scale_x = icon_w as f32 / icon.width.max(1) as f32;
+    let scale_y = icon_h as f32 / icon.height.max(1) as f32;
+    let scale = scale_x.min(scale_y);
+    let mut scene = VectorScene::new(
+        (icon.width as f32 * scale) as u32,
+        (icon.height as f32 * scale) as u32,
+    );
+    for mut op in icon.ops {
+        op.scale(scale);
+        scene.push(op);
+    }
+    scene
+}
+
 impl DashboardState {
     /// Draw a "vector" style icon — hides SDI sub-objects and prepares a
     /// vector scene for later rendering via [`render_vector_icons`].
@@ -385,6 +446,7 @@ impl DashboardState {
             icon_h,
             cell_x,
             text_pad,
+            left_align,
         } = geo;
 
         // Hide all SDI sub-objects (vector rendering is done directly).
@@ -406,9 +468,11 @@ impl DashboardState {
             at,
             names,
             cell_x,
-            self.config.cell_w,
+            self.cell_size().0,
             iy + icon_h as i32 + text_pad,
             &app.title,
+            left_align.then_some(ix + icon_w as i32 / 2),
+            &self.label_wrap_cache,
         );
 
         // Store the vector icon slot for rendering in render_vector_icons().
@@ -453,49 +517,74 @@ impl DashboardState {
 
         let per_page = self.config.icons_per_page as usize;
         let page_start = self.page * per_page;
+        let origins = self.page_cell_origins();
+        let (cell_w, cell_h) = self.cell_size();
 
-        for (i, app) in page_apps.iter().enumerate() {
-            let cell = self.config.grid_layout.cell_rect(
-                i,
-                self.config.grid_x,
-                self.config.grid_y,
-                self.config.grid_w,
-                self.config.grid_h,
-                per_page,
-            );
-            let (cell_x, cell_y) = match cell {
-                Some(r) => (r.x + slide_offset, r.y),
-                None => continue,
-            };
-            let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-            let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
+        // Draw the dragged icon last so it stays on top of its siblings.
+        let mut order: Vec<usize> = (0..page_apps.len()).collect();
+        if let Some(drag) = self.drag_index
+            && drag < order.len()
+        {
+            order.retain(|&i| i != drag);
+            order.push(drag);
+        }
 
-            // Get vector icon for this app (with animation state).
+        for &i in &order {
+            let app = &page_apps[i];
+            let (cell_x, cell_y) = (origins[i].0 + slide_offset, origins[i].1);
+            let ix = cell_x + (cell_w as i32 - icon_w as i32) / 2;
+            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4;
+
+            // Get or build the scaled icon scene: static icons render from
+            // the cache; animated or flashing icons rebuild each frame.
             let global_index = page_start + i;
-            let mut icon = icon_for_app(preset, app, global_index, frame_counter, &at.icon);
-
-            // Apply press flash effect.
-            if self.press_flash_frame > 0 && i == self.press_flash_index {
-                icon.recolor(oasis_types::color::lighten(
-                    app.color,
-                    at.press_flash_lighten,
-                ));
-            }
-
-            // Build a scene from the icon and scale to fill the icon cell.
-            // Icons are 22x22 base, scale to icon_w x icon_h.
-            let scale_x = icon_w as f32 / icon.width.max(1) as f32;
-            let scale_y = icon_h as f32 / icon.height.max(1) as f32;
-            let scale = scale_x.min(scale_y);
-
-            let mut scene = VectorScene::new(
-                (icon.width as f32 * scale) as u32,
-                (icon.height as f32 * scale) as u32,
-            );
-            for mut op in icon.ops {
-                op.scale(scale);
-                scene.push(op);
-            }
+            let flashing = self.press_flash_frame > 0 && i == self.press_flash_index;
+            let fresh: Option<VectorScene> =
+                if flashing || icon_is_animated(preset, global_index, &at.icon) {
+                    let flash = flashing
+                        .then(|| oasis_types::color::lighten(app.color, at.press_flash_lighten));
+                    Some(build_icon_scene(
+                        app,
+                        global_index,
+                        frame_counter,
+                        &at.icon,
+                        icon_w,
+                        icon_h,
+                        flash,
+                    ))
+                } else {
+                    None
+                };
+            let mut cache = self.scene_cache.borrow_mut();
+            let scene: &VectorScene = match fresh {
+                Some(ref s) => s,
+                None => {
+                    let build = || CachedIconScene {
+                        preset: preset.clone(),
+                        color: app.color,
+                        icon_w,
+                        icon_h,
+                        scene: build_icon_scene(
+                            app,
+                            global_index,
+                            0,
+                            &at.icon,
+                            icon_w,
+                            icon_h,
+                            None,
+                        ),
+                    };
+                    let entry = cache.entry(global_index).or_insert_with(build);
+                    if entry.preset != *preset
+                        || entry.color != app.color
+                        || entry.icon_w != icon_w
+                        || entry.icon_h != icon_h
+                    {
+                        *entry = build();
+                    }
+                    &entry.scene
+                },
+            };
 
             // Center the scaled icon within the cell.
             let mut ox = ix + (icon_w as i32 - scene.width as i32) / 2;
@@ -511,8 +600,10 @@ impl DashboardState {
                 );
             }
 
-            // Entrance animation.
+            // Entrance animation. `scale_up` shrinks a transient copy so
+            // the cached scene stays pristine.
             let mut alpha = 255u8;
+            let mut shrunk: Option<VectorScene> = None;
             if at.entrance_style != "none"
                 && let Some(elapsed) = self.entrance_elapsed_ms
             {
@@ -525,15 +616,17 @@ impl DashboardState {
                     "scale_up" => {
                         let s = anim::entrance_scale(staggered, dur);
                         if s < 1.0 {
-                            let sw = (scene.width as f32 * s) as u32;
-                            let sh = (scene.height as f32 * s) as u32;
-                            ox += (scene.width as i32 - sw as i32) / 2;
-                            oy += (scene.height as i32 - sh as i32) / 2;
-                            for op in &mut scene.ops {
+                            let mut small = scene.clone();
+                            let sw = (small.width as f32 * s) as u32;
+                            let sh = (small.height as f32 * s) as u32;
+                            ox += (small.width as i32 - sw as i32) / 2;
+                            oy += (small.height as i32 - sh as i32) / 2;
+                            for op in &mut small.ops {
                                 op.scale(s);
                             }
-                            scene.width = sw;
-                            scene.height = sh;
+                            small.width = sw;
+                            small.height = sh;
+                            shrunk = Some(small);
                         }
                     },
                     "slide_up" => {
@@ -543,6 +636,7 @@ impl DashboardState {
                     _ => {},
                 }
             }
+            let scene: &VectorScene = shrunk.as_ref().unwrap_or(scene);
 
             // Container backdrop (drawn before the glyph so it sits underneath).
             // Keeps vector icons legible on busy shader wallpapers.
@@ -564,7 +658,7 @@ impl DashboardState {
                 0
             };
             if at.icon.container_style != "none" && !pixel_preset {
-                let backdrop = build_container_backdrop(at, app.color, ox, oy, &scene);
+                let backdrop = build_container_backdrop(at, app.color, ox, oy, scene);
                 render_scene_at(backend, &backdrop, 0, 0, alpha)?;
             }
 
@@ -590,7 +684,7 @@ impl DashboardState {
                 render_scene_at(backend, &glow_scene, 0, 0, alpha)?;
             }
 
-            render_scene_at(backend, &scene, ox, oy + glyph_offset_y, alpha)?;
+            render_scene_at(backend, scene, ox, oy + glyph_offset_y, alpha)?;
         }
 
         Ok(())

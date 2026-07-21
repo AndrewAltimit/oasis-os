@@ -3,14 +3,17 @@
 mod parsing;
 mod validation;
 
+use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use oasis_sdi::SdiRegistry;
+use oasis_types::backend::{SdiBackend, TextureId};
 use oasis_types::error::{OasisError, Result};
 
+use super::assets::SkinAsset;
 use super::corrupted::CorruptedModifiers;
 use super::strings::SkinStrings;
 use super::theme::SkinTheme;
@@ -19,6 +22,7 @@ pub use parsing::{SkinLayout, SkinObjectDef};
 
 /// Top-level skin manifest (`skin.toml`).
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinManifest {
     /// Human-readable skin name.
     pub name: String,
@@ -37,11 +41,18 @@ pub struct SkinManifest {
     /// Virtual screen height in pixels (default 272).
     #[serde(default = "default_height")]
     pub screen_height: u32,
+    /// Desktop render width override (default: PSP-native 480x272 skins
+    /// are upscaled to 1280x720 on desktop; other sizes render as-is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_width: Option<u32>,
+    /// Desktop render height override (see `desktop_width`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_height: Option<u32>,
     /// Parent skin to inherit from (built-in name).
     ///
     /// Child skin only needs to specify overrides; non-overridden fields
     /// come from the parent. Max depth 3 to prevent infinite recursion.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherits: Option<String>,
 }
 
@@ -57,6 +68,7 @@ fn default_height() -> u32 {
 
 /// Feature gates controlling which capabilities a skin exposes.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinFeatures {
     /// Whether the dashboard icon grid is shown.
     #[serde(default = "yes")]
@@ -79,6 +91,33 @@ pub struct SkinFeatures {
     /// Icons per page (grid capacity).
     #[serde(default = "default_icons_per_page")]
     pub icons_per_page: u32,
+    /// Dashboard icon layout: `"grid"` (uniform cells, default), `"free"`
+    /// (desktop-style per-icon positions with column auto-flow and drag &
+    /// drop on pointer targets), or `"column"` (opt-in sparse PSIX-style
+    /// left column — same interaction semantics as `free`, but auto-flow is
+    /// constrained to `free_icon_cols` columns (default 1), icons are
+    /// left-aligned instead of centered, and the vertical pitch is larger).
+    #[serde(default = "default_icon_layout")]
+    pub icon_layout: String,
+    /// Cap the free/column auto-flow to this many columns. `None` = as many
+    /// as fit the grid width (classic `free` behaviour). In `"column"`
+    /// layout this defaults to 1 when unset; in `"free"` layout it applies
+    /// only when explicitly set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_icon_cols: Option<u32>,
+    /// In free layout, snap dragged icons to a virtual grid on drop
+    /// (default true — matches real desktop behaviour).
+    #[serde(default = "yes")]
+    pub snap_to_grid: bool,
+    /// Launch apps on a single pointer click (default true). When false,
+    /// the first click only selects the icon and a second click launches.
+    #[serde(default = "yes")]
+    pub launch_on_single_click: bool,
+    /// Draw the skin's own software mouse cursor instead of relying on the
+    /// host OS pointer (default false). Themeable via `[cursor]` in
+    /// theme.toml.
+    #[serde(default)]
+    pub software_cursor: bool,
     /// Grid columns.
     #[serde(default = "default_grid_cols")]
     pub grid_cols: u32,
@@ -120,14 +159,20 @@ pub struct SkinFeatures {
     #[serde(default = "yes")]
     pub clock_in_bottombar: bool,
     /// Custom fade transition duration in frames (default 15).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_fade_frames: Option<u32>,
     /// Custom slide transition duration in frames (default 20).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_slide_frames: Option<u32>,
     /// Disable animations for accessibility (defaults to false).
     #[serde(default)]
     pub reduced_motion: bool,
+    /// Bottom bar style. `""` (default) = classic footer. `"media_dock"` =
+    /// decorative PSIX-style media dock (transport pills + progress/volume
+    /// tracks alongside the media tab strip). Purely cosmetic — no audio
+    /// binding.
+    #[serde(default)]
+    pub bottombar_style: String,
 }
 
 fn yes() -> bool {
@@ -138,6 +183,9 @@ fn default_pages() -> u32 {
 }
 fn default_icons_per_page() -> u32 {
     9
+}
+fn default_icon_layout() -> String {
+    "grid".to_string()
 }
 fn default_grid_cols() -> u32 {
     3
@@ -156,6 +204,11 @@ impl Default for SkinFeatures {
             window_manager: false,
             dashboard_pages: 1,
             icons_per_page: 15,
+            icon_layout: "grid".to_string(),
+            free_icon_cols: None,
+            snap_to_grid: true,
+            launch_on_single_click: true,
+            software_cursor: false,
             grid_cols: 5,
             grid_rows: 3,
             command_categories: Vec::new(),
@@ -171,6 +224,7 @@ impl Default for SkinFeatures {
             transition_fade_frames: None,
             transition_slide_frames: None,
             reduced_motion: false,
+            bottombar_style: String::new(),
         }
     }
 }
@@ -194,6 +248,44 @@ pub struct Skin {
     pub strings: SkinStrings,
     /// Optional corrupted visual effect modifiers.
     pub corrupted_modifiers: Option<CorruptedModifiers>,
+    /// Unknown TOML keys encountered during parsing (`file: key` per entry).
+    /// Unknown keys are ignored for forwards compatibility, but surfaced so
+    /// skin authors can catch typos and unsupported fields.
+    pub schema_warnings: Vec<String>,
+    /// Decoded image assets keyed by skin-relative path
+    /// (e.g. `"assets/bar_top.png"`). Populated from the skin directory's
+    /// `assets/` folder or embedded bytes for built-in skins.
+    pub assets: HashMap<String, SkinAsset>,
+    /// Raw TTF/OTF font bytes keyed by skin-relative path
+    /// (e.g. `"assets/skin.ttf"`) — the string `[typography] font` uses to
+    /// reference them. Kept undecoded: parsing happens in the backend's
+    /// rasterizer (and, feature-gated, in validation).
+    pub font_assets: HashMap<String, Vec<u8>>,
+    /// Raw WAV sound assets keyed by skin-relative path
+    /// (e.g. `"assets/click.wav"`), referenced by the theme's `[sounds]`
+    /// table. Decoding to PCM happens at playback-load time in the shell,
+    /// so `oasis-skin` only stores and header-validates the bytes.
+    pub sound_assets: HashMap<String, Vec<u8>>,
+}
+
+/// Parse a TOML document, collecting any keys the target type ignores.
+///
+/// Unknown keys never fail the parse — they are recorded as `"{file}:
+/// unknown key `{path}`"` warnings so authors get feedback instead of
+/// silently dead configuration.
+fn parse_toml_lint<T: serde::de::DeserializeOwned>(
+    content: &str,
+    file: &str,
+    warnings: &mut Vec<String>,
+) -> Result<T> {
+    let de = toml::Deserializer::new(content);
+    serde_ignored::deserialize(de, |path| {
+        // serde_ignored renders Option-wrapped struct hops as `?` segments
+        // (e.g. `wm_theme.?.close_button_color`); strip them for readability.
+        let path = path.to_string().replace(".?.", ".");
+        warnings.push(format!("{file}: unknown key `{path}`"));
+    })
+    .map_err(|e| OasisError::Config(format!("{file}: {e}").into()))
 }
 
 impl Skin {
@@ -210,26 +302,39 @@ impl Skin {
         theme_toml: &str,
         strings_toml: &str,
     ) -> Result<Self> {
-        let manifest: SkinManifest = toml::from_str(manifest_toml)
-            .map_err(|e| OasisError::Config(format!("skin.toml: {e}").into()))?;
-        let layout: SkinLayout = toml::from_str(layout_toml)
-            .map_err(|e| OasisError::Config(format!("layout.toml: {e}").into()))?;
-        let features: SkinFeatures = toml::from_str(features_toml)
-            .map_err(|e| OasisError::Config(format!("features.toml: {e}").into()))?;
+        let mut schema_warnings = Vec::new();
+        let manifest: SkinManifest =
+            parse_toml_lint(manifest_toml, "skin.toml", &mut schema_warnings)?;
+        let layout: SkinLayout = parse_toml_lint(layout_toml, "layout.toml", &mut schema_warnings)?;
+        let mut features: SkinFeatures =
+            parse_toml_lint(features_toml, "features.toml", &mut schema_warnings)?;
 
         let theme: SkinTheme = if theme_toml.is_empty() {
             SkinTheme::default()
         } else {
-            toml::from_str(theme_toml)
-                .map_err(|e| OasisError::Config(format!("theme.toml: {e}").into()))?
+            parse_toml_lint(theme_toml, "theme.toml", &mut schema_warnings)?
         };
 
         let strings: SkinStrings = if strings_toml.is_empty() {
             SkinStrings::default()
         } else {
-            toml::from_str(strings_toml)
-                .map_err(|e| OasisError::Config(format!("strings.toml: {e}").into()))?
+            parse_toml_lint(strings_toml, "strings.toml", &mut schema_warnings)?
         };
+
+        // Millisecond transition durations from the theme convert to frames
+        // (60 fps); explicit frame counts in features.toml take precedence.
+        if let Some(t) = theme.transition.as_ref() {
+            if features.transition_fade_frames.is_none()
+                && let Some(ms) = t.fade_ms
+            {
+                features.transition_fade_frames = Some((ms * 60 / 1000).max(1));
+            }
+            if features.transition_slide_frames.is_none()
+                && let Some(ms) = t.slide_ms
+            {
+                features.transition_slide_frames = Some((ms * 60 / 1000).max(1));
+            }
+        }
 
         let corrupted_modifiers = if features.corrupted {
             Some(CorruptedModifiers::default())
@@ -244,7 +349,117 @@ impl Skin {
             theme,
             strings,
             corrupted_modifiers,
+            schema_warnings,
+            assets: HashMap::new(),
+            font_assets: HashMap::new(),
+            sound_assets: HashMap::new(),
         })
+    }
+
+    /// Decode a PNG and register it as a named asset (e.g.
+    /// `"assets/bar_top.png"`). Used by generated built-in skins to attach
+    /// `include_bytes!` payloads and by tests.
+    pub fn add_asset_png(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        let asset = SkinAsset::from_png_bytes(bytes)
+            .map_err(|e| OasisError::Config(format!("{name}: {e}").into()))?;
+        self.assets.insert(name.to_string(), asset);
+        Ok(())
+    }
+
+    /// Register raw TTF/OTF bytes as a named font asset (e.g.
+    /// `"assets/skin.ttf"`). Bytes are stored as-is; parse errors surface
+    /// through `validate()` (feature `ttf`) and the backend rasterizer.
+    pub fn add_asset_font(&mut self, name: &str, bytes: Vec<u8>) {
+        self.font_assets.insert(name.to_string(), bytes);
+    }
+
+    /// The raw bytes of the font selected by `[typography] font`, if the
+    /// skin sets one and the referenced asset was loaded. This is what the
+    /// app hands to `SdiText::set_font` on skin swap.
+    pub fn active_font_bytes(&self) -> Option<&[u8]> {
+        let path = self.theme.typography.as_ref()?.font.as_ref()?;
+        self.font_assets.get(path).map(Vec::as_slice)
+    }
+
+    /// Register raw WAV bytes as a named sound asset (e.g.
+    /// `"assets/click.wav"`). The header is checked here so obviously
+    /// broken files fail loudly at load time; full decode happens in the
+    /// shell's SFX player.
+    pub fn add_asset_wav(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        if super::assets::probe_wav(bytes).is_none() {
+            return Err(OasisError::Config(
+                format!("{name}: not an uncompressed PCM WAV").into(),
+            ));
+        }
+        self.sound_assets.insert(name.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    /// Upload layout-referenced textures and attach them to their SDI
+    /// objects. Call after `apply_layout`/`swap_scaled` once a backend is
+    /// available. Returns the created texture ids; the caller owns them and
+    /// must destroy them on skin swap-out (SDI object destruction does not
+    /// free backend textures).
+    ///
+    /// Objects without explicit `w`/`h` in the layout inherit the asset's
+    /// native pixel dimensions.
+    pub fn upload_layout_textures(
+        &self,
+        sdi: &mut SdiRegistry,
+        backend: &mut dyn SdiBackend,
+    ) -> Vec<TextureId> {
+        let mut ids = Vec::new();
+        for (name, def) in &self.layout.objects {
+            // Nine-patch takes precedence over a plain texture.
+            let asset_name = match (&def.nine_patch, &def.texture) {
+                (Some(np), _) => &np.image,
+                (None, Some(tex)) => tex,
+                (None, None) => continue,
+            };
+            let Some(asset) = self.assets.get(asset_name) else {
+                log::warn!(
+                    "skin '{}': object '{name}' references missing asset '{asset_name}'",
+                    self.manifest.name
+                );
+                continue;
+            };
+            let tex = match backend.load_texture(asset.width, asset.height, &asset.rgba) {
+                Ok(tex) => tex,
+                Err(e) => {
+                    log::warn!(
+                        "skin '{}': texture upload for '{name}' failed: {e}",
+                        self.manifest.name
+                    );
+                    continue;
+                },
+            };
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.texture = Some(tex);
+                obj.nine_patch = def.nine_patch.as_ref().map(|np| {
+                    let [left, top, right, bottom] = np.insets;
+                    oasis_types::nine_patch::NinePatchSlices {
+                        tex_width: asset.width,
+                        tex_height: asset.height,
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    }
+                });
+                if def.w.is_none() {
+                    obj.w = asset.width;
+                }
+                if def.h.is_none() {
+                    obj.h = asset.height;
+                }
+                ids.push(tex);
+            } else {
+                // Layout applied and textures uploaded should always agree,
+                // but never leak a texture if the object vanished.
+                let _ = backend.destroy_texture(tex);
+            }
+        }
+        ids
     }
 
     /// Load a skin with explicit corrupted modifier configuration.
@@ -265,9 +480,11 @@ impl Skin {
         )?;
 
         if !corrupted_toml.is_empty() {
-            let modifiers: CorruptedModifiers = toml::from_str(corrupted_toml)
-                .map_err(|e| OasisError::Config(format!("corrupted.toml: {e}").into()))?;
+            let mut warnings = Vec::new();
+            let modifiers: CorruptedModifiers =
+                parse_toml_lint(corrupted_toml, "corrupted.toml", &mut warnings)?;
             skin.corrupted_modifiers = Some(modifiers);
+            skin.schema_warnings.append(&mut warnings);
         }
 
         Ok(skin)
@@ -319,6 +536,9 @@ impl Skin {
             Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)?
         };
 
+        // Load image assets from the skin's assets/ subdirectory.
+        skin.load_assets_from(&dir.join("assets"));
+
         // Apply inheritance from a built-in parent skin if specified.
         if let Some(ref parent_name) = skin.manifest.inherits
             && let Ok(parent) = super::builtin::load_builtin(parent_name)
@@ -326,7 +546,60 @@ impl Skin {
             skin.merge_theme_from(&parent);
         }
 
+        for warning in &skin.schema_warnings {
+            log::warn!("skin '{}': {warning}", skin.manifest.name);
+        }
+
         Ok(skin)
+    }
+
+    /// Decode every `*.png` (images) and `*.wav` (UI sounds) in an assets
+    /// directory into `self.assets` / `self.sound_assets`, and slurp every
+    /// `*.ttf`/`*.otf` into `self.font_assets`, keyed `"assets/<file>"`.
+    /// Files that fail to decode are recorded as schema warnings instead of
+    /// failing the whole skin load.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_assets_from(&mut self, assets_dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(assets_dir) else {
+            return; // No assets/ directory -- nothing to do.
+        };
+        let ext_is = |p: &Path, wanted: &str| {
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(wanted))
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                ext_is(p, "png") || ext_is(p, "ttf") || ext_is(p, "otf") || ext_is(p, "wav")
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let key = format!("assets/{file_name}");
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let result = if ext_is(&path, "png") {
+                        self.add_asset_png(&key, &bytes)
+                    } else if ext_is(&path, "wav") {
+                        self.add_asset_wav(&key, &bytes)
+                    } else {
+                        self.add_asset_font(&key, bytes);
+                        Ok(())
+                    };
+                    if let Err(e) = result {
+                        self.schema_warnings.push(format!("{key}: {e}"));
+                    }
+                },
+                Err(e) => {
+                    self.schema_warnings.push(format!("{key}: {e}"));
+                },
+            }
+        }
     }
 
     /// Scan a directory for skin subdirectories (those containing `skin.toml`).
@@ -392,8 +665,17 @@ impl Skin {
         if ct.surface.is_none() {
             ct.surface.clone_from(&pt.surface);
         }
+        if ct.accent.is_none() {
+            ct.accent.clone_from(&pt.accent);
+        }
         if ct.accent_hover.is_none() {
             ct.accent_hover.clone_from(&pt.accent_hover);
+        }
+        if ct.success.is_none() {
+            ct.success.clone_from(&pt.success);
+        }
+        if ct.warning.is_none() {
+            ct.warning.clone_from(&pt.warning);
         }
         if ct.border_radius.is_none() {
             ct.border_radius = pt.border_radius;
@@ -428,14 +710,32 @@ impl Skin {
         if ct.wallpaper.is_none() {
             ct.wallpaper.clone_from(&pt.wallpaper);
         }
+        if ct.cursor.is_none() {
+            ct.cursor.clone_from(&pt.cursor);
+        }
+        if ct.background_layers.is_none() {
+            ct.background_layers.clone_from(&pt.background_layers);
+        }
+        if ct.chrome_layers.is_none() {
+            ct.chrome_layers.clone_from(&pt.chrome_layers);
+        }
         if ct.geometry.is_none() {
             ct.geometry.clone_from(&pt.geometry);
+        }
+        if ct.typography.is_none() {
+            ct.typography.clone_from(&pt.typography);
         }
         if ct.transition.is_none() {
             ct.transition.clone_from(&pt.transition);
         }
         if ct.scrollbar_overrides.is_none() {
             ct.scrollbar_overrides.clone_from(&pt.scrollbar_overrides);
+        }
+        if ct.palette.is_none() {
+            ct.palette.clone_from(&pt.palette);
+        }
+        if ct.boot.is_none() {
+            ct.boot.clone_from(&pt.boot);
         }
         // Merge collection fields: only fill if child has none.
         if ct.app_themes.is_none() {
@@ -455,6 +755,32 @@ impl Skin {
         for (name, def) in &parent.layout.objects {
             if !self.layout.objects.contains_key(name) {
                 self.layout.objects.insert(name.clone(), def.clone());
+            }
+        }
+
+        // Merge assets: parent images fill in missing child assets so
+        // inherited layout objects keep their textures.
+        for (name, asset) in &parent.assets {
+            if !self.assets.contains_key(name) {
+                self.assets.insert(name.clone(), asset.clone());
+            }
+        }
+
+        // Same for font assets, so an inherited `[typography] font` resolves.
+        for (name, bytes) in &parent.font_assets {
+            if !self.font_assets.contains_key(name) {
+                self.font_assets.insert(name.clone(), bytes.clone());
+            }
+        }
+
+        // Merge UI sounds the same way: the parent's [sounds] table fills
+        // in when the child has none, and parent WAVs back inherited paths.
+        if ct.sounds.is_none() {
+            ct.sounds.clone_from(&pt.sounds);
+        }
+        for (name, bytes) in &parent.sound_assets {
+            if !self.sound_assets.contains_key(name) {
+                self.sound_assets.insert(name.clone(), bytes.clone());
             }
         }
     }
@@ -1000,6 +1326,112 @@ another_unknown = 42
 "#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
         assert_eq!(skin.manifest.name, "test");
+        // Unknown keys parse fine but are recorded as schema warnings.
+        assert!(
+            skin.schema_warnings
+                .iter()
+                .any(|w| w.contains("skin.toml") && w.contains("future_field")),
+            "missing schema warning: {:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn unknown_theme_keys_are_recorded() {
+        let theme = r##"
+background = "#000000"
+not_a_real_field = true
+
+[wm_theme]
+titlebar_height = 20
+close_button_colour = "#FF0000"
+
+[transition]
+bogus_ms = 300
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let has = |s: &str| skin.schema_warnings.iter().any(|w| w.contains(s));
+        assert!(has("not_a_real_field"), "{:?}", skin.schema_warnings);
+        assert!(
+            has("wm_theme.close_button_colour"),
+            "{:?}",
+            skin.schema_warnings
+        );
+        assert!(has("transition.bogus_ms"), "{:?}", skin.schema_warnings);
+        // Warnings also flow through validate().
+        assert!(skin.validate().iter().any(|w| w.contains("bogus_ms")));
+    }
+
+    #[test]
+    fn transition_ms_converts_to_frames() {
+        let theme = r#"
+[transition]
+fade_ms = 300
+slide_ms = 400
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        assert_eq!(skin.features.transition_fade_frames, Some(18));
+        assert_eq!(skin.features.transition_slide_frames, Some(24));
+    }
+
+    #[test]
+    fn explicit_frames_beat_transition_ms() {
+        let features = r#"
+transition_fade_frames = 5
+"#;
+        let theme = r#"
+[transition]
+fade_ms = 1000
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, features, theme, "").unwrap();
+        assert_eq!(skin.features.transition_fade_frames, Some(5));
+    }
+
+    #[test]
+    fn bar_text_color_fallback() {
+        let theme = r##"
+[bar_overrides]
+text_color = "#123456"
+clock_color = "#654321"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        // Specific color wins; unset elements fall back to text_color.
+        assert_eq!(
+            at.bar.clock_color,
+            oasis_types::backend::Color::rgb(0x65, 0x43, 0x21)
+        );
+        assert_eq!(
+            at.bar.version_color,
+            oasis_types::backend::Color::rgb(0x12, 0x34, 0x56)
+        );
+        assert_eq!(
+            at.bar.url_color,
+            oasis_types::backend::Color::rgb(0x12, 0x34, 0x56)
+        );
+    }
+
+    #[test]
+    fn all_shipped_skins_lint_clean() {
+        let mut report = String::new();
+        for name in crate::builtin::builtin_names() {
+            let skin = crate::builtin::load_builtin(name).unwrap();
+            for w in &skin.schema_warnings {
+                report.push_str(&format!("builtin '{name}': {w}\n"));
+            }
+        }
+        for name in crate::builtin::generated::GENERATED_SKIN_NAMES {
+            let skin = crate::builtin::generated::load_generated_skin(name)
+                .unwrap()
+                .unwrap();
+            for w in &skin.schema_warnings {
+                report.push_str(&format!("generated '{name}': {w}\n"));
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "shipped skins have schema warnings:\n{report}"
+        );
     }
 
     #[test]
@@ -1366,6 +1798,32 @@ h = 50
     }
 
     #[test]
+    fn validate_low_contrast_theme_warns() {
+        // Contrast failures surface as advisory warnings with the
+        // computed ratio in the message.
+        let theme_toml = "background = \"#808080\"\ntext = \"#909090\"\n";
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        let w = warnings
+            .iter()
+            .find(|w| w.starts_with("contrast: text on background"))
+            .unwrap_or_else(|| panic!("missing contrast warning: {warnings:?}"));
+        assert!(w.contains(":1"), "ratio missing from message: {w}");
+        assert!(w.contains("4.5:1"), "threshold missing from message: {w}");
+    }
+
+    #[test]
+    fn validate_all_builtin_skins_contrast_lint_runs() {
+        // The contrast lint must never panic; warnings are fine
+        // (stylized skins like corrupted/vaporwave may fail on purpose).
+        for name in crate::builtin::builtin_names() {
+            let skin = crate::builtin::load_builtin(name)
+                .unwrap_or_else(|e| panic!("builtin '{name}' failed to load: {e}"));
+            let _warnings = skin.validate();
+        }
+    }
+
+    #[test]
     fn validate_empty_name() {
         let manifest = r#"name = """#;
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
@@ -1429,6 +1887,80 @@ h = 50
     }
 
     #[test]
+    fn validate_chrome_layer_unsupported_kind() {
+        let theme_toml = r#"
+[[chrome_layers]]
+kind = "image"
+source = "assets/x.png"
+
+[[chrome_layers]]
+kind = "crosshair"
+size = 12
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("chrome_layers[0]") && w.contains("image")),
+            "missing chrome layer kind warning: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("chrome_layers[1]")),
+            "vector kind should not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_widget_states_accepts_known_slots() {
+        let theme_toml = r##"
+[widget_states.button]
+hover_bg = "#656565"
+
+[widget_states.slider]
+track = "#101018"
+fill = "#FF8C1E"
+thumb = "#F0F0E8"
+
+[widget_states.menu]
+bg = "#2A2A30"
+hover_bg = "#F5820F"
+separator = "#55555C"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            !warnings.iter().any(|w| w.contains("widget_states")),
+            "known widget_states slots should not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_widget_states_flags_typos() {
+        let theme_toml = r##"
+[widget_states.slider]
+trak = "#101018"
+
+[widget_states.menus]
+bg = "#2A2A30"
+"##;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme_toml, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("widget_states.slider.trak") && w.contains("unknown state")),
+            "missing typo'd slot warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("widget_states.menus") && w.contains("unknown widget")),
+            "missing unknown widget warning: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn validate_zero_screen_dimensions() {
         let manifest = "name = \"zero\"\nscreen_width = 0\nscreen_height = 0\n";
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
@@ -1441,6 +1973,315 @@ h = 50
             warnings.iter().any(|w| w.contains("screen_height is 0")),
             "missing zero height warning: {warnings:?}"
         );
+    }
+
+    // -- Asset tests --
+
+    fn png_bytes() -> Vec<u8> {
+        crate::assets::tests::encode_png(8, 8, png::ColorType::Rgba)
+    }
+
+    #[test]
+    fn add_asset_png_registers_asset() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let asset = &skin.assets["assets/logo.png"];
+        assert_eq!(asset.width, 8);
+        assert_eq!(asset.height, 8);
+    }
+
+    #[test]
+    fn add_asset_png_invalid_bytes_errors() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let err = skin.add_asset_png("assets/bad.png", b"nope").unwrap_err();
+        assert!(format!("{err}").contains("assets/bad.png"));
+    }
+
+    #[test]
+    fn from_directory_loads_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("skin.toml"), MANIFEST).unwrap();
+        std::fs::write(dir.path().join("layout.toml"), LAYOUT).unwrap();
+        std::fs::write(dir.path().join("features.toml"), FEATURES).unwrap();
+        let assets = dir.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        std::fs::write(assets.join("logo.png"), png_bytes()).unwrap();
+        std::fs::write(assets.join("broken.png"), b"not a png").unwrap();
+        std::fs::write(assets.join("readme.txt"), b"ignored").unwrap();
+
+        let skin = Skin::from_directory(dir.path()).unwrap();
+        assert!(skin.assets.contains_key("assets/logo.png"));
+        assert!(!skin.assets.contains_key("assets/readme.txt"));
+        // Broken PNG is skipped with a warning, not a hard failure.
+        assert!(!skin.assets.contains_key("assets/broken.png"));
+        assert!(
+            skin.schema_warnings
+                .iter()
+                .any(|w| w.contains("assets/broken.png")),
+            "{:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn layout_texture_field_parses() {
+        let layout = r#"
+[bar_top]
+x = 0
+y = 0
+w = 480
+h = 24
+texture = "assets/bar_top.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(
+            skin.layout.objects["bar_top"].texture.as_deref(),
+            Some("assets/bar_top.png")
+        );
+    }
+
+    #[test]
+    fn upload_layout_textures_attaches_and_sizes() {
+        let layout = r#"
+[logo]
+x = 10
+y = 20
+texture = "assets/logo.png"
+
+[bar]
+x = 0
+y = 0
+w = 480
+h = 24
+texture = "assets/logo.png"
+
+[plain]
+x = 0
+y = 0
+w = 10
+h = 10
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert_eq!(ids.len(), 2);
+        // No explicit w/h -> asset native dims.
+        let logo = sdi.get("logo").unwrap();
+        assert!(logo.texture.is_some());
+        assert_eq!((logo.w, logo.h), (8, 8));
+        // Explicit w/h wins over asset dims.
+        let bar = sdi.get("bar").unwrap();
+        assert!(bar.texture.is_some());
+        assert_eq!((bar.w, bar.h), (480, 24));
+        assert!(sdi.get("plain").unwrap().texture.is_none());
+    }
+
+    #[test]
+    fn upload_layout_nine_patch_attaches_slices() {
+        let layout = r#"
+[panel]
+x = 0
+y = 0
+w = 200
+h = 60
+nine_patch = { image = "assets/logo.png", insets = [2, 3, 2, 3] }
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert_eq!(ids.len(), 1);
+        let panel = sdi.get("panel").unwrap();
+        assert!(panel.texture.is_some());
+        let slices = panel.nine_patch.expect("nine_patch slices attached");
+        assert_eq!((slices.tex_width, slices.tex_height), (8, 8));
+        assert_eq!(
+            (slices.left, slices.top, slices.right, slices.bottom),
+            (2, 3, 2, 3)
+        );
+        assert_eq!((panel.w, panel.h), (200, 60));
+    }
+
+    #[test]
+    fn validate_nine_patch_missing_asset_and_bad_insets() {
+        let layout = r#"
+[panel]
+x = 0
+y = 0
+w = 100
+h = 40
+nine_patch = { image = "assets/missing.png", insets = [4, 4, 4, 4] }
+
+[chunky]
+x = 0
+y = 0
+w = 100
+h = 40
+nine_patch = { image = "assets/logo.png", insets = [5, 5, 5, 5] }
+"#;
+        let mut skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        // logo.png is 8x8, so 5+5 insets cannot fit.
+        skin.add_asset_png("assets/logo.png", &png_bytes()).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("panel") && w.contains("missing asset")),
+            "missing nine_patch asset warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("chunky") && w.contains("don't fit")),
+            "missing insets warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn upload_layout_textures_missing_asset_skipped() {
+        let layout = r#"
+[ghost]
+x = 0
+y = 0
+texture = "assets/missing.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let ids = skin.upload_layout_textures(&mut sdi, &mut backend);
+        assert!(ids.is_empty());
+        assert!(sdi.get("ghost").unwrap().texture.is_none());
+    }
+
+    #[test]
+    fn validate_missing_texture_asset() {
+        let layout = r#"
+[ghost]
+x = 0
+y = 0
+texture = "assets/missing.png"
+"#;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("ghost") && w.contains("assets/missing.png")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_image_wallpaper_sources() {
+        let theme = r#"
+[wallpaper]
+style = "image"
+fit = "sideways"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings.iter().any(|w| w.contains("no source set")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown fit")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_image_layer_sources() {
+        let theme = r#"
+[[background_layers]]
+kind = "image"
+source = "assets/nope.png"
+
+[[background_layers]]
+kind = "image"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("background_layers[0]") && w.contains("assets/nope.png")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("background_layers[1]") && w.contains("no source set")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_non_pot_asset_warns() {
+        let mut skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let bytes = crate::assets::tests::encode_png(10, 8, png::ColorType::Rgba);
+        skin.add_asset_png("assets/odd.png", &bytes).unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("assets/odd.png") && w.contains("power-of-two")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn image_layer_theme_derivation() {
+        let theme = r#"
+[[background_layers]]
+kind = "image"
+source = "assets/logo.png"
+alpha = 128
+
+[background_layers.position]
+anchor = "bottom_right"
+offset_x = -0.05
+
+[background_layers.animation]
+pulse_speed = 0.5
+
+[[background_layers]]
+kind = "grid"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        // Image layers are split out; the grid stays a vector layer.
+        assert_eq!(at.image_layers.len(), 1);
+        assert_eq!(at.background_layers.len(), 1);
+        let layer = &at.image_layers[0];
+        assert_eq!(layer.source, "assets/logo.png");
+        assert_eq!(layer.alpha, 128);
+        assert!((layer.animation.pulse_speed - 0.5).abs() < f32::EPSILON);
+        assert!(matches!(
+            layer.position.anchor,
+            oasis_vector::background::Anchor::BottomRight
+        ));
+    }
+
+    #[test]
+    fn wallpaper_image_theme_derivation() {
+        let theme = r#"
+[wallpaper]
+style = "image"
+source = "assets/wall.png"
+fit = "tile"
+"#;
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, theme, "").unwrap();
+        let at = crate::ActiveTheme::from_skin(&skin.theme);
+        assert_eq!(at.wallpaper.style, "image");
+        assert_eq!(at.wallpaper.source.as_deref(), Some("assets/wall.png"));
+        assert_eq!(at.wallpaper.fit, "tile");
     }
 
     #[test]
@@ -1458,5 +2299,136 @@ h = 50
             !warnings.iter().any(|w| w.contains("accent_hover")),
             "unexpected accent_hover warning: {warnings:?}"
         );
+    }
+
+    // -- Typography font asset tests --
+
+    const FONT_THEME: &str = r#"
+[typography]
+font = "assets/skin.ttf"
+"#;
+
+    /// The oasis-browser web-font test fixture: a tiny but valid TTF.
+    const TEST_TTF: &[u8] = include_bytes!("../../../oasis-browser/test_data/minimal.ttf");
+
+    #[test]
+    fn typography_font_key_parses_without_warning() {
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        assert_eq!(
+            skin.theme
+                .typography
+                .as_ref()
+                .and_then(|t| t.font.as_deref()),
+            Some("assets/skin.ttf")
+        );
+        // The key is a real schema field, not an unknown-key warning.
+        assert!(
+            !skin.schema_warnings.iter().any(|w| w.contains("font")),
+            "{:?}",
+            skin.schema_warnings
+        );
+    }
+
+    #[test]
+    fn active_font_bytes_resolves_registered_font() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        assert!(skin.active_font_bytes().is_none(), "font not loaded yet");
+        skin.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+        assert_eq!(skin.active_font_bytes(), Some(TEST_TTF));
+    }
+
+    #[test]
+    fn active_font_bytes_none_without_typography() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        assert!(skin.active_font_bytes().is_none());
+    }
+
+    #[test]
+    fn validate_missing_font_asset_warns() {
+        let skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("missing")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_registered_font_ok() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        skin.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+        let warnings = skin.validate();
+        assert!(
+            !warnings.iter().any(|w| w.contains("typography.font")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_font_over_budget_warns() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        // Valid header so the (feature-gated) parse check isn't what fires,
+        // padded past the budget.
+        let mut bytes = TEST_TTF.to_vec();
+        bytes.resize(crate::assets::FONT_BUDGET_BYTES + 1, 0);
+        skin.add_asset_font("assets/skin.ttf", bytes);
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("budget")),
+            "{warnings:?}"
+        );
+    }
+
+    #[cfg(feature = "ttf")]
+    #[test]
+    fn validate_unparseable_font_warns() {
+        let mut skin = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        skin.add_asset_font("assets/skin.ttf", b"not a font at all".to_vec());
+        let warnings = skin.validate();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("typography.font") && w.contains("failed to parse")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn from_directory_loads_font_assets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path();
+        std::fs::write(path.join("skin.toml"), MANIFEST).expect("skin.toml");
+        std::fs::write(path.join("layout.toml"), LAYOUT).expect("layout.toml");
+        std::fs::write(path.join("features.toml"), FEATURES).expect("features.toml");
+        std::fs::write(path.join("theme.toml"), FONT_THEME).expect("theme.toml");
+        std::fs::create_dir(path.join("assets")).expect("assets dir");
+        std::fs::write(path.join("assets/skin.ttf"), TEST_TTF).expect("font file");
+
+        let skin = Skin::from_directory(path).expect("skin loads");
+        assert_eq!(skin.active_font_bytes(), Some(TEST_TTF));
+        assert!(
+            !skin
+                .validate()
+                .iter()
+                .any(|w| w.contains("typography.font")),
+            "{:?}",
+            skin.validate()
+        );
+    }
+
+    #[test]
+    fn merge_theme_fills_font_assets() {
+        let mut parent = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, FONT_THEME, "").unwrap();
+        parent.add_asset_font("assets/skin.ttf", TEST_TTF.to_vec());
+
+        let mut child = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        child.merge_theme_from(&parent);
+        // Child inherits both the typography table and the font bytes it
+        // references.
+        assert_eq!(child.active_font_bytes(), Some(TEST_TTF));
     }
 }

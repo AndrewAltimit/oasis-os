@@ -28,8 +28,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone PPSSPP with submodules
-RUN git clone --depth=1 --recurse-submodules --shallow-submodules \
+# Clone PPSSPP with submodules, pinned to a release tag.
+#
+# This must stay pinned: PPSSPP master has migrated to SDL3, which Debian
+# bookworm does not package, so an unpinned clone fails at cmake with
+# "SDL3 not found". v1.20.4 is the last SDL2-based release and builds against
+# the libsdl2-dev pulled in above. Bumping this past the SDL3 migration means
+# moving the base image to a release that ships libsdl3-dev.
+ARG PPSSPP_REF=v1.20.4
+RUN git clone --depth=1 --branch "${PPSSPP_REF}" --recurse-submodules --shallow-submodules \
     https://github.com/hrydgard/ppsspp.git /ppsspp
 
 # Apply patches (if any exist in the patches directory)

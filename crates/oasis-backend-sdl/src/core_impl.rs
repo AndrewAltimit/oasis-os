@@ -21,9 +21,9 @@ impl SdiCore for SdlBackend {
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
-        self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
-            color.r, color.g, color.b, color.a,
-        ));
+        // Goes through set_color so the cached draw-color state stays
+        // coherent (clear itself ignores the blend mode).
+        self.set_color(color);
         self.canvas.clear();
         Ok(())
     }
@@ -32,8 +32,14 @@ impl SdiCore for SdlBackend {
         let (tx, ty) = self.translate(x, y);
         let texture = self
             .textures
-            .get(&tex.0)
+            .get_mut(&tex.0)
             .ok_or_else(|| texture_not_found(tex.0))?;
+        crate::blitting::ensure_texture_mod(
+            &mut self.texture_mods,
+            tex.0,
+            texture,
+            crate::blitting::NEUTRAL_MOD,
+        );
         self.canvas
             .copy(texture, None, frect(tx, ty, w, h))
             .backend_err()?;
@@ -92,6 +98,7 @@ impl SdiCore for SdlBackend {
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
         self.textures.remove(&tex.0);
+        self.texture_mods.remove(&tex.0);
         Ok(())
     }
 
@@ -117,6 +124,22 @@ impl SdiCore for SdlBackend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        // Mirror the draw path's per-character font choice (TTF glyph when
+        // the skin font has one, bitmap fallback otherwise) with the same
+        // whole-pixel advances, so measurement and rendering always agree.
+        if let Some(ttf) = &self.ttf_font {
+            let px = font_size.max(1) as f32;
+            return text
+                .chars()
+                .map(|ch| {
+                    if ttf.has_glyph(ch) {
+                        ttf.advance(ch, px).max(0) as u32
+                    } else {
+                        oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as u32
+                    }
+                })
+                .sum();
+        }
         oasis_core::backend::bitmap_measure_text(text, font_size)
     }
 
@@ -147,5 +170,69 @@ impl SdiCore for SdlBackend {
     fn shutdown(&mut self) -> Result<()> {
         log::info!("SDL3 backend shut down");
         Ok(())
+    }
+}
+
+// -------------------------------------------------------------------
+// Inherent texture helpers (not part of SdiCore)
+// -------------------------------------------------------------------
+
+impl SdlBackend {
+    /// Update the pixels of an existing streaming texture in place.
+    ///
+    /// Reuses the texture created by `load_texture` instead of the
+    /// destroy + create churn (GPU texture allocation, HashMap
+    /// insert/remove, unbounded id growth) that per-frame callers like
+    /// the shader wallpaper bridge would otherwise incur. The texture
+    /// dimensions must match `width` x `height`; a mismatch returns an
+    /// error so the caller can destroy and re-create at the new size.
+    pub fn update_texture(
+        &mut self,
+        tex: TextureId,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Result<()> {
+        validate_rgba_data(width, height, rgba_data)?;
+
+        let texture = self
+            .textures
+            .get_mut(&tex.0)
+            .ok_or_else(|| texture_not_found(tex.0))?;
+
+        let query = texture.query();
+        if query.width != width || query.height != height {
+            return Err(oasis_core::error::OasisError::Backend(
+                format!(
+                    "update_texture: size mismatch (texture is {}x{}, data is {width}x{height})",
+                    query.width, query.height
+                )
+                .into(),
+            ));
+        }
+
+        texture
+            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            })
+            .backend_err()?;
+
+        Ok(())
+    }
+
+    /// Show or hide the host OS mouse pointer over the window.
+    ///
+    /// Skins that enable `features.software_cursor` draw their own themed
+    /// cursor, so the host pointer is hidden to avoid a double cursor.
+    pub fn set_host_cursor_visible(&mut self, visible: bool) {
+        // SAFETY: SDL_ShowCursor/SDL_HideCursor are global SDL calls with
+        // no preconditions beyond SDL_Init, which ran in `new()`.
+        unsafe {
+            if visible {
+                sdl3::sys::mouse::SDL_ShowCursor();
+            } else {
+                sdl3::sys::mouse::SDL_HideCursor();
+            }
+        }
     }
 }

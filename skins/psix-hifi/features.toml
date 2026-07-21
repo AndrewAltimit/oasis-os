@@ -1,0 +1,36 @@
+# psix-hifi features -- PSIX-style desktop metaphor, tuned for fidelity.
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 3
+# Sparse PSIX left column: ONE column, three icons per page. A single
+# column keeps each app label on its own row so wide names (e.g. "Package
+# Manager") never collide horizontally with a neighbour, exactly like the
+# reference shell. 8 apps -> 3 pages (3 + 3 + 2).
+icons_per_page = 3
+grid_cols = 5
+grid_rows = 3
+# No START pill: the reference footer leads with the URL plate instead.
+start_menu = false
+show_tabs = true
+# PSIX puts the clock TOP-RIGHT (not in the dock). Keeping it out of the
+# footer also frees ~120px so the media dock's transport + progress +
+# volume + tab strip lay out without overlapping.
+clock_in_bottombar = false
+
+# Desktop icons: PSIX sparse LEFT-column flow (icons hug the left edge,
+# left-aligned, not the centered phone grid). A single column matches the
+# reference and gives every label its own row; drag & drop with per-skin
+# persistence.
+icon_layout = "column"
+free_icon_cols = 1
+snap_to_grid = true
+launch_on_single_click = false
+software_cursor = true
+
+# Bottom bar becomes the PSIX media dock: transport pills + progress +
+# volume + the AUDIO/VIDEO/IMAGE/FILE tab strip (forced on in dock mode).
+bottombar_style = "media_dock"
+show_media_tabs = true

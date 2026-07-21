@@ -10,17 +10,20 @@ use serde::Deserialize;
 
 use oasis_types::backend::Color;
 
-pub use conversion::{ContrastWarning, contrast_ratio};
+pub use conversion::{ContrastWarning, composite_over, contrast_ratio};
 pub use overrides::resolve_easing;
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
-    BarOverrides, BrowserOverrides, GeometryOverrides, GradientPreset, IconOverrides,
-    LayerAnimationConfig, LayerPositionConfig, OskOverrides, ScrollbarOverrides,
-    StartMenuOverrides, TransitionOverrides, WallpaperConfig, WmThemeOverrides,
+    BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, Density, ElevationLayerConfig,
+    ElevationOverrides, GeometryOverrides, GradientPreset, IconOverrides, LayerAnimationConfig,
+    LayerPositionConfig, NinePatchDef, OskOverrides, PaletteOverrides, ScrollbarOverrides,
+    StartMenuOverrides, TransitionOverrides, TypographyOverrides, WallpaperConfig,
+    WmThemeOverrides,
 };
 
 /// Color scheme for a skin.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct SkinTheme {
     /// Main background color.
     #[serde(default = "default_bg")]
@@ -52,64 +55,134 @@ pub struct SkinTheme {
 
     // -- Extended visual fields (optional, for modern rendering) --
     /// Surface color override (default: derived from background).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<String>,
-    /// Accent hover color override (default: derived from primary).
-    #[serde(default)]
+    /// Accent color override (default: same as primary). Drives the UI
+    /// accent family (hover/pressed/subtle) when set, letting a skin use
+    /// a highlight color distinct from its primary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// Accent hover color override (default: derived from the accent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_hover: Option<String>,
+    /// Success/positive color override (toasts, status badges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    /// Warning/caution color override (toasts, status badges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     /// Default border radius for UI elements (pixels).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_radius: Option<u16>,
     /// Shadow intensity (0 = none, 1 = subtle, 2 = medium, 3 = heavy).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_intensity: Option<u8>,
     /// Whether gradient fills are enabled for this skin.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient_enabled: Option<bool>,
 
+    /// Global accessibility text-size multiplier applied to the resolved UI
+    /// font-size ladder and text metrics. `1.0` = no change (pixel-identical);
+    /// values above `1.0` enlarge all text. Clamped to `0.5..=3.0` when applied.
+    ///
+    /// This is orthogonal to `geometry.font_scale`: it scales whatever the
+    /// resolved font sizes are, so the two compose multiplicatively.
+    #[serde(default = "default_text_scale")]
+    pub text_scale: f32,
+
+    /// UI density preset applied to spacing tokens only: `"compact"`,
+    /// `"comfortable"` (default), or `"spacious"`. Unset / unknown values are
+    /// treated as `comfortable`, which is an exact pixel-identity no-op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<String>,
+
+    /// Semantic elevation/shadow ladder overrides (`[elevation]` table).
+    ///
+    /// Levels left unset fall back to the built-in shadow ladder, so an empty
+    /// table renders shadows byte-for-byte identically to today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation: Option<ElevationOverrides>,
+
     /// Whether the WM is visually themed by this skin.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wm_theme: Option<WmThemeOverrides>,
 
     /// Per-element color overrides for status/bottom bars.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_overrides: Option<BarOverrides>,
 
     /// Per-element color overrides for dashboard icons.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_overrides: Option<IconOverrides>,
 
     /// Per-element color overrides for browser chrome.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_overrides: Option<BrowserOverrides>,
 
     /// Per-element color overrides for app screens.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_overrides: Option<AppOverrides>,
 
     /// Per-element color overrides for the on-screen keyboard.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osk_overrides: Option<OskOverrides>,
 
     /// Per-element color overrides for the start menu popup.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_menu_overrides: Option<StartMenuOverrides>,
 
     /// Wallpaper generation configuration.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<WallpaperConfig>,
 
+    /// Software mouse cursor theming (texture + hotspot + procedural
+    /// arrow fill/outline colors).
+    ///
+    /// ```toml
+    /// [cursor]
+    /// fill = "#FFFFFF"
+    /// outline = "#000000"
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorConfig>,
+
     /// Geometry overrides (bar heights, icon sizes, font sizes).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<GeometryOverrides>,
 
+    /// Typography scale for the widget toolkit (font-size ladder + spacing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typography: Option<TypographyOverrides>,
+
     /// Transition effect overrides.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionOverrides>,
 
     /// Per-element overrides for scrollbar appearance.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
+
+    /// 16-slot ANSI terminal palette overrides.
+    ///
+    /// ```toml
+    /// [palette]
+    /// red = "#FF5555"
+    /// bright_green = "#69FF94"
+    /// ```
+    ///
+    /// Unset slots derive from the skin's base colors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palette: Option<PaletteOverrides>,
+
+    /// Boot splash color overrides.
+    ///
+    /// ```toml
+    /// [boot]
+    /// banner_border = "#AA88FF"
+    /// sky_stops = ["#02001A", "#050044", "#150088", "#5500CC", "#AA55FF", "#FFFFFF"]
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<BootOverrides>,
 
     /// Background decoration layers for the dashboard.
     ///
@@ -119,11 +192,27 @@ pub struct SkinTheme {
     /// spacing = 30
     /// color = "#FFFFFF12"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_layers: Option<Vec<BackgroundLayerConfig>>,
 
+    /// Chrome decoration layers rendered in the overlay pass — on top of
+    /// bars, tabs, and windows — for procedurally shaped chrome accents
+    /// (notch lines, corner brackets, HUD reticles) without shipping art.
+    /// Same schema as `background_layers`; `"image"` and `"shader"` kinds
+    /// are not supported here.
+    ///
+    /// ```toml
+    /// [[chrome_layers]]
+    /// kind = "crosshair"
+    /// size = 12
+    /// color = "#FFFFFF30"
+    /// position = { anchor = "top_right", offset_x = -0.05, offset_y = 0.04 }
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrome_layers: Option<Vec<BackgroundLayerConfig>>,
+
     /// Performance settings for background layers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_performance: Option<BackgroundPerformanceConfig>,
 
     /// Per-app color overrides keyed by app name.
@@ -137,7 +226,7 @@ pub struct SkinTheme {
     /// bg = "#0A1628"
     /// grid_line = "#1A3A5C"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_themes:
         Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 
@@ -148,7 +237,7 @@ pub struct SkinTheme {
     /// from = "#0066FF"
     /// to = "#0044AA"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradients: Option<std::collections::HashMap<String, GradientPreset>>,
 
     /// Named animation timing presets.
@@ -158,7 +247,7 @@ pub struct SkinTheme {
     /// duration_ms = 100
     /// easing = "ease_out_quad"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animations: Option<std::collections::HashMap<String, AnimationPreset>>,
 
     /// Per-widget state color overrides.
@@ -171,9 +260,76 @@ pub struct SkinTheme {
     /// disabled_bg = "#3A3A3A"
     /// disabled_text = "#555555"
     /// ```
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget_states:
         Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
+
+    /// UI sound theme: WAV assets played on interface events.
+    ///
+    /// ```toml
+    /// [sounds]
+    /// click = "assets/click.wav"
+    /// nav = "assets/nav.wav"
+    /// volume = 0.8
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sounds: Option<SkinSounds>,
+}
+
+/// UI sound theme (`[sounds]` in theme.toml): each field references a WAV
+/// asset by skin-relative path (e.g. `"assets/click.wav"`). Omitted events
+/// stay silent; a skin without a `[sounds]` table is fully silent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+pub struct SkinSounds {
+    /// Button / interactive element click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<String>,
+    /// App launch / window open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<String>,
+    /// App / window close.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<String>,
+    /// Error feedback (error toasts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Non-error toast notification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toast: Option<String>,
+    /// Cursor / d-pad navigation between icons (rate-limited).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav: Option<String>,
+    /// Master volume for UI sounds, 0.0–1.0 (default 1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+}
+
+impl SkinSounds {
+    /// Iterate the configured `(event, asset_path)` pairs.
+    pub fn entries(&self) -> [(&'static str, Option<&str>); 6] {
+        [
+            ("click", self.click.as_deref()),
+            ("open", self.open.as_deref()),
+            ("close", self.close.as_deref()),
+            ("error", self.error.as_deref()),
+            ("toast", self.toast.as_deref()),
+            ("nav", self.nav.as_deref()),
+        ]
+    }
+
+    /// The asset path configured for a named event, if any.
+    pub fn path_for(&self, event: &str) -> Option<&str> {
+        self.entries()
+            .into_iter()
+            .find(|(name, _)| *name == event)
+            .and_then(|(_, path)| path)
+    }
+
+    /// Master volume clamped to 0.0–1.0 (default 1.0).
+    pub fn effective_volume(&self) -> f32 {
+        self.volume.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
 }
 
 fn default_bg() -> String {
@@ -203,6 +359,9 @@ fn default_output() -> String {
 fn default_error() -> String {
     "#FF4444".to_string()
 }
+fn default_text_scale() -> f32 {
+    1.0
+}
 
 impl Default for SkinTheme {
     fn default() -> Self {
@@ -217,10 +376,16 @@ impl Default for SkinTheme {
             output: default_output(),
             error: default_error(),
             surface: None,
+            accent: None,
             accent_hover: None,
+            success: None,
+            warning: None,
             border_radius: None,
             shadow_intensity: None,
             gradient_enabled: None,
+            text_scale: default_text_scale(),
+            density: None,
+            elevation: None,
             wm_theme: None,
             bar_overrides: None,
             icon_overrides: None,
@@ -229,20 +394,32 @@ impl Default for SkinTheme {
             osk_overrides: None,
             start_menu_overrides: None,
             wallpaper: None,
+            cursor: None,
             geometry: None,
+            typography: None,
             transition: None,
             scrollbar_overrides: None,
+            palette: None,
+            boot: None,
             background_layers: None,
+            chrome_layers: None,
             background_performance: None,
             app_themes: None,
             gradients: None,
             animations: None,
             widget_states: None,
+            sounds: None,
         }
     }
 }
 
 impl SkinTheme {
+    /// Parse a theme from a TOML string (the body of a `theme.toml`).
+    pub fn from_toml_str(toml_str: &str) -> oasis_types::error::Result<Self> {
+        toml::from_str(toml_str)
+            .map_err(|e| oasis_types::error::OasisError::Config(format!("theme: {e}").into()))
+    }
+
     /// Parse the background color string to a `Color`.
     pub fn background_color(&self) -> Color {
         parse_hex_color(&self.background).unwrap_or(Color::BLACK)
@@ -281,6 +458,43 @@ impl SkinTheme {
     /// Parse the dim_text color string to a `Color`.
     pub fn dim_text_color(&self) -> Color {
         parse_hex_color(&self.dim_text).unwrap_or(Color::rgb(128, 128, 128))
+    }
+
+    /// Parse the status_bar color string to a `Color`.
+    pub fn status_bar_color(&self) -> Color {
+        parse_hex_color(&self.status_bar).unwrap_or(Color::rgb(40, 60, 90))
+    }
+
+    /// The resolved UI density preset (spacing multiplier). Defaults to
+    /// `comfortable`, an exact pixel-identity no-op.
+    pub fn density_preset(&self) -> Density {
+        Density::parse(self.density.as_deref())
+    }
+
+    /// Clamped global accessibility text-size multiplier. `1.0` = no change.
+    ///
+    /// The raw `text_scale` field is clamped to `0.5..=3.0` so a malformed
+    /// skin cannot shrink text to nothing or blow it up unboundedly.
+    pub fn text_scale_factor(&self) -> f32 {
+        self.text_scale.clamp(0.5, 3.0)
+    }
+
+    /// Scale a base font size by the accessibility `text_scale`, rounded and
+    /// clamped to at least 1px. With `text_scale == 1.0` the input is returned
+    /// unchanged (pixel-identical to pre-`text_scale` behavior).
+    pub fn scale_font(&self, base: u16) -> u16 {
+        (f32::from(base) * self.text_scale_factor())
+            .round()
+            .max(1.0) as u16
+    }
+
+    /// Build the semantic elevation ladder from the `[elevation]` table, or a
+    /// default ladder (built-in shadows) when the table is absent.
+    pub fn elevation_ladder(&self) -> oasis_types::shadow::ElevationLadder {
+        self.elevation
+            .as_ref()
+            .map(ElevationOverrides::to_ladder)
+            .unwrap_or_default()
     }
 }
 
@@ -351,6 +565,28 @@ button_size = 20
     }
 
     #[test]
+    fn wm_theme_nine_patch_overrides() {
+        let toml = r##"
+[wm_theme]
+titlebar_nine_patch = { image = "assets/tb.png", insets = [4, 4, 4, 4] }
+frame_nine_patch = { image = "assets/frame.png", insets = [6, 6, 6, 6] }
+"##;
+        let theme: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = theme.build_wm_theme();
+        assert_eq!(
+            wm.titlebar_nine_patch,
+            Some(("assets/tb.png".to_string(), [4, 4, 4, 4]))
+        );
+        assert_eq!(
+            wm.frame_nine_patch,
+            Some(("assets/frame.png".to_string(), [6, 6, 6, 6]))
+        );
+        // Runtime patches are resolved by the shell, never at parse time.
+        assert!(wm.titlebar_patch.is_none());
+        assert!(wm.frame_patch.is_none());
+    }
+
+    #[test]
     fn to_ui_theme_derives_from_base_colors() {
         let skin = SkinTheme::default();
         let ui = skin.to_ui_theme();
@@ -389,6 +625,49 @@ gradient_enabled = true
         let skin = SkinTheme::default();
         let ui = skin.to_ui_theme();
         assert_eq!(ui.accent, skin.primary_color());
+    }
+
+    #[test]
+    fn to_ui_theme_accent_override() {
+        let toml = r##"
+primary = "#FF71CE"
+accent = "#01CDFE"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let ui = skin.to_ui_theme();
+        // Accent family derives from the explicit accent, not primary.
+        assert_eq!(ui.accent, Color::rgb(0x01, 0xCD, 0xFE));
+        assert_ne!(ui.accent, skin.primary_color());
+        assert_eq!(ui.accent_subtle.r, 0x01);
+        assert_eq!(ui.info, ui.accent);
+    }
+
+    #[test]
+    fn build_wm_theme_titlebar_text_active_inactive() {
+        let toml = r##"
+[wm_theme]
+titlebar_text_active = "#FFFFFF"
+titlebar_text_inactive = "#888888"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = skin.build_wm_theme();
+        assert_eq!(wm.titlebar_text_color, Color::rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(
+            wm.titlebar_text_inactive_color,
+            Color::rgb(0x88, 0x88, 0x88)
+        );
+    }
+
+    #[test]
+    fn build_wm_theme_inactive_text_defaults_to_active() {
+        let toml = r##"
+[wm_theme]
+titlebar_text = "#FF00FF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let wm = skin.build_wm_theme();
+        assert_eq!(wm.titlebar_text_color, Color::rgb(0xFF, 0x00, 0xFF));
+        assert_eq!(wm.titlebar_text_inactive_color, wm.titlebar_text_color);
     }
 
     // -- resolve_easing tests --
@@ -466,6 +745,180 @@ pressed_bg = "#353535"
         let states = skin.widget_states.unwrap();
         let button = &states["button"];
         assert_eq!(button["hover_bg"], "#656565");
+    }
+
+    #[test]
+    fn widget_states_override_ui_theme() {
+        let toml = r##"
+[widget_states.button]
+normal_bg = "#505050"
+hover_bg = "#656565"
+
+[widget_states.toggle]
+track_on = "#FF8C1E"
+thumb = "#101010"
+
+[widget_states.input]
+focus_border = "#00FFAA"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.button_bg, Color::rgb(0x50, 0x50, 0x50));
+        assert_eq!(theme.button_bg_hover, Color::rgb(0x65, 0x65, 0x65));
+        assert_eq!(theme.toggle_track_on, Color::rgb(0xFF, 0x8C, 0x1E));
+        assert_eq!(theme.toggle_thumb, Color::rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.input_border_focus, Color::rgb(0x00, 0xFF, 0xAA));
+        // Slots not overridden keep their derived values.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.button_bg_pressed, plain.button_bg_pressed);
+        assert_eq!(theme.toggle_track_off, plain.toggle_track_off);
+    }
+
+    #[test]
+    fn typography_overrides_ui_theme_scale() {
+        let toml = r##"
+[typography]
+font_size_md = 10
+font_size_lg = 18
+spacing_md = 10
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        let plain = SkinTheme::default().to_ui_theme();
+
+        assert_eq!(theme.font_size_md, 10);
+        assert_eq!(theme.font_size_lg, 18);
+        assert_eq!(theme.spacing_md, 10);
+        // Unset steps keep the historical ladder.
+        assert_eq!(theme.font_size_xs, plain.font_size_xs);
+        assert_eq!(theme.font_size_xxl, plain.font_size_xxl);
+        assert_eq!(theme.spacing_xl, plain.spacing_xl);
+    }
+
+    #[test]
+    fn no_typography_table_is_identical_to_before() {
+        // Every shipped skin predates `[typography]`: the derived scale must be
+        // exactly the values that were hardcoded in the derivation.
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(
+            (
+                theme.font_size_xs,
+                theme.font_size_sm,
+                theme.font_size_md,
+                theme.font_size_lg,
+                theme.font_size_xl,
+                theme.font_size_xxl
+            ),
+            (8, 8, 8, 16, 16, 24)
+        );
+        assert_eq!(
+            (
+                theme.spacing_xs,
+                theme.spacing_sm,
+                theme.spacing_md,
+                theme.spacing_lg,
+                theme.spacing_xl
+            ),
+            (2, 4, 8, 12, 16)
+        );
+    }
+
+    #[test]
+    fn ui_theme_toggle_defaults_derive_from_accent() {
+        let skin = SkinTheme::default();
+        let theme = skin.to_ui_theme();
+        // Without widget_states, the toggle derives from the accent family
+        // exactly as the widget hardcoded before.
+        assert_eq!(theme.toggle_track_off, Color::rgba(255, 255, 255, 10));
+        assert_eq!(theme.toggle_track_on, theme.accent);
+        assert_eq!(theme.toggle_thumb, theme.text_on_accent);
+    }
+
+    #[test]
+    fn ui_theme_slider_defaults_derive_from_legacy_slots() {
+        // Without widget_states, the slider slots equal the fields the
+        // widget used to borrow (input_bg / accent / surface).
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.slider_track, theme.input_bg);
+        assert_eq!(theme.slider_fill, theme.accent);
+        assert_eq!(theme.slider_thumb, theme.surface);
+    }
+
+    #[test]
+    fn ui_theme_menu_defaults_are_win95_grays() {
+        // Without widget_states, the menu bar keeps the Win95 grays that
+        // `MenuStyle::default()` always hardcoded.
+        let theme = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.menu_bg, Color::rgb(240, 240, 240));
+        assert_eq!(theme.menu_border, Color::rgb(180, 180, 180));
+        assert_eq!(theme.menu_text, Color::rgb(30, 30, 30));
+        assert_eq!(theme.menu_hover_bg, Color::rgb(49, 106, 197));
+        assert_eq!(theme.menu_hover_text, Color::rgb(255, 255, 255));
+        assert_eq!(theme.menu_dropdown_bg, Color::rgb(236, 236, 236));
+        assert_eq!(theme.menu_dropdown_border_light, Color::rgb(255, 255, 255));
+        assert_eq!(theme.menu_dropdown_border_dark, Color::rgb(105, 105, 105));
+        assert_eq!(theme.menu_item_text, Color::rgb(20, 20, 20));
+        assert_eq!(theme.menu_disabled_text, Color::rgb(150, 150, 150));
+        assert_eq!(theme.menu_separator, Color::rgb(170, 170, 170));
+    }
+
+    #[test]
+    fn widget_states_slider_overrides_ui_theme() {
+        let toml = r##"
+[widget_states.slider]
+track = "#101018"
+fill = "#FF8C1E"
+thumb = "#F0F0E8"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.slider_track, Color::rgb(0x10, 0x10, 0x18));
+        assert_eq!(theme.slider_fill, Color::rgb(0xFF, 0x8C, 0x1E));
+        assert_eq!(theme.slider_thumb, Color::rgb(0xF0, 0xF0, 0xE8));
+        // Unrelated slots keep their derived values.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(theme.accent, plain.accent);
+        assert_eq!(theme.input_bg, plain.input_bg);
+    }
+
+    #[test]
+    fn widget_states_menu_overrides_ui_theme() {
+        let toml = r##"
+[widget_states.menu]
+bg = "#2A2A30"
+text = "#E0E0E8"
+hover_bg = "#F5820F"
+hover_text = "#101010"
+dropdown_bg = "#33333A"
+separator = "#55555C"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.menu_bg, Color::rgb(0x2A, 0x2A, 0x30));
+        assert_eq!(theme.menu_text, Color::rgb(0xE0, 0xE0, 0xE8));
+        assert_eq!(theme.menu_hover_bg, Color::rgb(0xF5, 0x82, 0x0F));
+        assert_eq!(theme.menu_hover_text, Color::rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.menu_dropdown_bg, Color::rgb(0x33, 0x33, 0x3A));
+        assert_eq!(theme.menu_separator, Color::rgb(0x55, 0x55, 0x5C));
+        // Slots not overridden keep the Win95 defaults.
+        assert_eq!(theme.menu_border, Color::rgb(180, 180, 180));
+        assert_eq!(theme.menu_item_text, Color::rgb(20, 20, 20));
+    }
+
+    #[test]
+    fn success_warning_override_toast_and_ui() {
+        let toml = r##"
+success = "#00CC66"
+warning = "#FFAA00"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let theme = skin.to_ui_theme();
+        assert_eq!(theme.success, Color::rgb(0x00, 0xCC, 0x66));
+        assert_eq!(theme.warning, Color::rgb(0xFF, 0xAA, 0x00));
+        // Defaults are the historical literals.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(plain.success, Color::rgb(80, 200, 120));
+        assert_eq!(plain.warning, Color::rgb(255, 180, 50));
     }
 
     // -- Phase 12: expanded SkinTheme tests --
@@ -575,6 +1028,87 @@ text = "#909090"
     }
 
     #[test]
+    fn contrast_ratio_known_gray_pair() {
+        // #767676 on white is the canonical ~4.54:1 AA boundary pair.
+        let ratio = contrast_ratio(Color::rgb(0x76, 0x76, 0x76), Color::WHITE);
+        assert!((ratio - 4.54).abs() < 0.02, "got {ratio}");
+    }
+
+    #[test]
+    fn composite_over_opaque_passthrough() {
+        let fg = Color::rgb(10, 20, 30);
+        let out = composite_over(fg, Color::WHITE);
+        assert_eq!((out.r, out.g, out.b), (10, 20, 30));
+        assert_eq!(out.a, 255);
+    }
+
+    #[test]
+    fn composite_over_blends_alpha() {
+        // 50% black over white -> mid gray.
+        let out = composite_over(Color::rgba(0, 0, 0, 128), Color::WHITE);
+        assert!((out.r as i32 - 127).abs() <= 1, "got {}", out.r);
+        // Fully transparent -> backdrop.
+        let out = composite_over(Color::rgba(255, 0, 0, 0), Color::rgb(1, 2, 3));
+        assert_eq!((out.r, out.g, out.b), (1, 2, 3));
+    }
+
+    #[test]
+    fn contrast_warns_on_low_button_pair() {
+        // Button text is the base text color; button bg derives from
+        // `secondary`. Near-identical values must trip the 4.5:1 check.
+        let toml = r##"
+background = "#101010"
+text = "#5A5A5A"
+secondary = "#4A4A4A"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.pair.contains("button") && w.required == 4.5),
+            "missing button contrast warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn contrast_warns_on_low_bar_pair() {
+        // Clock text matches the status bar backdrop -> unreadable.
+        let toml = r##"
+background = "#202020"
+status_bar = "#303030"
+
+[bar_overrides]
+statusbar_bg = "#303030"
+clock_color = "#3A3A3A"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.pair.contains("status bar") && w.required == 3.0),
+            "missing status bar contrast warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn contrast_ratio_included_in_warning() {
+        let toml = r##"
+background = "#808080"
+text = "#909090"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        let text_warning = warnings
+            .iter()
+            .find(|w| w.pair == "text on background")
+            .expect("text pair should warn");
+        assert!(text_warning.ratio >= 1.0 && text_warning.ratio < 4.5);
+        assert_eq!(text_warning.required, 4.5);
+    }
+
+    #[test]
     fn bar_overrides_deserialize() {
         let toml = r##"
 [bar_overrides]
@@ -596,6 +1130,129 @@ body_color = "#FF0000"
         let skin: SkinTheme = toml::from_str(toml).unwrap();
         let icons = skin.icon_overrides.unwrap();
         assert_eq!(icons.body_color.as_deref(), Some("#FF0000"));
+    }
+
+    // -- text_scale (accessibility) tests --
+
+    #[test]
+    fn default_text_scale_is_one() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.text_scale, 1.0);
+        assert_eq!(skin.text_scale_factor(), 1.0);
+    }
+
+    #[test]
+    fn text_scale_one_is_pixel_identical() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.scale_font(8), 8);
+        assert_eq!(skin.scale_font(16), 16);
+        assert_eq!(skin.scale_font(24), 24);
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.font_size_md, 8);
+        assert_eq!(ui.font_size_lg, 16);
+        assert_eq!(ui.font_size_xxl, 24);
+    }
+
+    #[test]
+    fn text_scale_multiplies_font_ladder() {
+        let skin: SkinTheme = toml::from_str("text_scale = 2.0\n").unwrap();
+        assert_eq!(skin.scale_font(8), 16);
+        assert_eq!(skin.scale_font(16), 32);
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.font_size_md, 16);
+        assert_eq!(ui.font_size_lg, 32);
+        assert_eq!(ui.font_size_xxl, 48);
+        // Spacing is untouched by text_scale.
+        let plain = SkinTheme::default().to_ui_theme();
+        assert_eq!(ui.spacing_md, plain.spacing_md);
+    }
+
+    #[test]
+    fn text_scale_composes_with_typography() {
+        // text_scale multiplies the resolved (typography-overridden) ladder.
+        let toml = "text_scale = 2.0\n[typography]\nfont_size_md = 10\n";
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        assert_eq!(skin.to_ui_theme().font_size_md, 20);
+    }
+
+    #[test]
+    fn text_scale_clamped_and_min_one_px() {
+        let skin: SkinTheme = toml::from_str("text_scale = 0.01\n").unwrap();
+        assert_eq!(skin.text_scale_factor(), 0.5);
+        assert!(skin.scale_font(1) >= 1);
+        let big: SkinTheme = toml::from_str("text_scale = 99.0\n").unwrap();
+        assert_eq!(big.text_scale_factor(), 3.0);
+    }
+
+    // -- density tests --
+
+    #[test]
+    fn density_default_is_comfortable_identity() {
+        let skin = SkinTheme::default();
+        assert_eq!(skin.density_preset(), overrides::Density::Comfortable);
+        let ui = skin.to_ui_theme();
+        // Exact legacy spacing ladder preserved.
+        assert_eq!(
+            (
+                ui.spacing_xs,
+                ui.spacing_sm,
+                ui.spacing_md,
+                ui.spacing_lg,
+                ui.spacing_xl
+            ),
+            (2, 4, 8, 12, 16)
+        );
+    }
+
+    #[test]
+    fn density_compact_shrinks_spacing_only() {
+        let skin: SkinTheme = toml::from_str("density = \"compact\"\n").unwrap();
+        let ui = skin.to_ui_theme();
+        let plain = SkinTheme::default().to_ui_theme();
+        // Spacing shrinks (0.85x rounded).
+        assert_eq!(ui.spacing_lg, 10); // 12 * 0.85 = 10.2 -> 10
+        assert_eq!(ui.spacing_xl, 14); // 16 * 0.85 = 13.6 -> 14
+        assert!(ui.spacing_xl < plain.spacing_xl);
+        // Font sizes are unaffected by density.
+        assert_eq!(ui.font_size_md, plain.font_size_md);
+        assert_eq!(ui.font_size_xxl, plain.font_size_xxl);
+    }
+
+    #[test]
+    fn density_spacious_grows_spacing() {
+        let skin: SkinTheme = toml::from_str("density = \"spacious\"\n").unwrap();
+        let ui = skin.to_ui_theme();
+        assert_eq!(ui.spacing_lg, 14); // 12 * 1.15 = 13.8 -> 14
+        assert_eq!(ui.spacing_xl, 18); // 16 * 1.15 = 18.4 -> 18
+    }
+
+    #[test]
+    fn density_unknown_falls_back_to_comfortable() {
+        let skin: SkinTheme = toml::from_str("density = \"cozy\"\n").unwrap();
+        assert_eq!(skin.density_preset(), overrides::Density::Comfortable);
+        assert_eq!(skin.to_ui_theme().spacing_xl, 16);
+    }
+
+    // -- elevation ladder tests --
+
+    #[test]
+    fn default_elevation_ladder_is_builtin() {
+        let skin = SkinTheme::default();
+        assert!(skin.elevation_ladder().is_default());
+    }
+
+    #[test]
+    fn elevation_table_builds_ladder() {
+        let toml = r##"
+[[elevation.level_1]]
+offset_x = 5
+offset_y = 5
+alpha = 90
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let ladder = skin.elevation_ladder();
+        assert!(!ladder.is_default());
+        assert_eq!(ladder.resolve(1).layers[0].alpha, 90);
     }
 
     #[test]

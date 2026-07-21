@@ -159,6 +159,37 @@ pub fn make_transition(w: u32, h: u32, fade_frames: u32) -> transition::Transiti
     transition::fade_in_custom(w, h, fade_frames)
 }
 
+/// Build the skin's entrance transition for boot and skin swaps.
+///
+/// `[transition] entrance` selects the style: "fade" (default), "assemble"
+/// (PSIX-style bar slide + shrinking iris), or "none". Assemble falls back
+/// to a fade under `reduced_motion`. A `[transition] easing` name overrides
+/// the effect's built-in curve.
+pub fn make_entrance(
+    at: &oasis_core::active_theme::ActiveTheme,
+    fade_frames: u32,
+    w: u32,
+    h: u32,
+) -> Option<transition::TransitionState> {
+    let ts = match at.transition_entrance.as_str() {
+        "none" => return None,
+        "assemble" if !at.background_reduced_motion => transition::TransitionState::new(
+            transition::TransitionEffect::Assemble,
+            at.transition_entrance_frames,
+            w,
+            h,
+        ),
+        _ => transition::fade_in_custom(w, h, fade_frames),
+    };
+    Some(if at.transition_easing.is_empty() {
+        ts
+    } else {
+        ts.with_easing(oasis_core::skin::theme::resolve_easing(
+            &at.transition_easing,
+        ))
+    })
+}
+
 /// Apply a launch result to update the mode.
 pub fn apply_launch(result: LaunchResult, mode: &mut Mode) {
     match result {

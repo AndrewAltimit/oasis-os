@@ -99,8 +99,13 @@ pub fn ensure_chrome_bezel(
         ("_l", x, y, 1, h, style.left),
         ("_r", x + w as i32 - 1, y, 1, h, style.right),
     ];
+    // One reusable buffer for the four suffixed names instead of a
+    // format! allocation per edge per frame.
+    let mut edge_name = String::with_capacity(name.len() + 2);
+    edge_name.push_str(name);
     for (suffix, ex, ey, ew, eh, color) in &edges {
-        let edge_name = format!("{name}{suffix}");
+        edge_name.truncate(name.len());
+        edge_name.push_str(suffix);
         ensure_border(sdi, &edge_name, *ex, *ey, *ew, *eh, *color);
     }
 }
@@ -143,8 +148,12 @@ pub fn hide_objects(sdi: &mut SdiRegistry, names: &[&str]) {
 
 /// Hide a range of indexed SDI objects (`{prefix}0`, `{prefix}1`, ...).
 pub fn hide_indexed(sdi: &mut SdiRegistry, prefix: &str, count: usize) {
+    use std::fmt::Write as _;
+    // Reuse one buffer across the loop instead of a format! per index.
+    let mut name = String::with_capacity(prefix.len() + 4);
     for i in 0..count {
-        let name = format!("{prefix}{i}");
+        name.clear();
+        let _ = write!(name, "{prefix}{i}");
         if let Ok(obj) = sdi.get_mut(&name) {
             obj.visible = false;
         }
@@ -216,15 +225,17 @@ pub fn ensure_pill(
 
 /// Hide all bezel-related objects (fill + 4 edges).
 pub fn hide_bezel(sdi: &mut SdiRegistry, name: &str) {
-    let names: [String; 5] = [
-        name.to_string(),
-        format!("{name}_t"),
-        format!("{name}_b"),
-        format!("{name}_l"),
-        format!("{name}_r"),
-    ];
-    for n in &names {
-        if let Ok(obj) = sdi.get_mut(n) {
+    if let Ok(obj) = sdi.get_mut(name) {
+        obj.visible = false;
+    }
+    // One reusable buffer instead of five per-frame String allocations
+    // (this runs every frame in the common no-bezel bottombar state).
+    let mut buf = String::with_capacity(name.len() + 2);
+    buf.push_str(name);
+    for suffix in ["_t", "_b", "_l", "_r"] {
+        buf.truncate(name.len());
+        buf.push_str(suffix);
+        if let Ok(obj) = sdi.get_mut(&buf) {
             obj.visible = false;
         }
     }

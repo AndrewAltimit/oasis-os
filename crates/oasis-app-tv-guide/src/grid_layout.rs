@@ -229,6 +229,11 @@ pub(crate) fn truncate_title(title: &str, max_chars: usize) -> String {
 }
 
 /// Get the current Unix timestamp in seconds.
+///
+/// Honors `OASIS_FIXED_TIME` (`"YYYY-MM-DD HH:MM:SS"`), the same clock freeze
+/// the platform `TimeService` uses. The guide's date header and schedule grid
+/// are laid out from this timestamp, so without it a captured screenshot
+/// changes every minute — and every scheduled slot changes at midnight.
 pub(crate) fn current_unix_time() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
@@ -236,6 +241,9 @@ pub(crate) fn current_unix_time() -> u64 {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if let Some(fixed) = fixed_unix_time() {
+            return fixed;
+        }
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -243,11 +251,72 @@ pub(crate) fn current_unix_time() -> u64 {
     }
 }
 
+/// Parse `OASIS_FIXED_TIME` into a Unix timestamp, if it is set and valid.
+#[cfg(not(target_arch = "wasm32"))]
+fn fixed_unix_time() -> Option<u64> {
+    let raw = std::env::var("OASIS_FIXED_TIME").ok()?;
+    parse_fixed_time(&raw)
+}
+
+/// Parse `"YYYY-MM-DD HH:MM:SS"` (or with a `T` separator) into Unix seconds.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_fixed_time(raw: &str) -> Option<u64> {
+    let normalized = raw.replace('T', " ");
+    let (date, time) = normalized.split_once(' ')?;
+    let mut d = date.split('-');
+    let mut t = time.split(':');
+    let year: i64 = d.next()?.trim().parse().ok()?;
+    let month: i64 = d.next()?.parse().ok()?;
+    let day: i64 = d.next()?.parse().ok()?;
+    let hour: i64 = t.next()?.parse().ok()?;
+    let minute: i64 = t.next()?.parse().ok()?;
+    let second: i64 = t.next()?.trim().parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let secs = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
+    u64::try_from(secs).ok()
+}
+
+/// Days since the Unix epoch for a proleptic-Gregorian date (Hinnant's
+/// `days_from_civil`).
+#[cfg(not(target_arch = "wasm32"))]
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    // -- fixed clock --
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_fixed_time_matches_known_epochs() {
+        assert_eq!(parse_fixed_time("1970-01-01 00:00:00"), Some(0));
+        assert_eq!(parse_fixed_time("2000-01-01 00:00:00"), Some(946_684_800));
+        // The screenshot harness's frozen timestamp.
+        assert_eq!(parse_fixed_time("2025-06-15 12:00:00"), Some(1_749_988_800));
+        // The 'T' separator is accepted too.
+        assert_eq!(parse_fixed_time("2025-06-15T12:00:00"), Some(1_749_988_800));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_fixed_time_rejects_garbage() {
+        assert_eq!(parse_fixed_time(""), None);
+        assert_eq!(parse_fixed_time("not-a-time"), None);
+        assert_eq!(parse_fixed_time("2025-13-01 00:00:00"), None);
+        assert_eq!(parse_fixed_time("2025-06-15 12:00"), None);
+    }
 
     // -- truncate_title --
 

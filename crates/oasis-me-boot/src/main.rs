@@ -5,7 +5,7 @@
 //! and calls it during `module_start`. The EBOOT loads this PRX from the
 //! video thread before attempting H.264 decode.
 //!
-//! Build: cd crates/oasis-me-boot && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+//! Build: cd crates/oasis-me-boot && RUST_PSP_BUILD_STD=1 cargo psp --release
 //! Output: target/mipsel-sony-psp-std/release/oasis-me-boot.prx
 
 #![no_std]

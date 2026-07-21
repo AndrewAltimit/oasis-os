@@ -29,6 +29,22 @@ The terminal in `oasis-terminal/src/` supports:
 `Environment::profile_paths()` and `populate_profile()` honour shell-like
 startup files for site-local aliases.
 
+### SGR color output
+
+Command output may embed ANSI SGR **foreground color** escape sequences,
+which the terminal renderer resolves against the active skin's 16-slot
+`[palette]` (see `docs/skin-authoring.md`):
+
+- `ESC[30m`..`ESC[37m` — normal colors, `ESC[90m`..`ESC[97m` — bright colors
+- `ESC[39m` — reset foreground to the default output color
+- `ESC[0m` / `ESC[m` — full reset
+
+This is deliberately **not** a VT100 emulator: bold, underline, background
+colors, 256-color/truecolor extensions, and cursor-movement sequences are
+ignored (non-SGR escape sequences are stripped). Built-in emitters today:
+`ls` and `tree` color directories bright blue (SGR 94), and the desktop
+shell prints command errors in red (SGR 31).
+
 ## Core filesystem (`oasis-terminal/src/core_commands.rs`)
 
 | Command | Usage | Description |
@@ -142,7 +158,36 @@ VFS metadata only — there is no real Unix permission model behind these.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `skin` | `skin [list\|current\|<name>]` | List, show, or switch skins. |
+| `skin` | `skin [list\|current\|lint <name>\|inspect <name>\|export <name> [file]\|variant <dark\|light\|high-contrast>\|<name>]` | List, show, lint, inspect, switch, export, or derive variants of skins. `inspect` prints a plain-text contact sheet (resolved base colors, a WCAG AA contrast report for the key text/background pairs, and a token dump of the derived bar / icon / start-menu / app-screen colors plus the ANSI palette rows); `export` writes the skin as a single re-loadable TOML document to the VFS; `variant` applies a Dark / Light / High-contrast derivation of the currently active skin. |
+
+`skin inspect <name>` output has three sections — base colors, a WCAG AA contrast report, and a derived-token dump — for example:
+
+```
+Skin: classic  (480x272)
+
+Base colors:
+  background  #000000
+  primary     #3E5FCC
+  ...
+  status_bar  #283C5A
+  ...
+
+WCAG contrast (AA):
+  text on background        21.00:1  PASS (>= 4.5)
+  dim_text on background     5.32:1  PASS (>= 3.0)
+  prompt on background       ...
+  error on background        ...
+
+Tokens:
+  bar    statusbar_bg #...  bottom_bg #...  clock #...  tab_active #...
+  icon   body #...  outline #...  label #...  cursor #...
+  menu   panel_bg #...  item_text #...  highlight #...  button_bg #...
+  app    bg #...  text #...  title_bar_bg #...  selected_bg #...
+  ansi   #... (8 normal slots)
+  bright #... (8 bright slots)
+```
+
+Skin resolution matches `skin lint` (built-in name, directory path, or `skins/<name>/` subdir) with no silent fallback to `classic`, so inspecting a missing skin is an error.
 
 ## Audio (`oasis-terminal/src/audio_commands.rs`, `radio_commands.rs`)
 

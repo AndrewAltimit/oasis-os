@@ -50,7 +50,7 @@ log_warn()  { echo "  [WARN]  $*"; }
 check_prerequisites() {
     if [ ! -f "$REPO_ROOT/$EBOOT_PATH" ]; then
         echo "ERROR: EBOOT.PBP not found. Build first:"
-        echo "  cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release"
+        echo "  cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release"
         exit 1
     fi
     mkdir -p "$GAME_DIR" "$OUT_DIR"

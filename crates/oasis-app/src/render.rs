@@ -19,6 +19,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     state.ui.bottom_bar.tick_animation(&state.active_theme);
     state.toasts.tick();
 
+    // Any frame spent outside Terminal mode may hide the terminal objects
+    // or change the theme, so force a full rebuild on re-entry.
+    if state.mode != Mode::Terminal {
+        state.terminal.sdi_signature = None;
+    }
+
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
@@ -57,15 +63,60 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             let cursor_visible = state.active_theme.terminal_cursor_blink_rate == 0
                 || (state.frame_counter / state.active_theme.terminal_cursor_blink_rate as u64)
                     .is_multiple_of(2);
-            terminal_sdi::setup_terminal_objects(
-                sdi,
-                &state.terminal.output_lines,
-                &state.terminal.cwd,
-                &state.terminal.input_buf,
-                state.terminal.scroll_offset,
-                &state.active_theme,
-                cursor_visible,
-            );
+            // The full rebuild walks every visible line (SGR run parsing,
+            // per-line SDI lookups) plus ~20 theme-color HashMap lookups;
+            // skip it while nothing it renders from has changed. The hash
+            // covers exactly the inputs of `setup_terminal_objects`: the
+            // visible scrollback window, prompt state, blink phase, and
+            // the theme geometry/colors it reads. Theme edits made in
+            // other modes are covered by the `sdi_signature = None` reset
+            // below; edits made *in* the terminal echo into the
+            // scrollback and change the hash themselves.
+            let sig = {
+                use std::hash::{Hash, Hasher};
+                let at = &state.active_theme;
+                let term = &state.terminal;
+                let mut h = std::hash::DefaultHasher::new();
+                let end = term.output_lines.len().saturating_sub(term.scroll_offset);
+                let start = end.saturating_sub(terminal_sdi::visible_output_lines(at));
+                term.output_lines.len().hash(&mut h);
+                for line in &term.output_lines[start..end] {
+                    line.hash(&mut h);
+                }
+                term.cwd.hash(&mut h);
+                term.input_buf.hash(&mut h);
+                term.scroll_offset.hash(&mut h);
+                cursor_visible.hash(&mut h);
+                (
+                    at.screen_w,
+                    at.screen_h,
+                    at.statusbar_height,
+                    at.bottombar_height,
+                )
+                    .hash(&mut h);
+                (
+                    at.terminal_border_radius,
+                    at.terminal_line_height,
+                    at.font_small,
+                )
+                    .hash(&mut h);
+                for c in [at.app.terminal_output_color, at.app.terminal_prompt_color] {
+                    (c.r, c.g, c.b, c.a).hash(&mut h);
+                }
+                h.finish()
+            };
+            if state.terminal.sdi_signature != Some(sig) {
+                terminal_sdi::setup_terminal_objects(
+                    sdi,
+                    &state.terminal.output_lines,
+                    &state.terminal.cwd,
+                    &state.terminal.input_buf,
+                    state.terminal.scroll_offset,
+                    &state.active_theme,
+                    cursor_visible,
+                );
+                state.terminal.sdi_signature = Some(sig);
+            }
         },
         Mode::App => {
             state.ui.dashboard.hide_sdi(sdi);
@@ -91,18 +142,51 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             AppRunner::hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
 
-            // Sync terminal output to the windowed terminal runner (only when changed).
+            // Sync terminal output to the windowed terminal runner (only when
+            // changed). `dirty` is a catch-all set on any input event, so the
+            // content signature gates the expensive full-scrollback clone to
+            // frames where the terminal actually changed — a mouse drag over
+            // the desktop must not deep-copy 2000 lines per frame.
             if state.terminal.dirty {
+                let term = &state.terminal;
+                let changed = term.sync_signature.as_ref().is_none_or(|sig| {
+                    sig.0 != term.output_lines.len()
+                        || sig.1 != term.scroll_offset
+                        || sig.2 != term.input_buf
+                        || Some(sig.3.as_str()) != term.output_lines.first().map(String::as_str)
+                        || Some(sig.4.as_str()) != term.output_lines.last().map(String::as_str)
+                });
                 if let Some((_, runner)) = state
                     .content
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
+                    // A freshly (re)opened runner has not received this
+                    // content yet even if the signature matches — its line
+                    // count (scrollback + prompt) gives that away.
+                    && (changed || runner.lines.len() != state.terminal.output_lines.len() + 1)
                 {
                     let mut lines = state.terminal.output_lines.clone();
                     let prompt = format!("> {}", state.terminal.input_buf);
                     lines.push(prompt);
                     runner.set_lines(lines, state.terminal.scroll_offset);
+                    state.terminal.sync_signature = Some((
+                        state.terminal.output_lines.len(),
+                        state.terminal.scroll_offset,
+                        state.terminal.input_buf.clone(),
+                        state
+                            .terminal
+                            .output_lines
+                            .first()
+                            .cloned()
+                            .unwrap_or_default(),
+                        state
+                            .terminal
+                            .output_lines
+                            .last()
+                            .cloned()
+                            .unwrap_or_default(),
+                    ));
                 }
                 state.terminal.dirty = false;
             }
@@ -167,8 +251,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         },
     }
 
-    // No software cursor on the SDL build — the host OS already renders
-    // its own pointer over our window, so we'd just be drawing a duplicate.
+    // Software cursor: skins opt in via `features.software_cursor` (the
+    // host pointer is hidden by `refresh_skin_assets`). Everyone else
+    // keeps the host OS pointer — drawing our own would duplicate it.
+    if state.skin.features.software_cursor {
+        state.ui.mouse_cursor.update_sdi(sdi);
+    }
 
     // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
     // where we explicitly hide it to prevent bleed-through, and skip when a

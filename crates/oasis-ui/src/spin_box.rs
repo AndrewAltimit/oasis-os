@@ -25,6 +25,8 @@ pub struct SpinBox {
     pub decimals: u8,
     /// Whether the spin box is disabled.
     pub disabled: bool,
+    /// Whether the spin box has keyboard focus (draws a focus ring).
+    pub focused: bool,
 }
 
 impl SpinBox {
@@ -38,6 +40,7 @@ impl SpinBox {
             step: 1.0,
             decimals: 0,
             disabled: false,
+            focused: false,
         }
     }
 
@@ -127,6 +130,11 @@ impl Widget for SpinBox {
             fs,
             ctx.theme.interactive_text(self.disabled),
         )?;
+
+        // Keyboard focus ring around the whole control.
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
 
         Ok(())
     }

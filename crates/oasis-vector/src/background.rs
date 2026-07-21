@@ -200,7 +200,7 @@ impl BackgroundScene {
     }
 
     /// Count the number of primitive ops (recursing into groups).
-    fn count_ops(ops: &[VectorOp]) -> usize {
+    pub fn count_ops(ops: &[VectorOp]) -> usize {
         let mut count = 0;
         for op in ops {
             match op {
@@ -212,7 +212,11 @@ impl BackgroundScene {
     }
 
     /// Build ops for a single layer.
-    fn build_layer_ops(
+    ///
+    /// Public so callers can build (and cache) individual layers — see
+    /// `LayerOpsCache` in oasis-core, which caches ops for layers whose
+    /// output is frame-independent.
+    pub fn build_layer_ops(
         layer: &BackgroundLayer,
         clock: &AnimClock,
         w: u32,

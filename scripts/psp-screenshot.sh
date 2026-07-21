@@ -5,7 +5,7 @@
 # for manual visual review. Not CI-blocking.
 #
 # Prerequisites:
-#   - PSP EBOOT built: cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+#   - PSP EBOOT built: cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 #   - PPSSPP Docker image built: docker compose --profile psp build ppsspp
 #
 # Usage:
@@ -52,7 +52,7 @@ check_prerequisites() {
         echo ""
         echo "Build it first:"
         echo "  cd crates/oasis-backend-psp"
-        echo "  RUST_PSP_BUILD_STD=1 cargo +nightly psp --release"
+        echo "  RUST_PSP_BUILD_STD=1 cargo psp --release"
         exit 1
     fi
 
@@ -265,7 +265,7 @@ main() {
 
     # Default: run all scenarios.
     if [ ${#scenarios_to_run[@]} -eq 0 ]; then
-        scenarios_to_run=($(echo "${!SCENARIOS[@]}" | tr ' ' '\n' | sort))
+        mapfile -t scenarios_to_run < <(printf '%s\n' "${!SCENARIOS[@]}" | sort)
     fi
 
     check_prerequisites

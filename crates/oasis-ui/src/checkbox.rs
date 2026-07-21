@@ -22,6 +22,8 @@ pub struct Checkbox {
     pub label: String,
     /// Whether the checkbox is disabled.
     pub disabled: bool,
+    /// Whether the checkbox has keyboard focus (draws a focus ring).
+    pub focused: bool,
 }
 
 /// Size of the checkbox box in pixels.
@@ -36,6 +38,7 @@ impl Checkbox {
             checked,
             label: label.into(),
             disabled: false,
+            focused: false,
         }
     }
 
@@ -197,6 +200,17 @@ impl Widget for Checkbox {
         let border_color = ctx.theme.interactive_border(self.disabled, self.checked);
         ctx.backend
             .stroke_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, 1, border_color)?;
+
+        // Keyboard focus ring around the box.
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                ctx.backend,
+                x,
+                box_y,
+                BOX_SIZE,
+                BOX_SIZE,
+            )?;
+        }
 
         // Checkmark.
         if self.checked {

@@ -15,6 +15,9 @@
 mod texture_dedup;
 pub use texture_dedup::TextureDedup;
 
+#[cfg(feature = "ttf")]
+pub mod ttf;
+
 use oasis_types::backend::{Color, GradientStyle};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
@@ -52,6 +55,17 @@ impl GlyphCacheKey {
         let a = color.a as u64; // 8 bits
         let flags = (bold as u64) | ((italic as u64) << 1); // 2 bits
         Self(c | (fs << 21) | (r5 << 37) | (g5 << 42) | (b5 << 47) | (a << 52) | (flags << 60))
+    }
+
+    /// Create a *color-independent* key from character and style parameters.
+    ///
+    /// Backends that rasterize glyphs white and tint them at blit time (SDL's
+    /// texture color/alpha modulation, for instance) must not key the cache on
+    /// color: doing so re-rasterizes the same glyph for every theme accent,
+    /// hover tint, or animated fade. The color bits are left zero, so these
+    /// keys never collide with [`Self::new`] keys carrying a nonzero color.
+    pub const fn colorless(ch: char, font_size: u16, bold: bool, italic: bool) -> Self {
+        Self::new(ch, font_size, Color::rgba(0, 0, 0, 0), bold, italic)
     }
 
     /// Return the inner packed `u64` value.
@@ -1112,6 +1126,29 @@ mod tests {
         let k1 = GlyphCacheKey::new('A', 12, c1, false, false);
         let k2 = GlyphCacheKey::new('A', 12, c2, false, false);
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn colorless_key_ignores_color() {
+        let k1 = GlyphCacheKey::colorless('A', 12, false, false);
+        let k2 = GlyphCacheKey::colorless('A', 12, false, false);
+        assert_eq!(k1, k2);
+        // Style still matters.
+        assert_ne!(k1, GlyphCacheKey::colorless('A', 12, true, false));
+        assert_ne!(k1, GlyphCacheKey::colorless('A', 12, false, true));
+        assert_ne!(k1, GlyphCacheKey::colorless('A', 16, false, false));
+        assert_ne!(k1, GlyphCacheKey::colorless('B', 12, false, false));
+    }
+
+    #[test]
+    fn colorless_key_never_collides_with_colored_key() {
+        // A colored key with a visible color always has nonzero color bits,
+        // so the two key spaces can safely share one cache map.
+        let visible = Color::rgba(255, 255, 255, 255);
+        assert_ne!(
+            GlyphCacheKey::colorless('A', 12, false, false),
+            GlyphCacheKey::new('A', 12, visible, false, false)
+        );
     }
 
     // -----------------------------------------------------------------------

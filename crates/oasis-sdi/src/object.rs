@@ -51,6 +51,10 @@ pub struct SdiObject {
     pub visible: bool,
     /// Optional texture handle. If `None`, the object draws as a solid `color`.
     pub texture: Option<TextureId>,
+    /// Nine-patch slicing for the texture. When set (and `texture` is
+    /// `Some`), the object renders as a 9-slice: corners fixed, edges and
+    /// center stretched to `w`x`h` — scalable chrome from one small bitmap.
+    pub nine_patch: Option<oasis_types::nine_patch::NinePatchSlices>,
     /// Solid fill color (used when `texture` is `None` and `text` is `None`).
     pub color: Color,
     /// Optional text content. When set, the object renders text instead of a
@@ -106,6 +110,7 @@ impl SdiObject {
             z: 0,
             visible: true,
             texture: None,
+            nine_patch: None,
             color: Color::WHITE,
             text: None,
             font_size: 12,
@@ -122,6 +127,17 @@ impl SdiObject {
             text_shadow_color: None,
             aria_label: None,
             role: None,
+        }
+    }
+
+    /// Set the object's text only when it actually changed.
+    ///
+    /// `obj.text = Some(s.to_string())` allocates on every call; per-frame
+    /// `update_sdi` paths (bars, labels) funnel through this instead so
+    /// steady-state frames do a string compare and no allocation.
+    pub fn set_text(&mut self, s: &str) {
+        if self.text.as_deref() != Some(s) {
+            self.text = Some(s.to_string());
         }
     }
 }

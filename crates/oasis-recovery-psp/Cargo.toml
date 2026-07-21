@@ -4,7 +4,7 @@
 # Replaces ARK-4's recovery menu with a network-enabled version
 # that accepts remote file uploads for unbricking.
 #
-# Build:  cd crates/oasis-recovery-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Build:  cd crates/oasis-recovery-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 # Deploy: cp target/.../EBOOT.PBP ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP
 # Trigger: Hold R-trigger during PSP boot to enter recovery mode
 

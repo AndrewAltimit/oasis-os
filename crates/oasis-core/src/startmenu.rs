@@ -143,7 +143,7 @@ impl StartMenuState {
             colors
                 .get(idx)
                 .copied()
-                .unwrap_or(Color::rgb(100, 100, 100))
+                .unwrap_or(at.menu.item_fallback_color)
         };
         vec![
             StartMenuItem {
@@ -444,7 +444,7 @@ impl StartMenuState {
             obj.x = btn_x + (btn_w as i32 - text_w) / 2;
             obj.y = self.btn_y + (btn_h as i32 - at.font_small as i32) / 2;
             obj.font_size = at.font_small;
-            obj.text = Some(at.menu.button_label.clone());
+            obj.set_text(&at.menu.button_label);
             obj.text_color = at.menu.button_text;
             obj.visible = true;
         }

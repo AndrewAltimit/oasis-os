@@ -26,6 +26,8 @@ pub struct RadioGroup {
     pub selected: usize,
     /// Whether the group is disabled.
     pub disabled: bool,
+    /// Whether the group has keyboard focus (rings the selected option).
+    pub focused: bool,
 }
 
 /// Diameter of the radio circle in pixels.
@@ -43,6 +45,7 @@ impl RadioGroup {
             options,
             selected: 0,
             disabled: false,
+            focused: false,
         }
     }
 
@@ -304,6 +307,17 @@ impl Widget for RadioGroup {
                 1,
                 border_color,
             )?;
+
+            // Keyboard focus ring around the selected option's circle.
+            if self.focused && !self.disabled && is_selected {
+                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                    ctx.backend,
+                    x,
+                    circle_y,
+                    CIRCLE_SIZE,
+                    CIRCLE_SIZE,
+                )?;
+            }
 
             // Inner filled dot for selected.
             if is_selected {

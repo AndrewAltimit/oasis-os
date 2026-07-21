@@ -3,7 +3,7 @@
 # Minimal kernel-mode PRX for remote PSP development automation.
 # WiFi TCP server on port 9293 for commands: screenshot, reboot, launch.
 #
-# Build: cd crates/oasis-devloop-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Build: cd crates/oasis-devloop-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 # Deploy: cp target/.../oasis-devloop-psp.prx ms0:/seplugins/devloop.prx
 # Enable: add "xmb, ms0:/seplugins/devloop.prx, on" to PLUGINS.TXT
 

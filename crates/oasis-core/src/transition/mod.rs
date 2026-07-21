@@ -24,6 +24,11 @@ pub enum TransitionEffect {
     PageSlideLeft,
     /// PSIX-style horizontal page slide: incoming from right, outgoing to left.
     PageSlideRight,
+    /// PSIX-style boot assemble: the top bar slides down and the bottom bar
+    /// slides up from off-screen while an iris rectangle shrinks from the
+    /// center. Bar movement is applied by [`apply_assemble`]; `draw_overlay`
+    /// renders the iris.
+    Assemble,
 }
 
 /// Runtime state for an active transition.
@@ -40,6 +45,9 @@ pub struct TransitionState {
     pub screen_h: u32,
     /// Overlay color for fade/slide transitions (default: black).
     pub transition_color: Color,
+    /// Custom easing curve (from the skin's `[transition] easing` name).
+    /// `None` = the effect's built-in curve.
+    easing: Option<fn(f32) -> f32>,
 }
 
 impl TransitionState {
@@ -52,12 +60,19 @@ impl TransitionState {
             screen_w: w,
             screen_h: h,
             transition_color: Color::BLACK,
+            easing: None,
         }
     }
 
     /// Set the overlay color for this transition (builder pattern).
     pub fn with_color(mut self, color: Color) -> Self {
         self.transition_color = color;
+        self
+    }
+
+    /// Override the easing curve (builder pattern).
+    pub fn with_easing(mut self, easing: fn(f32) -> f32) -> Self {
+        self.easing = Some(easing);
         self
     }
 
@@ -76,11 +91,15 @@ impl TransitionState {
     /// curtain effect.
     pub fn progress(&self) -> f32 {
         let t = self.linear_progress();
+        if let Some(easing) = self.easing {
+            return easing(t);
+        }
         match self.effect {
             TransitionEffect::FadeIn
             | TransitionEffect::FadeOut
             | TransitionEffect::PageSlideLeft
-            | TransitionEffect::PageSlideRight => ease_in_out_cubic(t),
+            | TransitionEffect::PageSlideRight
+            | TransitionEffect::Assemble => ease_in_out_cubic(t),
             TransitionEffect::SlideRight | TransitionEffect::SlideLeft | TransitionEffect::None => {
                 t
             },
@@ -200,12 +219,74 @@ impl TransitionState {
                     )?;
                 }
             },
+            TransitionEffect::Assemble => {
+                // Iris: an opaque rectangle shrinking toward the center,
+                // revealing the assembled scene from the edges inward.
+                let iris_w = ((1.0 - t) * self.screen_w as f32) as u32;
+                let iris_h = ((1.0 - t) * self.screen_h as f32) as u32;
+                if iris_w > 0 && iris_h > 0 {
+                    let x = ((self.screen_w - iris_w) / 2) as i32;
+                    let y = ((self.screen_h - iris_h) / 2) as i32;
+                    backend.fill_rect(x, y, iris_w, iris_h, Color::rgba(c.r, c.g, c.b, 255))?;
+                }
+            },
             TransitionEffect::None
             | TransitionEffect::PageSlideLeft
             | TransitionEffect::PageSlideRight => {},
         }
 
         Ok(())
+    }
+}
+
+/// Apply the assemble entrance to the bar SDI objects for the current frame.
+///
+/// While the transition runs, the bar backgrounds (`bar_top`, `bar_bottom`)
+/// and their separator lines slide in from off-screen and every other
+/// `bar_`-prefixed object (text, tabs, page dots, bezels) is hidden — they
+/// pop in when the chrome lands, PSIX-style. Positions are written as
+/// absolute values each frame, so calling this after the bars' `update_sdi`
+/// is idempotent; once the transition finishes, `update_sdi` restores the
+/// canonical layout on the next frame.
+pub fn apply_assemble(
+    sdi: &mut crate::sdi::SdiRegistry,
+    at: &crate::active_theme::ActiveTheme,
+    ts: &TransitionState,
+) {
+    if ts.effect != TransitionEffect::Assemble || ts.is_done() {
+        return;
+    }
+    let t = ts.progress();
+    let bar_h = at.statusbar_height;
+    let bot_h = at.bottombar_height;
+    let top_dy = (-(1.0 - t) * bar_h as f32).round() as i32;
+    let bot_dy = ((1.0 - t) * bot_h as f32).round() as i32;
+    let bar_y = (at.screen_h - bot_h) as i32;
+
+    // Hide bar content while the chrome slides (backgrounds ride the offset).
+    const SLIDERS: [&str; 4] = ["bar_top", "bar_top_line", "bar_bottom", "bar_bottom_line"];
+    let content: Vec<String> = sdi
+        .names()
+        .filter(|n| n.starts_with("bar_") && !SLIDERS.contains(n))
+        .map(str::to_string)
+        .collect();
+    for name in &content {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
+
+    if let Ok(obj) = sdi.get_mut("bar_top") {
+        obj.y = top_dy;
+    }
+    if let Ok(obj) = sdi.get_mut("bar_top_line") {
+        obj.y = bar_h as i32 - 1 + top_dy;
+    }
+    if let Ok(obj) = sdi.get_mut("bar_bottom") {
+        obj.y = bar_y + bot_dy;
+    }
+    if let Ok(obj) = sdi.get_mut("bar_bottom_line") {
+        obj.y = bar_y + bot_dy;
     }
 }
 
@@ -408,6 +489,68 @@ mod tests {
 
         let ts = page_slide_right(480, 272);
         assert_eq!(ts.effect, TransitionEffect::PageSlideRight);
+    }
+
+    #[test]
+    fn with_easing_overrides_curve() {
+        let mut ts =
+            TransitionState::new(TransitionEffect::FadeIn, 10, 480, 272).with_easing(|t| t);
+        for _ in 0..5 {
+            ts.tick();
+        }
+        // Linear override: exactly 0.5 at midpoint (built-in cubic would too,
+        // so check an asymmetric point as well).
+        assert!((ts.progress() - 0.5).abs() < f32::EPSILON);
+        ts.tick();
+        assert!((ts.progress() - 0.6).abs() < 0.001);
+    }
+
+    #[test]
+    fn assemble_iris_shrinks() {
+        let ts = TransitionState::new(TransitionEffect::Assemble, 10, 480, 272);
+        // At t=0 the iris covers the whole screen.
+        assert!((ts.progress() - 0.0).abs() < f32::EPSILON);
+        let mut ts = ts;
+        for _ in 0..10 {
+            ts.tick();
+        }
+        assert!(ts.is_done());
+    }
+
+    #[test]
+    fn apply_assemble_slides_bars_and_hides_content() {
+        use crate::active_theme::ActiveTheme;
+        use crate::sdi::SdiRegistry;
+
+        let at = ActiveTheme::default();
+        let mut sdi = SdiRegistry::new();
+        let bar = crate::statusbar::StatusBar::new();
+        let bottom = crate::bottombar::BottomBar::new();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+        bottom.update_sdi(&mut sdi, &at, &feat);
+
+        let ts = TransitionState::new(TransitionEffect::Assemble, 10, at.screen_w, at.screen_h);
+        apply_assemble(&mut sdi, &at, &ts);
+
+        // At t=0 the bars sit fully off-screen.
+        assert_eq!(sdi.get("bar_top").unwrap().y, -(at.statusbar_height as i32));
+        assert_eq!(
+            sdi.get("bar_bottom").unwrap().y,
+            (at.screen_h - at.bottombar_height) as i32 + at.bottombar_height as i32
+        );
+        // Bar content is hidden while sliding.
+        assert!(!sdi.get("bar_battery").unwrap().visible);
+        assert!(!sdi.get("bar_version").unwrap().visible);
+
+        // A finished transition leaves the scene alone.
+        let mut done = TransitionState::new(TransitionEffect::Assemble, 0, 480, 272);
+        done.tick();
+        bar.update_sdi(&mut sdi, &at, &feat);
+        let y_before = sdi.get("bar_top").unwrap().y;
+        apply_assemble(&mut sdi, &at, &done);
+        assert_eq!(sdi.get("bar_top").unwrap().y, y_before);
+        assert!(sdi.get("bar_battery").unwrap().visible);
     }
 
     #[test]

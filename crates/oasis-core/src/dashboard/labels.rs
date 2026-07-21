@@ -3,11 +3,21 @@
 //! Provides word-wrapping and centered label drawing beneath icons,
 //! including optional drop-shadow support.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::active_theme::ActiveTheme;
 use crate::backend::Color;
 use crate::sdi::SdiRegistry;
 
 use super::IconNames;
+
+/// Cache of word-wrapped label lines, keyed by app title. The stored
+/// `usize` is the `max_chars` the lines were wrapped at, so a font or
+/// cell-width change lazily re-wraps instead of serving stale lines.
+/// Titles are static frame-to-frame; without this every icon re-splits
+/// and re-allocates its label lines 60 times a second.
+pub(crate) type LabelWrapCache = RefCell<HashMap<String, (usize, Vec<String>)>>;
 
 /// Word-wrap a label into lines that fit within `max_chars` per line.
 pub(crate) fn wrap_label(text: &str, max_chars: usize) -> Vec<String> {
@@ -39,7 +49,13 @@ pub(crate) fn wrap_label(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
-/// Render word-wrapped, centered label lines under an icon.
+/// Render word-wrapped label lines under an icon.
+///
+/// Lines are centered within `[cell_x, cell_x + cell_w]` by default. When
+/// `icon_center` is `Some(cx)` (column layout) each line is centered on
+/// the icon's horizontal midpoint instead, PSIX-style, clamped so long
+/// lines stay on-screen.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_label(
     sdi: &mut SdiRegistry,
     at: &ActiveTheme,
@@ -48,12 +64,25 @@ pub(crate) fn draw_label(
     cell_w: u32,
     label_y: i32,
     title: &str,
+    icon_center: Option<i32>,
+    cache: &LabelWrapCache,
 ) {
     let fs = at.font_small;
     let glyph_w = (fs.max(8) / 8) as u32 * 8;
     let max_chars = (cell_w / glyph_w).max(1) as usize;
-    let lines = wrap_label(title, max_chars);
+    let mut cache = cache.borrow_mut();
+    if !matches!(cache.get(title), Some((mc, _)) if *mc == max_chars) {
+        cache.insert(title.to_string(), (max_chars, wrap_label(title, max_chars)));
+    }
+    let lines: &[String] = &cache.get(title).expect("cached above").1;
     let line_h = glyph_w as i32 + 1; // 1px spacing between lines
+    // Left edge for a line of pixel width `tw`: centered on the icon
+    // midpoint in column layout, otherwise centered within the cell
+    // (unchanged legacy arithmetic).
+    let line_x = |tw: i32| match icon_center {
+        Some(cx) => (cx - tw / 2).max(2),
+        None => cell_x + (cell_w as i32 - tw) / 2,
+    };
 
     // Label shadows (1px offset).
     if let Some(shadow_color) = at.icon.label_shadow {
@@ -61,12 +90,12 @@ pub(crate) fn draw_label(
         if let Ok(obj) = sdi.get_mut(&names.shadow) {
             if let Some(line) = lines.first() {
                 let tw = line.len() as i32 * glyph_w as i32;
-                obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                obj.x = line_x(tw) + 1;
                 obj.y = label_y + 1;
                 obj.w = 0;
                 obj.h = 0;
                 obj.font_size = fs;
-                obj.text = Some(line.clone());
+                obj.set_text(line);
                 obj.text_color = shadow_color;
                 obj.visible = true;
                 obj.color = Color::rgba(0, 0, 0, 0);
@@ -78,12 +107,12 @@ pub(crate) fn draw_label(
         if let Ok(obj) = sdi.get_mut(&names.shadow2) {
             if lines.len() > 1 {
                 let tw = lines[1].len() as i32 * glyph_w as i32;
-                obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                obj.x = line_x(tw) + 1;
                 obj.y = label_y + line_h + 1;
                 obj.w = 0;
                 obj.h = 0;
                 obj.font_size = fs;
-                obj.text = Some(lines[1].clone());
+                obj.set_text(&lines[1]);
                 obj.text_color = shadow_color;
                 obj.visible = true;
                 obj.color = Color::rgba(0, 0, 0, 0);
@@ -104,12 +133,12 @@ pub(crate) fn draw_label(
     if let Ok(obj) = sdi.get_mut(&names.label) {
         if let Some(line) = lines.first() {
             let tw = line.len() as i32 * glyph_w as i32;
-            obj.x = cell_x + (cell_w as i32 - tw) / 2;
+            obj.x = line_x(tw);
             obj.y = label_y;
             obj.w = 0;
             obj.h = 0;
             obj.font_size = fs;
-            obj.text = Some(line.clone());
+            obj.set_text(line);
             obj.text_color = at.icon.label_color;
             obj.visible = true;
         } else {
@@ -120,12 +149,12 @@ pub(crate) fn draw_label(
     if let Ok(obj) = sdi.get_mut(&names.label2) {
         if lines.len() > 1 {
             let tw = lines[1].len() as i32 * glyph_w as i32;
-            obj.x = cell_x + (cell_w as i32 - tw) / 2;
+            obj.x = line_x(tw);
             obj.y = label_y + line_h;
             obj.w = 0;
             obj.h = 0;
             obj.font_size = fs;
-            obj.text = Some(lines[1].clone());
+            obj.set_text(&lines[1]);
             obj.text_color = at.icon.label_color;
             obj.visible = true;
         } else {

@@ -1,8 +1,10 @@
 //! Button widget.
 
 use crate::context::DrawContext;
+use crate::focus::FocusStyle;
 use crate::icon::Icon;
 use crate::layout::{self, Padding};
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -45,6 +47,20 @@ pub struct Button {
     pub style: ButtonStyle,
     /// Internal padding around label.
     pub padding: Padding,
+    /// Whether the button has keyboard focus (draws a focus ring).
+    pub focused: bool,
+}
+
+impl ButtonState {
+    /// Map the button's visual state onto the shared interaction state.
+    fn as_widget_state(self) -> WidgetState {
+        match self {
+            ButtonState::Normal => WidgetState::Normal,
+            ButtonState::Hover => WidgetState::Hover,
+            ButtonState::Pressed => WidgetState::Pressed,
+            ButtonState::Disabled => WidgetState::Disabled,
+        }
+    }
 }
 
 impl Button {
@@ -56,6 +72,7 @@ impl Button {
             state: ButtonState::Normal,
             style: ButtonStyle::Secondary,
             padding: Padding::symmetric(8, 4),
+            focused: false,
         }
     }
 
@@ -68,19 +85,10 @@ impl Button {
     }
 
     fn bg_color(&self, theme: &crate::theme::Theme) -> Option<Color> {
+        let state = self.state.as_widget_state();
         match self.style {
-            ButtonStyle::Primary => Some(match self.state {
-                ButtonState::Pressed => theme.accent_pressed,
-                ButtonState::Hover => theme.accent_hover,
-                ButtonState::Disabled => theme.button_bg_disabled,
-                _ => theme.accent,
-            }),
-            ButtonStyle::Secondary => Some(match self.state {
-                ButtonState::Pressed => theme.button_bg_pressed,
-                ButtonState::Hover => theme.button_bg_hover,
-                ButtonState::Disabled => theme.button_bg_disabled,
-                _ => theme.button_bg,
-            }),
+            ButtonStyle::Primary => Some(WidgetStateColors::accent_bg(theme, state)),
+            ButtonStyle::Secondary => Some(WidgetStateColors::neutral_bg(theme, state)),
             ButtonStyle::Outline | ButtonStyle::Ghost => {
                 if self.state == ButtonState::Hover {
                     Some(theme.accent_subtle)
@@ -336,6 +344,49 @@ mod tests {
         assert!(tx > 0, "text x ({tx}) should be offset from left edge");
         assert!(ty >= 0, "text y ({ty}) should be non-negative");
     }
+
+    #[test]
+    fn bg_color_identity_default_theme() {
+        // The helper-routed background must reproduce the exact theme
+        // fields the widget referenced before the refactor.
+        let t = Theme::dark();
+        let mut b = Button::primary("P");
+        assert_eq!(b.bg_color(&t), Some(t.accent));
+        b.state = ButtonState::Hover;
+        assert_eq!(b.bg_color(&t), Some(t.accent_hover));
+        b.state = ButtonState::Pressed;
+        assert_eq!(b.bg_color(&t), Some(t.accent_pressed));
+        b.state = ButtonState::Disabled;
+        assert_eq!(b.bg_color(&t), Some(t.button_bg_disabled));
+
+        let mut s = Button::new("S");
+        assert_eq!(s.bg_color(&t), Some(t.button_bg));
+        s.state = ButtonState::Hover;
+        assert_eq!(s.bg_color(&t), Some(t.button_bg_hover));
+        s.state = ButtonState::Pressed;
+        assert_eq!(s.bg_color(&t), Some(t.button_bg_pressed));
+        s.state = ButtonState::Disabled;
+        assert_eq!(s.bg_color(&t), Some(t.button_bg_disabled));
+    }
+
+    #[test]
+    fn unfocused_draws_no_focus_ring() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let mut with_focus = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            Button::new("X").draw(&mut ctx, 0, 0, 60, 24).unwrap();
+        }
+        {
+            let mut ctx = DrawContext::new(&mut with_focus, &theme);
+            let mut b = Button::new("X");
+            b.focused = true;
+            b.draw(&mut ctx, 0, 0, 60, 24).unwrap();
+        }
+        // Focused button emits additional fill_rects for the ring.
+        assert!(with_focus.fill_rect_count() > backend.fill_rect_count());
+    }
 }
 
 impl Widget for Button {
@@ -378,6 +429,11 @@ impl Widget for Button {
         let color = self.text_color(ctx.theme);
         ctx.backend
             .draw_text(&self.label, tx, ty, ctx.theme.font_size_md, color)?;
+
+        // Keyboard focus ring (only when focused and interactive).
+        if self.focused && self.state != ButtonState::Disabled {
+            FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
 
         Ok(())
     }

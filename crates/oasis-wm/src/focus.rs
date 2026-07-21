@@ -147,6 +147,15 @@ impl WindowManager {
                     obj.gradient_bottom = None;
                 }
             }
+            // Update title text color for focus state.
+            let title_name = window.sdi_name("title_text");
+            if let Ok(obj) = sdi.get_mut(&title_name) {
+                obj.text_color = if is_active {
+                    self.theme.titlebar_text_color
+                } else {
+                    self.theme.titlebar_text_inactive_color
+                };
+            }
             // Dim inactive window frames.
             let frame_name = window.sdi_name("frame");
             if let Ok(obj) = sdi.get_mut(&frame_name) {

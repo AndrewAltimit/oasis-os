@@ -247,7 +247,10 @@ impl SdlBackend {
         self.set_color(stroke.color);
         let sw = (stroke.width as i32).max(1);
 
-        // Draw concentric circle outlines for the requested stroke width.
+        // Collect concentric circle outlines for the requested stroke
+        // width, then submit all perimeter points in one draw_points call
+        // (one FFI call instead of ~8 * 0.7r * width).
+        self.point_batch.clear();
         for offset in 0..sw {
             let r = radius as i32 - offset;
             if r <= 0 {
@@ -269,7 +272,7 @@ impl SdlBackend {
                     (tcx + y, tcy - x),
                     (tcx - y, tcy - x),
                 ] {
-                    let _ = self.canvas.draw_point(fpoint(px, py));
+                    self.point_batch.push(fpoint(px, py));
                 }
                 x += 1;
                 if d < 0 {
@@ -279,6 +282,9 @@ impl SdlBackend {
                     d += 2 * (x - y) + 1;
                 }
             }
+        }
+        if !self.point_batch.is_empty() {
+            let _ = self.canvas.draw_points(self.point_batch.as_slice());
         }
         Ok(())
     }
@@ -354,6 +360,10 @@ impl SdlBackend {
         self.set_color(stroke.color);
 
         let sw = (stroke.width as i32).max(1);
+        // Corner arc points are collected across all stroke rings and
+        // submitted in one draw_points call; the four straight edges stay
+        // as draw_line (4 calls per ring — already cheap).
+        self.point_batch.clear();
         for t in 0..sw {
             // Top edge.
             let _ = self.canvas.draw_line(
@@ -386,36 +396,32 @@ impl SdlBackend {
             let mut d = 1 - cr;
             while cx <= cy {
                 // Top-left corner.
-                let _ = self.canvas.draw_point(fpoint(tx + r - cy, ty + r - cx));
+                self.point_batch.push(fpoint(tx + r - cy, ty + r - cx));
                 if cx != cy {
-                    let _ = self.canvas.draw_point(fpoint(tx + r - cx, ty + r - cy));
+                    self.point_batch.push(fpoint(tx + r - cx, ty + r - cy));
                 }
                 // Top-right corner.
-                let _ = self
-                    .canvas
-                    .draw_point(fpoint(tx + w as i32 - 1 - r + cy, ty + r - cx));
+                self.point_batch
+                    .push(fpoint(tx + w as i32 - 1 - r + cy, ty + r - cx));
                 if cx != cy {
-                    let _ = self
-                        .canvas
-                        .draw_point(fpoint(tx + w as i32 - 1 - r + cx, ty + r - cy));
+                    self.point_batch
+                        .push(fpoint(tx + w as i32 - 1 - r + cx, ty + r - cy));
                 }
                 // Bottom-left corner.
                 if cx != 0 {
-                    let _ = self
-                        .canvas
-                        .draw_point(fpoint(tx + r - cy, ty + h as i32 - 1 - r + cx));
+                    self.point_batch
+                        .push(fpoint(tx + r - cy, ty + h as i32 - 1 - r + cx));
                 }
-                let _ = self
-                    .canvas
-                    .draw_point(fpoint(tx + r - cx, ty + h as i32 - 1 - r + cy));
+                self.point_batch
+                    .push(fpoint(tx + r - cx, ty + h as i32 - 1 - r + cy));
                 // Bottom-right corner.
                 if cx != 0 {
-                    let _ = self.canvas.draw_point(fpoint(
+                    self.point_batch.push(fpoint(
                         tx + w as i32 - 1 - r + cy,
                         ty + h as i32 - 1 - r + cx,
                     ));
                 }
-                let _ = self.canvas.draw_point(fpoint(
+                self.point_batch.push(fpoint(
                     tx + w as i32 - 1 - r + cx,
                     ty + h as i32 - 1 - r + cy,
                 ));
@@ -428,6 +434,9 @@ impl SdlBackend {
                     d += 2 * (cx - cy) + 1;
                 }
             }
+        }
+        if !self.point_batch.is_empty() {
+            let _ = self.canvas.draw_points(self.point_batch.as_slice());
         }
         Ok(())
     }
@@ -445,8 +454,9 @@ impl SdlBackend {
         let y_min = translated.iter().map(|v| v.1).min().unwrap_or(0);
         let y_max = translated.iter().map(|v| v.1).max().unwrap_or(0);
 
+        let mut x_intersections = Vec::new();
         for y in y_min..=y_max {
-            let mut x_intersections = Vec::new();
+            x_intersections.clear();
             let n = translated.len();
             for i in 0..n {
                 let j = (i + 1) % n;

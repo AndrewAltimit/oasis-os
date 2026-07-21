@@ -70,10 +70,61 @@ pub struct Theme {
     pub scrollbar_thumb: Color,
     /// Scrollbar thumb on hover.
     pub scrollbar_thumb_hover: Color,
+    /// Toggle track color when off.
+    pub toggle_track_off: Color,
+    /// Toggle track color when on.
+    pub toggle_track_on: Color,
+    /// Toggle thumb color.
+    pub toggle_thumb: Color,
+    /// Slider track (unfilled portion) background.
+    pub slider_track: Color,
+    /// Slider filled-portion color.
+    pub slider_fill: Color,
+    /// Slider thumb fill color.
+    pub slider_thumb: Color,
+    /// Menu bar background (`MenuBar` widget).
+    ///
+    /// The `menu_*` slots default to the classic Win95 grays the menu
+    /// bar widget has always rendered with — in every built-in theme —
+    /// so existing apps stay pixel-identical. Skins re-color them via
+    /// `[widget_states.menu]`.
+    pub menu_bg: Color,
+    /// Menu bar bottom border.
+    pub menu_border: Color,
+    /// Menu bar label text.
+    pub menu_text: Color,
+    /// Highlight behind an open label / hovered drop-down item.
+    pub menu_hover_bg: Color,
+    /// Text on the menu hover highlight.
+    pub menu_hover_text: Color,
+    /// Drop-down panel background.
+    pub menu_dropdown_bg: Color,
+    /// Drop-down bezel highlight (top/left edge).
+    pub menu_dropdown_border_light: Color,
+    /// Drop-down bezel shadow (bottom/right edge).
+    pub menu_dropdown_border_dark: Color,
+    /// Drop-down item text.
+    pub menu_item_text: Color,
+    /// Disabled drop-down item text.
+    pub menu_disabled_text: Color,
+    /// Drop-down separator line.
+    pub menu_separator: Color,
     /// Tooltip background.
     pub tooltip_bg: Color,
     /// Tooltip text color.
     pub tooltip_text: Color,
+
+    /// Focus ring color override for keyboard-focus indicators.
+    ///
+    /// `None` means "not themed": `FocusStyle` derives the ring color
+    /// from `accent` exactly as it always has. Skins set this via
+    /// `[geometry] focus_ring_color`.
+    pub focus_ring_color: Option<Color>,
+    /// Focus ring stroke width override in pixels (`None` = default).
+    pub focus_ring_width: Option<u16>,
+    /// Focus ring offset from the widget edge in pixels
+    /// (`None` = default).
+    pub focus_ring_offset: Option<i32>,
 
     /// Extra-small font size.
     pub font_size_xs: u16,
@@ -222,8 +273,29 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: Color::rgb(80, 160, 255),
+            toggle_thumb: Color::rgb(255, 255, 255),
+            slider_track: Color::rgb(25, 25, 35),
+            slider_fill: Color::rgb(80, 160, 255),
+            slider_thumb: Color::rgb(30, 30, 40),
+            menu_bg: Color::rgb(240, 240, 240),
+            menu_border: Color::rgb(180, 180, 180),
+            menu_text: Color::rgb(30, 30, 30),
+            menu_hover_bg: Color::rgb(49, 106, 197),
+            menu_hover_text: Color::rgb(255, 255, 255),
+            menu_dropdown_bg: Color::rgb(236, 236, 236),
+            menu_dropdown_border_light: Color::rgb(255, 255, 255),
+            menu_dropdown_border_dark: Color::rgb(105, 105, 105),
+            menu_item_text: Color::rgb(20, 20, 20),
+            menu_disabled_text: Color::rgb(150, 150, 150),
+            menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -291,8 +363,29 @@ impl Theme {
             scrollbar_track: Color::rgba(0, 0, 0, 10),
             scrollbar_thumb: Color::rgba(0, 0, 0, 30),
             scrollbar_thumb_hover: Color::rgba(0, 0, 0, 60),
+            toggle_track_off: Color::rgba(0, 0, 0, 10),
+            toggle_track_on: Color::rgb(50, 120, 220),
+            toggle_thumb: Color::rgb(255, 255, 255),
+            slider_track: Color::rgb(255, 255, 255),
+            slider_fill: Color::rgb(50, 120, 220),
+            slider_thumb: Color::rgb(255, 255, 255),
+            menu_bg: Color::rgb(240, 240, 240),
+            menu_border: Color::rgb(180, 180, 180),
+            menu_text: Color::rgb(30, 30, 30),
+            menu_hover_bg: Color::rgb(49, 106, 197),
+            menu_hover_text: Color::rgb(255, 255, 255),
+            menu_dropdown_bg: Color::rgb(236, 236, 236),
+            menu_dropdown_border_light: Color::rgb(255, 255, 255),
+            menu_dropdown_border_dark: Color::rgb(105, 105, 105),
+            menu_item_text: Color::rgb(20, 20, 20),
+            menu_disabled_text: Color::rgb(150, 150, 150),
+            menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(40, 40, 50),
             tooltip_text: Color::rgb(240, 240, 245),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -332,6 +425,8 @@ impl Theme {
         theme.accent_subtle = Color::rgba(255, 140, 30, 30);
         theme.border_strong = Color::rgb(255, 140, 30);
         theme.success = Color::rgb(100, 220, 80);
+        theme.toggle_track_on = theme.accent;
+        theme.slider_fill = theme.accent;
         theme
     }
 
@@ -377,8 +472,29 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 30),
             scrollbar_thumb: Color::rgba(255, 255, 255, 120),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 200),
+            toggle_track_off: Color::rgba(255, 255, 255, 30),
+            toggle_track_on: Color::rgb(0, 255, 255),
+            toggle_thumb: Color::rgb(0, 0, 0),
+            slider_track: Color::rgb(0, 0, 0),
+            slider_fill: Color::rgb(0, 255, 255),
+            slider_thumb: Color::rgb(0, 0, 0),
+            menu_bg: Color::rgb(240, 240, 240),
+            menu_border: Color::rgb(180, 180, 180),
+            menu_text: Color::rgb(30, 30, 30),
+            menu_hover_bg: Color::rgb(49, 106, 197),
+            menu_hover_text: Color::rgb(255, 255, 255),
+            menu_dropdown_bg: Color::rgb(236, 236, 236),
+            menu_dropdown_border_light: Color::rgb(255, 255, 255),
+            menu_dropdown_border_dark: Color::rgb(105, 105, 105),
+            menu_item_text: Color::rgb(20, 20, 20),
+            menu_disabled_text: Color::rgb(150, 150, 150),
+            menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(0, 0, 0),
             tooltip_text: Color::rgb(255, 255, 255),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -488,8 +604,29 @@ impl Theme {
             scrollbar_track: Color::rgba(255, 255, 255, 10),
             scrollbar_thumb: Color::rgba(255, 255, 255, 40),
             scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            toggle_track_off: Color::rgba(255, 255, 255, 10),
+            toggle_track_on: Color::rgb(80, 160, 255),
+            toggle_thumb: Color::rgb(255, 255, 255),
+            slider_track: Color::rgb(25, 25, 35),
+            slider_fill: Color::rgb(80, 160, 255),
+            slider_thumb: Color::rgb(30, 30, 40),
+            menu_bg: Color::rgb(240, 240, 240),
+            menu_border: Color::rgb(180, 180, 180),
+            menu_text: Color::rgb(30, 30, 30),
+            menu_hover_bg: Color::rgb(49, 106, 197),
+            menu_hover_text: Color::rgb(255, 255, 255),
+            menu_dropdown_bg: Color::rgb(236, 236, 236),
+            menu_dropdown_border_light: Color::rgb(255, 255, 255),
+            menu_dropdown_border_dark: Color::rgb(105, 105, 105),
+            menu_item_text: Color::rgb(20, 20, 20),
+            menu_disabled_text: Color::rgb(150, 150, 150),
+            menu_separator: Color::rgb(170, 170, 170),
             tooltip_bg: Color::rgb(50, 50, 65),
             tooltip_text: Color::rgb(220, 220, 230),
+
+            focus_ring_color: None,
+            focus_ring_width: None,
+            focus_ring_offset: None,
 
             font_size_xs: 8,
             font_size_sm: 8,
@@ -931,5 +1068,65 @@ mod tests {
     fn interactive_text_enabled() {
         let t = Theme::dark();
         assert_eq!(t.interactive_text(false), t.text_primary);
+    }
+
+    // -- Widget slot defaults (theming completeness sweep) --
+    //
+    // The slider/menu slots were extracted from hardcoded draw-path
+    // colors; these tests pin the defaults to the legacy values so the
+    // refactor stays pixel-identical for every built-in theme.
+
+    #[test]
+    fn slider_slots_default_to_legacy_sources() {
+        for t in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::high_contrast(),
+            Theme::colorblind(),
+        ] {
+            assert_eq!(t.slider_track, t.input_bg);
+            assert_eq!(t.slider_fill, t.accent);
+            assert_eq!(t.slider_thumb, t.surface);
+        }
+    }
+
+    #[test]
+    fn slider_dark_defaults_match_old_literals() {
+        let t = Theme::dark();
+        assert_eq!(t.slider_track, Color::rgb(25, 25, 35));
+        assert_eq!(t.slider_fill, Color::rgb(80, 160, 255));
+        assert_eq!(t.slider_thumb, Color::rgb(30, 30, 40));
+    }
+
+    #[test]
+    fn classic_slider_fill_follows_accent() {
+        let t = Theme::classic();
+        assert_eq!(t.slider_fill, t.accent);
+        assert_eq!(t.slider_fill, Color::rgb(255, 140, 30));
+    }
+
+    #[test]
+    fn menu_slots_default_to_win95_grays_in_all_themes() {
+        for t in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::classic(),
+            Theme::high_contrast(),
+            Theme::colorblind(),
+            Theme::protanopia(),
+            Theme::tritanopia(),
+        ] {
+            assert_eq!(t.menu_bg, Color::rgb(240, 240, 240));
+            assert_eq!(t.menu_border, Color::rgb(180, 180, 180));
+            assert_eq!(t.menu_text, Color::rgb(30, 30, 30));
+            assert_eq!(t.menu_hover_bg, Color::rgb(49, 106, 197));
+            assert_eq!(t.menu_hover_text, Color::rgb(255, 255, 255));
+            assert_eq!(t.menu_dropdown_bg, Color::rgb(236, 236, 236));
+            assert_eq!(t.menu_dropdown_border_light, Color::rgb(255, 255, 255));
+            assert_eq!(t.menu_dropdown_border_dark, Color::rgb(105, 105, 105));
+            assert_eq!(t.menu_item_text, Color::rgb(20, 20, 20));
+            assert_eq!(t.menu_disabled_text, Color::rgb(150, 150, 150));
+            assert_eq!(t.menu_separator, Color::rgb(170, 170, 170));
+        }
     }
 }

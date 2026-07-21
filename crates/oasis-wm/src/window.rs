@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use oasis_types::backend::Color;
+use oasis_types::nine_patch::NinePatchSlices;
 
 /// Shared, reference-counted window identifier.
 ///
@@ -175,8 +176,10 @@ pub struct WmTheme {
     pub titlebar_active_color: Color,
     /// Titlebar background color (inactive window).
     pub titlebar_inactive_color: Color,
-    /// Titlebar text color.
+    /// Titlebar text color (active window).
     pub titlebar_text_color: Color,
+    /// Titlebar text color (inactive window).
+    pub titlebar_text_inactive_color: Color,
     /// Frame/border color.
     pub frame_color: Color,
     /// Content area background color.
@@ -263,6 +266,17 @@ pub struct WmTheme {
     pub modal_overlay_color: Color,
     /// Alpha applied to inactive window frames (default 180; 255 = no dim).
     pub inactive_frame_alpha: u8,
+
+    // -- Nine-patch chrome --
+    /// Titlebar nine-patch from the skin: (asset key, [l, t, r, b] insets).
+    /// The shell resolves it into `titlebar_patch` once a backend exists.
+    pub titlebar_nine_patch: Option<(String, [u16; 4])>,
+    /// Frame nine-patch from the skin: (asset key, insets).
+    pub frame_nine_patch: Option<(String, [u16; 4])>,
+    /// Uploaded titlebar texture + slices (set by the shell on skin swap).
+    pub titlebar_patch: Option<(oasis_types::backend::TextureId, NinePatchSlices)>,
+    /// Uploaded frame texture + slices.
+    pub frame_patch: Option<(oasis_types::backend::TextureId, NinePatchSlices)>,
 }
 
 impl Default for WmTheme {
@@ -273,6 +287,7 @@ impl Default for WmTheme {
             titlebar_active_color: Color::rgb(50, 80, 140),
             titlebar_inactive_color: Color::rgb(80, 80, 80),
             titlebar_text_color: Color::WHITE,
+            titlebar_text_inactive_color: Color::WHITE,
             frame_color: Color::rgb(40, 40, 40),
             content_bg_color: Color::rgb(30, 30, 30),
             btn_close_color: Color::rgb(200, 60, 60),
@@ -312,6 +327,10 @@ impl Default for WmTheme {
             maximize_bottom_inset: 0,
             modal_overlay_color: Color::rgba(0, 0, 0, 100),
             inactive_frame_alpha: 180,
+            titlebar_nine_patch: None,
+            frame_nine_patch: None,
+            titlebar_patch: None,
+            frame_patch: None,
         }
     }
 }
@@ -585,55 +604,63 @@ impl Window {
     }
 
     /// The list of SDI object suffixes this window creates.
-    pub fn sdi_suffixes(&self) -> Vec<&'static str> {
+    ///
+    /// Returns a borrowed static slice: the render path calls this once per
+    /// window per frame, so it must not allocate.
+    pub fn sdi_suffixes(&self) -> &'static [&'static str] {
+        const FULLSCREEN: &[&str] = &["content"];
+        const FLOATING_WIDGET: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "content",
+            "content_stroke",
+        ];
+        const PANEL: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "content",
+            "content_stroke",
+        ];
+        const DIALOG: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "content",
+            "content_stroke",
+        ];
+        const APP_WINDOW: &[&str] = &[
+            "frame",
+            "titlebar",
+            "title_text",
+            "title_shadow",
+            "separator",
+            "btn_close",
+            "btn_close_glyph",
+            "btn_minimize",
+            "btn_minimize_glyph",
+            "btn_maximize",
+            "btn_maximize_glyph",
+            "content",
+            "content_stroke",
+        ];
         match self.window_type {
-            WindowType::Fullscreen => vec!["content"],
-            WindowType::FloatingWidget => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::Panel => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::Dialog => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "content",
-                "content_stroke",
-            ],
-            WindowType::AppWindow => vec![
-                "frame",
-                "titlebar",
-                "title_text",
-                "title_shadow",
-                "separator",
-                "btn_close",
-                "btn_close_glyph",
-                "btn_minimize",
-                "btn_minimize_glyph",
-                "btn_maximize",
-                "btn_maximize_glyph",
-                "content",
-                "content_stroke",
-            ],
+            WindowType::Fullscreen => FULLSCREEN,
+            WindowType::FloatingWidget => FLOATING_WIDGET,
+            WindowType::Panel => PANEL,
+            WindowType::Dialog => DIALOG,
+            WindowType::AppWindow => APP_WINDOW,
         }
     }
 

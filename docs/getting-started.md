@@ -168,7 +168,7 @@ rustup toolchain install nightly
 
 ```bash
 cd crates/oasis-backend-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 Output: `target/mipsel-sony-psp-std/release/EBOOT.PBP`
@@ -177,7 +177,7 @@ Output: `target/mipsel-sony-psp-std/release/EBOOT.PBP`
 
 ```bash
 cd crates/oasis-plugin-psp
-RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
 Output: `target/mipsel-sony-psp-std/release/oasis_plugin_psp.prx`

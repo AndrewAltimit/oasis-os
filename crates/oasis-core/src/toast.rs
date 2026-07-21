@@ -14,6 +14,16 @@ use crate::transition::ease_out_cubic;
 /// Maximum number of visible toasts.
 const MAX_VISIBLE: usize = 4;
 
+/// SDI object names for the `MAX_VISIBLE` toast slots, precomputed so the
+/// per-frame update never `format!`s a name (it runs even with no toasts).
+const BG_NAMES: [&str; MAX_VISIBLE] = ["toast_bg_0", "toast_bg_1", "toast_bg_2", "toast_bg_3"];
+const TEXT_NAMES: [&str; MAX_VISIBLE] = [
+    "toast_text_0",
+    "toast_text_1",
+    "toast_text_2",
+    "toast_text_3",
+];
+
 /// Toast severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastLevel {
@@ -59,6 +69,10 @@ impl Toast {
 #[derive(Debug)]
 pub struct ToastManager {
     toasts: VecDeque<Toast>,
+    /// Monotonic count of toasts ever shown (for UI sound derivation).
+    shown_total: u64,
+    /// Monotonic count of `ToastLevel::Error` toasts ever shown.
+    shown_errors: u64,
 }
 
 impl Default for ToastManager {
@@ -71,11 +85,24 @@ impl ToastManager {
     pub fn new() -> Self {
         Self {
             toasts: VecDeque::new(),
+            shown_total: 0,
+            shown_errors: 0,
         }
+    }
+
+    /// Monotonic `(total, errors)` counters of toasts ever shown. The UI
+    /// sound queue diffs these once per frame to fire Toast/Error sounds
+    /// without instrumenting every `show()` call site.
+    pub fn shown_counts(&self) -> (u64, u64) {
+        (self.shown_total, self.shown_errors)
     }
 
     /// Enqueue a new toast.
     pub fn show(&mut self, msg: impl Into<String>, level: ToastLevel, ttl: u32) {
+        self.shown_total += 1;
+        if level == ToastLevel::Error {
+            self.shown_errors += 1;
+        }
         self.toasts.push_back(Toast {
             message: msg.into(),
             level,
@@ -108,35 +135,30 @@ impl ToastManager {
         let toast_h = at.toast.height;
         let gap = at.toast.gap;
 
-        // Take the last MAX_VISIBLE toasts.
-        let visible: Vec<_> = self
-            .toasts
-            .iter()
-            .rev()
-            .take(MAX_VISIBLE)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
+        // The last MAX_VISIBLE toasts, oldest-first: slot i shows the
+        // toast at `start + i`. Direct indexing avoids the two Vec
+        // collects the old rev/take/rev dance allocated per frame.
+        let vis_len = self.toasts.len().min(MAX_VISIBLE);
+        let start = self.toasts.len() - vis_len;
 
         for i in 0..MAX_VISIBLE {
-            let bg_name = format!("toast_bg_{i}");
-            let text_name = format!("toast_text_{i}");
+            let bg_name = BG_NAMES[i];
+            let text_name = TEXT_NAMES[i];
 
-            if !sdi.contains(&bg_name) {
-                let obj = sdi.create(&bg_name);
+            if !sdi.contains(bg_name) {
+                let obj = sdi.create(bg_name);
                 obj.z = 950;
                 obj.overlay = true;
             }
-            if !sdi.contains(&text_name) {
-                let obj = sdi.create(&text_name);
+            if !sdi.contains(text_name) {
+                let obj = sdi.create(text_name);
                 obj.z = 951;
                 obj.overlay = true;
             }
 
-            if let Some(toast) = visible.get(i) {
+            if let Some(toast) = (i < vis_len).then(|| &self.toasts[start + i]) {
                 let alpha = toast.alpha(at.toast.fade_frames);
-                let slot = (visible.len() - 1 - i) as i32;
+                let slot = (vis_len - 1 - i) as i32;
                 let final_x = at.screen_w as i32 - toast_w as i32 - margin;
                 let y = at.screen_h as i32
                     - at.bottombar_height as i32
@@ -160,7 +182,7 @@ impl ToastManager {
                     ToastLevel::Error => at.toast.error_bg,
                 };
 
-                if let Ok(obj) = sdi.get_mut(&bg_name) {
+                if let Ok(obj) = sdi.get_mut(bg_name) {
                     obj.x = x;
                     obj.y = y;
                     obj.w = toast_w;
@@ -171,13 +193,13 @@ impl ToastManager {
                     obj.shadow_level = Some(at.toast.shadow_level);
                     obj.visible = true;
                 }
-                if let Ok(obj) = sdi.get_mut(&text_name) {
+                if let Ok(obj) = sdi.get_mut(text_name) {
                     obj.x = x + 8;
                     obj.y = y + 4;
                     obj.w = toast_w.saturating_sub(16);
                     obj.h = toast_h.saturating_sub(8);
                     obj.font_size = at.font_body;
-                    obj.text = Some(toast.message.clone());
+                    obj.set_text(&toast.message);
                     obj.text_color = with_alpha(at.toast.text_color, alpha);
                     obj.visible = true;
                     if at.toast.text_shadow {
@@ -186,10 +208,10 @@ impl ToastManager {
                     }
                 }
             } else {
-                if let Ok(obj) = sdi.get_mut(&bg_name) {
+                if let Ok(obj) = sdi.get_mut(bg_name) {
                     obj.visible = false;
                 }
-                if let Ok(obj) = sdi.get_mut(&text_name) {
+                if let Ok(obj) = sdi.get_mut(text_name) {
                     obj.visible = false;
                 }
             }
@@ -198,12 +220,9 @@ impl ToastManager {
 
     /// Hide all toast SDI objects.
     pub fn hide_sdi(sdi: &mut SdiRegistry) {
-        for i in 0..MAX_VISIBLE {
-            for prefix in &["toast_bg_", "toast_text_"] {
-                let name = format!("{prefix}{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
+        for name in BG_NAMES.iter().chain(TEXT_NAMES.iter()) {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
             }
         }
     }
@@ -245,6 +264,21 @@ mod tests {
         };
         // Near start -- should be fading in.
         assert!(t2.alpha(10) < 255);
+    }
+
+    #[test]
+    fn shown_counts_track_levels() {
+        let mut tm = ToastManager::new();
+        assert_eq!(tm.shown_counts(), (0, 0));
+        tm.show("info", ToastLevel::Info, 60);
+        tm.show("boom", ToastLevel::Error, 60);
+        tm.show("warn", ToastLevel::Warning, 60);
+        assert_eq!(tm.shown_counts(), (3, 1));
+        // Counters are monotonic: expiry doesn't rewind them.
+        for _ in 0..120 {
+            tm.tick();
+        }
+        assert_eq!(tm.shown_counts(), (3, 1));
     }
 
     #[test]

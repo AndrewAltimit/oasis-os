@@ -13,6 +13,7 @@ use oasis_types::backend::{BatchRect, BatchText, Color, SdiBackend};
 use oasis_ui::flex;
 use oasis_ui::menu_bar::{MenuBar, MenuEntry, MenuStyle};
 
+use crate::colors::FileManagerColors;
 use crate::model::{EntryKind, TreeEntry, parse_entry, truncate_label};
 use crate::state::FileManagerApp;
 
@@ -330,7 +331,7 @@ mod private {
         w: u32,
         h: u32,
         kind: EntryKind,
-        dark: Color,
+        colors: &FileManagerColors,
     ) {
         match kind {
             EntryKind::Dir | EntryKind::ParentDir => {
@@ -339,14 +340,14 @@ mod private {
                     y,
                     w,
                     h,
-                    color: Color::rgb(255, 207, 87),
+                    color: colors.folder_icon,
                 });
                 batch.push(BatchRect {
                     x,
                     y,
                     w: w / 2,
                     h: 4,
-                    color: Color::rgb(220, 170, 50),
+                    color: colors.folder_icon_tab,
                 });
             },
             EntryKind::File => {
@@ -355,7 +356,7 @@ mod private {
                     y,
                     w,
                     h,
-                    color: Color::WHITE,
+                    color: colors.file_icon,
                 });
                 let fold = 6u32;
                 batch.push(BatchRect {
@@ -363,11 +364,11 @@ mod private {
                     y,
                     w: fold,
                     h: fold,
-                    color: Color::rgb(220, 220, 220),
+                    color: colors.file_icon_fold,
                 });
             },
         }
-        push_outline(batch, x, y, w, h, dark);
+        push_outline(batch, x, y, w, h, colors.divider);
     }
 
     /// Hide all Explorer-view SDI objects.
@@ -430,8 +431,8 @@ mod private {
         bar_y: i32,
         bar_w: u32,
         bar_h: u32,
+        style: &MenuStyle,
     ) {
-        let style = MenuStyle::default();
         ensure_rect(
             sdi,
             "app_fm_menubar_bg",
@@ -515,6 +516,7 @@ mod private {
         bar_x: i32,
         bar_y: i32,
         bar_h: u32,
+        style: &MenuStyle,
     ) {
         for name in [
             "app_fm_dd_bg",
@@ -540,7 +542,6 @@ mod private {
         let Some(menu) = bar.menus.get(idx) else {
             return;
         };
-        let style = MenuStyle::default();
 
         // Anchor x to the open label.
         let mut label_x = 6i32;
@@ -758,6 +759,7 @@ impl FileManagerApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
+        let colors = FileManagerColors::from_theme(at);
         let half_w = (cw / 2).saturating_sub(1);
         let divider_x = cx + half_w as i32;
 
@@ -766,25 +768,26 @@ impl FileManagerApp {
             "File Manager  [L: {}]  [R: {}]",
             self.panels[0].browse_dir, self.panels[1].browse_dir,
         );
-        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
+        backend.draw_text(&title, cx + 4, cy + 2, 12, colors.title_text)?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,
             cw,
             1,
-            at.app.divider,
+            colors.divider,
         )?;
 
         // Menu bar below the title bar.
         let title_h = at.app.title_bar_height as i32;
         let menu_y = cy + title_h;
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
         self.menu
-            .draw_bar(backend, cx, menu_y, cw, FM_MENU_H, &MenuStyle::default())?;
+            .draw_bar(backend, cx, menu_y, cw, FM_MENU_H, &menu_style)?;
 
         // Vertical divider below the menu strip.
         let content_y = menu_y + FM_MENU_H as i32;
         let content_h = ch.saturating_sub(title_h as u32 + FM_MENU_H + 14);
-        backend.fill_rect(divider_x, content_y, 1, content_h, at.app.divider)?;
+        backend.fill_rect(divider_x, content_y, 1, content_h, colors.divider)?;
 
         // Draw each panel.
         let line_h = at.terminal_line_height.max(12) as i32;
@@ -795,7 +798,7 @@ impl FileManagerApp {
             let is_active = pi == self.active_panel;
 
             if is_active {
-                backend.fill_rect(px, content_y, pw, 1, at.app.selected_text)?;
+                backend.fill_rect(px, content_y, pw, 1, colors.selected_text)?;
             }
 
             let visible = panel
@@ -819,9 +822,9 @@ impl FileManagerApp {
                 };
                 let text = format!("{prefix}{display}");
                 let text_color = if is_active && i == panel.cursor {
-                    at.app.selected_text
+                    colors.selected_text
                 } else {
-                    at.app.text
+                    colors.text
                 };
                 let y = content_y + 2 + i as i32 * line_h;
                 backend.draw_text(&text, px + 2, y, 12, text_color)?;
@@ -834,13 +837,13 @@ impl FileManagerApp {
             cx + 4,
             scroll_y,
             10,
-            at.app.dim_text,
+            colors.dim_text,
         )?;
 
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &MenuStyle::default())?;
+                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &menu_style)?;
         }
 
         Ok(())
@@ -848,6 +851,7 @@ impl FileManagerApp {
 
     /// Render dual-panel to SDI objects.
     pub(crate) fn update_sdi_dual(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        let colors = FileManagerColors::from_theme(at);
         // Title with both panel paths.
         if let Ok(obj) = sdi.get_mut("app_title_text") {
             obj.text = Some(format!(
@@ -857,7 +861,7 @@ impl FileManagerApp {
             obj.x = 8;
             obj.y = 4;
             obj.font_size = at.font_body;
-            obj.text_color = at.app.title_bar_text;
+            obj.text_color = colors.title_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -884,7 +888,16 @@ impl FileManagerApp {
             .saturating_sub(title_h + FM_MENU_H + at.statusbar_height + at.bottombar_height + 14);
         let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
 
-        update_menu_bar_sdi(sdi, &self.menu, 0, menu_y, at.screen_w, FM_MENU_H);
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        update_menu_bar_sdi(
+            sdi,
+            &self.menu,
+            0,
+            menu_y,
+            at.screen_w,
+            FM_MENU_H,
+            &menu_style,
+        );
 
         // Vertical divider.
         if !sdi.contains("app_divider") {
@@ -895,7 +908,7 @@ impl FileManagerApp {
             obj.y = content_y - 2;
             obj.w = 1;
             obj.h = divider_h;
-            obj.color = at.app.divider;
+            obj.color = colors.divider;
             obj.visible = true;
             obj.z = 102;
         }
@@ -929,9 +942,9 @@ impl FileManagerApp {
                 obj.y = rect.y;
                 obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
-                    at.app.selected_text
+                    colors.selected_text
                 } else {
-                    at.app.text
+                    colors.text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -968,9 +981,9 @@ impl FileManagerApp {
                 obj.y = rect.y;
                 obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
-                    at.app.selected_text
+                    colors.selected_text
                 } else {
-                    at.app.text
+                    colors.text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -988,7 +1001,7 @@ impl FileManagerApp {
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
             obj.font_size = at.font_hint;
-            obj.text_color = at.app.dim_text;
+            obj.text_color = colors.dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -996,7 +1009,7 @@ impl FileManagerApp {
         }
 
         // Drop-down overlay (when an open menu exists).
-        update_menu_dropdown_sdi(sdi, &self.menu, 0, menu_y, FM_MENU_H);
+        update_menu_dropdown_sdi(sdi, &self.menu, 0, menu_y, FM_MENU_H, &menu_style);
 
         // Hide single-panel lines.
         for i in 0..100 {
@@ -1012,6 +1025,7 @@ impl FileManagerApp {
 
     /// Render Explorer view to SDI. Updates `explorer_cols`/`rows` cache.
     pub(crate) fn update_sdi_explorer(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        let colors = FileManagerColors::from_theme(at);
         let panel = self.panels[self.active_panel].clone();
         // Title text reused from chrome.
         if let Ok(obj) = sdi.get_mut("app_title_text") {
@@ -1019,7 +1033,7 @@ impl FileManagerApp {
             obj.x = 8;
             obj.y = 4;
             obj.font_size = at.font_body;
-            obj.text_color = at.app.title_bar_text;
+            obj.text_color = colors.title_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -1038,10 +1052,19 @@ impl FileManagerApp {
         self.cached_system_bars
             .set(at.statusbar_height + at.bottombar_height);
 
-        let dark = at.app.divider;
+        let dark = colors.divider;
 
         // Menu bar (shared MenuBar widget; click hits routed via App::handle_click).
-        update_menu_bar_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_w, g.menu_h);
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        update_menu_bar_sdi(
+            sdi,
+            &self.menu,
+            g.menu_x,
+            g.menu_y,
+            g.menu_w,
+            g.menu_h,
+            &menu_style,
+        );
 
         // Address bar.
         ensure_rect(
@@ -1053,7 +1076,7 @@ impl FileManagerApp {
                 w: g.menu_w,
                 h: g.addr_h,
             },
-            at.app.bg,
+            colors.bg,
             104,
         );
         ensure_text(
@@ -1064,7 +1087,7 @@ impl FileManagerApp {
             g.addr_y + 2,
             TextStyle {
                 font_size: at.font_hint,
-                color: at.app.dim_text,
+                color: colors.dim_text,
                 z: 105,
             },
         );
@@ -1076,7 +1099,7 @@ impl FileManagerApp {
             w: addr_field_w,
             h: g.addr_h - 2,
         };
-        ensure_rect(sdi, "app_xp_addr_field", addr_field, Color::WHITE, 105);
+        ensure_rect(sdi, "app_xp_addr_field", addr_field, colors.pane_bg, 105);
         outline_rect(sdi, "app_xp_addr_o", addr_field, dark, 106);
         ensure_text(
             sdi,
@@ -1086,7 +1109,7 @@ impl FileManagerApp {
             g.addr_y + 3,
             TextStyle {
                 font_size: at.font_hint,
-                color: Color::BLACK,
+                color: colors.pane_text,
                 z: 107,
             },
         );
@@ -1098,7 +1121,7 @@ impl FileManagerApp {
             w: g.tree_w,
             h: g.body_h,
         };
-        ensure_rect(sdi, "app_xp_tree_bg", tree_box, Color::WHITE, 104);
+        ensure_rect(sdi, "app_xp_tree_bg", tree_box, colors.pane_bg, 104);
         outline_rect(sdi, "app_xp_tree_o", tree_box, dark, 105);
 
         // Tree contents.
@@ -1122,9 +1145,9 @@ impl FileManagerApp {
                     obj.y = y + 1;
                     obj.font_size = at.font_hint;
                     obj.text_color = if entry.is_current {
-                        at.app.selected_text
+                        colors.selected_text
                     } else {
-                        Color::BLACK
+                        colors.pane_text
                     };
                     obj.w = 0;
                     obj.h = 0;
@@ -1148,7 +1171,7 @@ impl FileManagerApp {
                         w: g.tree_w.saturating_sub(4),
                         h: tree_line_h as u32,
                     },
-                    at.app.selected_bg,
+                    colors.selected_bg,
                     105,
                 );
             } else if let Ok(obj) = sdi.get_mut("app_xp_tree_sel") {
@@ -1165,7 +1188,7 @@ impl FileManagerApp {
             w: g.grid_w,
             h: g.body_h,
         };
-        ensure_rect(sdi, "app_xp_grid_bg", grid_box, Color::WHITE, 104);
+        ensure_rect(sdi, "app_xp_grid_bg", grid_box, colors.pane_bg, 104);
         outline_rect(sdi, "app_xp_grid_o", grid_box, dark, 105);
 
         // Tiles.
@@ -1196,7 +1219,7 @@ impl FileManagerApp {
                 obj.y = ty;
                 obj.w = g.tile_w;
                 obj.h = g.tile_h;
-                obj.color = at.app.selected_bg;
+                obj.color = colors.selected_bg;
                 obj.visible = tile_visible && is_selected;
                 obj.z = 106;
             }
@@ -1211,8 +1234,8 @@ impl FileManagerApp {
             let icon_x = tx + (g.tile_w as i32 - g.icon_w as i32) / 2;
             let icon_y = ty + 4;
             let body_color = match kind {
-                EntryKind::Dir | EntryKind::ParentDir => Color::rgb(255, 207, 87),
-                EntryKind::File => Color::WHITE,
+                EntryKind::Dir | EntryKind::ParentDir => colors.folder_icon,
+                EntryKind::File => colors.file_icon,
             };
             let body_name = format!("app_xp_t_body_{i}");
             if !sdi.contains(&body_name) {
@@ -1242,7 +1265,7 @@ impl FileManagerApp {
                         obj.y = icon_y;
                         obj.w = g.icon_w / 2;
                         obj.h = 4;
-                        obj.color = Color::rgb(220, 170, 50);
+                        obj.color = colors.folder_icon_tab;
                     },
                     EntryKind::File => {
                         let fold = 6u32;
@@ -1250,7 +1273,7 @@ impl FileManagerApp {
                         obj.y = icon_y;
                         obj.w = fold;
                         obj.h = fold;
-                        obj.color = Color::rgb(220, 220, 220);
+                        obj.color = colors.file_icon_fold;
                     },
                 }
                 obj.stroke_width = None;
@@ -1271,9 +1294,9 @@ impl FileManagerApp {
                 obj.y = icon_y + g.icon_h as i32 + 2;
                 obj.font_size = at.font_hint;
                 obj.text_color = if is_selected {
-                    at.app.selected_text
+                    colors.selected_text
                 } else {
-                    Color::BLACK
+                    colors.pane_text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -1293,12 +1316,12 @@ impl FileManagerApp {
                 w: g.menu_w,
                 h: g.status_h,
             },
-            at.app.title_bar_bg,
+            colors.status_bg,
             104,
         );
         let status_style = TextStyle {
             font_size: at.font_hint,
-            color: at.app.title_bar_text,
+            color: colors.status_text,
             z: 105,
         };
         ensure_text(
@@ -1327,7 +1350,7 @@ impl FileManagerApp {
         }
 
         // Drop-down overlay last so it floats above the icon grid.
-        update_menu_dropdown_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_h);
+        update_menu_dropdown_sdi(sdi, &self.menu, g.menu_x, g.menu_y, g.menu_h, &menu_style);
     }
 
     /// Direct-draw Explorer view in windowed mode.
@@ -1340,6 +1363,7 @@ impl FileManagerApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
+        let colors = FileManagerColors::from_theme(at);
         let panel = self.active();
         // No inner title bar -- the WM titlebar already shows "File Manager"
         // and the address bar below shows the current path.
@@ -1350,26 +1374,21 @@ impl FileManagerApp {
         self.cached_system_bars
             .set(at.statusbar_height + at.bottombar_height);
 
-        let dark = at.app.divider;
+        let dark = colors.divider;
 
         // Menu bar via the shared MenuBar widget.
-        self.menu.draw_bar(
-            backend,
-            g.menu_x,
-            g.menu_y,
-            g.menu_w,
-            g.menu_h,
-            &MenuStyle::default(),
-        )?;
+        let menu_style = MenuStyle::from_theme(&at.ui_theme);
+        self.menu
+            .draw_bar(backend, g.menu_x, g.menu_y, g.menu_w, g.menu_h, &menu_style)?;
 
         // Address bar.
-        backend.fill_rect(g.menu_x, g.addr_y, g.menu_w, g.addr_h, at.app.bg)?;
+        backend.fill_rect(g.menu_x, g.addr_y, g.menu_w, g.addr_h, colors.bg)?;
         backend.draw_text(
             "Address:",
             g.menu_x + 4,
             g.addr_y + 2,
             at.font_hint,
-            at.app.dim_text,
+            colors.dim_text,
         )?;
         let addr_field_x = g.menu_x + 56;
         let addr_field_w = g.menu_w.saturating_sub(60);
@@ -1378,7 +1397,7 @@ impl FileManagerApp {
             g.addr_y + 1,
             addr_field_w,
             g.addr_h - 2,
-            Color::WHITE,
+            colors.pane_bg,
         )?;
         draw_outline(
             backend,
@@ -1393,11 +1412,11 @@ impl FileManagerApp {
             addr_field_x + 4,
             g.addr_y + 3,
             at.font_hint,
-            Color::BLACK,
+            colors.pane_text,
         )?;
 
         // Tree pane.
-        backend.fill_rect(g.tree_x, g.body_y, g.tree_w, g.body_h, Color::WHITE)?;
+        backend.fill_rect(g.tree_x, g.body_y, g.tree_w, g.body_h, colors.pane_bg)?;
         draw_outline(backend, g.tree_x, g.body_y, g.tree_w, g.body_h, dark)?;
         let tree_entries = &panel.tree_entries;
         let tree_line_h = (at.font_hint as i32 + 2).max(11);
@@ -1412,14 +1431,14 @@ impl FileManagerApp {
                     y,
                     g.tree_w.saturating_sub(4),
                     tree_line_h as u32,
-                    at.app.selected_bg,
+                    colors.selected_bg,
                 )?;
             }
             let indent = entry.depth as i32 * 8;
             let color = if entry.is_current {
-                at.app.selected_text
+                colors.selected_text
             } else {
-                Color::BLACK
+                colors.pane_text
             };
             backend.draw_text(
                 &entry.label,
@@ -1436,7 +1455,7 @@ impl FileManagerApp {
         // Collecting them into batches collapses the per-item wasm-bindgen
         // cost into one round-trip per batch on the WASM backend; native
         // backends fall through to the per-item default.
-        backend.fill_rect(g.grid_x, g.body_y, g.grid_w, g.body_h, Color::WHITE)?;
+        backend.fill_rect(g.grid_x, g.body_y, g.grid_w, g.body_h, colors.pane_bg)?;
         draw_outline(backend, g.grid_x, g.body_y, g.grid_w, g.body_h, dark)?;
         let count_visible = g.cols * g.rows;
         let mut tile_rects: Vec<BatchRect> = Vec::with_capacity(count_visible * 7);
@@ -1464,7 +1483,7 @@ impl FileManagerApp {
                     y: ty,
                     w: g.tile_w,
                     h: g.tile_h,
-                    color: at.app.selected_bg,
+                    color: colors.selected_bg,
                 });
             }
             let (name, kind) = parse_entry(line);
@@ -1477,14 +1496,14 @@ impl FileManagerApp {
                 g.icon_w,
                 g.icon_h,
                 kind,
-                dark,
+                &colors,
             );
             let max_chars = (g.tile_w as usize / 7).max(4);
             let label = truncate_label(&name, max_chars);
             let label_color = if is_selected {
-                at.app.selected_text
+                colors.selected_text
             } else {
-                Color::BLACK
+                colors.pane_text
             };
             tile_labels.push((tx + 2, icon_y + g.icon_h as i32 + 2, label_color, label));
         }
@@ -1506,37 +1525,26 @@ impl FileManagerApp {
 
         // Status.
         let count = panel.lines.iter().filter(|l| l.trim() != "..").count();
-        backend.fill_rect(
-            g.menu_x,
-            g.status_y,
-            g.menu_w,
-            g.status_h,
-            at.app.title_bar_bg,
-        )?;
+        backend.fill_rect(g.menu_x, g.status_y, g.menu_w, g.status_h, colors.status_bg)?;
         backend.draw_text(
             &format!("{count} object(s)"),
             g.menu_x + 4,
             g.status_y + 1,
             at.font_hint,
-            at.app.title_bar_text,
+            colors.status_text,
         )?;
         backend.draw_text(
             "View>List  Cancel=back",
             g.menu_x + g.menu_w as i32 - 180,
             g.status_y + 1,
             at.font_hint,
-            at.app.title_bar_text,
+            colors.status_text,
         )?;
 
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
-            self.menu.draw_dropdown(
-                backend,
-                g.menu_x,
-                g.menu_y,
-                g.menu_h,
-                &MenuStyle::default(),
-            )?;
+            self.menu
+                .draw_dropdown(backend, g.menu_x, g.menu_y, g.menu_h, &menu_style)?;
         }
 
         Ok(())

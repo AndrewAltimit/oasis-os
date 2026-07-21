@@ -11,7 +11,7 @@ authors.workspace = true
 oasis-app-core = { workspace = true }
 oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
-oasis-skin = { workspace = true }
+oasis-skin = { workspace = true, features = ["serialize"] }
 oasis-vfs = { workspace = true }
 
 [lints]

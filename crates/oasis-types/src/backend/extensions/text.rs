@@ -12,6 +12,14 @@ use crate::error::Result;
 /// Text measurement and drawing helpers.
 #[allow(clippy::too_many_arguments)]
 pub trait SdiText: SdiCore {
+    /// Install (or clear) a TrueType font for all subsequent text drawing
+    /// and measurement.
+    ///
+    /// `font` is raw TTF/OTF bytes, typically a skin's `[typography] font`
+    /// asset; `None` restores the built-in bitmap font. Backends without a
+    /// TTF rasterizer ignore this (the default is a no-op), keeping the
+    /// bitmap path pixel-identical.
+    fn set_font(&mut self, _font: Option<&[u8]>) {}
     /// Measure the height of text at the given font size.
     fn measure_text_height(&self, font_size: u16) -> u32 {
         let fs = font_size as u32;
