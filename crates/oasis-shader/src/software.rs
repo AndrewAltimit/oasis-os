@@ -105,9 +105,10 @@ impl SoftwareShaderRenderer {
         let scale_f = RENDER_SCALE as f32;
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row_par(lo, iw, |iy, row| {
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
                 let qx = (ox / pixel_size).floor() * pixel_size;
                 let qy = (oy / pixel_size).floor() * pixel_size;
                 let mut ux = (qx - 0.5 * w) / res_len;
@@ -157,10 +158,9 @@ impl SoftwareShaderRenderer {
                     (base_w * c1[2] + blend * (c1[2] * c1p + c2[2] * c2p + c3[2] * c3p) + light)
                         .clamp(0.0, 1.0);
 
-                self.lo_buf[(iy * iw + ix) as usize] =
-                    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
+                *px = [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -191,30 +191,66 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
-                let mut uvx = (ox - 0.5 * w) / w + off_x;
-                let mut uvy = (oy - 0.5 * h) / w + off_y;
-                uvx *= size;
-                uvy *= size;
+        // The 3x3 neighbour search evaluates `voronoi_pt` (4 sins) nine
+        // times per pixel, but the animated points depend only on the
+        // integer cell id — precompute them once for every cell in view
+        // (plus a 1-cell margin for the neighbour taps). uv is monotonic
+        // in the pixel position, so the corner pixels bound the id range.
+        let uv_x = |ox: f32| ((ox - 0.5 * w) / w + off_x) * size;
+        let uv_y = |oy: f32| ((oy - 0.5 * h) / w + off_y) * size;
+        let (ox0, oy0) = lo_to_out(0, 0, scale_f);
+        let (ox1, oy1) = lo_to_out(iw - 1, ih - 1, scale_f);
+        // min/max over both corners so a negative `size` (reversed uv
+        // direction) still yields valid bounds.
+        let (ex0, ex1) = (uv_x(ox0).floor() as i32, uv_x(ox1).floor() as i32);
+        let (ey0, ey1) = (uv_y(oy0).floor() as i32, uv_y(oy1).floor() as i32);
+        let idx_min = ex0.min(ex1) - 1;
+        let idy_min = ey0.min(ey1) - 1;
+        let gw = (ex0.max(ex1) + 1 - idx_min + 1) as usize;
+        let gh = (ey0.max(ey1) + 1 - idy_min + 1) as usize;
+        // Pathological params (huge/NaN `size`) could explode the grid;
+        // fall back to direct per-pixel evaluation instead of allocating.
+        let use_grid = gw.saturating_mul(gh) <= (1 << 20);
+        let mut pts = vec![(0.0f32, 0.0f32); if use_grid { gw * gh } else { 0 }];
+        if use_grid {
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let nid_x = (idx_min + gx as i32) as f32;
+                    let nid_y = (idy_min + gy as i32) as f32;
+                    pts[gy * gw + gx] = voronoi_pt(t, nid_x, nid_y);
+                }
+            }
+        }
+
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            for (ix, out) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
+                let uvx = uv_x(ox);
+                let uvy = uv_y(oy);
 
                 let gvx = fract(uvx) - 0.5;
                 let gvy = fract(uvy) - 0.5;
                 let idx = uvx.floor();
                 let idy = uvy.floor();
+                let gx0 = (idx as i32 - idx_min) as usize;
+                let gy0 = (idy as i32 - idy_min) as usize;
 
                 let mut mindist2: f32 = 1e9;
                 let mut vorv_x: f32 = 0.0;
                 let mut vorv_y: f32 = 0.0;
 
-                for i in -1..=1 {
-                    for j in -1..=1 {
+                for i in -1i32..=1 {
+                    for j in -1i32..=1 {
                         let fi = i as f32;
                         let fj = j as f32;
-                        let nid_x = idx + fi;
-                        let nid_y = idy + fj;
-                        let (px, py) = voronoi_pt(t, nid_x, nid_y);
+                        let (px, py) = if use_grid {
+                            let gx = (gx0 as i32 + i) as usize;
+                            let gy = (gy0 as i32 + j) as usize;
+                            pts[gy * gw + gx]
+                        } else {
+                            voronoi_pt(t, idx + fi, idy + fj)
+                        };
                         let dx = gvx + px - fi;
                         let dy = gvy + py - fj;
                         let dist2 = dx * dx + dy * dy;
@@ -231,10 +267,9 @@ impl SoftwareShaderRenderer {
                 let g = lerp(col1[1], col2[1], blend).clamp(0.0, 1.0);
                 let b = lerp(col1[2], col2[2], blend).clamp(0.0, 1.0);
 
-                self.lo_buf[(iy * iw + ix) as usize] =
-                    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
+                *out = [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -251,9 +286,50 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+        // Everything except the two shadow smoothsteps depends only on
+        // the integer cell id (~8 sin/cos per pixel otherwise). Values
+        // per cell: [dim, cr, cg, cb, left_diff.min(0), top_diff.min(0)].
+        let cell_vals = |idx: f32, idy: f32| -> [f32; 6] {
+            let rb = cell_bright(time * speed, idx, idy);
+            let cs = hash2(idx, idy) * 0.1;
+            // 0.6 + 0.5*cos(time + id.xyx*0.1 + vec3(4,2,1) + colorShift)
+            let cr = 0.6 + 0.5 * (anim_time + idx * 0.1 + 4.0 + cs).cos();
+            let cg = 0.6 + 0.5 * (anim_time + idy * 0.1 + 2.0 + cs).cos();
+            let cb = 0.6 + 0.5 * (anim_time + idx * 0.1 + 1.0 + cs).cos();
+            let ldm = (cell_bright(time * speed, idx - 1.0, idy) - rb).min(0.0);
+            let tdm = (cell_bright(time * speed, idx, idy + 1.0) - rb).min(0.0);
+            [1.0 - rb * 0.2, cr, cg, cb, ldm, tdm]
+        };
+
+        let (ox1, oy1) = lo_to_out(iw - 1, ih - 1, scale_f);
+        let uv0 = lo_to_out(0, 0, scale_f);
+        let (ex0, ex1) = (
+            (uv0.0 / mx * size).floor() as i32,
+            (ox1 / mx * size).floor() as i32,
+        );
+        let (ey0, ey1) = (
+            (uv0.1 / mx * size).floor() as i32,
+            (oy1 / mx * size).floor() as i32,
+        );
+        let idx_min = ex0.min(ex1);
+        let idy_min = ey0.min(ey1);
+        let gw = (ex0.max(ex1) - idx_min + 1) as usize;
+        let gh = (ey0.max(ey1) - idy_min + 1) as usize;
+        let use_grid = gw.saturating_mul(gh) <= (1 << 20);
+        let mut cells = vec![[0.0f32; 6]; if use_grid { gw * gh } else { 0 }];
+        if use_grid {
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    cells[gy * gw + gx] =
+                        cell_vals((idx_min + gx as i32) as f32, (idy_min + gy as i32) as f32);
+                }
+            }
+        }
+
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
                 let uvx = ox / mx * size;
                 let uvy = oy / mx * size;
 
@@ -262,30 +338,26 @@ impl SoftwareShaderRenderer {
                 let gvx = fract(uvx) - 0.5;
                 let gvy = fract(uvy) - 0.5;
 
-                let rb = cell_bright(time * speed, idx, idy);
-                let cs = hash2(idx, idy) * 0.1;
-
-                // 0.6 + 0.5*cos(time + id.xyx*0.1 + vec3(4,2,1) + colorShift)
-                let cr = 0.6 + 0.5 * (anim_time + idx * 0.1 + 4.0 + cs).cos();
-                let cg = 0.6 + 0.5 * (anim_time + idy * 0.1 + 2.0 + cs).cos();
-                let cb = 0.6 + 0.5 * (anim_time + idx * 0.1 + 1.0 + cs).cos();
+                let [dim, cr, cg, cb, ldm, tdm] = if use_grid {
+                    let gx = (idx as i32 - idx_min) as usize;
+                    let gy = (idy as i32 - idy_min) as usize;
+                    cells[gy * gw + gx]
+                } else {
+                    cell_vals(idx, idy)
+                };
 
                 // Shadows.
-                let left_diff = cell_bright(time * speed, idx - 1.0, idy) - rb;
-                let top_diff = cell_bright(time * speed, idx, idy + 1.0) - rb;
-                let s1 = smoothstep(0.0, 0.7, gvx * left_diff.min(0.0));
-                let s2 = smoothstep(0.0, 0.7, -gvy * top_diff.min(0.0));
+                let s1 = smoothstep(0.0, 0.7, gvx * ldm);
+                let s2 = smoothstep(0.0, 0.7, -gvy * tdm);
                 let shadow = (s1 + s2) * 0.4;
 
-                let dim = 1.0 - rb * 0.2;
                 let r = ((cr - shadow) * dim).clamp(0.0, 1.0);
                 let g = ((cg - shadow) * dim).clamp(0.0, 1.0);
                 let b = ((cb - shadow) * dim).clamp(0.0, 1.0);
 
-                self.lo_buf[(iy * iw + ix) as usize] =
-                    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
+                *px = [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -316,51 +388,61 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
-                let uv_x = 2.0 * (2.0 * ox - self.width as f32) / res_y;
-                let uv_y = 2.0 * (2.0 * oy - h) / res_y;
+        // Each wave's height is a function of the column (uv_x) and time
+        // only — hoist the 12 sines per pixel to 12 per column.
+        let w_f = self.width as f32;
+        let heights: Vec<[f32; 3]> = (0..iw)
+            .map(|ix| {
+                let ox = lo_to_out(ix, 0, scale_f).0;
+                let uv_x = 2.0 * (2.0 * ox - w_f) / res_y;
+                [
+                    ocean_wave_height(
+                        t,
+                        uv_x,
+                        [0.1, 0.2, 0.3, 0.4],
+                        [0.1, 0.4, 0.8, 0.3],
+                        [PI, 1.5 * PI, 2.0 * PI, 2.5 * PI],
+                    ),
+                    ocean_wave_height(
+                        t,
+                        uv_x,
+                        [0.1, 0.3, 0.4, 0.1],
+                        [0.8, 0.5, 0.4, 0.3],
+                        [5.0, 2.0, 1.0, 3.0],
+                    ),
+                    ocean_wave_height(
+                        t,
+                        uv_x,
+                        [0.3, 0.2, 0.1, 0.2],
+                        [0.9, 0.5, 0.1, 0.1],
+                        [1.0, 2.0, 2.0, 3.0],
+                    ),
+                ]
+            })
+            .collect();
 
-                let bg_t = oy / h;
-                let mut r = lerp(bg_bot[0], bg_top[0], bg_t);
-                let mut g = lerp(bg_bot[1], bg_top[1], bg_t);
-                let mut b = lerp(bg_bot[2], bg_top[2], bg_t);
-
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            let oy = lo_to_out(0, iy, scale_f).1;
+            let uv_y = 2.0 * (2.0 * oy - h) / res_y;
+            let bg_t = oy / h;
+            let base_r = lerp(bg_bot[0], bg_top[0], bg_t);
+            let base_g = lerp(bg_bot[1], bg_top[1], bg_t);
+            let base_b = lerp(bg_bot[2], bg_top[2], bg_t);
+            for (ix, px) in row.iter_mut().enumerate() {
+                let hs = heights[ix];
                 let mut f: f32 = 0.0;
-                f += ocean_wave(
-                    t,
-                    uv_x,
-                    uv_y,
-                    [0.1, 0.2, 0.3, 0.4],
-                    [0.1, 0.4, 0.8, 0.3],
-                    [PI, 1.5 * PI, 2.0 * PI, 2.5 * PI],
-                );
-                f += ocean_wave(
-                    t,
-                    uv_x,
-                    uv_y,
-                    [0.1, 0.3, 0.4, 0.1],
-                    [0.8, 0.5, 0.4, 0.3],
-                    [5.0, 2.0, 1.0, 3.0],
-                );
-                f += ocean_wave(
-                    t,
-                    uv_x,
-                    uv_y,
-                    [0.3, 0.2, 0.1, 0.2],
-                    [0.9, 0.5, 0.1, 0.1],
-                    [1.0, 2.0, 2.0, 3.0],
-                );
+                f += ocean_wave_shade(hs[0], uv_y);
+                f += ocean_wave_shade(hs[1], uv_y);
+                f += ocean_wave_shade(hs[2], uv_y);
 
-                r = (r + f * wave_col[0]).clamp(0.0, 1.0);
-                g = (g + f * wave_col[1]).clamp(0.0, 1.0);
-                b = (b + f * wave_col[2]).clamp(0.0, 1.0);
+                let r = (base_r + f * wave_col[0]).clamp(0.0, 1.0);
+                let g = (base_g + f * wave_col[1]).clamp(0.0, 1.0);
+                let b = (base_b + f * wave_col[2]).clamp(0.0, 1.0);
 
-                self.lo_buf[(iy * iw + ix) as usize] =
-                    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
+                *px = [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -388,19 +470,29 @@ impl SoftwareShaderRenderer {
         let wave_height: f32 = 10.0;
         let col_diff: [f32; 3] = [0.1, 0.05, 0.1];
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
-                let xy_x = ox / w;
-                let xy_y = oy / h;
+        // t.cos()/t.sin() are loop constants; the wave values depend
+        // only on the column.
+        let (t_cos, t_sin) = (t.cos(), t.sin());
+        let waves: Vec<(f32, f32)> = (0..iw)
+            .map(|ix| {
+                let xy_x = lo_to_out(ix, 0, scale_f).0 / w;
+                let w1 = ((xy_x + t_cos / wave_diff + t * 0.05) * wave_width).cos() / wave_height;
+                let w2 = ((xy_x + t_sin / wave_diff + t * 0.05) * wave_width).sin() / wave_height;
+                (w1, w2)
+            })
+            .collect();
+
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            let xy_y = lo_to_out(0, iy, scale_f).1 / h;
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (w1_val, w2_val) = waves[ix];
 
                 let mut r = bg[0] - 0.1 * xy_y;
                 let mut g = bg[1] - 0.15 * xy_y;
                 let mut b = bg[2] - 0.05 * xy_y;
 
                 // First wave (cosine).
-                let w1_val =
-                    ((xy_x + t.cos() / wave_diff + t * 0.05) * wave_width).cos() / wave_height;
                 let w1_line = w1_val + 0.35;
                 let w1b = w1_val + 0.25;
 
@@ -416,8 +508,6 @@ impl SoftwareShaderRenderer {
                 }
 
                 // Second wave (sine).
-                let w2_val =
-                    ((xy_x + t.sin() / wave_diff + t * 0.05) * wave_width).sin() / wave_height;
                 let w2_line = w2_val + 0.5;
                 let w2b = w2_val + 0.25;
 
@@ -432,14 +522,14 @@ impl SoftwareShaderRenderer {
                     b += col_diff[2] * factor;
                 }
 
-                self.lo_buf[(iy * iw + ix) as usize] = [
+                *px = [
                     (r.clamp(0.0, 1.0) * 255.0) as u8,
                     (g.clamp(0.0, 1.0) * 255.0) as u8,
                     (b.clamp(0.0, 1.0) * 255.0) as u8,
                     255,
                 ];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -464,9 +554,10 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row_par(lo, iw, |iy, row| {
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
                 let uv_x = (ox - 0.5 * w) / h;
                 let uv_y = (oy - 0.5 * h) / h;
 
@@ -502,14 +593,14 @@ impl SoftwareShaderRenderer {
                     b += star_col[2] * brightness;
                 }
 
-                self.lo_buf[(iy * iw + ix) as usize] = [
+                *px = [
                     (r.clamp(0.0, 1.0) * 255.0) as u8,
                     (g.clamp(0.0, 1.0) * 255.0) as u8,
                     (b.clamp(0.0, 1.0) * 255.0) as u8,
                     255,
                 ];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -539,14 +630,24 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+        // Time-only trig and the column-only v1 term are loop constants.
+        let (ts05, tc03) = ((t * 0.5).sin(), (t * 0.3).cos());
+        let v1s: Vec<f32> = (0..iw)
+            .map(|ix| {
+                let uv_x = lo_to_out(ix, 0, scale_f).0 / w;
+                (uv_x * 10.0 + t).sin()
+            })
+            .collect();
+
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
                 let uv_x = ox / w;
                 let uv_y = oy / h;
 
-                let v1 = (uv_x * 10.0 + t).sin();
-                let v2 = (10.0 * (uv_x * (t * 0.5).sin() + uv_y * (t * 0.3).cos()) + t).sin();
+                let v1 = v1s[ix];
+                let v2 = (10.0 * (uv_x * ts05 + uv_y * tc03) + t).sin();
                 let dx1 = uv_x - 0.5;
                 let dy1 = uv_y - 0.5;
                 let v3 = (((dx1 * dx1 + dy1 * dy1) * 100.0 + 1.0).sqrt() + t).sin();
@@ -580,14 +681,14 @@ impl SoftwareShaderRenderer {
                     )
                 };
 
-                self.lo_buf[(iy * iw + ix) as usize] = [
+                *px = [
                     (r.clamp(0.0, 1.0) * 255.0) as u8,
                     (g.clamp(0.0, 1.0) * 255.0) as u8,
                     (b.clamp(0.0, 1.0) * 255.0) as u8,
                     255,
                 ];
             }
-        }
+        });
 
         self.upscale(iw, ih)
     }
@@ -615,36 +716,67 @@ impl SoftwareShaderRenderer {
         let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
-        for iy in 0..ih {
-            for ix in 0..iw {
-                let (ox, oy) = lo_to_out(ix, iy, scale_f);
-                let cell_x = (ox / cell_w).floor();
-                let cell_y = (oy / cell_h).floor();
+        // The pixel color depends only on the (cell_x, cell_y) glyph
+        // cell (~40 x ~25 cells) — shade each cell once and fill the
+        // pixel grid by lookup.
+        let cell_rgba = |cell_x: f32, cell_y: f32| -> [u8; 4] {
+            let col_hash = hash2(cell_x, 0.0);
+            let col_speed = 1.0 + col_hash * 3.0;
+            let col_offset = col_hash * 100.0;
 
-                let col_hash = hash2(cell_x, 0.0);
-                let col_speed = 1.0 + col_hash * 3.0;
-                let col_offset = col_hash * 100.0;
+            let fall = (cell_y + t * col_speed + col_offset) % 40.0;
 
-                let fall = (cell_y + t * col_speed + col_offset) % 40.0;
+            let intensity = smoothstep(20.0, 0.0, fall) * smoothstep(-1.0, 0.0, fall);
+            let char_hash = hash2(cell_x + (t * 4.0).floor(), cell_y + (t * 4.0).floor());
+            let intensity = intensity * (0.7 + 0.3 * char_hash);
 
-                let intensity = smoothstep(20.0, 0.0, fall) * smoothstep(-1.0, 0.0, fall);
-                let char_hash = hash2(cell_x + (t * 4.0).floor(), cell_y + (t * 4.0).floor());
-                let intensity = intensity * (0.7 + 0.3 * char_hash);
+            let head = smoothstep(1.0, 0.0, fall) * 2.0;
 
-                let head = smoothstep(1.0, 0.0, fall) * 2.0;
+            let r = bg_col[0] + rain_col[0] * intensity + head * 0.5;
+            let g = bg_col[1] + rain_col[1] * intensity + head * 0.5;
+            let b = bg_col[2] + rain_col[2] * intensity + head * 0.5;
+            [
+                (r.clamp(0.0, 1.0) * 255.0) as u8,
+                (g.clamp(0.0, 1.0) * 255.0) as u8,
+                (b.clamp(0.0, 1.0) * 255.0) as u8,
+                255,
+            ]
+        };
 
-                let r = bg_col[0] + rain_col[0] * intensity + head * 0.5;
-                let g = bg_col[1] + rain_col[1] * intensity + head * 0.5;
-                let b = bg_col[2] + rain_col[2] * intensity + head * 0.5;
-
-                self.lo_buf[(iy * iw + ix) as usize] = [
-                    (r.clamp(0.0, 1.0) * 255.0) as u8,
-                    (g.clamp(0.0, 1.0) * 255.0) as u8,
-                    (b.clamp(0.0, 1.0) * 255.0) as u8,
-                    255,
-                ];
+        let (ox1, oy1) = lo_to_out(iw - 1, ih - 1, scale_f);
+        let (o0x, o0y) = lo_to_out(0, 0, scale_f);
+        let (ex0, ex1) = ((o0x / cell_w).floor() as i32, (ox1 / cell_w).floor() as i32);
+        let (ey0, ey1) = ((o0y / cell_h).floor() as i32, (oy1 / cell_h).floor() as i32);
+        let cx_min = ex0.min(ex1);
+        let cy_min = ey0.min(ey1);
+        let gw = (ex0.max(ex1) - cx_min + 1) as usize;
+        let gh = (ey0.max(ey1) - cy_min + 1) as usize;
+        let use_grid = gw.saturating_mul(gh) <= (1 << 20);
+        let mut cells = vec![[0u8; 4]; if use_grid { gw * gh } else { 0 }];
+        if use_grid {
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    cells[gy * gw + gx] =
+                        cell_rgba((cx_min + gx as i32) as f32, (cy_min + gy as i32) as f32);
+                }
             }
         }
+
+        let lo = &mut self.lo_buf[..(iw * ih) as usize];
+        for_each_row(lo, iw, |iy, row| {
+            for (ix, px) in row.iter_mut().enumerate() {
+                let (ox, oy) = lo_to_out(ix as u32, iy, scale_f);
+                let cell_x = (ox / cell_w).floor();
+                let cell_y = (oy / cell_h).floor();
+                *px = if use_grid {
+                    let gx = (cell_x as i32 - cx_min) as usize;
+                    let gy = (cell_y as i32 - cy_min) as usize;
+                    cells[gy * gw + gx]
+                } else {
+                    cell_rgba(cell_x, cell_y)
+                };
+            }
+        });
 
         self.upscale(iw, ih)
     }
@@ -673,6 +805,44 @@ impl SoftwareShaderRenderer {
 }
 
 // -- Free helper functions --
+
+/// Run `shade` over every low-res row (`lo_buf` must be exactly
+/// `iw * ih` cells), serially.
+fn for_each_row<F>(lo_buf: &mut [[u8; 4]], iw: u32, shade: F)
+where
+    F: Fn(u32, &mut [[u8; 4]]) + Send + Sync,
+{
+    for (iy, row) in lo_buf.chunks_mut(iw as usize).enumerate() {
+        shade(iy as u32, row);
+    }
+}
+
+/// Like [`for_each_row`], but with the `parallel` feature the rows are
+/// spread across the rayon pool. Each pixel's math is identical either
+/// way, so the output is bit-identical to the serial path (locked by
+/// the `golden_output_checksums` test).
+///
+/// Only worthwhile for shaders with heavy per-pixel transcendental work
+/// (balatro's 5-iteration distortion, starfield's 4 hash layers) — for
+/// the memoized shaders the pool dispatch costs more than the shading,
+/// so they call [`for_each_row`] directly.
+fn for_each_row_par<F>(lo_buf: &mut [[u8; 4]], iw: u32, shade: F)
+where
+    F: Fn(u32, &mut [[u8; 4]]) + Send + Sync,
+{
+    // Below ~16k cells (e.g. the PSP's 32x32 / 64x64 targets) the pool
+    // dispatch overhead exceeds the shading work — stay serial.
+    #[cfg(feature = "parallel")]
+    if lo_buf.len() >= 16 * 1024 {
+        use rayon::prelude::*;
+        lo_buf
+            .par_chunks_mut(iw as usize)
+            .enumerate()
+            .for_each(|(iy, row)| shade(iy as u32, row));
+        return;
+    }
+    for_each_row(lo_buf, iw, shade);
+}
 
 /// Nearest-neighbour upscale from low-res buffer to output RGBA buffer.
 fn upscale_nn(lo_buf: &[[u8; 4]], pixel_buf: &mut [u8], width: u32, height: u32, iw: u32, ih: u32) {
@@ -744,11 +914,11 @@ fn voronoi_pt(t: f32, id_x: f32, id_y: f32) -> (f32, f32) {
     (px, py)
 }
 
-/// Single ocean wave layer evaluation.
-fn ocean_wave(
+/// Ocean wave layer height at a column (independent of `uv_y`, so it is
+/// computed once per column and shared down the rows).
+fn ocean_wave_height(
     time: f32,
     uv_x: f32,
-    uv_y: f32,
     amps: [f32; 4],
     freqs: [f32; 4],
     offsets: [f32; 4],
@@ -757,6 +927,11 @@ fn ocean_wave(
     for i in 0..4 {
         y += amps[i] * (freqs[i] * uv_x + time + offsets[i]).sin();
     }
+    y
+}
+
+/// Ocean wave layer shading for a pixel below/above the wave height.
+fn ocean_wave_shade(y: f32, uv_y: f32) -> f32 {
     let blur: f32 = 0.025;
     let top = smoothstep(y + blur, y, uv_y);
     let bot = smoothstep(y - 1.0, y, uv_y) * 0.4;
@@ -1062,6 +1237,71 @@ mod tests {
                 per_frame_us < 2000,
                 "{skin} ({name}): {per_frame_us}us/frame exceeds 2ms host budget \
                  (~20ms PSP estimate, 33ms budget at 30fps)",
+            );
+        }
+    }
+
+    /// FNV-1a over an RGBA buffer, for pixel-exact golden comparisons.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    /// Pixel-exact golden checksums, captured before the loop-invariant
+    /// hoisting / per-cell memoization / row-parallel refactor. Any
+    /// optimization of the shade loops must keep these outputs
+    /// bit-identical. 241x135 exercises the `div_ceil` partial edge
+    /// cell; 64x64 matches the PSP path. (Values depend on the platform
+    /// libm's sin/cos, so this test is gated to the x86_64 targets CI
+    /// and dev machines use.)
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn golden_output_checksums() {
+        #[rustfmt::skip]
+        let golden: &[(u32, u32, &str, f32, u64)] = &[
+            (241, 135, "balatro", 0.0, 0xe683273248fbb563),
+            (241, 135, "balatro", 1.7, 0x599b552b17fc1aa0),
+            (241, 135, "voronoi", 0.0, 0x134812c5bae9ebbb),
+            (241, 135, "voronoi", 1.7, 0xb27f2d3a263e33e1),
+            (241, 135, "city_lights", 0.0, 0x825ee4062f67f80f),
+            (241, 135, "city_lights", 1.7, 0x80ef6e80d0efb168),
+            (241, 135, "ocean_waves", 0.0, 0x99f4708b04fc8143),
+            (241, 135, "ocean_waves", 1.7, 0xa48f2758a91c1d67),
+            (241, 135, "calm_waves", 0.0, 0xd8ad25f237f7b56c),
+            (241, 135, "calm_waves", 1.7, 0x4c44798775101aef),
+            (241, 135, "starfield", 0.0, 0xc021031ba10c5906),
+            (241, 135, "starfield", 1.7, 0x904b735e365f7d00),
+            (241, 135, "plasma", 0.0, 0x810a16afc41d5d28),
+            (241, 135, "plasma", 1.7, 0xa5399775c2dccdfd),
+            (241, 135, "matrix_rain", 0.0, 0xef631f7232e84993),
+            (241, 135, "matrix_rain", 1.7, 0x60f5c2b6de9f4dbe),
+            (64, 64, "balatro", 0.0, 0x780a6abc3968051a),
+            (64, 64, "balatro", 1.7, 0x6fef1da00cbf99e0),
+            (64, 64, "voronoi", 0.0, 0x42d9eb449b82e9aa),
+            (64, 64, "voronoi", 1.7, 0xff9584adb8fccee3),
+            (64, 64, "city_lights", 0.0, 0x454467ba33118c7d),
+            (64, 64, "city_lights", 1.7, 0x95a3c1f11c325ef8),
+            (64, 64, "ocean_waves", 0.0, 0x14bf42f68ce6d2e7),
+            (64, 64, "ocean_waves", 1.7, 0xf33c870531ea0a98),
+            (64, 64, "calm_waves", 0.0, 0xb929ccf472509a87),
+            (64, 64, "calm_waves", 1.7, 0x786122825e84babd),
+            (64, 64, "starfield", 0.0, 0x9d8047079aa4c57b),
+            (64, 64, "starfield", 1.7, 0xf8c72c091c63d3ba),
+            (64, 64, "plasma", 0.0, 0x65e84b38260695b4),
+            (64, 64, "plasma", 1.7, 0x9b6b56f561f587ef),
+            (64, 64, "matrix_rain", 0.0, 0xb07189b1c8442261),
+            (64, 64, "matrix_rain", 1.7, 0xd75904872f0f1830),
+        ];
+        for &(w, h, name, t, want) in golden {
+            let mut r = SoftwareShaderRenderer::new(w, h);
+            let got = fnv1a(r.render_shader(name, t, &ShaderParams::default()));
+            assert_eq!(
+                got, want,
+                "{name} {w}x{h} t={t}: output changed (got {got:#018x})"
             );
         }
     }

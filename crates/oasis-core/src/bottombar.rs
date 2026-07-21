@@ -90,11 +90,15 @@ fn dock_triangle(
 ) {
     let half = (rows as i32 - 1) / 2;
     let max_w = half + 1;
+    // Runs every frame on dock skins: reuse one name buffer across rows.
+    use std::fmt::Write as _;
+    let mut name = String::with_capacity(prefix.len() + 2);
     for r in 0..rows {
         let dc = (r as i32 - half).abs();
         let w = (max_w - dc).max(1);
         let x = if point_right { gx } else { gx + (max_w - w) };
-        let name = format!("{prefix}{r}");
+        name.clear();
+        let _ = write!(name, "{prefix}{r}");
         ensure_border(sdi, &name, x, gy + r as i32, w as u32, 1, color);
         if let Ok(obj) = sdi.get_mut(&name) {
             obj.z = 902; // above the pill fill (901)
@@ -443,10 +447,12 @@ impl BottomBar {
         let bz_y = bar_y + 2;
         let bz_h = bar_h.saturating_sub(4);
 
-        let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
-        let labels_w: i32 = tab_labels.iter().map(|l| text_px(l, font_small)).sum();
+        let labels_w: i32 = MediaTab::TABS
+            .iter()
+            .map(|t| text_px(t.label(), font_small))
+            .sum();
         let pipe_w = text_px("|", font_small);
-        let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
+        let pipes_w = (MediaTab::TABS.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
         let total_w = labels_w + pipes_w;
         let tabs_x = right_edge - total_w - 8;
 
@@ -712,10 +718,16 @@ impl BottomBar {
             bx += pill_w + gap;
         }
         // Hide any glyph scanlines beyond the active row count.
-        for prefix in DOCK_GLYPH_PREFIXES {
-            for r in rows..DOCK_GLYPH_ROWS {
-                if let Ok(obj) = sdi.get_mut(&format!("{prefix}{r}")) {
-                    obj.visible = false;
+        {
+            use std::fmt::Write as _;
+            let mut name = String::with_capacity(24);
+            for prefix in DOCK_GLYPH_PREFIXES {
+                for r in rows..DOCK_GLYPH_ROWS {
+                    name.clear();
+                    let _ = write!(name, "{prefix}{r}");
+                    if let Ok(obj) = sdi.get_mut(&name) {
+                        obj.visible = false;
+                    }
                 }
             }
         }

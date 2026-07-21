@@ -77,6 +77,12 @@ pub struct TerminalLayer {
     /// whole scrollback every frame. First+last+len covers append,
     /// cap-trim (`remove(0)`), and `clear`.
     pub sync_signature: Option<(usize, usize, String, String, String)>,
+    /// Hash of everything `setup_terminal_objects` renders from (visible
+    /// lines, prompt, scroll, blink state, theme geometry/colors). The
+    /// Terminal-mode SDI rebuild is skipped while it is unchanged; reset
+    /// to `None` whenever the mode is not Terminal so re-entry (and any
+    /// theme edit made in another mode) forces a rebuild.
+    pub sdi_signature: Option<u64>,
 }
 
 /// Networking: TCP backend, remote listener/client, FTP, TLS.
@@ -295,6 +301,7 @@ mod tests {
             scroll_offset: 0,
             dirty: true,
             sync_signature: None,
+            sdi_signature: None,
         };
 
         let _net = NetworkLayer {

@@ -32,8 +32,14 @@ impl SdiCore for SdlBackend {
         let (tx, ty) = self.translate(x, y);
         let texture = self
             .textures
-            .get(&tex.0)
+            .get_mut(&tex.0)
             .ok_or_else(|| texture_not_found(tex.0))?;
+        crate::blitting::ensure_texture_mod(
+            &mut self.texture_mods,
+            tex.0,
+            texture,
+            crate::blitting::NEUTRAL_MOD,
+        );
         self.canvas
             .copy(texture, None, frect(tx, ty, w, h))
             .backend_err()?;
@@ -92,6 +98,7 @@ impl SdiCore for SdlBackend {
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
         self.textures.remove(&tex.0);
+        self.texture_mods.remove(&tex.0);
         Ok(())
     }
 

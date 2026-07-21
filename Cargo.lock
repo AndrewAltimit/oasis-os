@@ -1360,9 +1360,11 @@ dependencies = [
 name = "oasis-shader"
 version = "1.4.0"
 dependencies = [
+ "criterion",
  "glow",
  "log",
  "oasis-types",
+ "rayon",
  "wasm-bindgen",
  "web-sys",
 ]

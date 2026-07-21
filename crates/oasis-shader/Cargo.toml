@@ -12,11 +12,15 @@ default = []
 gl-native = ["glow"]
 gl-web = ["glow", "web-sys", "wasm-bindgen"]
 software = []
+# Multi-threaded software shading (rayon). Desktop-only: do not enable
+# for the WASM or PSP targets (single-threaded; PSP grids are tiny).
+parallel = ["dep:rayon"]
 
 [dependencies]
 glow = { version = "0.16", optional = true }
 log = { workspace = true }
 oasis-types = { workspace = true }
+rayon = { workspace = true, optional = true }
 web-sys = { workspace = true, features = [
     "WebGl2RenderingContext",
     "HtmlCanvasElement",
@@ -24,6 +28,13 @@ web-sys = { workspace = true, features = [
     "Window",
 ], optional = true }
 wasm-bindgen = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "shader_render"
+harness = false
 
 [lints]
 workspace = true

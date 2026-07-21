@@ -115,6 +115,16 @@ pub struct SdlBackend {
     /// and blend-mode calls. All canvas draw-color/blend changes must go
     /// through `set_color` (or reset this to `None`) to stay coherent.
     pub(crate) last_draw_color: Option<Color>,
+    /// Reusable scratch buffer for batched `draw_points` submissions
+    /// (circle / rounded-corner outlines plot hundreds of points per
+    /// call; one `SDL_RenderPoints` beats one FFI call per point).
+    pub(crate) point_batch: Vec<FPoint>,
+    /// Tracked color/alpha modulation per texture in `textures`, keyed by
+    /// texture id. Lets blit paths skip redundant `set_color_mod` /
+    /// `set_alpha_mod` calls (tinted blits previously set + reset four
+    /// mods on every call). All mod changes to `textures` entries must go
+    /// through `ensure_texture_mod` to stay coherent.
+    pub(crate) texture_mods: HashMap<u64, (u8, u8, u8, u8)>,
 }
 
 impl SdlBackend {
@@ -169,6 +179,8 @@ impl SdlBackend {
             viewport_w: width,
             viewport_h: height,
             last_draw_color: None,
+            point_batch: Vec::new(),
+            texture_mods: HashMap::new(),
         })
     }
 

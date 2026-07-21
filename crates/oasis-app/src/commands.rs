@@ -1123,6 +1123,7 @@ mod tests {
                 scroll_offset: 0,
                 dirty: true,
                 sync_signature: None,
+                sdi_signature: None,
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
