@@ -48,6 +48,7 @@ pub struct RecordingBackend {
     next_render_target_id: u64,
     live_render_targets: HashSet<u64>,
     render_target_bind_stack: Vec<RenderTargetId>,
+    render_targets_supported: bool,
 }
 
 impl RecordingBackend {
@@ -65,7 +66,18 @@ impl RecordingBackend {
             next_render_target_id: 1,
             live_render_targets: HashSet::new(),
             render_target_bind_stack: Vec::new(),
+            render_targets_supported: true,
         }
+    }
+
+    /// Make [`SdiRenderTarget::supports_render_targets`] report `false`.
+    ///
+    /// Lets tests exercise the immediate-mode fallback of callers that
+    /// probe the capability before using offscreen targets. The
+    /// explicit render-target methods keep working so unrelated tests
+    /// are unaffected.
+    pub fn disable_render_targets(&mut self) {
+        self.render_targets_supported = false;
     }
 
     /// Return the number of render targets currently allocated (created
@@ -256,6 +268,30 @@ impl SdiRenderTarget for RecordingBackend {
         Ok(())
     }
 
+    fn composite_render_target_premultiplied(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<()> {
+        if !self.live_render_targets.contains(&id.0) {
+            return Err(OasisError::Backend(
+                format!("composite_render_target_premultiplied: unknown id {id:?}").into(),
+            ));
+        }
+        self.commands
+            .push(DrawCommand::CompositeRenderTargetPremultiplied {
+                id,
+                dst_x,
+                dst_y,
+                dst_w,
+                dst_h,
+            });
+        Ok(())
+    }
+
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
         if !self.live_render_targets.contains(&id.0) {
             return Err(OasisError::Backend(
@@ -280,7 +316,7 @@ impl SdiRenderTarget for RecordingBackend {
     }
 
     fn supports_render_targets(&self) -> bool {
-        true
+        self.render_targets_supported
     }
 
     fn supports_render_target_readback(&self) -> bool {

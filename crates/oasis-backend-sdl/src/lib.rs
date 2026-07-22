@@ -120,6 +120,13 @@ pub struct SdlBackend {
     /// (circle / rounded-corner outlines plot hundreds of points per
     /// call; one `SDL_RenderPoints` beats one FFI call per point).
     pub(crate) point_batch: Vec<FPoint>,
+    /// Reusable scratch buffer for polygon fills: translated vertices.
+    /// Same reuse-instead-of-allocate pattern as `point_batch` —
+    /// `fill_polygon` previously allocated a fresh `Vec` per call.
+    pub(crate) poly_points: Vec<(i32, i32)>,
+    /// Reusable scratch buffer for polygon fills: per-scanline edge
+    /// intersection x coordinates.
+    pub(crate) poly_xs: Vec<i32>,
     /// Tracked color/alpha modulation per texture in `textures`, keyed by
     /// texture id. Lets blit paths skip redundant `set_color_mod` /
     /// `set_alpha_mod` calls (tinted blits previously set + reset four
@@ -181,6 +188,8 @@ impl SdlBackend {
             viewport_h: height,
             last_draw_color: None,
             point_batch: Vec::new(),
+            poly_points: Vec::new(),
+            poly_xs: Vec::new(),
             texture_mods: HashMap::new(),
         })
     }
@@ -781,6 +790,56 @@ impl SdiRenderTarget for SdlBackend {
             .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
             .backend_err();
         tex.set_alpha_mod(255);
+        tex.set_blend_mode(sdl3::render::BlendMode::Blend);
+        r
+    }
+
+    fn composite_render_target_premultiplied(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<()> {
+        let Self {
+            canvas,
+            render_targets,
+            ..
+        } = self;
+        let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
+            OasisError::Backend(
+                format!("composite_render_target_premultiplied: unknown id {id:?}").into(),
+            )
+        })?;
+        // The safe sdl3 `BlendMode` enum does not expose
+        // SDL_BLENDMODE_BLEND_PREMULTIPLIED, so set it through the sys
+        // API. The call doubles as the capability probe: SDL rejects
+        // blend modes the active renderer cannot execute, and the
+        // resulting `Err` makes callers (the vector-layer bake cache)
+        // fall back to immediate-mode drawing instead of compositing
+        // with wrong alpha.
+        let raw_tex = sdl_texture_raw(tex);
+        // SAFETY: raw_tex is a valid SDL_Texture owned by this backend
+        // (fetched from `render_targets` above and kept alive by it).
+        let ok = unsafe {
+            sdl3::sys::render::SDL_SetTextureBlendMode(
+                raw_tex,
+                sdl3::sys::blendmode::SDL_BLENDMODE_BLEND_PREMULTIPLIED,
+            )
+        };
+        if !ok {
+            return Err(OasisError::Backend(
+                "premultiplied blending not supported by this renderer".into(),
+            ));
+        }
+        tex.set_alpha_mod(255);
+        tex.set_color_mod(255, 255, 255);
+        let r = canvas
+            .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
+            .backend_err();
+        // Restore the straight-alpha default the plain composite path
+        // (and any other texture user) expects.
         tex.set_blend_mode(sdl3::render::BlendMode::Blend);
         r
     }

@@ -447,28 +447,32 @@ impl SdlBackend {
         }
         self.set_color(color);
 
-        // Collect translated, y-sorted scanline edges.
-        let translated: Vec<(i32, i32)> =
-            points.iter().map(|&(x, y)| self.translate(x, y)).collect();
+        // Collect translated vertices into the persistent scratch
+        // buffer (`point_batch` pattern) instead of allocating a fresh
+        // Vec on every call. Translation is a pure offset, so applying
+        // it once to (0, 0) covers every vertex.
+        let (ox, oy) = self.translate(0, 0);
+        self.poly_points.clear();
+        self.poly_points
+            .extend(points.iter().map(|&(x, y)| (x + ox, y + oy)));
 
-        let y_min = translated.iter().map(|v| v.1).min().unwrap_or(0);
-        let y_max = translated.iter().map(|v| v.1).max().unwrap_or(0);
+        let y_min = self.poly_points.iter().map(|v| v.1).min().unwrap_or(0);
+        let y_max = self.poly_points.iter().map(|v| v.1).max().unwrap_or(0);
 
-        let mut x_intersections = Vec::new();
+        let n = self.poly_points.len();
         for y in y_min..=y_max {
-            x_intersections.clear();
-            let n = translated.len();
+            self.poly_xs.clear();
             for i in 0..n {
                 let j = (i + 1) % n;
-                let (x0, y0) = translated[i];
-                let (x1, y1) = translated[j];
+                let (x0, y0) = self.poly_points[i];
+                let (x1, y1) = self.poly_points[j];
                 if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) {
                     let t = (y - y0) as f32 / (y1 - y0) as f32;
-                    x_intersections.push(x0 + (t * (x1 - x0) as f32) as i32);
+                    self.poly_xs.push(x0 + (t * (x1 - x0) as f32) as i32);
                 }
             }
-            x_intersections.sort_unstable();
-            for pair in x_intersections.as_chunks::<2>().0.iter() {
+            self.poly_xs.sort_unstable();
+            for pair in self.poly_xs.as_chunks::<2>().0.iter() {
                 let _ = self
                     .canvas
                     .draw_line(fpoint(pair[0], y), fpoint(pair[1], y));

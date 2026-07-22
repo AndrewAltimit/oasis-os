@@ -390,6 +390,15 @@ pub enum DrawCommand {
         blend: BlendMode,
         opacity: f32,
     },
+    /// Composite a premultiplied-alpha render target back into the
+    /// currently bound surface with source-over blending.
+    CompositeRenderTargetPremultiplied {
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    },
     /// Release a render target.
     DestroyRenderTarget {
         id: RenderTargetId,
