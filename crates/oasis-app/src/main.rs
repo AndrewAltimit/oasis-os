@@ -896,10 +896,18 @@ fn main() -> Result<()> {
 
         // Render shader wallpaper FIRST (replaces bg_color clear).
         // This runs every drawn frame so the animation stays live in all
-        // modes (elided frames redraw whenever the bridge would shade).
+        // modes (elided frames redraw whenever the bridge would shade),
+        // except while an opaque surface provably covers the whole canvas
+        // (fullscreen kiosk app, full-screen opaque window): then the
+        // bridge skips both the CPU shade pass and the blit. Time keeps
+        // advancing during occlusion, so on reveal the animation resumes
+        // at the current time (immediately — no 30 Hz wait). Occluding
+        // states always come with `content_active` redraws, so the
+        // visibility pushed here is never stale on a frame that needs it.
         if let Some(ref mut bridge) = shader_bridge
             && let Some(info) = get_shader_layer(&state.active_theme)
         {
+            bridge.set_visibility(render::wallpaper_visibility(&state));
             bridge.render_and_blit(
                 &mut backend,
                 &info.name,
