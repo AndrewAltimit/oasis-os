@@ -1,9 +1,10 @@
 //! SDL3 audio backend for OASIS_OS.
 //!
-//! Implements `AudioBackend` using SDL3's audio stream API and the `rmp3` MP3
-//! decoder.  Incoming MP3 data (from `feed_data` or `load_track`) is decoded
-//! to PCM i16 samples via `rmp3::RawDecoder`, volume-scaled, and pushed to an
-//! `sdl3::audio::AudioStream` bound to the default playback device.
+//! Implements `AudioBackend` using SDL3's audio stream API and minimp3 (via
+//! the [`crate::mp3`] wrapper over `rmp3::ffi`).  Incoming MP3 data (from
+//! `feed_data` or `load_track`) is decoded to PCM i16 samples, volume-scaled,
+//! and pushed to an `sdl3::audio::AudioStream` bound to the default playback
+//! device.
 //!
 //! The SDL3 audio device and stream are opened lazily on the first decoded
 //! frame so that the sample rate and channel count come from the actual stream.
@@ -145,7 +146,7 @@ pub struct SdlAudioBackend {
     /// SDL3 audio subsystem (kept alive for device lifetime).
     audio_subsystem: Option<sdl3::AudioSubsystem>,
     /// MP3 decoder state.
-    decoder: rmp3::RawDecoder,
+    decoder: crate::mp3::Mp3Decoder,
     /// Pending MP3 bytes not yet decoded (streaming track).
     mp3_buffer: Vec<u8>,
     /// Reusable staging buffer for decoded PCM (avoids per-call allocation).
@@ -196,7 +197,7 @@ impl SdlAudioBackend {
             initialized: false,
             stream_owner: None,
             audio_subsystem: None,
-            decoder: rmp3::RawDecoder::new(),
+            decoder: crate::mp3::Mp3Decoder::new(),
             mp3_buffer: Vec::new(),
             pcm_staging: Vec::new(),
             pcm_resampled: Vec::new(),
@@ -372,12 +373,12 @@ impl SdlAudioBackend {
             match self.decoder.next(&self.mp3_buffer[offset..], &mut pcm_out) {
                 Some((frame, consumed)) => {
                     offset += consumed;
-                    if let rmp3::Frame::Audio(audio) = frame {
+                    if let crate::mp3::Frame::Audio(audio) = frame {
                         if detected_rate == 0 {
-                            detected_rate = audio.sample_rate();
-                            detected_channels = audio.channels();
+                            detected_rate = audio.sample_rate;
+                            detected_channels = audio.channels;
                         }
-                        self.pcm_staging.extend_from_slice(audio.samples());
+                        self.pcm_staging.extend_from_slice(audio.samples);
                     }
                 },
                 None => break,
@@ -506,7 +507,7 @@ impl SdlAudioBackend {
         // resample to OUTPUT_SAMPLE_RATE → queue. That way the
         // `play_mp3` example binary exercises exactly what the radio
         // app does, which keeps it useful as a diagnostic tool.
-        let mut decoder = rmp3::RawDecoder::new();
+        let mut decoder = crate::mp3::Mp3Decoder::new();
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
         let mut decoded: Vec<i16> = Vec::new();
@@ -521,12 +522,12 @@ impl SdlAudioBackend {
             match decoder.next(&mp3_data[offset..], &mut pcm_out) {
                 Some((frame, consumed)) => {
                     offset += consumed;
-                    if let rmp3::Frame::Audio(audio) = frame {
+                    if let crate::mp3::Frame::Audio(audio) = frame {
                         if detected_rate == 0 {
-                            detected_rate = audio.sample_rate();
-                            detected_channels = audio.channels();
+                            detected_rate = audio.sample_rate;
+                            detected_channels = audio.channels;
                         }
-                        decoded.extend_from_slice(audio.samples());
+                        decoded.extend_from_slice(audio.samples);
                     }
                 },
                 None => break,
@@ -751,7 +752,7 @@ impl AudioBackend for SdlAudioBackend {
         if self.stream_track == Some(track.0) {
             self.stream_track = None;
             self.mp3_buffer.clear();
-            self.decoder = rmp3::RawDecoder::new();
+            self.decoder = crate::mp3::Mp3Decoder::new();
         }
         self.tracks.remove(&track.0);
         Ok(())
@@ -767,7 +768,7 @@ impl AudioBackend for SdlAudioBackend {
         self.stream_track = None;
         self.mp3_buffer.clear();
         self.pcm_staging.clear();
-        self.decoder = rmp3::RawDecoder::new();
+        self.decoder = crate::mp3::Mp3Decoder::new();
         self.initialized = false;
         log::info!("SDL3 audio backend shut down");
         Ok(())
@@ -780,7 +781,7 @@ impl AudioBackend for SdlAudioBackend {
         let id = self.next_id;
         self.next_id += 1;
         self.mp3_buffer.clear();
-        self.decoder = rmp3::RawDecoder::new();
+        self.decoder = crate::mp3::Mp3Decoder::new();
         self.stream_track = Some(id);
         self.samples_queued = 0;
         // Drop the SDL stream so the next decoded frame opens a fresh
@@ -824,7 +825,7 @@ impl AudioBackend for SdlAudioBackend {
                  clearing (network faster than playback + back-pressure broken?)"
             );
             self.mp3_buffer.clear();
-            self.decoder = rmp3::RawDecoder::new();
+            self.decoder = crate::mp3::Mp3Decoder::new();
         }
 
         self.decode_buffered()
@@ -837,8 +838,9 @@ impl AudioBackend for SdlAudioBackend {
         // Drain the last bit of `mp3_buffer` with a relaxed threshold.
         // Normal `decode_buffered` needs ~2 KB of look-ahead for
         // minimp3, so up to 2 KB trails undecoded at end-of-source.
-        // Sixteen bytes is the minimum rmp3 needs to avoid a
-        // bounds-check panic.
+        // Sixteen bytes is the smallest chunk worth handing minimp3:
+        // anything shorter can't hold even a frame header plus side
+        // info, so it would just be reported back as skipped bytes.
         self.decode_mp3_buffer(16)
     }
 
