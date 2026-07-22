@@ -13,6 +13,7 @@ mod font;
 mod glyph_cache;
 mod gradients;
 mod input;
+pub mod mp3;
 pub mod network;
 mod sdl_audio;
 pub mod shader_bridge;

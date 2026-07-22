@@ -1,11 +1,11 @@
 //! Diagnostic: decode an MP3 two ways and compare the PCM output.
 //!
-//!   A) Fresh `rmp3::RawDecoder`, entire file fed in one `next()`-loop
+//!   A) Fresh `Mp3Decoder`, entire file fed in one `next()`-loop
 //!      over the full byte buffer (what `load_track` effectively does).
-//!   B) Long-lived `rmp3::RawDecoder`, file fed 4 KB at a time, with
+//!   B) Long-lived `Mp3Decoder`, file fed 4 KB at a time, with
 //!      the leftover tail carried across chunks (what streaming does).
 //!
-//! If the two outputs differ, rmp3 is producing different PCM for the
+//! If the two outputs differ, minimp3 is producing different PCM for the
 //! chunked pattern — that's our stutter source. If they match, the
 //! stutter is coming from further downstream (resampler state,
 //! queuing, timing).
@@ -22,13 +22,12 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use rmp3::{Frame, RawDecoder, Sample};
+use oasis_backend_sdl::mp3::{Frame, MAX_SAMPLES_PER_FRAME, Mp3Decoder, Sample};
 
 const CHUNK_SIZE: usize = 4096;
-const MAX_SAMPLES_PER_FRAME: usize = 0x900;
 
 fn decode_whole(data: &[u8]) -> Vec<Sample> {
-    let mut decoder = RawDecoder::new();
+    let mut decoder = Mp3Decoder::new();
     let mut pcm_out = [Sample::default(); MAX_SAMPLES_PER_FRAME];
     let mut samples = Vec::new();
     let mut offset = 0;
@@ -47,7 +46,7 @@ fn decode_whole(data: &[u8]) -> Vec<Sample> {
             Some((frame, consumed)) => {
                 offset += consumed;
                 if let Frame::Audio(audio) = frame {
-                    samples.extend_from_slice(audio.samples());
+                    samples.extend_from_slice(audio.samples);
                 }
             },
             None => break,
@@ -57,7 +56,7 @@ fn decode_whole(data: &[u8]) -> Vec<Sample> {
 }
 
 fn decode_chunked(data: &[u8], chunk_size: usize) -> Vec<Sample> {
-    let mut decoder = RawDecoder::new();
+    let mut decoder = Mp3Decoder::new();
     let mut pcm_out = [Sample::default(); MAX_SAMPLES_PER_FRAME];
     let mut samples = Vec::new();
     // Mirror the streaming backend's mp3_buffer model: accumulate
@@ -88,7 +87,7 @@ fn decode_chunked(data: &[u8], chunk_size: usize) -> Vec<Sample> {
                 Some((frame, consumed)) => {
                     offset += consumed;
                     if let Frame::Audio(audio) = frame {
-                        samples.extend_from_slice(audio.samples());
+                        samples.extend_from_slice(audio.samples);
                     }
                 },
                 None => break,
@@ -99,8 +98,7 @@ fn decode_chunked(data: &[u8], chunk_size: usize) -> Vec<Sample> {
 
     // Final drain: production now ends each stream with a
     // `finalize_streaming` call that re-runs the decode loop with a
-    // 16-byte minimum (the smallest chunk rmp3 will accept without
-    // panicking on its bounds check), recovering the sub-2 KB tail
+    // 16-byte minimum, recovering the sub-2 KB tail
     // that the mid-stream `MIN_DECODE_BYTES` threshold left behind.
     // Mirror that here in a second pass so this diagnostic actually
     // reflects production behaviour — otherwise the example would
@@ -118,7 +116,7 @@ fn decode_chunked(data: &[u8], chunk_size: usize) -> Vec<Sample> {
             Some((frame, consumed)) => {
                 offset += consumed;
                 if let Frame::Audio(audio) = frame {
-                    samples.extend_from_slice(audio.samples());
+                    samples.extend_from_slice(audio.samples);
                 }
             },
             None => break,
