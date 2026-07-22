@@ -104,18 +104,31 @@ const BUDGETS: &[(&str, f32, f32, u64)] = &[
     ("responsive_grid.html", 480.0, 272.0, 500),
 ];
 
+/// Budget multiplier for instrumented builds. Sanitizers (ASAN in
+/// `memory-ci.yml`) slow the pipeline ~2x systematically — that is not
+/// noise a loose budget can absorb, so those jobs export
+/// `OASIS_LAYOUT_BUDGET_SCALE` to widen every budget uniformly.
+fn budget_scale() -> u64 {
+    std::env::var("OASIS_LAYOUT_BUDGET_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+}
+
 #[test]
 fn corpus_respects_layout_budgets() {
+    let scale = budget_scale();
     let mut failures = Vec::new();
     for (name, w, h, budget_ms) in BUDGETS {
         let html = load_fixture(name);
         // Warm-up pass: the first run after crate load pays for
         // default-stylesheet parsing and initial allocator behaviour.
         // The budgeted pass is the second run so we measure steady-
-        // state cost.
-        let _ = measure_layout(&html, *w, *h);
-        let elapsed = measure_layout(&html, *w, *h);
-        let budget = Duration::from_millis(*budget_ms);
+        // state cost — but take the min of the two, since scheduler
+        // preemption on a busy CI runner only ever adds time.
+        let warmup = measure_layout(&html, *w, *h);
+        let elapsed = measure_layout(&html, *w, *h).min(warmup);
+        let budget = Duration::from_millis(*budget_ms * scale);
         if elapsed > budget {
             failures.push(format!(
                 "  {name} @ {w}x{h}: {elapsed:?} > budget {budget:?}",
