@@ -135,7 +135,7 @@ impl SdiCore for SdlBackend {
                     if ttf.has_glyph(ch) {
                         ttf.advance(ch, px).max(0) as u32
                     } else {
-                        oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as u32
+                        oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size)
                     }
                 })
                 .sum();

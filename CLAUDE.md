@@ -37,6 +37,11 @@ cargo fmt --all
 # Lint (CI treats warnings as errors)
 cargo clippy --workspace -- -D warnings
 
+# Lint exactly as CI does — ALWAYS run this before opening a PR. The CI image
+# pins a specific Rust version (rust:1.93-slim), so a locally newer/older
+# toolchain can pass clippy while CI fails (lints change between releases).
+docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+
 # License/advisory audit
 cargo deny check
 
