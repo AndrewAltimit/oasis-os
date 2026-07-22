@@ -308,6 +308,12 @@ impl SdlAudioBackend {
         Ok(())
     }
 
+    /// Bytes currently queued in the music/streaming SDL stream.
+    /// Diagnostic accessor: 0 means the device is starving (underrun).
+    pub fn music_queued_bytes(&self) -> u32 {
+        self.queued_bytes()
+    }
+
     /// Bytes currently queued in the SFX stream (0 when it isn't open).
     /// The shell uses this to keep a small fixed backlog of mixed SFX.
     pub fn sfx_queued_bytes(&self) -> u32 {
@@ -834,6 +840,15 @@ impl AudioBackend for SdlAudioBackend {
         // Sixteen bytes is the minimum rmp3 needs to avoid a
         // bounds-check panic.
         self.decode_mp3_buffer(16)
+    }
+
+    fn streaming_queued_ms(&self, track: AudioTrackId) -> Option<u32> {
+        if self.stream_track != Some(track.0) {
+            return None;
+        }
+        // Queue holds interleaved stereo i16 at OUTPUT_SAMPLE_RATE:
+        // 48 kHz * 2 ch * 2 bytes = 192 bytes/ms.
+        Some(self.queued_bytes() / 192)
     }
 
     fn streaming_can_accept(&self, track: AudioTrackId) -> bool {

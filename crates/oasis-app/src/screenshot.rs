@@ -499,7 +499,7 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header()?;
     let mut opaque = rgba.to_vec();
-    for px in opaque.chunks_exact_mut(4) {
+    for px in opaque.as_chunks_mut::<4>().0.iter_mut() {
         px[3] = 255;
     }
     writer.write_image_data(&opaque)?;

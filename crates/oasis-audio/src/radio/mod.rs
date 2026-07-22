@@ -9,6 +9,7 @@ pub mod buffer;
 pub mod icy;
 pub mod source;
 pub mod station;
+pub mod threaded;
 
 use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
@@ -17,6 +18,7 @@ use oasis_vfs::Vfs;
 pub use archive::{ArchiveCatalog, ArchiveTrack};
 pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
 pub use station::{Station, StationRegistry};
+pub use threaded::ThreadedSource;
 
 /// VFS path where the radio manager publishes its status.
 pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
@@ -315,24 +317,55 @@ impl RadioManager {
                 }
             },
             RadioState::Buffering | RadioState::Playing => {
-                // One poll per tick. Drain loops (earlier attempts at
-                // "pull many chunks per frame") produced sawtooth queue
-                // patterns that audibly interacted with SDL3 /
-                // PulseAudio's output pacing. A single 4 KB poll at
-                // 60 Hz = 240 KB/s of MP3, which is ~15× typical radio
-                // bitrate — more than enough headroom while keeping the
-                // delivery steady. Back-pressure via
-                // `streaming_can_accept` still throttles the network
-                // when the backend's queue is full.
+                // Graduated pull. Two competing constraints:
+                //
+                // 1. Ingest must NOT be coupled to the tick rate: ticks
+                //    come from the render loop, and a collapsed frame rate
+                //    (occluded window, heavy scene) would otherwise drop
+                //    delivery below the stream bitrate and starve playback
+                //    ~25 s later (SDL queue + readahead runway) — heard as
+                //    stutters that begin about a minute into a session.
+                // 2. Delivery should stay gentle while the queue is
+                //    healthy: decoding a whole hysteresis-band refill
+                //    (~900 KB of PCM) in one tick costs ~15 ms in release
+                //    (measured) — a periodic render hitch.
+                //
+                // So: while `streaming_queued_ms` reports a healthy queue,
+                // cap each tick at a small budget (a refill then spreads
+                // over ~10 ticks); once the queue erodes below the danger
+                // line (collapsed tick rate, post-hitch recovery) pull up
+                // to the boost budget per tick to out-run playout.
+                // Backends that can't measure their queue get the gentle
+                // budget, which is still ~2× the old one-chunk-per-tick.
+                const NORMAL_FEED_PER_TICK: usize = 8 * 1024;
+                const BOOST_FEED_PER_TICK: usize = 64 * 1024;
+                // Below the SDL backend's ~3.6 s refill floor, so normal
+                // hysteresis cycling never triggers the boost.
+                const DANGER_QUEUE_MS: u32 = 3000;
+                let budget = match self
+                    .stream_track
+                    .and_then(|t| backend.streaming_queued_ms(t))
+                {
+                    Some(ms) if ms < DANGER_QUEUE_MS => BOOST_FEED_PER_TICK,
+                    Some(_) => NORMAL_FEED_PER_TICK,
+                    // Unknown queue depth (still buffering, or a backend
+                    // without measurement): gentle.
+                    None => NORMAL_FEED_PER_TICK,
+                };
                 let mut ended = false;
                 let mut err: Option<OasisError> = None;
-                let can_pull = self
-                    .stream_track
-                    .map(|t| backend.streaming_can_accept(t))
-                    .unwrap_or(true);
-                if can_pull {
+                let mut fed = 0usize;
+                while fed < budget {
+                    let can_pull = self
+                        .stream_track
+                        .map(|t| backend.streaming_can_accept(t))
+                        .unwrap_or(true);
+                    if !can_pull {
+                        break;
+                    }
                     match src.poll() {
                         Ok(Some(chunk)) => {
+                            fed += chunk.data.len();
                             let should_start = self.feed_audio(&chunk, backend)?;
                             if should_start && self.state == RadioState::Buffering {
                                 self.start_playback(backend)?;
@@ -342,9 +375,11 @@ impl RadioManager {
                             if src.state() == SourceState::Ended {
                                 ended = true;
                             }
+                            break;
                         },
                         Err(e) => {
                             err = Some(e);
+                            break;
                         },
                     }
                 }

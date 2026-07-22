@@ -112,12 +112,9 @@ impl TvGuideState {
         self.fetch_attempted = false;
         self.fetch_in_progress = false;
         self.fetch_error = None;
-        for cat in &mut self.catalogs {
-            *cat = None;
-        }
-        for sched in &mut self.cached_schedules {
-            *sched = None;
-        }
+        self.catalogs.fill(None);
+        // `CachedSchedule` is not `Clone`, so `fill(None)` can't be used.
+        self.cached_schedules.fill_with(|| None);
     }
 
     /// Rebuild the cached schedule for a channel after its catalog changes.

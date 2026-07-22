@@ -76,6 +76,19 @@ pub trait AudioBackend {
         true
     }
 
+    /// Milliseconds of decoded audio currently queued for playout on a
+    /// streaming track, if the backend can measure it. Streaming
+    /// consumers use this as a graduated pacing signal alongside
+    /// `streaming_can_accept`: while the queue is healthy they deliver
+    /// gently (small steady pulls each tick, which output stacks like
+    /// SDL3/PulseAudio pace best), and only when it erodes toward empty
+    /// (collapsed tick rates, post-hitch recovery) do they pull
+    /// aggressively to refill. `None` (the default) means the backend
+    /// cannot measure its queue.
+    fn streaming_queued_ms(&self, _track: AudioTrackId) -> Option<u32> {
+        None
+    }
+
     /// Signal that no more data will be fed for this streaming track
     /// (i.e. the source reached its end). Backends that keep a
     /// decode-lookahead side buffer should drain whatever's left now,

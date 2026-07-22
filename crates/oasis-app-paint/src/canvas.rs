@@ -89,9 +89,7 @@ impl Canvas {
     /// Fill the active layer with a color.
     pub fn fill(&mut self, color: Color) {
         if let Some(layer) = self.layers.get_mut(self.active_layer) {
-            for px in &mut layer.pixels {
-                *px = color;
-            }
+            layer.pixels.fill(color);
         }
         self.pixels = self.flatten();
     }

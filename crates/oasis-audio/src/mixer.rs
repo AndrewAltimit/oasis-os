@@ -96,7 +96,9 @@ pub fn mono_to_stereo_f32(mono: &[f32]) -> Vec<f32> {
 /// Convert interleaved stereo i16 samples to mono by averaging L+R channels.
 pub fn stereo_to_mono_i16(stereo: &[i16]) -> Vec<i16> {
     stereo
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
         .collect()
 }
@@ -104,7 +106,9 @@ pub fn stereo_to_mono_i16(stereo: &[i16]) -> Vec<i16> {
 /// Convert interleaved stereo f32 samples to mono by averaging L+R channels.
 pub fn stereo_to_mono_f32(stereo: &[f32]) -> Vec<f32> {
     stereo
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| (pair[0] + pair[1]) * 0.5)
         .collect()
 }

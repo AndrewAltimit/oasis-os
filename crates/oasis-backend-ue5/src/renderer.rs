@@ -741,7 +741,9 @@ mod tests {
             .unwrap();
         let has_white = backend
             .buffer()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|px| px[0] == 255 && px[1] == 255 && px[2] == 255);
         assert!(has_white);
     }
@@ -753,7 +755,9 @@ mod tests {
         backend.draw_text("X", 0, 0, 16, Color::WHITE).unwrap();
         let white_count = backend
             .buffer()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] == 255)
             .count();
         assert!(white_count > 20);

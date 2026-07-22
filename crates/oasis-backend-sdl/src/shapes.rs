@@ -468,7 +468,7 @@ impl SdlBackend {
                 }
             }
             x_intersections.sort_unstable();
-            for pair in x_intersections.chunks_exact(2) {
+            for pair in x_intersections.as_chunks::<2>().0.iter() {
                 let _ = self
                     .canvas
                     .draw_line(fpoint(pair[0], y), fpoint(pair[1], y));

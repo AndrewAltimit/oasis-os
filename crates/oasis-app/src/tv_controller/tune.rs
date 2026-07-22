@@ -127,7 +127,7 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
     // Create a streaming buffer shared between the download thread and decoder.
     let buffer = Arc::new(StreamingInner::new());
     let reader = StreamingBuffer::new(Arc::clone(&buffer));
-    let eviction_flag = Arc::clone(&reader.eviction_enabled);
+    let eviction_buffer = Arc::clone(&buffer);
 
     // Store session for cancellation on re-tune, and URL for dedup.
     state.tv_stream_session = Some(Arc::clone(&buffer));
@@ -156,7 +156,7 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
     // can be enabled immediately.
     let on_init: Box<dyn FnOnce() + Send> = Box::new(move || {
         log::info!("TV: decoder initialized, enabling sliding-window eviction");
-        eviction_flag.store(true, std::sync::atomic::Ordering::Release);
+        eviction_buffer.enable_eviction();
     });
 
     // Start the decoder -- it will block-read from the streaming buffer as

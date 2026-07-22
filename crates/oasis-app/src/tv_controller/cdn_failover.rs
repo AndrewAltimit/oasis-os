@@ -153,7 +153,10 @@ fn fetch_range_inner(
         .saturating_add(MAX_HEADER_SIZE as u64)
         .saturating_add(FETCH_RANGE_SIZE_SLACK);
     let mut response = Vec::new();
-    let mut buf = [0u8; 8192];
+    // 64 KB reads: the tail probe pulls up to 8 MB, and 8 KB reads
+    // interleaved with 1 ms WouldBlock sleeps made it needlessly slow
+    // while competing with the linear stream for CDN bandwidth.
+    let mut buf = [0u8; 65536];
     // Fixed absolute deadline matches `open_range_connection_inner`. A
     // rolling deadline that reset on every successful read would let a
     // server trickle one byte every 29s and never trigger the timeout;
@@ -415,10 +418,8 @@ fn open_range_connection_inner(
 pub(crate) fn split_redirect_target(loc: &str) -> Option<RedirectTarget> {
     let (is_https, stripped) = if let Some(s) = loc.strip_prefix("https://") {
         (true, s)
-    } else if let Some(s) = loc.strip_prefix("http://") {
-        (false, s)
     } else {
-        return None;
+        (false, loc.strip_prefix("http://")?)
     };
     let (host_with_port, path) = stripped
         .split_once('/')

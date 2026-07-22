@@ -54,7 +54,7 @@ pub fn apply_filter_chain(pixels: &mut [u8], width: u32, height: u32, filters: &
 /// `filter: opacity(k)` — multiply alpha channel by `k`.
 fn apply_opacity(pixels: &mut [u8], factor: f32) {
     let f = factor.clamp(0.0, 1.0);
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         chunk[3] = ((chunk[3] as f32) * f).round() as u8;
     }
 }
@@ -63,7 +63,7 @@ fn apply_opacity(pixels: &mut [u8], factor: f32) {
 fn apply_grayscale(pixels: &mut [u8], amount: f32) {
     let a = amount.clamp(0.0, 1.0);
     let inv = 1.0 - a;
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
         let b = chunk[2] as f32;
@@ -78,7 +78,7 @@ fn apply_grayscale(pixels: &mut [u8], amount: f32) {
 fn apply_invert(pixels: &mut [u8], amount: f32) {
     let a = amount.clamp(0.0, 1.0);
     let inv = 1.0 - a;
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         for channel in chunk.iter_mut().take(3) {
             let v = *channel as f32;
             let inverted = 255.0 - v;
@@ -92,7 +92,7 @@ fn apply_brightness(pixels: &mut [u8], factor: f32) {
     if (factor - 1.0).abs() < f32::EPSILON {
         return;
     }
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         for channel in chunk.iter_mut().take(3) {
             *channel = (*channel as f32 * factor).round().clamp(0.0, 255.0) as u8;
         }
@@ -104,7 +104,7 @@ fn apply_contrast(pixels: &mut [u8], factor: f32) {
     if (factor - 1.0).abs() < f32::EPSILON {
         return;
     }
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         for channel in chunk.iter_mut().take(3) {
             let v = *channel as f32;
             *channel = ((v - 128.0) * factor + 128.0).round().clamp(0.0, 255.0) as u8;
@@ -116,7 +116,7 @@ fn apply_contrast(pixels: &mut [u8], factor: f32) {
 fn apply_sepia(pixels: &mut [u8], amount: f32) {
     let a = amount.clamp(0.0, 1.0);
     let inv = 1.0 - a;
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
         let b = chunk[2] as f32;
@@ -134,7 +134,7 @@ fn apply_saturate(pixels: &mut [u8], factor: f32) {
     if (factor - 1.0).abs() < f32::EPSILON {
         return;
     }
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
         let b = chunk[2] as f32;
@@ -161,7 +161,7 @@ fn apply_hue_rotate(pixels: &mut [u8], radians: f32) {
         0.715 - c * 0.715 + s * 0.715,
         0.072 + c * 0.928 + s * 0.072,
     ];
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
         let b = chunk[2] as f32;
@@ -282,7 +282,12 @@ pub fn cpu_blend_composite(src: &[u8], dst: &mut [u8], w: u32, h: u32, blend: Bl
     if src.len() < count || dst.len() < count {
         return;
     }
-    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+    for (s, d) in src
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+    {
         let sa = s[3] as f32 / 255.0;
         if sa < 1.0 / 512.0 {
             continue; // fully transparent source — no change
