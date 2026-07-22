@@ -842,6 +842,15 @@ impl AudioBackend for SdlAudioBackend {
         self.decode_mp3_buffer(16)
     }
 
+    fn streaming_queued_ms(&self, track: AudioTrackId) -> Option<u32> {
+        if self.stream_track != Some(track.0) {
+            return None;
+        }
+        // Queue holds interleaved stereo i16 at OUTPUT_SAMPLE_RATE:
+        // 48 kHz * 2 ch * 2 bytes = 192 bytes/ms.
+        Some(self.queued_bytes() / 192)
+    }
+
     fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
         if self.stream_track != Some(track.0) {
             return false;
