@@ -1374,6 +1374,7 @@ fn dispatch_command(backend: &mut dyn SdiBackend, cmd: &DrawCommand) -> crate::e
         | DrawCommand::BindRenderTarget { .. }
         | DrawCommand::UnbindRenderTarget
         | DrawCommand::CompositeRenderTarget { .. }
+        | DrawCommand::CompositeRenderTargetPremultiplied { .. }
         | DrawCommand::DestroyRenderTarget { .. } => Ok(()),
     }
 }

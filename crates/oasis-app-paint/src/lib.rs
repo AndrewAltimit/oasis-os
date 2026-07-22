@@ -262,7 +262,9 @@ impl PaintApp {
         };
 
         self.display_lines = vec![
-            format!("Paint - {}x{}", self.canvas.width(), self.canvas.height()),
+            // Canvas dimensions only — the app title already shows in the
+            // WM / app-chrome title bar.
+            format!("Canvas: {}x{}", self.canvas.width(), self.canvas.height()),
             "\u{2500}".repeat(30),
             format!(
                 "  Tool: {}  Color: {} ({})  Size: {}",
@@ -432,11 +434,12 @@ impl App for PaintApp {
         draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)?;
 
         // Calculate canvas rendering area below the text info.
-        // Reserve space for 8 info lines + title bar.
+        // Reserve space for 8 info lines + the windowed top inset.
         let info_lines = 9u32;
         let line_h = at.terminal_line_height.max(1);
-        let canvas_top = cy + at.app.title_bar_height as i32 + (info_lines * line_h) as i32;
-        let available_h = ch.saturating_sub(at.app.title_bar_height + info_lines * line_h + 16);
+        let top_pad = oasis_app_core::render::WINDOWED_TOP_PAD;
+        let canvas_top = cy + top_pad as i32 + (info_lines * line_h) as i32;
+        let available_h = ch.saturating_sub(top_pad + info_lines * line_h + 16);
         let available_w = cw.saturating_sub(8);
 
         if available_h < 4 || available_w < 4 {
@@ -1177,7 +1180,9 @@ mod tests {
     fn paint_app_display_lines_nonempty() {
         let app = PaintApp::new("/apps/paint");
         assert!(!app.lines().is_empty());
-        assert!(app.lines().iter().any(|l| l.contains("Paint")));
+        // The heading shows canvas dimensions, not the app title — the
+        // title already lives in the WM / app-chrome title bar.
+        assert!(app.lines().iter().any(|l| l.contains("Canvas:")));
     }
 
     #[test]

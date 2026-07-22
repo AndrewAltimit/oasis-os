@@ -83,10 +83,12 @@ impl TextEditorApp {
         }
     }
 
-    /// Draw the full Windows-Notepad-style editor window: title bar,
-    /// menu bar, text area (syntax-highlighted when applicable), and
-    /// status bar. This is the primary windowed renderer for the
-    /// Text Editor app.
+    /// Draw the full Windows-Notepad-style editor window: menu bar,
+    /// text area (syntax-highlighted when applicable), and status bar.
+    /// This is the primary windowed renderer for the Text Editor app.
+    ///
+    /// No inner title bar — the WM titlebar already shows the app title.
+    /// The open file's name (and modified marker) live in the status bar.
     pub(crate) fn draw_notepad(
         &self,
         cx: i32,
@@ -104,22 +106,9 @@ impl TextEditorApp {
         let status_fg = Color::rgb(32, 32, 32);
         let selection_bg = Color::rgb(173, 214, 255);
 
-        // Title bar.
-        let title_h = at.app.title_bar_height.max(18);
-        backend.fill_rect(cx, cy, cw, title_h, at.app.title_bar_bg)?;
-        let title_text = self.build_title();
-        let mod_marker = if self.modified { " *" } else { "" };
-        backend.draw_text(
-            &format!("{title_text}{mod_marker}"),
-            cx + 6,
-            cy + 2,
-            at.font_body,
-            at.app.title_bar_text,
-        )?;
-
-        // Menu bar: real widget with live drop-downs.
+        // Menu bar at the very top: real widget with live drop-downs.
         let menu_h: u32 = 18;
-        let menu_y = cy + title_h as i32;
+        let menu_y = cy;
         let menu_style = oasis_ui::menu_bar::MenuStyle::from_theme(&at.ui_theme);
         self.menu
             .draw_bar(backend, cx, menu_y, cw, menu_h, &menu_style)?;
@@ -220,12 +209,18 @@ impl TextEditorApp {
         };
         let position = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
         let lines_total = format!("{} lines", self.buffer.line_count());
+        // The file name lives here now that there's no inner title bar.
+        let file_label = match &self.file_path {
+            Some(fp) => fp.rsplit('/').next().unwrap_or(fp),
+            None => "(untitled)",
+        };
+        let mod_marker = if self.modified { "*" } else { "" };
         let status_left = if let Some(ref msg) = self.status_message {
             format!("{mode_str}  |  {msg}")
         } else if self.mode == EditorMode::Find {
             format!("{mode_str}  |  Find: {}_", self.find_query)
         } else {
-            format!("{mode_str}  |  {lines_total}")
+            format!("{mode_str}  |  {file_label}{mod_marker}  |  {lines_total}")
         };
         backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
 

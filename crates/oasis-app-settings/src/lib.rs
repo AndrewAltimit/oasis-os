@@ -842,15 +842,16 @@ impl App for SettingsApp {
     }
 
     /// Windowed renderer. Mirrors
-    /// `oasis_app_core::render::draw_content_windowed` line-for-line, but
-    /// sources colors from [`SettingsColors`] so skins can restyle the
-    /// Settings window via `[app_themes.settings]`. Keep the layout metrics
-    /// in sync with the shared renderer (and with `handle_click`).
+    /// `oasis_app_core::render::draw_content_windowed` (no-context path)
+    /// line-for-line, but sources colors from [`SettingsColors`] so skins
+    /// can restyle the Settings window via `[app_themes.settings]`. Keep
+    /// the layout metrics in sync with the shared renderer (and with
+    /// `handle_click`).
     fn draw_windowed(
         &self,
         cx: i32,
         cy: i32,
-        cw: u32,
+        _cw: u32,
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
@@ -858,22 +859,15 @@ impl App for SettingsApp {
         let colors = SettingsColors::from_theme(at);
         let content = &self.content;
 
-        // Title row. Settings never sets `browse_dir`/`viewing_file`, so the
-        // generic renderer's directory suffix is always empty here.
-        backend.draw_text(&content.title, cx + 4, cy + 2, 12, colors.title_bar_text)?;
-
-        // Separator.
-        backend.fill_rect(
-            cx,
-            cy + at.app.title_bar_height as i32 - 4,
-            cw,
-            1,
-            colors.divider,
-        )?;
+        // No inner title row — the WM titlebar already shows "Settings".
+        // Settings never sets `browse_dir`/`viewing_file`, so the generic
+        // renderer's context header row never applies either: content
+        // starts at the shared windowed top inset.
+        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
 
         // Content lines.
         let line_h = at.terminal_line_height.max(12) as i32;
-        let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
+        let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
         let visible = content
             .lines
             .len()
@@ -889,7 +883,7 @@ impl App for SettingsApp {
             } else {
                 colors.text
             };
-            let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
+            let y = cy + content_top + i as i32 * line_h;
             backend.draw_text(&text, cx + 4, y, 12, text_color)?;
         }
 
@@ -1023,14 +1017,13 @@ impl App for SettingsApp {
         _fullscreen: bool,
     ) -> AppAction {
         // Map the click Y coordinate back to a content-line index using the
-        // same metrics the renderer uses for `draw_content_windowed`:
-        // `title_bar_height + line_idx * line_h`. Both values are cached on
-        // `ContentState` by `update_layout` each frame so they stay in sync
-        // with the active skin's theme rather than being hardcoded here.
-        let title_bar_height = self.content.cached_title_bar_height as i32;
+        // same metrics as the windowed renderer: content starts at the
+        // shared `WINDOWED_TOP_PAD` (there is no inner title row — the WM
+        // titlebar shows the app title), rows are `cached_line_h` tall.
+        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
         let line_h = self.content.cached_line_h.max(1) as i32;
 
-        let y_in_content = ly - title_bar_height;
+        let y_in_content = ly - content_top;
         if y_in_content < 0 {
             return AppAction::None;
         }
@@ -1500,10 +1493,10 @@ mod tests {
     fn click_on_skin_row_applies() {
         let mut app = make_app();
         // Items render starting at line 4 (tabs + separator + header + blank).
-        // Renderer uses title_bar_height = 20 + line_h = 14, so line 4 lives
-        // at y = 20 + 4*14 = 76. Line 5 (second skin, not the active one)
-        // lives at y = 90.
-        let _action = app.handle_click(10, 90, 400, 220, false);
+        // Renderer uses WINDOWED_TOP_PAD = 4 + line_h = 14, so line 4 lives
+        // at y = 4 + 4*14 = 60. Line 5 (second skin, not the active one)
+        // lives at y = 74.
+        let _action = app.handle_click(10, 74, 400, 220, false);
         let req = app.take_pending_request();
         let (path, data) = req.expect("click on non-active skin should post IPC");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
@@ -1515,8 +1508,9 @@ mod tests {
     fn click_on_active_skin_noop() {
         let vfs = make_vfs();
         let mut app = make_app();
-        // Line 4 = first skin ("classic"), which is the active one.
-        let _action = app.handle_click(10, 76, 400, 220, false);
+        // Line 4 = first skin ("classic"), which is the active one
+        // (y = 4 + 4*14 = 60).
+        let _action = app.handle_click(10, 60, 400, 220, false);
         assert!(app.take_pending_request().is_none());
         // Double-check we pulled the vfs arg in via sync (no panic).
         let _ = vfs;
@@ -1525,7 +1519,8 @@ mod tests {
     #[test]
     fn click_above_content_area_ignored() {
         let mut app = make_app();
-        // Click in the title bar area (y < 20).
+        // Click on the tab strip (line 0, well above the first skin row) —
+        // ignored because it maps to a line index below ITEMS_START.
         let _action = app.handle_click(10, 5, 400, 220, false);
         assert!(app.take_pending_request().is_none());
     }
@@ -1539,8 +1534,8 @@ mod tests {
         app.handle_input(&Button::Right, &vfs);
         assert_eq!(app.category, Category::Resolution);
         // Click the 4th preset (1280x720, index 3 → content line 4+3=7 →
-        // y = 20 + 7*14 = 118).
-        let _action = app.handle_click(10, 118, 400, 220, false);
+        // y = 4 + 7*14 = 102).
+        let _action = app.handle_click(10, 102, 400, 220, false);
         let req = app.take_pending_request();
         let (path, data) = req.expect("click on non-active preset should post IPC");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);

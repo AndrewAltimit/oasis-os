@@ -288,14 +288,13 @@ impl App for TextEditorApp {
     }
 
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
-        // Layout constants — must mirror `draw_notepad`. The title bar
-        // height is pulled from the active theme (cached during the last
-        // `update_layout`) and floored at 18 so it agrees with the renderer
-        // for skins that specify a very small bar.
-        let title_h = self.content.cached_title_bar_height.max(18) as i32;
+        // Layout constants — must mirror `draw_notepad`: the menu bar sits
+        // at the very top of the content area (no inner title bar — the WM
+        // titlebar shows the app title), text area below it, status strip
+        // at the bottom.
         let menu_h = 18i32;
-        let menu_y = title_h;
-        let area_top = title_h + menu_h;
+        let menu_y = 0i32;
+        let area_top = menu_h;
         let status_h = 18i32;
         let area_bottom = ch as i32 - status_h;
 
@@ -484,9 +483,9 @@ mod tests {
     fn click_in_text_area_places_cursor_and_enters_insert() {
         let mut app = TextEditorApp::open_file("/test.txt", "hello world");
         // Click roughly at column 6 in the first line. Area top is
-        // title_h + menu_h = 38, so ly = 40 + 6 (pad) puts us on
-        // line 0.
-        let action = app.handle_click(8 + 6 * 7, 44, 400, 300, false);
+        // menu_h = 18 (menu bar sits at the top of the content area),
+        // so ly = 18 + 6 (pad) + 2 puts us on line 0.
+        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, false);
         assert_eq!(action, AppAction::None);
         assert_eq!(app.mode, EditorMode::Insert);
         assert_eq!(app.cursor_line, 0);
@@ -499,11 +498,11 @@ mod tests {
     fn click_on_menu_label_toggles_dropdown() {
         let mut app = TextEditorApp::new("/apps/editor");
         assert!(!app.menu.is_open());
-        // "File" label at x=6, menu strip y=20..38 so ly=28 hits it.
-        let _ = app.handle_click(10, 28, 400, 300, false);
+        // "File" label at x=6, menu strip y=0..18 so ly=8 hits it.
+        let _ = app.handle_click(10, 8, 400, 300, false);
         assert_eq!(app.menu.open, Some(0), "File dropdown should be open");
         // Clicking File again toggles it closed.
-        let _ = app.handle_click(10, 28, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false);
         assert!(!app.menu.is_open(), "second click should close");
     }
 
@@ -513,12 +512,12 @@ mod tests {
     fn click_file_save_item_emits_vfs_write() {
         let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
         // Open the File menu.
-        let _ = app.handle_click(10, 28, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false);
         assert!(app.menu.is_open());
-        // File dropdown starts just below the menu bar (y=38) with
-        // 4px padding, so first item row is y=42..62. New, then
-        // Save is the second entry (y=62..82).
-        let action = app.handle_click(20, 66, 400, 300, false);
+        // File dropdown starts just below the menu bar (y=18) with
+        // 4px padding, so first item row is y=22..42. New, then
+        // Save is the second entry (y=42..62).
+        let action = app.handle_click(20, 46, 400, 300, false);
         assert_eq!(action, AppAction::None);
         assert!(!app.menu.is_open(), "menu should close after dispatch");
         let req = app.content.pending_vfs_request.take().expect("vfs write");
@@ -531,10 +530,10 @@ mod tests {
     #[test]
     fn click_file_exit_item_returns_exit() {
         let mut app = TextEditorApp::new("/apps/editor");
-        let _ = app.handle_click(10, 28, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false);
         // Exit is the 4th entry (New, Save, Separator, Exit).
-        // y=42+20+20+6 = 88 is the exit row.
-        let action = app.handle_click(20, 92, 400, 300, false);
+        // y=22+20+20+6 = 68 is the exit row.
+        let action = app.handle_click(20, 72, 400, 300, false);
         assert_eq!(action, AppAction::Exit);
     }
 

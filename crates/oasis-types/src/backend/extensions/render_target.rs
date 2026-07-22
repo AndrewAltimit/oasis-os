@@ -96,6 +96,34 @@ pub trait SdiRenderTarget: SdiCore {
         Err(OasisError::Backend("render targets not supported".into()))
     }
 
+    /// Composite a render target whose pixels hold *premultiplied*
+    /// alpha into the currently bound surface with source-over
+    /// blending (`dst = src + dst * (1 - srcA)`).
+    ///
+    /// Drawing straight-alpha primitives onto a transparent-cleared
+    /// target naturally leaves premultiplied pixels (`rgb * a` over
+    /// zero), so replaying such a texture through this operator
+    /// reproduces the original immediate-mode draws.  Compositing the
+    /// same texture with [`composite_render_target`](Self::composite_render_target)
+    /// and [`BlendMode::Normal`] would multiply by alpha a *second*
+    /// time and visibly darken semi-transparent content.
+    ///
+    /// Used by the static vector-layer bake cache in `oasis-core`.
+    /// Defaults to `Err`; callers must treat failure as "baking
+    /// unsupported" and fall back to immediate-mode drawing.
+    fn composite_render_target_premultiplied(
+        &mut self,
+        _id: RenderTargetId,
+        _dst_x: i32,
+        _dst_y: i32,
+        _dst_w: u32,
+        _dst_h: u32,
+    ) -> Result<()> {
+        Err(OasisError::Backend(
+            "premultiplied render-target composite not supported".into(),
+        ))
+    }
+
     /// Read RGBA8 pixels back from a render target into a
     /// caller-supplied buffer.
     ///

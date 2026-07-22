@@ -75,9 +75,10 @@ impl App for FileManagerApp {
         }
         let title_h = self.content.cached_title_bar_height.max(16) as i32;
         // Only `update_sdi_*` (fullscreen) and `draw_windowed_dual` paint an
-        // inner title bar; `draw_windowed_explorer` reuses the WM titlebar
-        // and starts the menu at the top of the content rect. Mirror that
-        // here so hit-tests align with what's drawn.
+        // inner header row (dual keeps a panel-paths context strip at
+        // `title_bar_height`); `draw_windowed_explorer` reuses the WM
+        // titlebar and starts the menu at the top of the content rect.
+        // Mirror that here so hit-tests align with what's drawn.
         let inner_title_bar = fullscreen || matches!(self.view_mode, ViewMode::Dual);
         let menu_y = if inner_title_bar { title_h } else { 0 };
 

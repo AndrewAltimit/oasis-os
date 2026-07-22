@@ -13,17 +13,39 @@ const DEFAULT_COLOR1: [f32; 4] = [0.871, 0.267, 0.251, 1.0]; // #DE4440
 const DEFAULT_COLOR2: [f32; 4] = [0.0, 0.420, 0.706, 1.0]; // #006BB4
 const DEFAULT_COLOR3: [f32; 4] = [0.086, 0.137, 0.145, 1.0]; // #162325
 
-/// Downscale factor for internal rendering. Render at 1/SCALE in each
-/// dimension, then nearest-neighbour upscale. 3 = 9x fewer pixels.
+/// Minimum downscale factor for internal rendering. Render at 1/SCALE in
+/// each dimension, then nearest-neighbour upscale. 3 = 9x fewer pixels.
 const RENDER_SCALE: u32 = 3;
+
+/// Cap on the low-res buffer dimensions. The effective scale grows with
+/// the output resolution so the number of per-pixel kernel evaluations
+/// stays roughly constant (~130k cells) regardless of window size — a 4K
+/// canvas must not cost 9x a 720p one. At or below 1440x810 the minimum
+/// [`RENDER_SCALE`] of 3 already satisfies the cap, so smaller outputs
+/// (including the golden-checksum test sizes) are unaffected.
+const MAX_LO_W: u32 = 480;
+const MAX_LO_H: u32 = 270;
+
+/// Effective downscale factor for a given output resolution: the smallest
+/// factor >= [`RENDER_SCALE`] that keeps the low-res buffer within
+/// [`MAX_LO_W`] x [`MAX_LO_H`].
+fn render_scale_for(width: u32, height: u32) -> u32 {
+    RENDER_SCALE
+        .max(width.div_ceil(MAX_LO_W))
+        .max(height.div_ceil(MAX_LO_H))
+}
 
 /// CPU-based shader renderer.
 ///
-/// Renders at reduced internal resolution (`1/RENDER_SCALE` in each dimension)
-/// and upscales to the output buffer with nearest-neighbour for performance.
+/// Renders at reduced internal resolution (`1/scale` in each dimension;
+/// at least 1/3, growing with the output size so the internal buffer
+/// stays within 480x270 cells) and upscales to the output buffer with
+/// nearest-neighbour for performance.
 pub struct SoftwareShaderRenderer {
     width: u32,
     height: u32,
+    /// Effective downscale factor for the current output resolution.
+    scale: u32,
     pixel_buf: Vec<u8>,
     lo_buf: Vec<[u8; 4]>,
 }
@@ -31,11 +53,13 @@ pub struct SoftwareShaderRenderer {
 impl SoftwareShaderRenderer {
     /// Create a new software renderer at the given output resolution.
     pub fn new(width: u32, height: u32) -> Self {
-        let iw = width.div_ceil(RENDER_SCALE);
-        let ih = height.div_ceil(RENDER_SCALE);
+        let scale = render_scale_for(width, height);
+        let iw = width.div_ceil(scale);
+        let ih = height.div_ceil(scale);
         Self {
             width,
             height,
+            scale,
             pixel_buf: vec![0u8; (width * height * 4) as usize],
             lo_buf: vec![[0u8; 4]; (iw * ih) as usize],
         }
@@ -45,9 +69,10 @@ impl SoftwareShaderRenderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        self.scale = render_scale_for(width, height);
         self.pixel_buf.resize((width * height * 4) as usize, 0);
-        let iw = width.div_ceil(RENDER_SCALE);
-        let ih = height.div_ceil(RENDER_SCALE);
+        let iw = width.div_ceil(self.scale);
+        let ih = height.div_ceil(self.scale);
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
     }
 
@@ -100,9 +125,7 @@ impl SoftwareShaderRenderer {
         let contrast_mod = 0.25 * contrast + 0.5 * spin_amount + 1.2;
         let base_w = 0.3 / contrast;
 
-        let iw = self.width.div_ceil(RENDER_SCALE);
-        let ih = self.height.div_ceil(RENDER_SCALE);
-        let scale_f = RENDER_SCALE as f32;
+        let (iw, ih, scale_f) = self.lo_dims();
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
         let lo = &mut self.lo_buf[..(iw * ih) as usize];
@@ -785,9 +808,9 @@ impl SoftwareShaderRenderer {
 
     fn lo_dims(&self) -> (u32, u32, f32) {
         (
-            self.width.div_ceil(RENDER_SCALE),
-            self.height.div_ceil(RENDER_SCALE),
-            RENDER_SCALE as f32,
+            self.width.div_ceil(self.scale),
+            self.height.div_ceil(self.scale),
+            self.scale as f32,
         )
     }
 
@@ -799,6 +822,7 @@ impl SoftwareShaderRenderer {
             self.height,
             iw,
             ih,
+            self.scale,
         );
         &self.pixel_buf
     }
@@ -845,13 +869,21 @@ where
 }
 
 /// Nearest-neighbour upscale from low-res buffer to output RGBA buffer.
-fn upscale_nn(lo_buf: &[[u8; 4]], pixel_buf: &mut [u8], width: u32, height: u32, iw: u32, ih: u32) {
+fn upscale_nn(
+    lo_buf: &[[u8; 4]],
+    pixel_buf: &mut [u8],
+    width: u32,
+    height: u32,
+    iw: u32,
+    ih: u32,
+    scale: u32,
+) {
     for y in 0..height {
-        let sy = (y / RENDER_SCALE).min(ih - 1);
+        let sy = (y / scale).min(ih - 1);
         let src_row = (sy * iw) as usize;
         let dst_row = (y * width * 4) as usize;
         for x in 0..width {
-            let sx = (x / RENDER_SCALE).min(iw - 1) as usize;
+            let sx = (x / scale).min(iw - 1) as usize;
             let rgba = lo_buf[src_row + sx];
             let idx = dst_row + (x * 4) as usize;
             pixel_buf[idx] = rgba[0];
@@ -960,6 +992,43 @@ mod tests {
         assert_eq!(renderer.pixel_buf.len(), 8 * 8 * 4);
         renderer.resize(16, 16);
         assert_eq!(renderer.pixel_buf.len(), 16 * 16 * 4);
+    }
+
+    #[test]
+    fn render_scale_stays_minimum_up_to_1440x810() {
+        // Everything at or below the cap boundary keeps the fixed 1/3
+        // scale — including the golden-checksum sizes below, whose
+        // outputs must not change.
+        assert_eq!(render_scale_for(64, 64), 3);
+        assert_eq!(render_scale_for(241, 135), 3);
+        assert_eq!(render_scale_for(480, 272), 3);
+        assert_eq!(render_scale_for(1280, 720), 3);
+        assert_eq!(render_scale_for(1440, 810), 3);
+    }
+
+    #[test]
+    fn render_scale_caps_lo_buffer_for_large_outputs() {
+        // 1080p: scale 4 → 480x270 cells.
+        assert_eq!(render_scale_for(1920, 1080), 4);
+        // 4K: scale 8 → 480x270 cells, not 9x the 720p cost.
+        assert_eq!(render_scale_for(3840, 2160), 8);
+        let r = SoftwareShaderRenderer::new(3840, 2160);
+        let (iw, ih, scale_f) = r.lo_dims();
+        assert_eq!((iw, ih), (480, 270));
+        assert_eq!(scale_f, 8.0);
+    }
+
+    #[test]
+    fn adaptive_scale_resize_updates_lo_dims() {
+        let mut r = SoftwareShaderRenderer::new(1280, 720);
+        assert_eq!(r.lo_dims().2, 3.0);
+        r.resize(2560, 1440);
+        let (iw, ih, scale_f) = r.lo_dims();
+        assert_eq!(scale_f, 6.0);
+        assert!(iw <= 480 && ih <= 270, "lo buffer exceeds cap: {iw}x{ih}");
+        // Output buffer still matches the full resolution.
+        let pixels = r.render_shader("plasma", 1.0, &ShaderParams::default());
+        assert_eq!(pixels.len(), 2560 * 1440 * 4);
     }
 
     #[test]

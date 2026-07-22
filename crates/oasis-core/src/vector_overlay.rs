@@ -7,7 +7,7 @@
 //! These overlays are rendered between the base SDI layer (wallpaper, bars)
 //! and the overlay layer (cursor, toasts), preserving correct z-order.
 
-use oasis_types::backend::SdiBackend;
+use oasis_types::backend::{Color, RenderTargetId, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vector::AnimClock;
 use oasis_vector::ShaderParams;
@@ -45,11 +45,26 @@ fn layer_is_animated(layer: &BackgroundLayer, reduced_motion: bool) -> bool {
     }
 }
 
-/// Per-layer op cache for background/chrome vector layers (perf item D4).
+/// Whether any layer in the slice animates from frame to frame.
+///
+/// Public so the shell's idle frame elision can tell whether background
+/// or chrome vector layers need a continuous redraw. Static-only layer
+/// sets replay identical ops every frame and are safe to skip.
+pub fn layers_animated(layers: &[BackgroundLayer], reduced_motion: bool) -> bool {
+    layers
+        .iter()
+        .any(|layer| layer_is_animated(layer, reduced_motion))
+}
+
+/// Per-layer op cache for background/chrome vector layers (perf item D4)
+/// plus baked offscreen textures for static layers.
 ///
 /// Ops for static layers are tessellated once and replayed each frame;
-/// animated layers rebuild as before. Owned by the shell (one per layer
-/// list) and invalidated on skin swap or resolution change via
+/// animated layers rebuild as before. On backends with render-target
+/// support, each static layer's ops are additionally rasterized once
+/// into an offscreen texture and replayed as a single composite per
+/// frame instead of re-running every primitive. Owned by the shell (one
+/// per layer list) and invalidated on skin swap or resolution change via
 /// [`LayerOpsCache::invalidate`]; a size/motion fingerprint also catches
 /// stale reuse defensively.
 #[derive(Default)]
@@ -58,6 +73,20 @@ pub struct LayerOpsCache {
     per_layer: Vec<Option<(Vec<VectorOp>, u32)>>,
     /// (w, h, reduced_motion, layer count) the cache was built for.
     built_for: Option<(u32, u32, bool, usize)>,
+    /// Baked offscreen texture per layer, parallel to `per_layer`.
+    /// `None` = animated layer, empty ops, or baking unavailable.
+    baked: Vec<Option<RenderTargetId>>,
+    /// Fingerprint the baked textures were built for (same key as
+    /// `built_for`).
+    baked_for: Option<(u32, u32, bool, usize)>,
+    /// Targets orphaned by [`invalidate`](Self::invalidate) or a
+    /// fingerprint change, destroyed at the next render call
+    /// (invalidation sites have no backend access).
+    stale_targets: Vec<RenderTargetId>,
+    /// Set once the backend rejects baking (no render-target support,
+    /// or premultiplied composite unavailable) so we stop retrying and
+    /// permanently use the immediate-mode path.
+    bake_disabled: bool,
 }
 
 impl LayerOpsCache {
@@ -67,9 +96,72 @@ impl LayerOpsCache {
     }
 
     /// Drop all cached ops; the next render rebuilds them.
+    ///
+    /// Baked textures are retired here and destroyed on the next
+    /// render call (the invalidation sites — skin swap, resolution
+    /// change — have no backend handle to destroy them with).
     pub fn invalidate(&mut self) {
         self.built_for = None;
         self.per_layer.clear();
+        self.retire_baked();
+    }
+
+    /// Destroy any baked textures owned by this cache.
+    ///
+    /// Call before dropping a short-lived cache whose backend outlives
+    /// it (e.g. per-screenshot caches); long-lived caches are cleaned
+    /// up by the backend's own teardown.
+    pub fn release_targets(&mut self, backend: &mut dyn SdiBackend) {
+        self.retire_baked();
+        self.destroy_stale(backend);
+    }
+
+    /// Move all baked textures to the stale list for later destruction.
+    fn retire_baked(&mut self) {
+        self.stale_targets.extend(self.baked.drain(..).flatten());
+        self.baked_for = None;
+    }
+
+    /// Destroy retired targets now that a backend is available.
+    fn destroy_stale(&mut self, backend: &mut dyn SdiBackend) {
+        for id in self.stale_targets.drain(..) {
+            // Best-effort: opt-out backends have a no-op destroy.
+            let _ = backend.destroy_render_target(id);
+        }
+    }
+}
+
+/// Rasterize a static layer's ops into a fresh offscreen target.
+///
+/// The target is cleared to transparent so the layer's alpha is
+/// preserved. Drawing straight-alpha primitives over transparent black
+/// leaves premultiplied pixels, which
+/// `composite_render_target_premultiplied` composes back onto the
+/// framebuffer exactly like the original immediate-mode draws.
+fn bake_layer_ops(
+    backend: &mut dyn SdiBackend,
+    ops: &[VectorOp],
+    w: u32,
+    h: u32,
+) -> Result<RenderTargetId> {
+    let id = backend.create_render_target(w, h)?;
+    let result = match backend.bind_render_target(id) {
+        Ok(()) => {
+            let draw = backend
+                .clear(Color::TRANSPARENT)
+                .and_then(|()| render_ops(backend, ops, 255));
+            // Always pop the bind, then surface the first error.
+            let unbind = backend.unbind_render_target();
+            draw.and(unbind)
+        },
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(()) => Ok(id),
+        Err(e) => {
+            let _ = backend.destroy_render_target(id);
+            Err(e)
+        },
     }
 }
 
@@ -86,11 +178,21 @@ pub struct LayerFrame {
     pub frame_counter: u32,
 }
 
-/// Render a layer list with per-layer caching (D4).
+/// Render a layer list with per-layer caching (D4) and static-layer
+/// texture baking.
 ///
 /// Behaviorally identical to `BackgroundScene::build_ops` + `render_scene`:
 /// layers render in order, disabled layers are skipped, and any layer whose
 /// primitive count exceeds the remaining complexity budget is dropped.
+///
+/// On backends that support offscreen render targets, each static
+/// layer's ops are rasterized once into a transparent-cleared target
+/// and replayed as a single premultiplied composite per frame. Animated
+/// layers keep the immediate path. If the backend lacks render-target
+/// support — or the premultiplied composite fails (some renderers can
+/// draw offscreen but not blend premultiplied sources) — baking is
+/// disabled and every layer renders through the immediate-mode path,
+/// so opt-out backends (WASM/UE5/PSP) degrade instead of breaking.
 pub fn render_layers_cached(
     backend: &mut dyn SdiBackend,
     layers: &[BackgroundLayer],
@@ -98,6 +200,10 @@ pub fn render_layers_cached(
     frame: LayerFrame,
     cache: &mut LayerOpsCache,
 ) -> Result<()> {
+    // Destroy targets orphaned by `invalidate()` (skin swap has no
+    // backend access) now that one is on hand. Runs before the empty
+    // check so a swap to a layer-less skin still releases textures.
+    cache.destroy_stale(backend);
     if layers.is_empty() {
         return Ok(());
     }
@@ -112,8 +218,11 @@ pub fn render_layers_cached(
         time_s: frame_counter as f32 / 60.0,
         frame: frame_counter,
     };
+    let key = (w, h, reduced_motion, layers.len());
 
-    if cache.built_for != Some((w, h, reduced_motion, layers.len())) {
+    if cache.built_for != Some(key) {
+        cache.retire_baked();
+        cache.destroy_stale(backend);
         cache.per_layer = layers
             .iter()
             .map(|layer| {
@@ -126,11 +235,51 @@ pub fn render_layers_cached(
                 }
             })
             .collect();
-        cache.built_for = Some((w, h, reduced_motion, layers.len()));
+        cache.built_for = Some(key);
+    }
+
+    // Bake static layers to offscreen textures (once per fingerprint).
+    if !cache.bake_disabled && cache.baked_for != Some(key) {
+        if backend.supports_render_targets() {
+            cache.retire_baked();
+            cache.destroy_stale(backend);
+            let mut baked: Vec<Option<RenderTargetId>> = Vec::with_capacity(cache.per_layer.len());
+            let mut failed = false;
+            for entry in &cache.per_layer {
+                let target = match entry {
+                    Some((ops, _)) if !ops.is_empty() && !failed => {
+                        match bake_layer_ops(backend, ops, w, h) {
+                            Ok(id) => Some(id),
+                            Err(_) => {
+                                failed = true;
+                                None
+                            },
+                        }
+                    },
+                    _ => None,
+                };
+                baked.push(target);
+            }
+            if failed {
+                // Backend advertises render targets but baking failed
+                // (e.g. out of texture memory): release the partial
+                // set and stop retrying.
+                cache.bake_disabled = true;
+                for id in baked.into_iter().flatten() {
+                    let _ = backend.destroy_render_target(id);
+                }
+            } else {
+                cache.baked = baked;
+                cache.baked_for = Some(key);
+            }
+        } else {
+            cache.bake_disabled = true;
+        }
     }
 
     let mut budget = complexity_budget;
-    for (layer, cached) in layers.iter().zip(&cache.per_layer) {
+    let mut composite_failed = false;
+    for (i, (layer, cached)) in layers.iter().zip(&cache.per_layer).enumerate() {
         if !layer.enabled || budget == 0 {
             continue;
         }
@@ -140,6 +289,16 @@ pub fn render_layers_cached(
                     continue;
                 }
                 budget -= count;
+                if !composite_failed && let Some(id) = cache.baked.get(i).copied().flatten() {
+                    match backend.composite_render_target_premultiplied(id, 0, 0, w, h) {
+                        Ok(()) => continue,
+                        // Renderer cannot composite premultiplied
+                        // sources: fall through to immediate mode and
+                        // disable baking after the loop (the borrow on
+                        // `ops` blocks retiring the cache here).
+                        Err(_) => composite_failed = true,
+                    }
+                }
                 render_ops(backend, ops, 255)?;
             },
             None => {
@@ -152,6 +311,11 @@ pub fn render_layers_cached(
                 render_ops(backend, &ops, 255)?;
             },
         }
+    }
+    if composite_failed {
+        cache.bake_disabled = true;
+        cache.retire_baked();
+        // Retired textures are destroyed at the start of the next call.
     }
     Ok(())
 }
@@ -364,6 +528,8 @@ mod tests {
         // Mixed static + animated layers, including one that busts the
         // budget: draw commands from the cached path (fresh AND warm)
         // must match the reference build_ops + render_scene path exactly.
+        // Render targets are disabled so this exercises the
+        // immediate-mode fallback (the baked path is covered below).
         let mut sweep = grid_layer();
         sweep.kind = LayerKind::RadarSweep {
             radius: 40,
@@ -397,6 +563,7 @@ mod tests {
         };
 
         let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+        rec.disable_render_targets();
         let mut cache = LayerOpsCache::new();
         let lf = LayerFrame {
             w: 480,
@@ -410,6 +577,211 @@ mod tests {
         rec.clear_commands();
         render_layers_cached(&mut rec, &layers, budget, lf, &mut cache).expect("warm render");
         assert_eq!(rec.commands(), &reference[..], "warm path diverges");
+        assert!(cache.bake_disabled, "unsupported backend disables baking");
+        assert!(cache.baked.is_empty());
+    }
+
+    #[test]
+    fn static_layers_bake_and_composite() {
+        use oasis_types::backend::DrawCommand;
+
+        // One static grid + one animated sweep. On a backend with
+        // render-target support the static layer bakes once (create /
+        // bind / clear / ops / unbind) and every frame replays as a
+        // single premultiplied composite; the animated layer keeps
+        // drawing immediate-mode primitives.
+        let mut sweep = grid_layer();
+        sweep.kind = LayerKind::RadarSweep {
+            radius: 40,
+            sweep_angle: 0.8,
+        };
+        sweep.animation.rotate_speed = 1.0;
+        let layers = vec![grid_layer(), sweep];
+
+        let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+        let mut cache = LayerOpsCache::new();
+        let lf = LayerFrame {
+            w: 480,
+            h: 272,
+            reduced_motion: false,
+            frame_counter: 7,
+        };
+
+        render_layers_cached(&mut rec, &layers, 500, lf, &mut cache).expect("cold render");
+        let cold = rec.commands();
+        let find = |pat: fn(&DrawCommand) -> bool| cold.iter().position(pat);
+        let create = find(|c| matches!(c, DrawCommand::CreateRenderTarget { .. }))
+            .expect("static layer creates a target");
+        let bind = find(|c| matches!(c, DrawCommand::BindRenderTarget { .. }))
+            .expect("bake binds the target");
+        // RecordingBackend records `clear` as a full-viewport FillRect.
+        let clear = find(|c| {
+            matches!(
+                c,
+                DrawCommand::FillRect {
+                    x: 0,
+                    y: 0,
+                    color: Color::TRANSPARENT,
+                    ..
+                }
+            )
+        })
+        .expect("bake clears the target to transparent");
+        let unbind =
+            find(|c| matches!(c, DrawCommand::UnbindRenderTarget)).expect("bake pops the bind");
+        let composite =
+            find(|c| matches!(c, DrawCommand::CompositeRenderTargetPremultiplied { .. }))
+                .expect("baked layer composites back");
+        assert!(create < bind && bind < clear && clear < unbind && unbind < composite);
+        assert_eq!(
+            rec.live_render_target_count(),
+            1,
+            "one target for one static layer"
+        );
+        assert_eq!(rec.render_target_bind_depth(), 0);
+
+        // Warm frame: composite only — no target churn, no re-baking,
+        // no immediate-mode ops for the static layer.
+        rec.clear_commands();
+        render_layers_cached(&mut rec, &layers, 500, lf, &mut cache).expect("warm render");
+        let warm = rec.commands();
+        assert!(
+            warm.iter()
+                .any(|c| matches!(c, DrawCommand::CompositeRenderTargetPremultiplied { .. })),
+            "warm frame replays the baked texture"
+        );
+        assert!(
+            !warm
+                .iter()
+                .any(|c| matches!(c, DrawCommand::CreateRenderTarget { .. })),
+            "warm frame must not re-bake"
+        );
+        assert!(
+            warm.iter()
+                .any(|c| !matches!(c, DrawCommand::CompositeRenderTargetPremultiplied { .. })),
+            "animated layer still draws immediate-mode"
+        );
+        assert_eq!(rec.live_render_target_count(), 1);
+    }
+
+    #[test]
+    fn invalidate_destroys_baked_targets_on_next_render() {
+        use oasis_types::backend::DrawCommand;
+
+        let layers = vec![grid_layer()];
+        let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+        let mut cache = LayerOpsCache::new();
+        let lf = LayerFrame {
+            w: 480,
+            h: 272,
+            reduced_motion: false,
+            frame_counter: 0,
+        };
+
+        render_layers_cached(&mut rec, &layers, 500, lf, &mut cache).expect("cold render");
+        assert_eq!(rec.live_render_target_count(), 1);
+
+        // Skin swap: retire now, destroy + re-bake at the next render.
+        cache.invalidate();
+        assert_eq!(cache.stale_targets.len(), 1);
+        rec.clear_commands();
+        render_layers_cached(&mut rec, &layers, 500, lf, &mut cache).expect("rebake render");
+        assert!(
+            rec.commands()
+                .iter()
+                .any(|c| matches!(c, DrawCommand::DestroyRenderTarget { .. })),
+            "stale target destroyed on next render"
+        );
+        assert_eq!(
+            rec.live_render_target_count(),
+            1,
+            "old target destroyed, fresh one baked"
+        );
+
+        // Explicit release for short-lived caches.
+        cache.release_targets(&mut rec);
+        assert_eq!(rec.live_render_target_count(), 0);
+    }
+
+    #[test]
+    fn resize_rebakes_at_new_dimensions() {
+        use oasis_types::backend::DrawCommand;
+
+        let layers = vec![grid_layer()];
+        let mut rec = oasis_test_backend::RecordingBackend::new(1024, 768);
+        let mut cache = LayerOpsCache::new();
+        let small = LayerFrame {
+            w: 480,
+            h: 272,
+            reduced_motion: false,
+            frame_counter: 0,
+        };
+        let big = LayerFrame {
+            w: 1024,
+            h: 768,
+            reduced_motion: false,
+            frame_counter: 0,
+        };
+
+        render_layers_cached(&mut rec, &layers, 500, small, &mut cache).expect("small render");
+        rec.clear_commands();
+        render_layers_cached(&mut rec, &layers, 500, big, &mut cache).expect("big render");
+        let created: Vec<(u32, u32)> = rec
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::CreateRenderTarget { w, h, .. } => Some((*w, *h)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(created, vec![(1024, 768)], "rebaked at the new size");
+        assert_eq!(rec.live_render_target_count(), 1, "old target destroyed");
+    }
+
+    #[test]
+    fn over_budget_static_layer_is_not_composited() {
+        use oasis_types::backend::DrawCommand;
+
+        // A dense grid whose primitive count exceeds the budget must be
+        // dropped entirely — no composite, matching the uncached path.
+        let mut dense = grid_layer();
+        dense.kind = LayerKind::Grid { spacing: 10 };
+        let layers = vec![dense];
+        let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+        let mut cache = LayerOpsCache::new();
+        let lf = LayerFrame {
+            w: 480,
+            h: 272,
+            reduced_motion: false,
+            frame_counter: 0,
+        };
+        render_layers_cached(&mut rec, &layers, 5, lf, &mut cache).expect("render");
+        assert!(
+            !rec.commands()
+                .iter()
+                .any(|c| matches!(c, DrawCommand::CompositeRenderTargetPremultiplied { .. })),
+            "over-budget layer must not composite"
+        );
+    }
+
+    #[test]
+    fn mock_backend_without_targets_falls_back() {
+        // MockSdiCore keeps the default `SdiRenderTarget` impl
+        // (`supports_render_targets` = false): rendering must succeed
+        // through the immediate path with baking disabled.
+        let mut backend = oasis_test_backend::MockSdiCore::new(480, 272);
+        let layers = vec![grid_layer()];
+        let mut cache = LayerOpsCache::new();
+        let lf = LayerFrame {
+            w: 480,
+            h: 272,
+            reduced_motion: false,
+            frame_counter: 0,
+        };
+        render_layers_cached(&mut backend, &layers, 500, lf, &mut cache).expect("render");
+        render_layers_cached(&mut backend, &layers, 500, lf, &mut cache).expect("warm render");
+        assert!(cache.bake_disabled);
+        assert!(cache.baked.is_empty());
     }
 
     #[test]

@@ -301,6 +301,9 @@ fn render_and_save_themed(
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
     oasis_core::vector_overlay::render_vector_chrome(backend, at, 0, &mut cache)?;
+    // The cache is per-scenario but the backend lives on: free any
+    // baked layer textures before the cache drops.
+    cache.release_targets(backend);
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
     save_png(path, w, h, &pixels)?;
