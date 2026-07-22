@@ -36,13 +36,18 @@ impl ShadeThrottle {
         }
     }
 
+    /// Whether a shade pass would run at `time`, without recording it.
+    fn would_shade(&self, time: f32) -> bool {
+        match self.last_shade_time {
+            None => true,
+            Some(last) => time < last || time - last >= SHADE_INTERVAL,
+        }
+    }
+
     /// Whether a shade pass should run at `time`. Records `time` as the
     /// last shade when returning `true`.
     fn should_shade(&mut self, time: f32) -> bool {
-        let shade = match self.last_shade_time {
-            None => true,
-            Some(last) => time < last || time - last >= SHADE_INTERVAL,
-        };
+        let shade = self.would_shade(time);
         if shade {
             self.last_shade_time = Some(time);
         }
@@ -83,6 +88,21 @@ impl SdlShaderBridge {
             width,
             height,
         })
+    }
+
+    /// Whether calling [`Self::render_and_blit`] at `time` would run a
+    /// CPU shade pass (as opposed to only re-blitting the cached
+    /// texture).
+    ///
+    /// Non-mutating peek at the 30 Hz throttle. The shell's idle
+    /// frame elision uses this: with a shader wallpaper active, a frame
+    /// only needs redrawing when the shader would actually advance —
+    /// otherwise re-blitting the cached texture reproduces the previous
+    /// frame exactly. A missing cached texture always wants a frame.
+    /// (A shader *switch* also forces a shade, but that comes from a
+    /// skin change, which dirties the scene and forces a redraw anyway.)
+    pub fn would_shade(&self, time: f32) -> bool {
+        self.cached_tex.is_none() || self.throttle.would_shade(time)
     }
 
     /// Render a shader and blit the result to the SDL canvas.
@@ -218,6 +238,21 @@ mod tests {
         assert!(t.should_shade(100.0));
         // e.g. frame counter reset: never freeze on the old image.
         assert!(t.should_shade(0.0));
+    }
+
+    #[test]
+    fn would_shade_is_non_mutating() {
+        let mut t = ShadeThrottle::new();
+        assert!(t.would_shade(1.0));
+        // Peeking must not record the time — should_shade still shades.
+        assert!(t.would_shade(1.0));
+        assert!(t.should_shade(1.0));
+        // Within the interval: peek and commit agree (both deny).
+        assert!(!t.would_shade(1.01));
+        assert!(!t.should_shade(1.01));
+        // Past the interval: peek predicts the shade.
+        assert!(t.would_shade(1.05));
+        assert!(t.should_shade(1.05));
     }
 
     #[test]

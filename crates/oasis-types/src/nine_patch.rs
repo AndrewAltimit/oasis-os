@@ -11,7 +11,7 @@ use crate::error::Result;
 ///
 /// Attached to a textured SDI object; the registry combines it with the
 /// object's `texture` into a [`NinePatch`] at draw time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NinePatchSlices {
     /// Source texture width in pixels.
     pub tex_width: u32,

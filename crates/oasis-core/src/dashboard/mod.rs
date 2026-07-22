@@ -410,6 +410,50 @@ impl DashboardState {
         self.selected_index = self.selected;
     }
 
+    /// Whether any dashboard animation is (or may be) live this frame.
+    ///
+    /// Used by the shell's idle frame elision: the vector-icon render
+    /// path paints directly to the backend (outside the SDI scene
+    /// graph), so its animations need an explicit "keep redrawing"
+    /// signal. Deliberately over-approximate — e.g. per-icon
+    /// spin/pulse/blink presets are reported page-wide — because a
+    /// wasted redraw is cheap and a stale frame is a bug.
+    pub fn has_active_animation(&self, at: &ActiveTheme) -> bool {
+        // Transient animations: page slide, press flash, icon drag.
+        if self.page_anim.is_some() || self.press_flash_frame > 0 || self.drag_index.is_some() {
+            return true;
+        }
+        // Entrance animation. `entrance_elapsed_ms` saturates upward and
+        // never returns to `None`, so compare against the full staggered
+        // window (last icon's stagger + its duration).
+        if at.entrance_style != "none"
+            && let Some(elapsed) = self.entrance_elapsed_ms
+        {
+            let window = at.entrance_duration_ms.saturating_add(
+                self.config
+                    .icons_per_page
+                    .saturating_mul(at.entrance_stagger_ms),
+            );
+            if elapsed < window {
+                return true;
+            }
+        }
+        // Continuous vector-icon idle animations (float bob and the
+        // spin/pulse/blink glyph presets).
+        if at.icon.style == "vector" {
+            let preset_static = matches!(
+                at.icon.vector_preset.as_str(),
+                "geometric" | "hud" | "outline" | "solid" | "pixel"
+            );
+            let glyphs_animated = !preset_static
+                && (at.icon.spin_enabled || at.icon.pulse_enabled || at.icon.blink_enabled);
+            if at.icon.idle_float || glyphs_animated {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get the currently selected app entry, if any.
     pub fn selected_app(&self) -> Option<&AppEntry> {
         self.current_page_apps().get(self.selected)
