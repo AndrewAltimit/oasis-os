@@ -94,6 +94,9 @@ const GRID_PAGE: usize = GRID_COLS * GRID_ROWS;
 const SEARCH_BAR_H: i32 = 24;
 const FOOTER_H: i32 = 14;
 const CELL_GAP: i32 = 6;
+/// Top inset for windowed content. The WM titlebar already shows the app
+/// title, so no inner title bar is drawn.
+const TOP_PAD: i32 = 4;
 const TITLE_LINES_H: i32 = 22; // two short lines below the thumbnail.
 
 /// YouTube embed app -- search + thumbnail grid + iframe player.
@@ -111,10 +114,6 @@ pub struct VideoEmbedApp {
     page: usize,
     /// Selected cell within the visible page.
     selection: usize,
-    /// Cached `title_bar_height` from the active skin (varies 16–36 px).
-    /// Captured in `update_sdi` so click-time hit-testing — which has no
-    /// access to `ActiveTheme` — can stay in sync with what was drawn.
-    cached_title_bar_h: i32,
 }
 
 impl VideoEmbedApp {
@@ -130,7 +129,6 @@ impl VideoEmbedApp {
             results: SearchResults::default(),
             page: 0,
             selection: 0,
-            cached_title_bar_h: 22,
         }
     }
 
@@ -261,8 +259,8 @@ impl VideoEmbedApp {
 
     /// Compute the rect of grid cell `i` (0..GRID_PAGE) within `(cw, ch)`.
     ///
-    /// `title_h` is the active skin's `title_bar_height` (16–36 px across the
-    /// shipped skins). Cells use the natural fitting size `avail_w / GRID_COLS`
+    /// `title_h` is the top inset above the search bar ([`TOP_PAD`] in
+    /// windowed mode). Cells use the natural fitting size `avail_w / GRID_COLS`
     /// (no minimum-size floor) so a column at the right edge of a very small
     /// window can never produce an x position past `cw`. Cells smaller than
     /// ~40 px are illegible but cosmetically degraded — that's preferable to
@@ -282,8 +280,8 @@ impl VideoEmbedApp {
     }
 
     /// Hit-test a click at local coords against the grid; returns the page-
-    /// local cell index, or `None`. `title_h` matches the active skin so the
-    /// hit zones line up with what `draw_results_grid` rendered.
+    /// local cell index, or `None`. `title_h` must match the top inset used
+    /// by `draw_results_grid` so the hit zones line up with what rendered.
     fn hit_test_grid(lx: i32, ly: i32, cw: u32, ch: u32, title_h: i32) -> Option<usize> {
         for i in 0..GRID_PAGE {
             let (x, y, w, h) = Self::cell_rect(cw, ch, title_h, i);
@@ -438,7 +436,7 @@ impl App for VideoEmbedApp {
         if self.state != EmbedState::Results {
             return AppAction::None;
         }
-        if let Some(cell) = Self::hit_test_grid(lx, ly, cw, ch, self.cached_title_bar_h) {
+        if let Some(cell) = Self::hit_test_grid(lx, ly, cw, ch, TOP_PAD) {
             let v = self.visible_count();
             if cell < v {
                 self.selection = cell;
@@ -481,7 +479,6 @@ impl App for VideoEmbedApp {
 
     fn update_sdi(&mut self, _sdi: &mut SdiRegistry, at: &ActiveTheme) {
         self.content.update_layout(at);
-        self.cached_title_bar_h = at.app.title_bar_height as i32;
     }
 
     fn draw_windowed(
@@ -493,16 +490,8 @@ impl App for VideoEmbedApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> Result<()> {
-        let title_bar_h = at.app.title_bar_height as i32;
-
-        // Title bar text.
-        backend.draw_text(
-            "Video Embed",
-            cx + 6,
-            cy + 2,
-            at.font_body,
-            at.app.title_bar_text,
-        )?;
+        // No inner title bar — the WM titlebar already shows "Video Embed".
+        let title_bar_h = TOP_PAD;
 
         // Search bar (always visible when not playing).
         if self.state != EmbedState::Playing {
@@ -593,7 +582,7 @@ fn draw_results_grid(
     backend: &mut dyn SdiBackend,
     at: &ActiveTheme,
 ) -> Result<()> {
-    let title_bar_h = at.app.title_bar_height as i32;
+    let title_bar_h = TOP_PAD;
     let footer_y = cy + ch as i32 - FOOTER_H;
 
     match app.results.status {
@@ -883,7 +872,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, 22, 0);
+        let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, TOP_PAD, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
         app.handle_click(cx, cy, 640, 400, false);

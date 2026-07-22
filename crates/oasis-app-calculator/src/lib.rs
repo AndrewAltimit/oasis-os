@@ -568,8 +568,8 @@ impl CalculatorApp {
         let separator = "\u{2500}".repeat(30); // box-drawing horizontal line
 
         let mut lines = Vec::new();
-        lines.push("Calculator".to_string());
-        lines.push(separator.clone());
+        // No heading line — the app title already shows in the WM /
+        // app-chrome title bar.
 
         // Input / result area.
         if self.input_buffer.is_empty() {
@@ -1066,10 +1066,13 @@ mod tests {
     // -- Display formatting --
 
     #[test]
-    fn display_lines_contain_calculator_title() {
+    fn display_lines_have_no_title_heading() {
+        // The app title shows in the WM / app-chrome title bar; the content
+        // must not repeat it (it read as a double title bar in windows).
         let app = CalculatorApp::new("/apps/calc");
         let lines = app.format_display_lines();
-        assert!(lines.iter().any(|l| l.contains("Calculator")));
+        assert!(!lines.iter().any(|l| l.contains("Calculator")));
+        assert!(lines.iter().any(|l| l.contains("Result: 0")));
     }
 
     #[test]

@@ -763,12 +763,15 @@ impl FileManagerApp {
         let half_w = (cw / 2).saturating_sub(1);
         let divider_x = cx + half_w as i32;
 
-        // Title bar.
-        let title = format!(
-            "File Manager  [L: {}]  [R: {}]",
+        // Context header row: panel paths only. The WM titlebar already
+        // shows "File Manager", so the app title is not repeated here. The
+        // row keeps `title_bar_height` so `handle_click`'s dual-mode hit
+        // math is unchanged.
+        let header = format!(
+            "[L: {}]  [R: {}]",
             self.panels[0].browse_dir, self.panels[1].browse_dir,
         );
-        backend.draw_text(&title, cx + 4, cy + 2, 12, colors.title_text)?;
+        backend.draw_text(&header, cx + 4, cy + 2, 12, colors.dim_text)?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,

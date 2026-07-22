@@ -169,7 +169,20 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
     }
 }
 
+/// Top inset for windowed app content when no context header row is drawn.
+///
+/// The WM titlebar already shows the app title, so windowed content must not
+/// repeat it in an inner title bar (it reads as a double title bar). Click
+/// handlers that map a local Y back to a content line must use this same
+/// inset.
+pub const WINDOWED_TOP_PAD: u32 = 4;
+
 /// Draw generic content to a windowed region.
+///
+/// The app title is NOT drawn here — the WM titlebar already shows it. A
+/// browse-directory / viewed-file context path still gets a dim header row
+/// (occupying `title_bar_height`, same as the old inner title bar); without
+/// one, content starts at [`WINDOWED_TOP_PAD`].
 pub fn draw_content_windowed(
     content: &ContentState,
     cx: i32,
@@ -179,31 +192,29 @@ pub fn draw_content_windowed(
     backend: &mut dyn SdiBackend,
     at: &ActiveTheme,
 ) -> oasis_types::error::Result<()> {
-    // Title row.
-    let dir_suffix = if let Some(ref file) = content.viewing_file {
-        format!("  [{file}]")
+    // Context header row (browse dir / viewed file), if any.
+    let context = if let Some(ref file) = content.viewing_file {
+        Some(format!("[{file}]"))
     } else {
-        content
-            .browse_dir
-            .as_deref()
-            .map(|d| format!("  [{d}]"))
-            .unwrap_or_default()
+        content.browse_dir.as_deref().map(|d| format!("[{d}]"))
     };
-    let title_text = format!("{}{dir_suffix}", content.title);
-    backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
-
-    // Separator.
-    backend.fill_rect(
-        cx,
-        cy + at.app.title_bar_height as i32 - 4,
-        cw,
-        1,
-        at.app.divider,
-    )?;
+    let content_top = if let Some(ctx) = context {
+        backend.draw_text(&ctx, cx + 4, cy + 2, 12, at.app.dim_text)?;
+        backend.fill_rect(
+            cx,
+            cy + at.app.title_bar_height as i32 - 4,
+            cw,
+            1,
+            at.app.divider,
+        )?;
+        at.app.title_bar_height as i32
+    } else {
+        WINDOWED_TOP_PAD as i32
+    };
 
     // Content lines.
     let line_h = at.terminal_line_height.max(12) as i32;
-    let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
+    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
     let visible = content
         .lines
         .len()
@@ -219,7 +230,7 @@ pub fn draw_content_windowed(
         } else {
             at.app.text
         };
-        let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
+        let y = cy + content_top + i as i32 * line_h;
         backend.draw_text(&text, cx + 4, y, 12, text_color)?;
     }
 
@@ -279,5 +290,114 @@ pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
         if let Ok(obj) = sdi.get_mut(&rp) {
             obj.visible = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oasis_types::backend::{Color, SdiCore, TextureId};
+    use oasis_types::error::Result;
+
+    /// Backend that records every `draw_text` call as `(text, x, y)`.
+    #[derive(Default)]
+    struct TextRecorder(Vec<(String, i32, i32)>);
+
+    impl SdiCore for TextRecorder {
+        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, _color: Color) -> Result<()> {
+            Ok(())
+        }
+        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
+            Ok(())
+        }
+        fn draw_text(&mut self, t: &str, x: i32, y: i32, _fs: u16, _c: Color) -> Result<()> {
+            self.0.push((t.to_string(), x, y));
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
+            Ok(TextureId(0))
+        }
+        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
+            0
+        }
+        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+        fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl oasis_types::backend::SdiShapes for TextRecorder {}
+    impl oasis_types::backend::SdiGradients for TextRecorder {}
+    impl oasis_types::backend::SdiAlpha for TextRecorder {}
+    impl oasis_types::backend::SdiText for TextRecorder {}
+    impl oasis_types::backend::SdiTextures for TextRecorder {}
+    impl oasis_types::backend::SdiClipTransform for TextRecorder {}
+    impl oasis_types::backend::SdiVector for TextRecorder {}
+    impl oasis_types::backend::SdiBatch for TextRecorder {}
+    impl oasis_types::backend::SdiRenderTarget for TextRecorder {}
+
+    #[test]
+    fn windowed_draw_omits_app_title() {
+        // The WM titlebar already shows the app title; drawing it again in
+        // the content area produced a "double title bar" in every windowed
+        // app. Content must instead start at WINDOWED_TOP_PAD.
+        let mut content = ContentState::new("Paint", "/apps/paint");
+        content.lines = vec!["first".into(), "second".into()];
+
+        let mut rec = TextRecorder::default();
+        let at = ActiveTheme::default();
+        draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
+
+        assert!(
+            !rec.0.iter().any(|(t, _, _)| t.contains("Paint")),
+            "windowed content must not repeat the app title: {:?}",
+            rec.0
+        );
+        let first = rec.0.first().expect("content lines drawn");
+        assert!(first.0.contains("first"));
+        assert_eq!(first.2, WINDOWED_TOP_PAD as i32);
+    }
+
+    #[test]
+    fn windowed_draw_keeps_context_header() {
+        // A viewed-file (or browse-dir) path still gets a header row so the
+        // context isn't lost — but without the app title.
+        let mut content = ContentState::new("File Manager", "/apps/files");
+        content.viewing_file = Some("/notes.txt".into());
+        content.lines = vec!["hello".into()];
+
+        let mut rec = TextRecorder::default();
+        let at = ActiveTheme::default();
+        draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
+
+        assert!(rec.0.iter().any(|(t, _, _)| t.contains("[/notes.txt]")));
+        assert!(!rec.0.iter().any(|(t, _, _)| t.contains("File Manager")));
+        // Content starts below the header row.
+        let line = rec
+            .0
+            .iter()
+            .find(|(t, _, _)| t.contains("hello"))
+            .expect("content line drawn");
+        assert_eq!(line.2, at.app.title_bar_height as i32);
     }
 }
