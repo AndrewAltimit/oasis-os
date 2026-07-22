@@ -45,6 +45,17 @@ fn layer_is_animated(layer: &BackgroundLayer, reduced_motion: bool) -> bool {
     }
 }
 
+/// Whether any layer in the slice animates from frame to frame.
+///
+/// Public so the shell's idle frame elision can tell whether background
+/// or chrome vector layers need a continuous redraw. Static-only layer
+/// sets replay identical ops every frame and are safe to skip.
+pub fn layers_animated(layers: &[BackgroundLayer], reduced_motion: bool) -> bool {
+    layers
+        .iter()
+        .any(|layer| layer_is_animated(layer, reduced_motion))
+}
+
 /// Per-layer op cache for background/chrome vector layers (perf item D4).
 ///
 /// Ops for static layers are tessellated once and replayed each frame;

@@ -35,6 +35,15 @@ pub struct SdiRegistry {
     z_sorted_overlay: Vec<usize>,
     /// Whether the z-sorted lists need rebuilding before next draw.
     z_dirty: bool,
+    /// Whether the scene *may* have changed since the flag was last
+    /// cleared. Set by every mutating operation — including `get_mut`
+    /// and `create`, which hand out `&mut SdiObject` without knowing
+    /// whether the caller actually writes anything. That makes the flag
+    /// deliberately over-approximate ("possibly dirty"); callers that
+    /// want an exact answer combine it with [`Self::scene_signature`].
+    /// Cleared only by [`Self::take_scene_dirty`] /
+    /// [`Self::clear_scene_dirty`].
+    scene_dirty: bool,
 }
 
 impl SdiRegistry {
@@ -47,7 +56,57 @@ impl SdiRegistry {
             z_sorted_base: Vec::new(),
             z_sorted_overlay: Vec::new(),
             z_dirty: false,
+            // Start dirty so a freshly built scene always draws once.
+            scene_dirty: true,
         }
+    }
+
+    /// Explicitly mark the scene as (possibly) changed.
+    ///
+    /// Useful when something outside the registry invalidates rendered
+    /// output (e.g. a texture's pixels were updated in place).
+    pub fn mark_scene_dirty(&mut self) {
+        self.scene_dirty = true;
+    }
+
+    /// Whether any mutating operation ran since the flag was last cleared.
+    ///
+    /// Over-approximate: `get_mut`/`create` set it even if the caller
+    /// ends up writing identical values. `false` however is a hard
+    /// guarantee that no object was touched through any accessor path.
+    pub fn is_scene_dirty(&self) -> bool {
+        self.scene_dirty
+    }
+
+    /// Return the dirty flag and clear it (call once per frame, after all
+    /// scene mutation for the frame is done).
+    pub fn take_scene_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.scene_dirty)
+    }
+
+    /// Clear the dirty flag without reading it.
+    pub fn clear_scene_dirty(&mut self) {
+        self.scene_dirty = false;
+    }
+
+    /// Hash of every render-relevant property of every object.
+    ///
+    /// Two calls return the same value iff the scene would rasterize
+    /// identically (modulo the astronomically unlikely 64-bit hash
+    /// collision). Used to confirm an over-approximate
+    /// [`Self::is_scene_dirty`] before spending a redraw: per-frame UI
+    /// update paths rewrite objects with unchanged values, which trips
+    /// the flag but not the signature.
+    pub fn scene_signature(&self) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::hash::DefaultHasher::new();
+        // Slab order is deterministic between mutations; it only changes
+        // through create/destroy, which legitimately change the hash
+        // anyway (object count / names differ).
+        for obj in &self.objects {
+            obj.hash_render_state(&mut h);
+        }
+        h.finish()
     }
 
     /// Create a new object and insert it into the registry.
@@ -64,6 +123,7 @@ impl SdiRegistry {
         obj.z = self.next_z;
         self.next_z += 1;
         self.z_dirty = true;
+        self.scene_dirty = true;
 
         let handle = match self.index.get(&name) {
             Some(&h) => {
@@ -89,9 +149,17 @@ impl SdiRegistry {
     }
 
     /// Get a mutable reference to an object by name.
+    ///
+    /// Conservatively marks the scene dirty: the returned `&mut` lets the
+    /// caller change any render property, so the registry must assume it
+    /// did. Callers that only *read* through this path cost a signature
+    /// check, never a stale frame.
     pub fn get_mut(&mut self, name: &str) -> Result<&mut SdiObject> {
         match self.index.get(name) {
-            Some(&h) => Ok(&mut self.objects[h]),
+            Some(&h) => {
+                self.scene_dirty = true;
+                Ok(&mut self.objects[h])
+            },
             None => Err(OasisError::Sdi(format!("object not found: {name}").into())),
         }
     }
@@ -109,6 +177,7 @@ impl SdiRegistry {
             self.index.insert(moved.name.clone(), handle);
         }
         self.z_dirty = true;
+        self.scene_dirty = true;
         Ok(())
     }
 
@@ -241,6 +310,7 @@ impl SdiRegistry {
         }
         self.next_z = handles.len() as i32;
         self.z_dirty = true;
+        self.scene_dirty = true;
     }
 
     /// Sort key for an object handle: z first, then name for a stable tiebreak.
@@ -807,6 +877,188 @@ font_size = 16
         let mut names: Vec<&str> = reg.names().collect();
         names.sort();
         assert_eq!(names, vec!["a", "b"]);
+    }
+
+    // -- Scene-dirty tracking tests --
+
+    #[test]
+    fn new_registry_starts_dirty() {
+        let reg = SdiRegistry::new();
+        assert!(reg.is_scene_dirty(), "fresh scene must draw at least once");
+    }
+
+    #[test]
+    fn take_scene_dirty_returns_and_clears() {
+        let mut reg = SdiRegistry::new();
+        assert!(reg.take_scene_dirty());
+        assert!(!reg.is_scene_dirty());
+        assert!(!reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn create_sets_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.clear_scene_dirty();
+        reg.create("obj");
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn destroy_sets_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        reg.destroy("obj").unwrap();
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn get_mut_sets_dirty_conservatively() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        // Even a read through get_mut marks dirty — the registry cannot
+        // know whether the caller writes through the returned &mut.
+        let _ = reg.get_mut("obj").unwrap();
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn get_mut_missing_object_does_not_set_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.clear_scene_dirty();
+        assert!(reg.get_mut("nope").is_err());
+        assert!(!reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn shared_get_does_not_set_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        let _ = reg.get("obj").unwrap();
+        assert!(!reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn z_order_moves_set_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("a");
+        reg.create("b");
+        reg.clear_scene_dirty();
+        reg.move_to_top("a").unwrap();
+        assert!(reg.is_scene_dirty());
+        reg.clear_scene_dirty();
+        reg.move_to_bottom("b").unwrap();
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn load_theme_sets_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.clear_scene_dirty();
+        reg.load_theme("[panel]\nx = 5\n").unwrap();
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn load_image_sets_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("img");
+        reg.clear_scene_dirty();
+        let (mut backend, _calls) = RecordingBackend::new();
+        reg.load_image("img", 2, 2, &[0u8; 16], &mut backend)
+            .unwrap();
+        assert!(reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn draw_does_not_set_dirty() {
+        let mut reg = SdiRegistry::new();
+        let obj = reg.create("box");
+        obj.w = 4;
+        obj.h = 4;
+        reg.clear_scene_dirty();
+        let (mut backend, _calls) = RecordingBackend::new();
+        reg.draw(&mut backend).unwrap();
+        assert!(
+            !reg.is_scene_dirty(),
+            "drawing must not re-dirty an unchanged scene"
+        );
+    }
+
+    #[test]
+    fn scene_signature_stable_for_identical_rewrites() {
+        // The per-frame UI update pattern: get_mut + write the same
+        // values. The flag trips but the signature must not change.
+        let mut reg = SdiRegistry::new();
+        let obj = reg.create("bar");
+        obj.x = 3;
+        obj.text = Some("12:00".into());
+        let sig1 = reg.scene_signature();
+        let obj = reg.get_mut("bar").unwrap();
+        obj.x = 3;
+        obj.set_text("12:00");
+        assert!(reg.take_scene_dirty());
+        assert_eq!(reg.scene_signature(), sig1);
+    }
+
+    #[test]
+    fn scene_signature_changes_on_property_change() {
+        let mut reg = SdiRegistry::new();
+        reg.create("bar").set_text("12:00");
+        let sig1 = reg.scene_signature();
+        reg.get_mut("bar").unwrap().set_text("12:01");
+        assert_ne!(reg.scene_signature(), sig1, "text change must re-hash");
+        let sig2 = reg.scene_signature();
+        reg.get_mut("bar").unwrap().visible = false;
+        assert_ne!(reg.scene_signature(), sig2, "visibility must re-hash");
+        let sig3 = reg.scene_signature();
+        reg.get_mut("bar").unwrap().x += 1;
+        assert_ne!(reg.scene_signature(), sig3, "position must re-hash");
+        let sig4 = reg.scene_signature();
+        reg.get_mut("bar").unwrap().alpha = 7;
+        assert_ne!(reg.scene_signature(), sig4, "alpha must re-hash");
+    }
+
+    #[test]
+    fn scene_signature_changes_on_create_and_destroy() {
+        let mut reg = SdiRegistry::new();
+        reg.create("a");
+        let sig1 = reg.scene_signature();
+        reg.create("b");
+        let sig2 = reg.scene_signature();
+        assert_ne!(sig1, sig2);
+        reg.destroy("b").unwrap();
+        assert_eq!(
+            reg.scene_signature(),
+            sig1,
+            "same scene content must hash the same"
+        );
+    }
+
+    #[test]
+    fn scene_signature_changes_on_texture_assignment() {
+        let mut reg = SdiRegistry::new();
+        reg.create("img");
+        let sig1 = reg.scene_signature();
+        reg.get_mut("img").unwrap().texture = Some(TextureId(9));
+        assert_ne!(reg.scene_signature(), sig1);
+    }
+
+    #[test]
+    fn scene_signature_ignores_accessibility_metadata() {
+        let mut reg = SdiRegistry::new();
+        reg.create("btn");
+        let sig1 = reg.scene_signature();
+        let obj = reg.get_mut("btn").unwrap();
+        obj.aria_label = Some("Launch".into());
+        obj.role = Some(crate::AccessibilityRole::Button);
+        assert_eq!(
+            reg.scene_signature(),
+            sig1,
+            "aria metadata never affects pixels"
+        );
     }
 
     // -- Draw pipeline tests using a recording backend --

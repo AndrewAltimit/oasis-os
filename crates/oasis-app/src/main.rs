@@ -9,6 +9,7 @@
 mod app_state;
 mod boot_splash;
 mod commands;
+mod frame_stats;
 #[cfg(feature = "skin-dev")]
 mod hot_reload;
 mod icon_drag;
@@ -57,6 +58,27 @@ use oasis_core::vector_overlay::get_shader_layer;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
+
+/// After an input event, keep redrawing unconditionally for this long —
+/// covers hover states, drags, key repeat, and any UI that reacts a few
+/// frames later than the event itself.
+const INPUT_REDRAW_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Upper bound on how long the shell may go without a real present.
+/// Safety net for idle frame elision: any redraw condition missed above
+/// (e.g. a window expose the event loop didn't surface) self-heals
+/// within this window.
+const REDRAW_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Target iteration period while frames are being elided. Without a
+/// present, vsync no longer paces the loop; `frame_counter` feeds blink
+/// and shader clocks that assume ~60 fps, so idle iterations sleep
+/// toward the same cadence instead of spinning.
+const IDLE_FRAME_PERIOD: std::time::Duration = std::time::Duration::from_micros(16_667);
+
+/// Minimum idle sleep, so a slow iteration can never turn the elided
+/// path into a busy spin.
+const IDLE_MIN_SLEEP: std::time::Duration = std::time::Duration::from_millis(4);
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -624,7 +646,17 @@ fn main() -> Result<()> {
     #[cfg(feature = "skin-dev")]
     let mut skin_watcher = hot_reload::SkinWatcher::new();
 
+    // -- Idle frame elision state (see the elision block in the loop) --
+    // Frame-phase stats are opt-in via OASIS_FRAME_STATS=1; when the env
+    // var is unset this is `None` and no timestamps are taken.
+    let mut frame_stats = frame_stats::FrameStats::from_env();
+    // Last confirmed SDI scene content signature (None = never hashed).
+    let mut last_scene_sig: Option<u64> = None;
+    let mut last_input_at = std::time::Instant::now();
+    let mut last_present_at = std::time::Instant::now();
+
     'running: loop {
+        let iter_start = std::time::Instant::now();
         state.frame_counter += 1;
 
         // Drain background disk sample loads (non-blocking).
@@ -659,6 +691,7 @@ fn main() -> Result<()> {
         }
         if !events.is_empty() {
             state.terminal.dirty = true;
+            last_input_at = std::time::Instant::now();
         }
 
         // Poll remote listener for incoming commands.
@@ -776,11 +809,94 @@ fn main() -> Result<()> {
             bw.tick(&vfs);
         }
 
+        // -- Idle frame elision --
+        // Skip clear/draw/present entirely when nothing on screen can
+        // have changed. The SDI dirty flag is over-approximate (per-frame
+        // update_sdi paths rewrite objects with identical values), so a
+        // tripped flag is confirmed against a full scene content
+        // signature before it costs a redraw. Everything that paints
+        // OUTSIDE the SDI scene graph gets an explicit condition below.
+        // Bias: when in doubt, redraw — a wasted frame is cheap, a stale
+        // frame is a bug.
+        let scene_changed = if sdi.take_scene_dirty() {
+            let sig = sdi.scene_signature();
+            let changed = last_scene_sig != Some(sig);
+            last_scene_sig = Some(sig);
+            changed
+        } else {
+            false
+        };
+
+        // Shader wallpapers advance at the bridge's 30 Hz shade cadence;
+        // between shades a redraw would reproduce identical pixels.
+        let shader_wants_frame = if let Some(ref bridge) = shader_bridge {
+            get_shader_layer(&state.active_theme).is_some()
+                && bridge.would_shade(state.frame_counter as f32 / 60.0)
+        } else {
+            false
+        };
+
+        // Animations that paint directly to the backend (outside SDI):
+        // transitions, dashboard vector icons, background/chrome layers.
+        let anim_active = state.active_transition.is_some()
+            || state.ui.dashboard.has_active_animation(&state.active_theme)
+            || oasis_core::vector_overlay::layers_animated(
+                &state.active_theme.background_layers,
+                state.active_theme.background_reduced_motion,
+            )
+            || oasis_core::vector_overlay::layers_animated(
+                &state.active_theme.chrome_layers,
+                state.active_theme.background_reduced_motion,
+            );
+
+        // Windowed/fullscreen app content (browser, app runners, video)
+        // paints via draw callbacks the SDI registry can't see, and
+        // media playback repaints continuously — always redraw while any
+        // of it is on screen or playing.
+        let content_active = (state.mode == Mode::Desktop && state.wm.window_count() > 0)
+            || state.content.fullscreen_app.is_some()
+            || state.video_player.is_active()
+            || state.radio_source.is_some()
+            || state.media_track.is_some()
+            || state.tv_audio_track.is_some();
+
+        let needs_redraw = scene_changed
+            || anim_active
+            || shader_wants_frame
+            || content_active
+            // Input drives derived UI (hover, drag, key repeat) for a
+            // few frames past the event; window resize/expose arrive as
+            // events too, so they land in the same grace window.
+            || last_input_at.elapsed() <= INPUT_REDRAW_GRACE
+            // Present at least once per heartbeat as a self-healing
+            // backstop for any condition missed above.
+            || last_present_at.elapsed() >= REDRAW_HEARTBEAT;
+
+        if !needs_redraw {
+            if let Some(ref mut stats) = frame_stats {
+                stats.record_skipped();
+            }
+            // Without a present, vsync no longer paces the loop; sleep
+            // toward the normal ~60 Hz cadence (never less than the
+            // anti-spin minimum) so frame-counter-driven clocks keep
+            // wall-time semantics and input polling stays responsive.
+            std::thread::sleep(
+                IDLE_FRAME_PERIOD
+                    .saturating_sub(iter_start.elapsed())
+                    .max(IDLE_MIN_SLEEP),
+            );
+            continue 'running;
+        }
+
         // -- Render --
+        let mut phase_clock = frame_stats
+            .as_ref()
+            .map(|_| frame_stats::PhaseClock::start());
         backend.clear(state.bg_color)?;
 
         // Render shader wallpaper FIRST (replaces bg_color clear).
-        // This runs every frame so the animation stays live in all modes.
+        // This runs every drawn frame so the animation stays live in all
+        // modes (elided frames redraw whenever the bridge would shade).
         if let Some(ref mut bridge) = shader_bridge
             && let Some(info) = get_shader_layer(&state.active_theme)
         {
@@ -790,6 +906,9 @@ fn main() -> Result<()> {
                 state.frame_counter as f32 / 60.0,
                 &info.params,
             );
+        }
+        if let Some(ref mut pc) = phase_clock {
+            pc.lap_shader();
         }
 
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
@@ -856,6 +975,9 @@ fn main() -> Result<()> {
         } else {
             sdi.draw(&mut backend)?;
         }
+        if let Some(ref mut pc) = phase_clock {
+            pc.lap_sdi();
+        }
 
         // Vector chrome layers paint on top of the SDI scene (bars, tabs,
         // windows) in every mode — procedurally shaped chrome accents.
@@ -886,8 +1008,15 @@ fn main() -> Result<()> {
                 state.active_transition = None;
             }
         }
+        if let Some(ref mut pc) = phase_clock {
+            pc.lap_vector();
+        }
 
         backend.swap_buffers()?;
+        last_present_at = std::time::Instant::now();
+        if let (Some(stats), Some(pc)) = (frame_stats.as_mut(), phase_clock.take()) {
+            stats.record_drawn(pc.finish());
+        }
     }
 
     // Clean up video player before shutting down backend.

@@ -130,6 +130,50 @@ impl SdiObject {
         }
     }
 
+    /// Feed every render-relevant property into a hasher.
+    ///
+    /// Backs [`crate::SdiRegistry::scene_signature`]: two objects hash
+    /// equally iff they would rasterize identically. Accessibility
+    /// metadata (`aria_label`, `role`) is deliberately excluded — it
+    /// never affects pixels. Every field that `draw_object` reads MUST
+    /// be hashed here; a missed field means a stale screen under idle
+    /// frame elision.
+    pub fn hash_render_state<H: std::hash::Hasher>(&self, h: &mut H) {
+        use std::hash::Hash;
+
+        fn hash_color<H: std::hash::Hasher>(c: Color, h: &mut H) {
+            (c.r, c.g, c.b, c.a).hash(h);
+        }
+        fn hash_opt_color<H: std::hash::Hasher>(c: Option<Color>, h: &mut H) {
+            match c {
+                Some(c) => {
+                    1u8.hash(h);
+                    hash_color(c, h);
+                },
+                None => 0u8.hash(h),
+            }
+        }
+
+        self.name.hash(h);
+        (self.x, self.y, self.w, self.h).hash(h);
+        (self.alpha, self.z, self.visible, self.overlay).hash(h);
+        self.texture.hash(h);
+        self.nine_patch.hash(h);
+        hash_color(self.color, h);
+        self.text.hash(h);
+        self.font_size.hash(h);
+        hash_color(self.text_color, h);
+        self.border_radius.hash(h);
+        hash_opt_color(self.gradient_top, h);
+        hash_opt_color(self.gradient_bottom, h);
+        self.shadow_level.hash(h);
+        self.stroke_width.hash(h);
+        hash_opt_color(self.stroke_color, h);
+        hash_opt_color(self.shadow_color, h);
+        self.text_shadow_offset.hash(h);
+        hash_opt_color(self.text_shadow_color, h);
+    }
+
     /// Set the object's text only when it actually changed.
     ///
     /// `obj.text = Some(s.to_string())` allocates on every call; per-frame
