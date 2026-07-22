@@ -425,6 +425,9 @@ fn render_chrome(
     {
         let mut cache = oasis_core::vector_overlay::LayerOpsCache::new();
         oasis_core::vector_overlay::render_vector_chrome(b, v.theme, fixed_frame, &mut cache)?;
+        // The cache is per-screenshot but the backend lives on: free
+        // any baked layer textures before the cache drops.
+        cache.release_targets(b);
     }
     Ok(())
 }
