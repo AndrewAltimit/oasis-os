@@ -30,6 +30,24 @@ impl StdNetworkBackend {
             tls,
         }
     }
+
+    /// Start listening on `127.0.0.1:{port}` only (loopback).
+    ///
+    /// Unlike [`NetworkBackend::listen`], which binds `0.0.0.0` (all
+    /// interfaces), this restricts the listener to local connections. Used by
+    /// the optional MCP control server so an on-device agent can drive the
+    /// shell without exposing the endpoint to the network.
+    pub fn listen_loopback(&mut self, port: u16) -> Result<()> {
+        let addr = format!("127.0.0.1:{port}");
+        let listener = TcpListener::bind(&addr)
+            .map_err(|e| OasisError::Backend(format!("bind: {e}").into()))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
+        log::info!("Loopback listener on {addr}");
+        self.listener = Some(listener);
+        Ok(())
+    }
 }
 
 impl Default for StdNetworkBackend {

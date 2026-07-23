@@ -165,6 +165,33 @@ pub fn process_command_output(
                 }
             }
         },
+        Ok(CommandOutput::Signal(CommandSignal::McpToggle { start, port, token })) => {
+            #[cfg(feature = "mcp")]
+            {
+                if start {
+                    start_mcp_server(state, port, token);
+                } else if let Some(mut server) = state.mcp.take() {
+                    server.stop();
+                    state
+                        .terminal
+                        .output_lines
+                        .push("MCP server stopped.".to_string());
+                } else {
+                    state
+                        .terminal
+                        .output_lines
+                        .push("No MCP server running.".to_string());
+                }
+            }
+            #[cfg(not(feature = "mcp"))]
+            {
+                let _ = (start, port, token);
+                state
+                    .terminal
+                    .output_lines
+                    .push("MCP support not compiled in (build with --features mcp).".to_string());
+            }
+        },
         Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
             return Some(name);
         },
@@ -859,7 +886,7 @@ fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
 
 /// Format a remote command result as a response string, applying side effects
 /// (browser sandbox, skin swap) as needed.
-fn format_remote_response(
+pub(crate) fn format_remote_response(
     result: oasis_core::error::Result<CommandOutput>,
     browser: &mut Option<oasis_core::browser::BrowserWidget>,
     skin: &mut Skin,
@@ -883,7 +910,8 @@ fn format_remote_response(
         Ok(CommandOutput::Signal(
             CommandSignal::ListenToggle { .. }
             | CommandSignal::RemoteConnect { .. }
-            | CommandSignal::FtpToggle { .. },
+            | CommandSignal::FtpToggle { .. }
+            | CommandSignal::McpToggle { .. },
         )) => "Not available via remote.".to_string(),
         Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
             if let Some(bw) = browser {
@@ -989,6 +1017,120 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
         let response =
             format_remote_response(result, browser, skin, active_theme, browser_config, wm, sdi);
         let _ = l.send_response(conn_idx, &response);
+    }
+}
+
+/// Poll the MCP control server, dispatching agent tool calls against the UI.
+///
+/// Mirrors [`poll_remote_listener`]'s borrow-split idiom, additionally taking
+/// the rendering `backend` so the `screenshot` tool can read the framebuffer.
+#[cfg(feature = "mcp")]
+pub fn poll_mcp_server(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+    backend: &mut dyn oasis_core::backend::SdiCore,
+) {
+    let AppState {
+        ref mut mcp,
+        ref mut wm,
+        ref mut content,
+        ref mut terminal,
+        ref mut skin,
+        ref mut active_theme,
+        ref mut browser_config,
+        ref platform,
+        ref net,
+        ref mut mode,
+        ref plugin_manager,
+        ref mut agent_activity,
+        ..
+    } = *state;
+
+    let Some(server) = mcp else { return };
+
+    let ContentLayer {
+        ref mut browser,
+        ref mut open_runners,
+        ..
+    } = *content;
+    let TerminalLayer {
+        ref mut cmd_reg,
+        ref mut cwd,
+        ..
+    } = *terminal;
+
+    let screen_w = skin.manifest.screen_width;
+    let screen_h = skin.manifest.screen_height;
+
+    let mut disp = crate::mcp_tools::AppDispatcher {
+        wm,
+        sdi,
+        vfs,
+        browser,
+        open_runners,
+        cmd_reg,
+        cwd,
+        skin,
+        active_theme,
+        browser_config,
+        platform,
+        tls_provider: &net.tls_provider,
+        plugin_manager,
+        mode,
+        screen: backend,
+        screen_w,
+        screen_h,
+        activity: agent_activity,
+    };
+    server.poll(&mut disp);
+}
+
+/// Start the MCP server from environment variables at boot (`OASIS_MCP=1`,
+/// optional `OASIS_MCP_PORT` / `OASIS_MCP_TOKEN`).
+#[cfg(feature = "mcp")]
+pub fn mcp_start_from_env(state: &mut AppState) {
+    if std::env::var("OASIS_MCP").ok().as_deref() != Some("1") {
+        return;
+    }
+    let port = std::env::var("OASIS_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(7345);
+    let token = std::env::var("OASIS_MCP_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+    start_mcp_server(state, port, token);
+}
+
+/// Bind a loopback listener and install the MCP server on `state`.
+#[cfg(feature = "mcp")]
+fn start_mcp_server(state: &mut AppState, port: u16, token: Option<String>) {
+    if state.mcp.is_some() {
+        state
+            .terminal
+            .output_lines
+            .push("MCP server already running. Use 'mcp-server stop' first.".to_string());
+        return;
+    }
+    let mut backend = oasis_core::net::StdNetworkBackend::new();
+    match backend.listen_loopback(port) {
+        Ok(()) => {
+            let server = oasis_mcp::McpServer::new(Box::new(backend), token);
+            log::info!("MCP control server listening on 127.0.0.1:{port}");
+            state
+                .terminal
+                .output_lines
+                .push(format!("MCP server listening on 127.0.0.1:{port}."));
+            state.mcp = Some(server);
+        },
+        Err(e) => {
+            log::warn!("MCP server failed to start: {e}");
+            state
+                .terminal
+                .output_lines
+                .push(format!("MCP start error: {e}"));
+        },
     }
 }
 
@@ -1183,6 +1325,10 @@ mod tests {
             tv_stream_session: None,
             #[cfg(feature = "_video")]
             tv_current_url: None,
+            #[cfg(feature = "mcp")]
+            mcp: None,
+            #[cfg(feature = "mcp")]
+            agent_activity: crate::mcp_tools::AgentActivity::default(),
         }
     }
 

@@ -41,9 +41,15 @@ video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 # hot-reload it when files change on disk (see src/hot_reload.rs).
 # Run: cargo run -p oasis-app --features skin-dev -- <skin>
 skin-dev = []
+# Optional: host an MCP (Model Context Protocol) control server on loopback
+# so a local agent can drive the shell. Off by default; also requires runtime
+# opt-in (OASIS_MCP=1 or the `mcp-server start` command). See docs/mcp-server.md.
+mcp = ["dep:oasis-mcp", "dep:serde_json"]
 
 [dependencies]
 oasis-core = { workspace = true, features = ["tls-rustls"] }
+oasis-mcp = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 oasis-app-settings = { workspace = true }
 oasis-app-media = { workspace = true }
 oasis-audio = { workspace = true }

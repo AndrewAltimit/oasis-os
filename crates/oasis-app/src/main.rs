@@ -15,6 +15,10 @@ mod hot_reload;
 mod icon_drag;
 mod input;
 mod launch;
+#[cfg(feature = "mcp")]
+mod mcp_command;
+#[cfg(feature = "mcp")]
+mod mcp_tools;
 mod media_controller;
 mod radio_controller;
 #[cfg(test)]
@@ -280,6 +284,8 @@ fn main() -> Result<()> {
     register_agent_commands(&mut cmd_reg);
     register_tv_commands(&mut cmd_reg);
     oasis_core::terminal::register_browser_commands(&mut cmd_reg);
+    #[cfg(feature = "mcp")]
+    mcp_command::register(&mut cmd_reg);
 
     splash_status!("Initializing plugin system...");
     let mut plugin_manager = PluginManager::new();
@@ -480,7 +486,15 @@ fn main() -> Result<()> {
         tv_stream_session: None,
         #[cfg(feature = "_video")]
         tv_current_url: None,
+        #[cfg(feature = "mcp")]
+        mcp: None,
+        #[cfg(feature = "mcp")]
+        agent_activity: mcp_tools::AgentActivity::default(),
     };
+
+    // Optionally start the MCP control server from the environment.
+    #[cfg(feature = "mcp")]
+    commands::mcp_start_from_env(&mut state);
 
     // Load persisted settings and apply per-skin icon positions (free
     // icon layout). Missing files and grid-layout skins are no-ops.
@@ -697,6 +711,10 @@ fn main() -> Result<()> {
         // Poll remote listener for incoming commands.
         commands::poll_remote_listener(&mut state, &mut sdi, &mut vfs);
 
+        // Poll the MCP control server (agent-driven UI actions).
+        #[cfg(feature = "mcp")]
+        commands::poll_mcp_server(&mut state, &mut sdi, &mut vfs, &mut backend);
+
         // Poll FTP server for incoming connections.
         commands::poll_ftp_server(&mut state, &mut vfs);
 
@@ -860,10 +878,20 @@ fn main() -> Result<()> {
             || state.media_track.is_some()
             || state.tv_audio_track.is_some();
 
+        // Keep redrawing while the agent-activity overlay is visible (and so
+        // the frame right after a tool call always paints).
+        #[cfg(feature = "mcp")]
+        let agent_active = state
+            .agent_activity
+            .is_active(std::time::Duration::from_secs(6));
+        #[cfg(not(feature = "mcp"))]
+        let agent_active = false;
+
         let needs_redraw = scene_changed
             || anim_active
             || shader_wants_frame
             || content_active
+            || agent_active
             // Input drives derived UI (hover, drag, key repeat) for a
             // few frames past the event; window resize/expose arrive as
             // events too, so they land in the same grace window.
@@ -1019,6 +1047,10 @@ fn main() -> Result<()> {
         if let Some(ref mut pc) = phase_clock {
             pc.lap_vector();
         }
+
+        // Assistant-activity overlay (agent connected/acting).
+        #[cfg(feature = "mcp")]
+        mcp_tools::draw_agent_overlay(&mut backend, &state.agent_activity, &state.active_theme)?;
 
         backend.swap_buffers()?;
         last_present_at = std::time::Instant::now();

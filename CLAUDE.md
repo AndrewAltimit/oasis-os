@@ -88,6 +88,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-platform   (platform service traits: Power, Time, USB, Network, OSK)
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
+├── oasis-mcp        (optional MCP control server: Streamable HTTP + JSON-RPC, agent tool dispatch)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
 ├── oasis-ui         (32 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
@@ -167,8 +168,8 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework lives in 49 crate directories under `crates/`:
-- **39 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
+The framework lives in 50 crate directories under `crates/`:
+- **40 workspace members** (the desktop / WASM / UE5 build surface — what `cargo build --workspace` compiles)
 - **1 explicitly excluded crate** (`oasis-backend-psp`, on the `mipsel-sony-psp` target)
 - **9 standalone PSP-target crates** that are not mentioned in the workspace `Cargo.toml` at all and are built individually via `cargo psp`: `oasis-plugin-psp`, `oasis-devloop-psp`, `oasis-me-boot`, `oasis-prx-decrypt-psp`, `oasis-recovery-psp`, `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp`
 
@@ -184,6 +185,7 @@ Each module below is its own crate (previously all in oasis-core):
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
+- **oasis-mcp** -- Optional MCP control server (off by default). Minimal Streamable-HTTP transport + JSON-RPC 2.0 / MCP dispatch over a non-blocking `NetworkStream`; app-agnostic (depends only on `oasis-types`) with a `ToolDispatcher` callback the app implements in `crates/oasis-app/src/mcp_tools.rs`. Lets an on-device agent drive the shell. See [`docs/mcp-server.md`](docs/mcp-server.md)
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
 - **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
@@ -249,6 +251,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 ### Subsystems
 - [`docs/oasis-js.md`](docs/oasis-js.md) -- JavaScript engine desktop API + DOM bindings catalog (PSP cross-compile lives in `javascript-engine.md`)
 - [`docs/networking.md`](docs/networking.md) -- TCP transport, PSK auth, remote terminal protocol, TLS, FTP-like file transfer
+- [`docs/mcp-server.md`](docs/mcp-server.md) -- Optional MCP control server: enabling, transport, tool catalog, security, agent (Claude Code) integration
 - [`docs/audio-engine.md`](docs/audio-engine.md) -- AudioManager, playlist/repeat/shuffle, radio sources, streaming back-pressure
 - [`docs/vector-graphics.md`](docs/vector-graphics.md) -- VectorOp/VectorScene, icon catalog, AnimClock, SdiVector integration
 - [`docs/shaders.md`](docs/shaders.md) -- Built-in shader wallpapers, GPU + software backends, extension guide

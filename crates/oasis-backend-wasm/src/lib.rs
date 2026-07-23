@@ -1615,7 +1615,8 @@ impl OasisWasm {
                     },
                     CommandSignal::ListenToggle { .. }
                     | CommandSignal::RemoteConnect { .. }
-                    | CommandSignal::FtpToggle { .. } => {
+                    | CommandSignal::FtpToggle { .. }
+                    | CommandSignal::McpToggle { .. } => {
                         self.output_lines
                             .push("Not available in browser.".to_string());
                     },

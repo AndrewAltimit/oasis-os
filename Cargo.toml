@@ -6,6 +6,7 @@ members = [
     "crates/oasis-platform",
     "crates/oasis-sdi",
     "crates/oasis-net",
+    "crates/oasis-mcp",
     "crates/oasis-audio",
     "crates/oasis-ui",
     "crates/oasis-wm",
@@ -151,6 +152,7 @@ oasis-vfs = { path = "crates/oasis-vfs" }
 oasis-platform = { path = "crates/oasis-platform" }
 oasis-sdi = { path = "crates/oasis-sdi" }
 oasis-net = { path = "crates/oasis-net" }
+oasis-mcp = { path = "crates/oasis-mcp" }
 oasis-audio = { path = "crates/oasis-audio" }
 oasis-ui = { path = "crates/oasis-ui" }
 oasis-wm = { path = "crates/oasis-wm" }

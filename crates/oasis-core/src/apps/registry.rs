@@ -78,6 +78,14 @@ pub(crate) const APP_REGISTRY: &[(&str, AppFactory)] = &[
     }),
 ];
 
+/// Titles of all statically-registered apps.
+///
+/// Exposed so hosts embedding the shell (e.g. the optional MCP control
+/// server) can enumerate launchable apps without hardcoding the list.
+pub fn registered_app_titles() -> Vec<&'static str> {
+    APP_REGISTRY.iter().map(|(name, _)| *name).collect()
+}
+
 /// Look up an app by title in the registry and construct it.
 ///
 /// Returns `None` if the title is not registered (falls through to the

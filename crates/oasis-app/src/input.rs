@@ -1020,6 +1020,10 @@ mod tests {
             tv_stream_session: None,
             #[cfg(feature = "_video")]
             tv_current_url: None,
+            #[cfg(feature = "mcp")]
+            mcp: None,
+            #[cfg(feature = "mcp")]
+            agent_activity: crate::mcp_tools::AgentActivity::default(),
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();
