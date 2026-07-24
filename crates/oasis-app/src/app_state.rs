@@ -196,6 +196,13 @@ pub struct AppState {
     /// URL currently being played — used to deduplicate tune requests.
     #[cfg(feature = "_video")]
     pub tv_current_url: Option<String>,
+    /// Optional MCP control server bound to loopback. `None` unless started
+    /// via `OASIS_MCP=1` or the `mcp-server start` command.
+    #[cfg(feature = "mcp")]
+    pub mcp: Option<oasis_mcp::McpServer>,
+    /// Rolling agent-activity record for the in-UI assistant overlay.
+    #[cfg(feature = "mcp")]
+    pub agent_activity: crate::mcp_tools::AgentActivity,
 }
 
 /// Parameters stashed from a tune request so they survive until download completes.

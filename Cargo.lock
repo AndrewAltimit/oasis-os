@@ -979,9 +979,11 @@ dependencies = [
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",
+ "oasis-mcp",
  "oasis-shader",
  "oasis-video",
  "png",
+ "serde_json",
 ]
 
 [[package]]
@@ -1313,6 +1315,16 @@ dependencies = [
  "log",
  "rquickjs",
  "thiserror",
+]
+
+[[package]]
+name = "oasis-mcp"
+version = "1.4.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -52,7 +52,8 @@ pub fn run_script(
             Ok(CommandOutput::Signal(
                 CommandSignal::ListenToggle { .. }
                 | CommandSignal::RemoteConnect { .. }
-                | CommandSignal::FtpToggle { .. },
+                | CommandSignal::FtpToggle { .. }
+                | CommandSignal::McpToggle { .. },
             )) => {
                 output.push("(network command skipped in script)".to_string());
             },

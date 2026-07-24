@@ -42,6 +42,16 @@ pub enum CommandSignal {
         /// Optional password for FTP authentication.
         password: Option<String>,
     },
+    /// Start/stop the optional MCP control server (handled by the app layer
+    /// only when built with the `mcp` feature).
+    McpToggle {
+        /// `true` to start, `false` to stop.
+        start: bool,
+        /// Loopback port to listen on when starting.
+        port: u16,
+        /// Optional bearer token required on every request.
+        token: Option<String>,
+    },
 }
 
 /// Output produced by a command.
@@ -91,6 +101,11 @@ impl CommandOutput {
     /// Shorthand for `Signal(CommandSignal::FtpToggle { port, password })`.
     pub fn ftp_toggle(port: u16, password: Option<String>) -> Self {
         Self::Signal(CommandSignal::FtpToggle { port, password })
+    }
+
+    /// Shorthand for `Signal(CommandSignal::McpToggle { .. })`.
+    pub fn mcp_toggle(start: bool, port: u16, token: Option<String>) -> Self {
+        Self::Signal(CommandSignal::McpToggle { start, port, token })
     }
 }
 
