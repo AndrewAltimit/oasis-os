@@ -154,6 +154,9 @@ pub struct OasisWasm {
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
+    /// Drops the gamepad-style twin of a key press already consumed as a
+    /// shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
+    key_filter: oasis_core::input::KeyTwinFilter,
     /// In-flight YouTube search; backend polls each tick and publishes
     /// results to `/tmp/video_embed_results` so the embed app can
     /// re-render.
@@ -385,6 +388,7 @@ impl OasisWasm {
             pending_tv_catalog: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
+            key_filter: oasis_core::input::KeyTwinFilter::default(),
             #[cfg(feature = "wasm-youtube")]
             pending_youtube_search: None,
             #[cfg(feature = "wasm-youtube")]
@@ -419,12 +423,7 @@ impl OasisWasm {
         let events = self.input.poll_events();
         for event in &events {
             self.mouse_cursor.handle_input(event);
-            match self.mode {
-                Mode::Osk => self.handle_osk_input(event),
-                Mode::Desktop => self.handle_desktop_input(event),
-                Mode::App => self.handle_app_input(event),
-                _ => self.handle_default_input(event),
-            }
+            self.handle_event(event);
         }
 
         // Process pending VFS requests from app runners (e.g. radio tune).

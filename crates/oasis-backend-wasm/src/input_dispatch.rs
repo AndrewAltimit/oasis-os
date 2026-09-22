@@ -14,7 +14,7 @@
 
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;
-use oasis_core::input::{Button, InputEvent, Trigger};
+use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::startmenu::StartMenuAction;
 use oasis_core::terminal_sdi;
@@ -463,35 +463,8 @@ impl OasisWasm {
                         .iter_mut()
                         .find(|(id, _)| *id == active_id)
                     {
-                        match runner.handle_input(btn, &self.vfs) {
-                            AppAction::Exit => {
-                                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                                    self.fullscreen_app = None;
-                                }
-                                let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                                self.open_runners.retain(|(rid, _)| *rid != active_id);
-                                if self.wm.window_count() == 0 {
-                                    self.mode = Mode::Dashboard;
-                                }
-                            },
-                            AppAction::SwitchToTerminal => {
-                                self.mode = Mode::Terminal;
-                            },
-                            AppAction::RequestFullscreen => {
-                                if self.fullscreen_app.is_none() {
-                                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
-                                    self.fullscreen_app = Some(active_id);
-                                }
-                            },
-                            AppAction::LaunchAppWithFile {
-                                app_title,
-                                file_path,
-                            } => {
-                                self.launch_app_window_for_file(&app_title, &file_path);
-                            },
-                            AppAction::None => {},
-                        }
+                        let action = runner.handle_input(btn, &self.vfs);
+                        self.apply_window_action(action, active_id);
                     }
                 }
             },
@@ -514,33 +487,163 @@ impl OasisWasm {
         if let Some(ref mut runner) = self.app_runner
             && let InputEvent::ButtonPress(btn) = event
         {
-            match runner.handle_input(btn, &self.vfs) {
-                AppAction::Exit => {
-                    AppRunner::hide_sdi(&mut self.sdi);
-                    self.app_runner = None;
+            let action = runner.handle_input(btn, &self.vfs);
+            self.apply_fullscreen_action(action);
+        }
+    }
+
+    /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
+    fn apply_fullscreen_action(&mut self, action: AppAction) {
+        match action {
+            AppAction::Exit => {
+                AppRunner::hide_sdi(&mut self.sdi);
+                self.app_runner = None;
+                self.mode = Mode::Dashboard;
+            },
+            AppAction::SwitchToTerminal => {
+                AppRunner::hide_sdi(&mut self.sdi);
+                self.app_runner = None;
+                self.mode = Mode::Terminal;
+            },
+            AppAction::LaunchAppWithFile {
+                app_title,
+                file_path,
+            } => {
+                AppRunner::hide_sdi(&mut self.sdi);
+                let entry = oasis_core::dashboard::AppEntry {
+                    title: app_title.clone(),
+                    path: format!("/apps/{app_title}"),
+                    icon_png: Vec::new(),
+                    color: oasis_core::backend::Color::rgb(100, 100, 100),
+                };
+                self.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, &self.vfs));
+            },
+            AppAction::RequestFullscreen | AppAction::None => {},
+        }
+    }
+
+    /// Apply an [`AppAction`] returned by the windowed runner `active_id`.
+    fn apply_window_action(&mut self, action: AppAction, active_id: String) {
+        match action {
+            AppAction::Exit => {
+                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
+                    self.fullscreen_app = None;
+                }
+                let _ = self.wm.close_window(&active_id, &mut self.sdi);
+                self.open_runners.retain(|(rid, _)| *rid != active_id);
+                if self.wm.window_count() == 0 {
                     self.mode = Mode::Dashboard;
-                },
-                AppAction::SwitchToTerminal => {
-                    AppRunner::hide_sdi(&mut self.sdi);
-                    self.app_runner = None;
-                    self.mode = Mode::Terminal;
-                },
-                AppAction::LaunchAppWithFile {
-                    app_title,
-                    file_path,
-                } => {
-                    AppRunner::hide_sdi(&mut self.sdi);
-                    let entry = oasis_core::dashboard::AppEntry {
-                        title: app_title.clone(),
-                        path: format!("/apps/{app_title}"),
-                        icon_png: Vec::new(),
-                        color: oasis_core::backend::Color::rgb(100, 100, 100),
-                    };
-                    self.app_runner =
-                        Some(AppRunner::launch_with_file(&entry, &file_path, &self.vfs));
-                },
-                AppAction::RequestFullscreen | AppAction::None => {},
+                }
+            },
+            AppAction::SwitchToTerminal => {
+                self.mode = Mode::Terminal;
+            },
+            AppAction::RequestFullscreen => {
+                if self.fullscreen_app.is_none() {
+                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
+                    self.fullscreen_app = Some(active_id);
+                }
+            },
+            AppAction::LaunchAppWithFile {
+                app_title,
+                file_path,
+            } => {
+                self.launch_app_window_for_file(&app_title, &file_path);
+            },
+            AppAction::None => {},
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Input dispatch: raw keyboard keys
+    // -----------------------------------------------------------------------
+
+    /// Whether the current input target is a text-entry surface (terminal,
+    /// browser URL bar / form field, or an app with `accepts_text()`).
+    pub(crate) fn text_focus(&self) -> bool {
+        match self.mode {
+            Mode::Terminal => true,
+            Mode::App => self
+                .app_runner
+                .as_ref()
+                .is_some_and(AppRunner::accepts_text),
+            Mode::Desktop => match self.wm.active_window() {
+                Some("terminal") => true,
+                Some("browser") => self.browser.as_ref().is_some_and(|bw| bw.accepts_text()),
+                Some(active_id) => self
+                    .open_runners
+                    .iter()
+                    .any(|(id, runner)| id == active_id && runner.accepts_text()),
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Route a raw key press to the focused app's `handle_key`. Returns
+    /// `true` when the app consumed it (its action has been applied).
+    fn route_key(&mut self, key: &Key, mods: Modifiers) -> bool {
+        match self.mode {
+            Mode::App => {
+                let Some(runner) = self.app_runner.as_mut() else {
+                    return false;
+                };
+                let Some(action) = runner.handle_key(key, mods, &self.vfs) else {
+                    return false;
+                };
+                self.apply_fullscreen_action(action);
+                true
+            },
+            Mode::Desktop => {
+                let Some(active_id) = self
+                    .wm
+                    .active_window()
+                    .filter(|id| *id != "browser" && *id != "terminal")
+                    .map(str::to_string)
+                else {
+                    return false;
+                };
+                let Some((_, runner)) = self
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| *id == active_id)
+                else {
+                    return false;
+                };
+                let Some(action) = runner.handle_key(key, mods, &self.vfs) else {
+                    return false;
+                };
+                self.apply_window_action(action, active_id);
+                true
+            },
+            _ => false,
+        }
+    }
+
+    /// Per-event entry point used by `tick()`.
+    ///
+    /// Routes [`InputEvent::Key`] to the focused app and arms
+    /// `self.key_filter` so the key's gamepad-style twin is dropped when
+    /// the app consumed it or it merely typed into a text-entry target;
+    /// every other event goes to the handler for the current mode.
+    pub(crate) fn handle_event(&mut self, event: &InputEvent) {
+        if self.key_filter.should_drop(event) {
+            return;
+        }
+        if let InputEvent::Key { key, mods } = event {
+            let typing = key.produces_text(*mods) && self.text_focus();
+            let consumed = self.route_key(key, *mods);
+            if consumed || typing {
+                self.key_filter.suppress_twin(*key, *mods);
             }
+            return;
+        }
+        match self.mode {
+            Mode::Osk => self.handle_osk_input(event),
+            Mode::Desktop => self.handle_desktop_input(event),
+            Mode::App => self.handle_app_input(event),
+            _ => self.handle_default_input(event),
         }
     }
 

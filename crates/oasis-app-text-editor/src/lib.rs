@@ -270,6 +270,12 @@ impl App for TextEditorApp {
         }
     }
 
+    fn accepts_text(&self) -> bool {
+        // Typing is accepted in every mode (Normal auto-enters Insert), so
+        // printable keys must never double as Triangle/trigger shortcuts.
+        true
+    }
+
     fn handle_backspace(&mut self) {
         match self.mode {
             EditorMode::Insert => self.delete_char(),
