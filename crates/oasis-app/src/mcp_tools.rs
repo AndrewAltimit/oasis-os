@@ -397,7 +397,7 @@ impl AppDispatcher<'_> {
         };
         // Force alpha opaque (the framebuffer has no real transparency).
         let mut opaque = rgba;
-        for px in opaque.chunks_exact_mut(4) {
+        for px in opaque.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         let mut png_bytes: Vec<u8> = Vec::new();

@@ -98,6 +98,9 @@ pub struct VideoPlayer {
     displayed_frames: u64,
     /// Last time a display stats log was emitted.
     last_display_report: Option<Instant>,
+    /// When the first frame was displayed (display-fps statistics; unlike
+    /// `playback_start` this exists in every build configuration).
+    stats_start: Option<Instant>,
     /// Minimum interval between displayed frames (1 / VIDEO_FPS).
     #[cfg(not(feature = "_video"))]
     frame_interval: Duration,
@@ -137,6 +140,7 @@ impl VideoPlayer {
             last_frame_time: None,
             displayed_frames: 0,
             last_display_report: None,
+            stats_start: None,
             #[cfg(not(feature = "_video"))]
             frame_interval: Duration::from_nanos(1_000_000_000 / u64::from(VIDEO_FPS)),
             #[cfg(feature = "_video")]
@@ -954,13 +958,14 @@ impl VideoPlayer {
                             self.base_pts = frame_ts;
                         }
                         self.last_display_report = Some(now);
+                        self.stats_start = Some(now);
                         log::info!("VideoPlayer: first frame received, now playing");
                     }
                     if let Some(ref mut t) = self.last_display_report
                         && now.saturating_duration_since(*t).as_millis() >= 500
                     {
                         let elapsed = self
-                            .playback_start
+                            .stats_start
                             .map(|s| now.saturating_duration_since(s).as_secs_f64())
                             .unwrap_or(0.0);
                         let fps = self.displayed_frames as f64 / elapsed.max(0.001);
@@ -1098,6 +1103,7 @@ impl VideoPlayer {
         self.last_frame_time = None;
         self.displayed_frames = 0;
         self.last_display_report = None;
+        self.stats_start = None;
         self.finished = false;
         #[cfg(feature = "_video")]
         {

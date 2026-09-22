@@ -75,6 +75,20 @@ jobs:
         timeout-minutes: 10
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
+      # -- Feature-combination check -----------------------------------------
+      # The workspace build only compiles oasis-app's default features
+      # (video-decode-ffmpeg). A build without any video decoder is a
+      # supported configuration and has broken before (code reading
+      # `_video`-only fields), so check it -- and the optional MCP server --
+      # explicitly.
+      - name: Check oasis-app feature combinations
+        timeout-minutes: 10
+        run: |
+          docker compose --profile ci run --rm rust-ci \
+            cargo check -p oasis-app --no-default-features --features javascript
+          docker compose --profile ci run --rm rust-ci \
+            cargo check -p oasis-app --no-default-features --features javascript,mcp
+
       # -- Nightly Clippy (advisory) -----------------------------------------
       - name: Clippy (nightly, advisory)
         timeout-minutes: 10
