@@ -323,6 +323,12 @@ impl App for TextEditorApp {
         self.handle_text_impl(ch);
     }
 
+    fn on_close_requested(&mut self, _vfs: &dyn Vfs) -> AppAction {
+        // Same as Cancel at top level: unsaved changes raise the prompt.
+        self.menu.close();
+        self.request_close(PendingClose::Exit)
+    }
+
     fn accepts_text(&self) -> bool {
         // Typing is accepted in every mode (Normal auto-enters Insert), so
         // printable keys must never double as Triangle/trigger shortcuts.

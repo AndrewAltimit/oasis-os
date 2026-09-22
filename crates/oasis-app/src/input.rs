@@ -128,6 +128,16 @@ fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
     }
 }
 
+/// Id of the window whose titlebar close button is under `(x, y)` (only
+/// the topmost window at that point counts).
+fn close_button_under(state: &AppState, x: i32, y: i32) -> Option<String> {
+    let id = state.wm.window_at(x, y)?;
+    let win = state.wm.get_window(id).filter(|w| !w.fullscreen_kiosk)?;
+    let (bx, by, bw, bh) = win.close_btn_rect(state.wm.theme())?;
+    let hit = x >= bx && y >= by && x < bx + bw as i32 && y < by + bh as i32;
+    hit.then(|| id.to_string())
+}
+
 /// Drive the open start menu with a gamepad-style button (d-pad moves the
 /// highlight, Confirm picks, Cancel closes).
 fn start_menu_button(
@@ -282,6 +292,21 @@ pub fn handle_desktop_input(
                     // Inactive, visible -- bring to front.
                     let _ = state.wm.focus_window(&win_id, sdi);
                 }
+                return InputResult::Continue;
+            }
+            // A titlebar close button asks the app first: an editor with
+            // unsaved changes answers with its prompt instead of closing
+            // (the WM would otherwise drop the window, and the edits, on
+            // the spot).
+            if let Some(id) = close_button_under(state, *x, *y)
+                && let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(rid, _)| *rid == id)
+                && runner.request_close(vfs) != AppAction::Exit
+            {
+                let _ = state.wm.focus_window(&id, sdi);
                 return InputResult::Continue;
             }
             let wm_event = state

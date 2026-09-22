@@ -152,6 +152,17 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
+    /// The user asked to close the app through the host's window chrome
+    /// (a titlebar close button) rather than through the app's own input.
+    ///
+    /// Return [`AppAction::Exit`] to close now; anything else keeps the
+    /// app open -- e.g. an editor with unsaved changes raises its
+    /// "Save / Discard / Cancel" prompt and closes later through its own
+    /// input or [`Self::take_close_request`]. Default: close immediately.
+    fn on_close_requested(&mut self, _vfs: &dyn Vfs) -> AppAction {
+        AppAction::Exit
+    }
+
     /// Whether this app needs every frame drawn (continuous animation,
     /// video, embedded content that repaints outside the app's control).
     ///

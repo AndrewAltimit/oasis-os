@@ -52,6 +52,48 @@ fn escape_closes_an_unmodified_app_window() {
     assert_eq!(h.mode(), Mode::Dashboard);
 }
 
+/// The titlebar close button on a Text Editor with unsaved changes must
+/// raise the unsaved-changes prompt like Escape does. The window manager
+/// used to drop the window (and the edits) on the spot.
+#[test]
+fn close_button_on_modified_text_editor_prompts_instead_of_discarding() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.click_app_icon("Text Editor"));
+    h.settle();
+    h.type_text("keep me");
+    h.settle();
+    assert!(h.close_window("Text Editor"));
+    h.settle();
+    assert!(
+        h.find_window("Text Editor").is_some(),
+        "close button with unsaved changes must not discard the edits"
+    );
+    h.render_now();
+    assert!(h.text_drawn_contains("keep me"), "{:?}", h.frame_text());
+
+    // "Discard" in the prompt closes it.
+    h.key(Key::Char('d'));
+    h.settle();
+    assert!(h.find_window("Text Editor").is_none(), "{:?}", h.windows());
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
+
+/// Unmodified apps still close on the first click of the close button.
+#[test]
+fn close_button_closes_unmodified_apps_immediately() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    for app in ["Text Editor", "Calculator", "Paint", "File Manager"] {
+        assert!(h.open_app(app));
+        h.settle();
+        assert!(h.close_window(app), "{app}");
+        h.settle();
+        assert!(h.find_window(app).is_none(), "{app}: {:?}", h.windows());
+    }
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
+
 #[cfg(feature = "_video")]
 mod tv {
     use super::*;

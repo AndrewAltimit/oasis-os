@@ -14,6 +14,7 @@ use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::vfs::Vfs;
 
+use super::app_trait::AppAction;
 use super::registry::{create_app_delegate, create_app_delegate_for_file};
 
 /// Runtime state for a launched application screen.
@@ -163,6 +164,21 @@ impl AppRunner {
         self.delegate
             .as_mut()
             .is_some_and(|app| app.take_close_request())
+    }
+
+    /// Ask the app whether its window may close now (titlebar close
+    /// button; see [`crate::apps::App::on_close_requested`]). Returns
+    /// `AppAction::Exit` to close; any other action keeps it open.
+    pub fn request_close(&mut self, vfs: &dyn Vfs) -> AppAction {
+        let Some(app) = self.delegate.as_mut() else {
+            return AppAction::Exit;
+        };
+        let action = app.on_close_requested(vfs);
+        if action != AppAction::Exit {
+            self.redraw_pending = true;
+            self.sync_from_delegate();
+        }
+        action
     }
 
     /// Whether the app's window needs to be redrawn: its content changed
