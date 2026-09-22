@@ -143,7 +143,58 @@ impl WidgetStateColors {
     pub fn focus_ring(theme: &Theme) -> Color {
         theme.input_border_focus
     }
+
+    /// Derive a state variant of an arbitrary resting fill `base`.
+    ///
+    /// Used by widgets whose resting surface is not a button (input
+    /// wells, toggle tracks, slider thumbs, menu rows…). The resting
+    /// state returns `base` unchanged (so default rendering is
+    /// pixel-identical); hover / pressed blend progressively toward the
+    /// theme's `text_primary` (lighter on dark themes, darker on light
+    /// ones) and disabled halves the alpha, matching the slider's
+    /// historical disabled dimming.
+    pub fn tinted(theme: &Theme, base: Color, state: WidgetState) -> Color {
+        match state {
+            WidgetState::Normal => base,
+            WidgetState::Hover => base.lerp(theme.text_primary, HOVER_TINT),
+            WidgetState::Pressed => base.lerp(theme.text_primary, PRESSED_TINT),
+            WidgetState::Disabled => Color::rgba(base.r, base.g, base.b, base.a / 2),
+        }
+    }
+
+    /// Text-input well background (`input_bg`) for the given state.
+    pub fn input_bg(theme: &Theme, state: WidgetState) -> Color {
+        Self::tinted(theme, theme.input_bg, state)
+    }
+
+    /// Panel-surface background (`surface`) for the given state.
+    ///
+    /// Used for the hover/press fill of flat controls that sit on a
+    /// surface (spin-box buttons, inactive tabs).
+    pub fn surface_bg(theme: &Theme, state: WidgetState) -> Color {
+        Self::tinted(theme, theme.surface, state)
+    }
+
+    /// Highlight fill for a row in a list or menu.
+    ///
+    /// Returns `None` for a row that is neither selected nor hovered (no
+    /// fill is drawn). A selected row uses `accent_subtle` (the
+    /// historical selection color), tinted when it is also hovered; a
+    /// hovered-only row uses the hover tint of `surface`.
+    pub fn row_bg(theme: &Theme, selected: bool, hovered: bool) -> Option<Color> {
+        match (selected, hovered) {
+            (true, false) => Some(theme.accent_subtle),
+            (true, true) => Some(Self::tinted(theme, theme.accent_subtle, WidgetState::Hover)),
+            (false, true) => Some(Self::surface_bg(theme, WidgetState::Hover)),
+            (false, false) => None,
+        }
+    }
 }
+
+/// Blend factor toward `text_primary` for the hover tint.
+const HOVER_TINT: f32 = 0.12;
+/// Blend factor toward `text_primary` for the pressed tint.
+const PRESSED_TINT: f32 = 0.24;
 
 #[cfg(test)]
 mod tests {
@@ -286,6 +337,40 @@ mod tests {
         for t in all_themes() {
             assert_eq!(WidgetStateColors::focus_ring(&t), t.input_border_focus);
         }
+    }
+
+    #[test]
+    fn tinted_normal_is_identity_and_states_distinct() {
+        for t in all_themes() {
+            for base in [t.input_bg, t.surface, t.accent, t.toggle_track_off] {
+                let n = WidgetStateColors::tinted(&t, base, WidgetState::Normal);
+                let h = WidgetStateColors::tinted(&t, base, WidgetState::Hover);
+                let p = WidgetStateColors::tinted(&t, base, WidgetState::Pressed);
+                let d = WidgetStateColors::tinted(&t, base, WidgetState::Disabled);
+                assert_eq!(n, base);
+                assert_ne!(n, h);
+                assert_ne!(h, p);
+                assert_ne!(n, p);
+                assert_ne!(n, d);
+            }
+        }
+    }
+
+    #[test]
+    fn row_bg_variants() {
+        let t = Theme::dark();
+        assert_eq!(WidgetStateColors::row_bg(&t, false, false), None);
+        assert_eq!(
+            WidgetStateColors::row_bg(&t, true, false),
+            Some(t.accent_subtle)
+        );
+        let hov = WidgetStateColors::row_bg(&t, false, true);
+        assert!(hov.is_some());
+        assert_ne!(hov, Some(t.accent_subtle));
+        assert_ne!(
+            WidgetStateColors::row_bg(&t, true, true),
+            Some(t.accent_subtle)
+        );
     }
 
     #[test]

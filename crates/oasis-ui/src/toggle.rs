@@ -2,6 +2,7 @@
 
 use crate::color::lerp_color;
 use crate::context::DrawContext;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -28,6 +29,13 @@ pub struct Toggle {
     pub progress: f32,
     /// Whether the toggle has keyboard focus (draws a focus ring).
     pub focused: bool,
+    /// Whether the pointer is over the toggle.
+    pub hovered: bool,
+    /// Whether the toggle is being pressed.
+    pub pressed: bool,
+    /// Whether the toggle is disabled (dimmed, [`flip`](Self::flip) is a
+    /// no-op).
+    pub disabled: bool,
 }
 
 impl Toggle {
@@ -37,7 +45,23 @@ impl Toggle {
             on,
             progress: if on { 1.0 } else { 0.0 },
             focused: false,
+            hovered: false,
+            pressed: false,
+            disabled: false,
         }
+    }
+
+    /// Resolved interaction state (Disabled > Pressed > Hover > Normal).
+    pub fn state(&self) -> WidgetState {
+        WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
+    }
+
+    /// Flip the on/off state unless disabled. Returns the new state.
+    pub fn flip(&mut self) -> bool {
+        if !self.disabled {
+            self.on = !self.on;
+        }
+        self.on
     }
 
     /// Animate toward the current `on` state.
@@ -267,6 +291,38 @@ mod tests {
     }
 
     #[test]
+    fn each_state_has_distinct_fill() {
+        for on in [false, true] {
+            crate::test_utils::assert_states_distinct(|st, ctx| {
+                let mut t = Toggle::new(on);
+                t.hovered = st == WidgetState::Hover;
+                t.pressed = st == WidgetState::Pressed;
+                t.disabled = st == WidgetState::Disabled;
+                t.draw(ctx, 0, 0, 28, 16).unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn resting_fill_unchanged() {
+        let theme = Theme::dark();
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            Toggle::new(true).draw(ctx, 0, 0, 28, 16).unwrap();
+        });
+        assert!(fills.contains(&theme.toggle_track_on));
+        assert!(fills.contains(&theme.toggle_thumb));
+    }
+
+    #[test]
+    fn flip_respects_disabled() {
+        let mut t = Toggle::new(false);
+        assert!(t.flip());
+        t.disabled = true;
+        assert!(t.flip());
+        assert!(t.on);
+    }
+
+    #[test]
     fn draw_partial_progress() {
         let theme = Theme::dark();
         let mut backend = MockBackend::new();
@@ -288,11 +344,13 @@ impl Widget for Toggle {
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let radius = h as u16 / 2;
-        let bg = lerp_color(
+        let state = self.state();
+        let track = lerp_color(
             ctx.theme.toggle_track_off,
             ctx.theme.toggle_track_on,
             self.progress,
         );
+        let bg = WidgetStateColors::tinted(ctx.theme, track, state);
         ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
 
         // Thumb circle.
@@ -300,11 +358,16 @@ impl Widget for Toggle {
         let travel = w as i32 - h as i32;
         let thumb_x = x + h as i32 / 2 + (travel as f32 * self.progress) as i32;
         let thumb_y = y + h as i32 / 2;
+        let thumb = if state.is_disabled() {
+            WidgetStateColors::tinted(ctx.theme, ctx.theme.toggle_thumb, state)
+        } else {
+            ctx.theme.toggle_thumb
+        };
         ctx.backend
-            .fill_circle(thumb_x, thumb_y, thumb_r as u16, ctx.theme.toggle_thumb)?;
+            .fill_circle(thumb_x, thumb_y, thumb_r as u16, thumb)?;
 
         // Keyboard focus ring around the track.
-        if self.focused {
+        if self.focused && !self.disabled {
             crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
         }
         Ok(())

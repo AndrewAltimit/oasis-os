@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -28,6 +29,10 @@ pub struct RadioGroup {
     pub disabled: bool,
     /// Whether the group has keyboard focus (rings the selected option).
     pub focused: bool,
+    /// Index of the option under the pointer, if any.
+    pub hovered: Option<usize>,
+    /// Whether the hovered option is being pressed.
+    pub pressed: bool,
 }
 
 /// Diameter of the radio circle in pixels.
@@ -46,7 +51,30 @@ impl RadioGroup {
             selected: 0,
             disabled: false,
             focused: false,
+            hovered: None,
+            pressed: false,
         }
+    }
+
+    /// Resolved interaction state of option `index`.
+    ///
+    /// Hover / press only apply to the option under the pointer.
+    pub fn option_state(&self, index: usize) -> WidgetState {
+        let hover = self.hovered == Some(index);
+        WidgetState::from_flags(hover, hover && self.pressed, self.disabled)
+    }
+
+    /// Index of the option whose row contains local offset `dy` (pixels
+    /// from the top of the group), or `None` when it falls in a gap or
+    /// past the last option.
+    pub fn option_at(&self, ctx: &DrawContext<'_>, dy: i32) -> Option<usize> {
+        if dy < 0 {
+            return None;
+        }
+        let row_h = Self::row_height(ctx);
+        let pitch = (row_h + ITEM_SPACING) as i32;
+        let i = (dy / pitch) as usize;
+        (i < self.options.len() && dy % pitch < row_h as i32).then_some(i)
     }
 
     /// Select the option at the given index (clamped to bounds).
@@ -257,6 +285,40 @@ mod tests {
     }
 
     #[test]
+    fn each_state_has_distinct_fill() {
+        crate::test_utils::assert_states_distinct(|st, ctx| {
+            let mut r = RadioGroup::new(vec!["A".into(), "B".into()]);
+            r.hovered = matches!(st, WidgetState::Hover | WidgetState::Pressed).then_some(1);
+            r.pressed = st == WidgetState::Pressed;
+            r.disabled = st == WidgetState::Disabled;
+            r.draw(ctx, 0, 0, 100, 40).unwrap();
+        });
+    }
+
+    #[test]
+    fn resting_draws_no_ring_fill() {
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            let r = RadioGroup::new(vec!["A".into(), "B".into()]);
+            r.draw(ctx, 0, 0, 100, 40).unwrap();
+        });
+        let theme = Theme::dark();
+        assert!(!fills.contains(&theme.input_bg));
+    }
+
+    #[test]
+    fn option_at_hit_test() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let r = RadioGroup::new(vec!["A".into(), "B".into()]);
+        let row_h = RadioGroup::row_height(&ctx) as i32;
+        assert_eq!(r.option_at(&ctx, 0), Some(0));
+        assert_eq!(r.option_at(&ctx, row_h + ITEM_SPACING as i32 + 1), Some(1));
+        assert_eq!(r.option_at(&ctx, -1), None);
+        assert_eq!(r.option_at(&ctx, 1000), None);
+    }
+
+    #[test]
     fn draw_all_themes_no_panic() {
         crate::test_utils::test_draw_all_themes(|ctx| {
             let r = RadioGroup::new(sample());
@@ -297,6 +359,21 @@ impl Widget for RadioGroup {
 
             // Outer circle (as rounded rect with full radius).
             let circle_y = iy + layout::center(row_h, CIRCLE_SIZE);
+
+            // Interaction fill inside the ring. The resting state draws
+            // no fill (historical look); other states tint the input well.
+            let state = self.option_state(i);
+            if state != WidgetState::Normal {
+                ctx.backend.fill_rounded_rect(
+                    x,
+                    circle_y,
+                    CIRCLE_SIZE,
+                    CIRCLE_SIZE,
+                    r as u16,
+                    WidgetStateColors::input_bg(ctx.theme, state),
+                )?;
+            }
+
             let border_color = ctx.theme.interactive_border(self.disabled, is_selected);
             ctx.backend.stroke_rounded_rect(
                 x,
