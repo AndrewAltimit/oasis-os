@@ -303,7 +303,10 @@ impl VideoPlayer {
     /// Set the video element's volume (0.0–1.0).
     pub fn set_volume(&self, volume: f64) {
         if let Some(ref video) = self.video {
-            video.set_volume(volume.clamp(0.0, 1.0));
+            let volume = volume.clamp(0.0, 1.0);
+            if (video.volume() - volume).abs() > f64::EPSILON {
+                video.set_volume(volume);
+            }
         }
     }
 

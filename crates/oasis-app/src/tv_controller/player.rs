@@ -5,13 +5,29 @@ use oasis_core::backend::{AudioBackend, SdiBackend};
 
 /// Tick video player: upload frames, collect audio chunks.
 pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
-    let (texture, audio_output) = state.video_player.tick(backend);
+    let (texture, mut audio_output) = state.video_player.tick(backend);
+
+    // The guide's volume slider (0-100) scales the video audio on top of
+    // the system volume the audio backend applies.
+    #[cfg(feature = "_video")]
+    let gain = {
+        let runner = super::find_tv_guide_runner(
+            &mut state.content.app_runner,
+            &mut state.content.open_runners,
+        );
+        runner
+            .and_then(|r| r.tv_guide_state())
+            .map_or(1.0, |guide| {
+                guide.volume_changed = false;
+                f32::from(guide.volume.min(100)) / 100.0
+            })
+    };
 
     // Feed audio to the streaming track.
     if let Some(track) = state.tv_audio_track {
         let mut audio_chunks_fed = 0u32;
         let mut audio_samples_fed = 0u64;
-        match &audio_output {
+        match &mut audio_output {
             #[cfg(not(feature = "_video"))]
             crate::video_player::AudioOutput::Mp3Chunks(chunks) => {
                 for chunk in chunks {
@@ -21,8 +37,11 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
             },
             #[cfg(feature = "_video")]
             crate::video_player::AudioOutput::PcmF32(chunks) => {
-                for chunk in chunks {
+                for chunk in chunks.iter_mut() {
                     audio_samples_fed += chunk.pcm_f32.len() as u64;
+                    if gain < 1.0 {
+                        chunk.pcm_f32.iter_mut().for_each(|s| *s *= gain);
+                    }
                     if let Err(e) = state.audio_backend.feed_pcm_f32(
                         track,
                         &chunk.pcm_f32,
