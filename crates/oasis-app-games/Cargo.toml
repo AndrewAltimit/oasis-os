@@ -14,5 +14,8 @@ oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
 
+[dev-dependencies]
+oasis-app-core = { workspace = true, features = ["testing"] }
+
 [lints]
 workspace = true
