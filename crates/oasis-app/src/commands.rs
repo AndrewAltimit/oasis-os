@@ -255,10 +255,15 @@ pub fn apply_skin_object(
 ) {
     let sw = state.active_theme.screen_w;
     let sh = state.active_theme.screen_h;
-    let swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
+    let mut swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
+    // User accessibility preferences (reduced motion, font scale) apply on
+    // top of every skin.
+    let prefs = crate::user_prefs::current(state);
+    prefs.patch_features(&mut swapped.features);
     state.active_theme = ActiveTheme::from_skin(&swapped.theme)
         .with_screen_size(sw, sh)
         .with_features(&swapped.features);
+    prefs.apply_font_scale(&mut state.active_theme);
     state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
     state.wm.set_theme(swapped.theme.build_wm_theme());
 
@@ -645,10 +650,13 @@ pub fn apply_resolution_change(
     let current_skin_name = state.skin.manifest.name.clone();
     match resolve_skin(&current_skin_name) {
         Ok(fresh_skin) => {
-            let swapped = Skin::swap_scaled(&state.skin, fresh_skin, sdi, new_w, new_h);
+            let mut swapped = Skin::swap_scaled(&state.skin, fresh_skin, sdi, new_w, new_h);
+            let prefs = crate::user_prefs::current(state);
+            prefs.patch_features(&mut swapped.features);
             state.active_theme = ActiveTheme::from_skin(&swapped.theme)
                 .with_screen_size(new_w, new_h)
                 .with_features(&swapped.features);
+            prefs.apply_font_scale(&mut state.active_theme);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
             state.wm.set_theme(swapped.theme.build_wm_theme());
             state.skin = swapped;
@@ -750,6 +758,22 @@ pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut Mem
         oasis_app_settings::BACKEND_STATE_PATH,
         backend_name.as_bytes(),
     );
+    // User preferences shown by the Settings Audio / Language /
+    // Accessibility categories.
+    use oasis_core::backend::AudioBackend;
+    let prefs = crate::user_prefs::current(state);
+    let volume = state.audio_backend.get_volume().to_string();
+    let _ = vfs.write(oasis_app_settings::VOLUME_STATE_PATH, volume.as_bytes());
+    let _ = vfs.write(
+        oasis_app_settings::LOCALE_STATE_PATH,
+        prefs.locale.as_bytes(),
+    );
+    let _ = vfs.write(
+        oasis_app_settings::FONT_SCALE_STATE_PATH,
+        prefs.font_scale.to_string().as_bytes(),
+    );
+    let reduced = if prefs.reduced_motion { b"1" } else { b"0" };
+    let _ = vfs.write(oasis_app_settings::REDUCED_MOTION_STATE_PATH, reduced);
 }
 
 /// Poll the Settings IPC paths once per frame and dispatch any pending
@@ -832,6 +856,10 @@ pub fn poll_settings_ipc(
     let mut changed = false;
     if let Some(name) = skin_request {
         apply_skin_swap(&name, state, sdi, vfs);
+        // Persist only a swap that actually took.
+        if state.skin.manifest.name == name {
+            crate::user_prefs::update(state, vfs, |p| p.skin = Some(name));
+        }
         changed = true;
     }
     if let Some(theme) = theme_preview {
@@ -854,6 +882,9 @@ pub fn poll_settings_ipc(
                 // Swap by name through the normal resolution path so the
                 // running session uses exactly what was written to disk.
                 apply_skin_swap(&name, state, sdi, vfs);
+                if state.skin.manifest.name == name {
+                    crate::user_prefs::update(state, vfs, |p| p.skin = Some(name));
+                }
                 changed = true;
             },
             Err(e) => {
@@ -866,8 +897,13 @@ pub fn poll_settings_ipc(
     }
     if let Some((w, h)) = resolution_request {
         apply_resolution_change(w, h, state, sdi, backend, shader_bridge, vfs);
+        let applied = (state.active_theme.screen_w, state.active_theme.screen_h);
+        crate::user_prefs::update(state, vfs, |p| p.resolution = Some(applied));
         changed = true;
     }
+
+    // Volume / locale / accessibility requests.
+    changed |= crate::user_prefs::poll_prefs_ipc(state, sdi, vfs);
 
     if changed {
         publish_runtime_state(state, backend_name, vfs);
@@ -1649,5 +1685,180 @@ mod tests {
         process_command_output(Err(err), &mut state);
         assert!(state.terminal.output_lines[0].contains("error:"));
         assert!(state.terminal.output_lines[0].contains("file not found"));
+    }
+
+    // -- Settings preference IPC (volume / locale / accessibility) --
+
+    use oasis_app_settings as settings_app;
+    use oasis_core::settings::{SettingsStore, UserPrefs};
+
+    /// A VFS with the runtime-state / IPC directories the shell creates.
+    fn prefs_vfs(state: &AppState) -> MemoryVfs {
+        let mut vfs = MemoryVfs::new();
+        publish_runtime_state(state, "test", &mut vfs);
+        vfs
+    }
+
+    /// Post one Settings IPC request and let the shell dispatch it.
+    fn post(state: &mut AppState, vfs: &mut MemoryVfs, path: &str, payload: &str) -> bool {
+        let mut sdi = SdiRegistry::new();
+        vfs.write(path, payload.as_bytes()).expect("write request");
+        crate::user_prefs::poll_prefs_ipc(state, &mut sdi, vfs)
+    }
+
+    /// Simulate a restart: reload the settings store from the VFS file.
+    fn reloaded_prefs(vfs: &MemoryVfs) -> UserPrefs {
+        let mut store = SettingsStore::new();
+        store.load(vfs);
+        UserPrefs::from_store(&store)
+    }
+
+    #[test]
+    fn volume_request_applies_persists_and_restores() {
+        use oasis_core::backend::AudioBackend;
+        let mut state = make_test_state();
+        let mut vfs = prefs_vfs(&state);
+        assert!(post(
+            &mut state,
+            &mut vfs,
+            settings_app::VOLUME_CHANGE_REQUEST_PATH,
+            "35"
+        ));
+        // Actually applied to the audio backend ...
+        assert_eq!(state.audio_backend.get_volume(), 35);
+        // ... the request is consumed ...
+        let req = vfs
+            .read(settings_app::VOLUME_CHANGE_REQUEST_PATH)
+            .expect("request path");
+        assert!(req.is_empty());
+        // ... published for the Settings UI ...
+        publish_runtime_state(&state, "test", &mut vfs);
+        let published = vfs
+            .read(settings_app::VOLUME_STATE_PATH)
+            .expect("volume state");
+        assert_eq!(published, b"35");
+        // ... and restored from /system/settings.toml after a reload.
+        assert_eq!(reloaded_prefs(&vfs).volume, 35);
+    }
+
+    #[test]
+    fn settings_ui_volume_change_reaches_audio_backend() {
+        use oasis_core::apps::App;
+        use oasis_core::backend::AudioBackend;
+        use oasis_core::input::Button;
+
+        let mut state = make_test_state();
+        let mut vfs = prefs_vfs(&state);
+        let mut app = settings_app::SettingsApp::from_vfs(
+            "/apps/settings",
+            &vfs,
+            "classic",
+            480,
+            272,
+            "test",
+        );
+        // Display -> Appearance -> Resolution -> Audio, then Volume Up.
+        for _ in 0..3 {
+            app.handle_input(&Button::Right, &vfs);
+        }
+        app.handle_input(&Button::Up, &vfs);
+        let (path, payload) = app.take_pending_request().expect("volume IPC");
+        assert!(post(&mut state, &mut vfs, &path, &payload));
+        assert_eq!(state.audio_backend.get_volume(), 85);
+    }
+
+    #[test]
+    fn unsupported_locale_is_persisted_but_ui_stays_english() {
+        let mut state = make_test_state();
+        let mut vfs = prefs_vfs(&state);
+        assert!(post(
+            &mut state,
+            &mut vfs,
+            settings_app::LOCALE_CHANGE_REQUEST_PATH,
+            "ja"
+        ));
+        assert_eq!(reloaded_prefs(&vfs).locale, "ja");
+        assert_eq!(
+            oasis_core::i18n::ui_locale_for(oasis_core::i18n::Locale::Japanese),
+            oasis_core::i18n::Locale::English
+        );
+        publish_runtime_state(&state, "test", &mut vfs);
+        let published = vfs
+            .read(settings_app::LOCALE_STATE_PATH)
+            .expect("locale state");
+        assert_eq!(published, b"ja");
+    }
+
+    #[test]
+    fn font_scale_request_rescales_theme_and_persists() {
+        let mut state = make_test_state();
+        let base_body = state.active_theme.font_body;
+        let mut vfs = prefs_vfs(&state);
+        assert!(post(
+            &mut state,
+            &mut vfs,
+            settings_app::FONT_SCALE_REQUEST_PATH,
+            "1.5"
+        ));
+        assert_eq!(state.active_theme.font_scale, 1.5);
+        assert!(state.active_theme.font_body > base_body);
+        assert_eq!(reloaded_prefs(&vfs).font_scale, 1.5);
+        // Scaling is applied to a fresh theme, never compounded.
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::FONT_SCALE_REQUEST_PATH,
+            "1.0",
+        );
+        assert_eq!(state.active_theme.font_body, base_body);
+    }
+
+    #[test]
+    fn reduced_motion_request_toggles_theme_motion() {
+        let mut state = make_test_state();
+        let mut vfs = prefs_vfs(&state);
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::REDUCED_MOTION_REQUEST_PATH,
+            "1",
+        );
+        assert!(state.skin.features.reduced_motion);
+        assert!(state.active_theme.background_reduced_motion);
+        assert!(reloaded_prefs(&vfs).reduced_motion);
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::REDUCED_MOTION_REQUEST_PATH,
+            "0",
+        );
+        assert!(!state.skin.features.reduced_motion);
+        assert!(!reloaded_prefs(&vfs).reduced_motion);
+    }
+
+    #[test]
+    fn high_contrast_shortcut_swaps_and_restores_skin() {
+        let mut state = make_test_state();
+        let original = state.skin.manifest.name.clone();
+        let mut vfs = prefs_vfs(&state);
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::HIGH_CONTRAST_REQUEST_PATH,
+            "on",
+        );
+        assert_eq!(state.skin.manifest.name, settings_app::HIGH_CONTRAST_SKIN);
+        assert_eq!(
+            reloaded_prefs(&vfs).skin.as_deref(),
+            Some(settings_app::HIGH_CONTRAST_SKIN)
+        );
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::HIGH_CONTRAST_REQUEST_PATH,
+            "off",
+        );
+        assert_eq!(state.skin.manifest.name, original);
+        assert_eq!(reloaded_prefs(&vfs).skin, Some(original));
     }
 }

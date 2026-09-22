@@ -95,6 +95,21 @@ impl Locale {
         }
     }
 
+    /// Return the English name of the locale (always drawable by the
+    /// built-in bitmap font).
+    #[must_use]
+    pub fn english_name(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Japanese => "Japanese",
+            Self::Spanish => "Spanish",
+            Self::German => "German",
+            Self::French => "French",
+            Self::Chinese => "Chinese",
+            Self::Korean => "Korean",
+        }
+    }
+
     /// List all supported locales.
     #[must_use]
     pub fn all() -> &'static [Locale] {
@@ -264,6 +279,74 @@ pub fn translate_with_for(key: &str, args: &[(&str, &str)], locale: Locale) -> S
 #[must_use]
 pub fn translate_with(key: &str, args: &[(&str, &str)]) -> String {
     translate_with_for(key, args, get_locale())
+}
+
+// ---------------------------------------------------------------------------
+// Font coverage / UI locale selection
+// ---------------------------------------------------------------------------
+
+/// Characters in `locale`'s translations that `has_glyph` cannot draw
+/// (deduplicated, in first-seen order).
+#[must_use]
+pub fn missing_glyphs(locale: Locale, has_glyph: impl Fn(char) -> bool) -> Vec<char> {
+    let mut missing = Vec::new();
+    if let Some(map) = CATALOG.locales.get(&locale) {
+        for value in map.values() {
+            for ch in value.chars() {
+                if !ch.is_control() && !has_glyph(ch) && !missing.contains(&ch) {
+                    missing.push(ch);
+                }
+            }
+        }
+    }
+    missing
+}
+
+/// Whether the built-in 8x8 bitmap font (`oasis_types::bitmap_font`) can
+/// draw every string of `locale`. Latin-script locales are covered by its
+/// Latin-1 table; CJK scripts are not. The result is computed once per
+/// locale.
+#[must_use]
+pub fn bitmap_font_supports(locale: Locale) -> bool {
+    static COVERAGE: LazyLock<HashMap<Locale, bool>> = LazyLock::new(|| {
+        Locale::all()
+            .iter()
+            .map(|&l| {
+                let ok = missing_glyphs(l, oasis_types::bitmap_font::has_glyph).is_empty();
+                (l, ok)
+            })
+            .collect()
+    });
+    COVERAGE.get(&locale).copied().unwrap_or(false)
+}
+
+/// The locale the UI should actually render for a user-selected locale:
+/// `requested` when the bitmap font can draw it, otherwise English.
+#[must_use]
+pub fn ui_locale_for(requested: Locale) -> Locale {
+    if bitmap_font_supports(requested) {
+        requested
+    } else {
+        Locale::English
+    }
+}
+
+/// Activate a user-selected locale for the UI.
+///
+/// Sets the global locale to [`ui_locale_for`]`(requested)`, logging a
+/// warning when the bitmap font cannot render the requested script and the
+/// UI falls back to English. Returns the locale that was activated.
+pub fn set_ui_locale(requested: Locale) -> Locale {
+    let effective = ui_locale_for(requested);
+    if effective != requested {
+        log::warn!(
+            "oasis-i18n: bitmap font cannot render '{}' ({}); UI falls back to English",
+            requested.code(),
+            requested.english_name(),
+        );
+    }
+    set_locale(effective);
+    effective
 }
 
 // ---------------------------------------------------------------------------

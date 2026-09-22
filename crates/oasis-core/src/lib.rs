@@ -34,6 +34,7 @@ pub use oasis_types::shadow;
 
 pub use oasis_audio as audio;
 pub use oasis_browser as browser;
+pub use oasis_i18n as i18n;
 pub use oasis_net as net;
 pub use oasis_platform as platform;
 pub use oasis_sdi as sdi;
