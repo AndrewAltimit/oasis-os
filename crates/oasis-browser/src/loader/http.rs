@@ -260,7 +260,8 @@ fn http_request_inner(
     let mut current_method = method.to_string();
     let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
 
-    for _ in 0..MAX_REDIRECTS {
+    // The initial request plus up to MAX_REDIRECTS followed redirects.
+    for _ in 0..=MAX_REDIRECTS {
         let resp = do_request_with_method(
             &current_method,
             &current_url,

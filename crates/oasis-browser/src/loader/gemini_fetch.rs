@@ -37,7 +37,8 @@ pub fn gemini_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceRe
     };
 
     let mut current_url = url.clone();
-    for _ in 0..MAX_REDIRECTS {
+    // The initial request plus up to MAX_REDIRECTS followed redirects.
+    for _ in 0..=MAX_REDIRECTS {
         let resp = do_gemini_request(&current_url, tls)?;
 
         if resp.status.is_redirect() {
