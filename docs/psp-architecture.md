@@ -236,12 +236,14 @@ five entries (Old Time Radio, LibriVox Audiobooks, Netlabel Music,
 - [`psp-plugin.md`](psp-plugin.md) — kernel-mode PRX.
 - [`adr/004-psp-two-binary-architecture.md`](adr/004-psp-two-binary-architecture.md)
   — ADR.
-- [`psp-me-direct-plan.md`](psp-me-direct-plan.md),
-  [`psp-me-driver-map.md`](psp-me-driver-map.md),
+- [`psp-me-driver-map.md`](psp-me-driver-map.md),
   [`psp-me-firmware-analysis.md`](psp-me-firmware-analysis.md),
   [`psp-me-rpc-api.md`](psp-me-rpc-api.md) — ME driver deep dives.
-- [`psp-video-decode-plan.md`](psp-video-decode-plan.md) — video
-  decode design doc.
+- Archived video-decode research (superseded by the NAL-direct path):
+  [`psp-video-decode-plan.md`](archive/psp-video-decode-plan.md),
+  [`psp-me-direct-plan.md`](archive/psp-me-direct-plan.md),
+  [`psp-me-decode-next-steps.md`](archive/psp-me-decode-next-steps.md),
+  [`psp-child-module-investigation.md`](archive/psp-child-module-investigation.md).
 - [`psp-usb-hardware-reference.md`](psp-usb-hardware-reference.md),
   [`psp-usb-vbus-findings.md`](psp-usb-vbus-findings.md) — USB host
   mode experiments.

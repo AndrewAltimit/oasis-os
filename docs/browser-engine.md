@@ -242,7 +242,7 @@ to page scripts include:
 
 - [`browser-backlog.md`](browser-backlog.md) — remaining work and
   recently shipped epics.
-- [`compositor-overhaul-plan.md`](compositor-overhaul-plan.md) —
+- [`compositor-overhaul-plan.md`](archive/compositor-overhaul-plan.md) —
   compositor deep dive.
 - [`javascript-engine.md`](javascript-engine.md) — JS engine and PSP
   cross-compile specifics.

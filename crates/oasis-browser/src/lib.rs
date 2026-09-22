@@ -53,7 +53,7 @@
 //! PSP opts out: the backend reports `supports_render_targets() = false`
 //! so replay falls back to plain opacity stacking — pages still render,
 //! but blend modes, filters, and masks do not apply. See
-//! `docs/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
+//! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
 pub(crate) mod css;

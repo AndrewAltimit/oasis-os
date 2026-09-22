@@ -1,5 +1,10 @@
 # PSP Child Module Loading Investigation
 
+> **Archived -- resolved.** The `0x800200D3` failure was an O32/EABI32
+> calling-convention mismatch for 5+ argument syscalls, fixed in the rust-psp
+> fork by applying the `i5` EABI bridge (see "Fix" below). Kept as an
+> investigation record.
+
 ## Date: 2026-03-25
 
 ## Problem

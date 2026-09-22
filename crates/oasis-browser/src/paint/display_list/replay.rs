@@ -180,7 +180,7 @@ impl DisplayList {
                         // Fallback: plain opacity stacking. Blend mode
                         // and filters are dropped — documented as the
                         // accepted degradation in
-                        // `docs/compositor-overhaul-plan.md` §3.4 step 4.
+                        // `docs/archive/compositor-overhaul-plan.md` §3.4 step 4.
                         opacity_stack.push(*opacity);
                     }
                     layer_stack.push(ActiveLayer {

@@ -1,5 +1,12 @@
 # PSP ME H.264 Decode: Next Steps Plan
 
+> **Archived -- completed.** H.264 decode on real PSP hardware works (the
+> breakthrough described below) and the resulting NAL-direct pipeline is what
+> ships; current behavior and constraints are documented in
+> [psp-architecture.md](../psp-architecture.md) and
+> [video-streaming.md](../video-streaming.md). The remaining phases below are
+> historical.
+
 ## Date: 2026-03-25 (Updated)
 
 ## BREAKTHROUGH: H.264 Video Decode Working! (2026-03-25)
@@ -69,7 +76,7 @@ Two bugs in `rust-psp` were preventing `sceKernelStartModule` from working:
 **Result:** `sceKernelStartModule` now returns SUCCESS for child PRX modules loaded
 from Rust EBOOTs. `mpeg_vsh370.prx` loading is unblocked.
 
-See: `docs/psp-child-module-investigation.md` for full investigation trail.
+See: `docs/archive/psp-child-module-investigation.md` for full investigation trail.
 
 ## Current Status: H.264 DECODE WORKING (2026-03-25)
 
