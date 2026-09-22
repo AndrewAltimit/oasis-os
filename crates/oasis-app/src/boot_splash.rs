@@ -516,8 +516,8 @@ fn generate_vignette_texture(
 
     for y in 0..h {
         for x in 0..w {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
             let dist = (dx * dx + dy * dy).sqrt();
             let alpha = if dist <= inner_r {
                 0.0
