@@ -99,7 +99,7 @@ impl BrowserWidget {
                 self.cached_image_info.clear();
                 self.image_info_dirty = false;
 
-                let text = String::from_utf8_lossy(&body);
+                let text = html_for_text_body(ct, &body);
                 self.load_html(&text, url);
 
                 self.collect_page_image_requests();
@@ -586,7 +586,7 @@ impl BrowserWidget {
 
         match content_type {
             ContentType::Html | ContentType::PlainText | ContentType::Unknown => {
-                let body = String::from_utf8_lossy(&response.body);
+                let body = html_for_text_body(content_type, &response.body);
                 self.load_html(&body, &url);
             },
             ContentType::GeminiText => {
@@ -1880,7 +1880,7 @@ impl BrowserWidget {
                     let body = entry.response.body.clone();
                     let ct = entry.response.content_type;
                     if ct == ContentType::Html || ct == ContentType::PlainText {
-                        let text = String::from_utf8_lossy(&body);
+                        let text = html_for_text_body(ct, &body);
                         self.load_html(&text, &url);
                     }
                 }
@@ -1954,6 +1954,22 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
     }
 
     html.push_str("</body></html>");
+    html
+}
+
+/// HTML source to render for a text-like response body. HTML (and
+/// untyped bodies, which are sniffed as HTML) is used as-is; `text/plain`
+/// is escaped into a `<pre>` so markup in it is displayed verbatim rather
+/// than parsed — and any `<script>` in it never runs.
+fn html_for_text_body(content_type: ContentType, body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    if content_type != ContentType::PlainText {
+        return text.into_owned();
+    }
+    let mut html = String::with_capacity(text.len() + 96);
+    html.push_str("<!DOCTYPE html><html><body><pre style=\"white-space:pre-wrap\">");
+    push_escaped(&mut html, &text);
+    html.push_str("</pre></body></html>");
     html
 }
 
