@@ -138,11 +138,13 @@ impl CommandRegistry {
 
             // Reset exit code before pipeline so we can detect if the
             // pipeline sets a non-zero code (e.g. redirect capturing
-            // an error via was_error).
+            // an error via was_error). `$?` keeps the previous command's
+            // status until this one finishes (it used to be reset to 0
+            // here, so `cmd; echo $?` always printed 0).
             self.last_exit_code.set(0);
-            self.set_variable("?", "0");
             match self.execute_pipeline(&segment.command, env) {
                 Ok(output) => {
+                    self.set_variable("?", &self.last_exit_code.get().to_string());
                     match output {
                         CommandOutput::None => {},
                         other => all_outputs.push(other),
@@ -417,13 +419,25 @@ impl CommandRegistry {
             "kill" if args.iter().any(|a| a.starts_with('%')) => {
                 return self.execute_kill(&args);
             },
+            "true" => return Ok(CommandOutput::None),
+            "false" => {
+                self.set_failed_status();
+                return Ok(CommandOutput::None);
+            },
             _ => {},
         }
 
         // Check registered commands first, then user-defined
         // functions.
         if let Some(cmd) = self.commands.get(name_lower.as_str()) {
-            return cmd.execute(&args, env);
+            let result = cmd.execute(&args, env);
+            // `test` reports its verdict as text; a `false` verdict is also
+            // a failing exit status so `test ... && cmd` / `||` behave.
+            if name_lower == "test" && matches!(&result, Ok(CommandOutput::Text(t)) if t == "false")
+            {
+                self.set_failed_status();
+            }
+            return result;
         }
 
         // Check user-defined functions.
