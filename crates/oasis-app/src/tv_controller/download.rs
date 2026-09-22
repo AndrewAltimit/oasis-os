@@ -248,29 +248,35 @@ fn stream_download_inner(
     use oasis_core::net::TlsProvider;
     use std::sync::atomic::Ordering;
 
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| format!("unsupported URL scheme: {url}"))?;
-    let (host, path) = stripped
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((stripped, "/".to_string()));
+    // Scheme, host and port come from the URL (a redirect may point at
+    // plain http:// or a non-default port); TLS only for https://.
+    let target = split_redirect_target(url).ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let host = target.host.as_str();
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let tcp = net
-        .connect(host, 443)
+        .connect(host, target.port)
         .map_err(|e| format!("connect: {e}"))?;
 
     // Force HTTP/1.1 ALPN — see comment in fetch_range_inner.
-    let mut stream = tls
-        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
-        .map_err(|e| format!("TLS: {e}"))?
-        .stream;
+    let mut stream: Box<dyn oasis_core::backend::NetworkStream> = if target.is_https {
+        tls.connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream
+    } else {
+        tcp
+    };
 
+    let default_port = if target.is_https { 443 } else { 80 };
+    let host_header = if target.port == default_port {
+        host.to_string()
+    } else {
+        format!("{host}:{}", target.port)
+    };
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
-         Connection: close\r\nAccept: */*\r\n\r\n"
+        "GET {} HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Connection: close\r\nAccept: */*\r\n\r\n",
+        target.path,
     );
     let req_bytes = request.as_bytes();
     let mut written = 0;
