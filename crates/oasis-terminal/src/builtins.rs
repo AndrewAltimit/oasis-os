@@ -10,6 +10,17 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{CommandOutput, CommandRegistry};
 
+/// `help` listing category of a shell builtin (see `BUILTIN_NAMES`).
+fn builtin_category(name: &str) -> &'static str {
+    match name {
+        "set" | "unset" | "env" | "alias" | "unalias" => "config",
+        "run" | "return" | "break" | "continue" | "local" | "function" => "scripting",
+        "jobs" | "fg" | "bg" | "kill" => "jobs",
+        "true" | "false" => "scripting",
+        _ => "general",
+    }
+}
+
 impl CommandRegistry {
     /// Built-in help with access to the registry.
     pub(crate) fn execute_help(&self, args: &[&str]) -> Result<CommandOutput> {
@@ -44,6 +55,9 @@ impl CommandRegistry {
                     out.push_str(&format!("  Usage: {}", cmd.usage()));
                     Ok(CommandOutput::Text(out))
                 },
+                None if crate::types::BUILTIN_NAMES.contains(&name_lower.as_str()) => Ok(
+                    CommandOutput::Text(format!("{name_lower} (shell built-in)")),
+                ),
                 None => Err(OasisError::Command(
                     format!("unknown command: {name}").into(),
                 )),
@@ -52,21 +66,11 @@ impl CommandRegistry {
             // Group commands by category.
             let mut categories: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
             // Include intercepted commands.
-            for builtin in &[
-                ("help", "general"),
-                ("run", "scripting"),
-                ("history", "general"),
-                ("set", "config"),
-                ("unset", "config"),
-                ("env", "config"),
-                ("alias", "config"),
-                ("unalias", "config"),
-                ("which", "general"),
-            ] {
+            for &name in crate::types::BUILTIN_NAMES {
                 categories
-                    .entry(builtin.1)
+                    .entry(builtin_category(name))
                     .or_default()
-                    .push((builtin.0, ""));
+                    .push((name, ""));
             }
             for cmd in self.commands.values() {
                 categories
@@ -122,11 +126,7 @@ impl CommandRegistry {
         }
         let name = args[0].to_ascii_lowercase();
         // Check intercepted commands first.
-        let intercepted = [
-            "help", "run", "history", "set", "unset", "env", "alias", "unalias", "which",
-            "function", "return", "break", "continue", "local",
-        ];
-        if intercepted.contains(&name.as_str()) {
+        if crate::types::BUILTIN_NAMES.contains(&name.as_str()) {
             return Ok(CommandOutput::Text(format!("{name}: shell built-in")));
         }
         match self.commands.get(name.as_str()) {
