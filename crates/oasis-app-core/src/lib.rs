@@ -7,6 +7,8 @@ mod app_trait;
 pub mod file_viewer;
 pub mod layout;
 pub mod render;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use app_trait::{App, ContentState};
 
