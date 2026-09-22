@@ -665,7 +665,7 @@ impl SdiRenderTarget for Ue5Backend {
         dst_y: i32,
         dst_w: u32,
         dst_h: u32,
-        _blend: BlendMode,
+        blend: BlendMode,
         opacity: f32,
     ) -> Result<()> {
         let src = self.render_targets.get(&id.0).ok_or_else(|| {
@@ -678,7 +678,7 @@ impl SdiRenderTarget for Ue5Backend {
         // `render_targets` and `fb` are disjoint fields, so the layer can be
         // composited straight from its storage -- no per-composite copy.
         self.fb
-            .composite_rgba(dst_x, dst_y, sw, sh, src.data(), opacity);
+            .composite_rgba_blend(dst_x, dst_y, sw, sh, src.data(), opacity, blend);
         self.dirty = true;
         Ok(())
     }

@@ -22,7 +22,7 @@ pub use texture_dedup::TextureDedup;
 #[cfg(feature = "ttf")]
 pub mod ttf;
 
-use oasis_types::backend::{Color, GradientStyle};
+use oasis_types::backend::{BlendMode, Color, GradientStyle};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::{self, PixelSink};
@@ -232,10 +232,13 @@ impl SoftwareBuffer {
                 color.b as u16 * sa,
             );
             for dst in row.as_chunks_mut::<4>().0 {
+                if dst[3] != 255 {
+                    blend_over_translucent(dst, color);
+                    continue;
+                }
                 dst[0] = ((r + dst[0] as u16 * da + 127) / 255) as u8;
                 dst[1] = ((g + dst[1] as u16 * da + 127) / 255) as u8;
                 dst[2] = ((bl + dst[2] as u16 * da + 127) / 255) as u8;
-                dst[3] = 255;
             }
         }
     }
@@ -268,14 +271,13 @@ impl SoftwareBuffer {
         }
     }
 
-    /// Composite `src_pixels` (a `src_w * src_h * 4` RGBA8 buffer) over
-    /// the destination rect at `(dst_x, dst_y, dst_w, dst_h)`,
-    /// stretching 1:1 (no scaling) and applying per-pixel src-over
-    /// alpha blending multiplied by `opacity`.
+    /// Composite `src_pixels` (a `src_w * src_h * 4` straight-alpha RGBA8
+    /// buffer) 1:1 (no scaling) at `(dst_x, dst_y)` with source-over
+    /// blending, the source alpha multiplied by `opacity` (clamped to
+    /// `[0.0, 1.0]`). Honors the clip rect.
     ///
-    /// This is the fallback compositor path for backends without
-    /// hardware blend (UE5, PSP, and SDL non-native blend modes).
-    /// `opacity` is clamped to `[0.0, 1.0]`.
+    /// This is the compositor path for backends without hardware blend
+    /// (UE5, PSP).
     pub fn composite_rgba(
         &mut self,
         dst_x: i32,
@@ -285,47 +287,73 @@ impl SoftwareBuffer {
         src_pixels: &[u8],
         opacity: f32,
     ) {
+        self.composite_rgba_blend(
+            dst_x,
+            dst_y,
+            src_w,
+            src_h,
+            src_pixels,
+            opacity,
+            BlendMode::Normal,
+        );
+    }
+
+    /// [`composite_rgba`](Self::composite_rgba) with a CSS blend mode.
+    ///
+    /// `Normal` and `Multiply` are implemented (the modes the SDL backend
+    /// executes natively); every other mode composites as `Normal`, the
+    /// same degradation SDL applies, so the backends stay alike. Multiply
+    /// follows the CSS compositing spec: the source color is replaced by
+    /// `(1 - backdrop_alpha) * src + backdrop_alpha * src * backdrop`
+    /// before the usual source-over, so transparent layer pixels leave
+    /// the backdrop untouched.
+    pub fn composite_rgba_blend(
+        &mut self,
+        dst_x: i32,
+        dst_y: i32,
+        src_w: u32,
+        src_h: u32,
+        src_pixels: &[u8],
+        opacity: f32,
+        mode: BlendMode,
+    ) {
         if src_w == 0 || src_h == 0 || src_pixels.len() < (src_w * src_h * 4) as usize {
             return;
         }
         let opacity = opacity.clamp(0.0, 1.0);
-        let op_u16 = (opacity * 256.0).round() as u16;
-        if op_u16 == 0 {
+        let op = (opacity * 255.0).round() as u16;
+        if op == 0 {
             return;
         }
-        let dst_stride = (self.width * 4) as usize;
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(dst_x, dst_y, src_w, src_h) else {
+            return;
+        };
+        let multiply = mode == BlendMode::Multiply;
         let src_stride = (src_w * 4) as usize;
-        for row in 0..src_h as i32 {
-            let dy = dst_y + row;
-            if dy < 0 || dy as u32 >= self.height {
-                continue;
-            }
-            for col in 0..src_w as i32 {
-                let dx = dst_x + col;
-                if dx < 0 || dx as u32 >= self.width {
-                    continue;
-                }
-                let src_off = (row as usize) * src_stride + (col as usize) * 4;
-                let dst_off = (dy as usize) * dst_stride + (dx as usize) * 4;
-                let sr = src_pixels[src_off];
-                let sg = src_pixels[src_off + 1];
-                let sb = src_pixels[src_off + 2];
-                let sa = src_pixels[src_off + 3];
-                // Apply layer opacity to source alpha (256-scale).
-                let a = ((sa as u16 * op_u16) >> 8) as u8;
+        for py in ys..ye {
+            let row = (py - dst_y) as usize * src_stride;
+            let src = &src_pixels[row + (xs - dst_x) as usize * 4..row + (xe - dst_x) as usize * 4];
+            let dst = self.row_mut(py, xs, xe);
+            for (d, s) in dst
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<4>().0)
+            {
+                let a = ((s[3] as u16 * op + 127) / 255) as u8;
                 if a == 0 {
                     continue;
                 }
-                let inv = 255 - a as u16;
-                let dr = self.buffer[dst_off];
-                let dg = self.buffer[dst_off + 1];
-                let db = self.buffer[dst_off + 2];
-                let da = self.buffer[dst_off + 3];
-                // Standard src-over.
-                self.buffer[dst_off] = ((sr as u16 * a as u16 + dr as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 1] = ((sg as u16 * a as u16 + dg as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 2] = ((sb as u16 * a as u16 + db as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 3] = (a as u16 + ((da as u16 * inv) / 255)) as u8;
+                let mut c = Color::rgba(s[0], s[1], s[2], a);
+                if multiply {
+                    let ab = d[3] as u32;
+                    let mix = |cs: u8, cb: u8| {
+                        let prod = cs as u32 * cb as u32 / 255;
+                        ((cs as u32 * (255 - ab) + prod * ab + 127) / 255) as u8
+                    };
+                    c = Color::rgba(mix(s[0], d[0]), mix(s[1], d[1]), mix(s[2], d[2]), a);
+                }
+                blend_px(d, c);
             }
         }
     }
@@ -1024,20 +1052,51 @@ fn blend_pixel(buffer: &mut [u8], offset: usize, color: Color) {
     }
 }
 
-/// Source-over blend `color` into one RGBA pixel. The destination alpha is
-/// always forced to 255 (the buffers are treated as opaque surfaces).
+/// Source-over blend `color` into one straight-alpha RGBA pixel.
+///
+/// Opaque destinations (the framebuffer) take the fast path; translucent
+/// ones (render-target layers, which start fully transparent) go through
+/// [`blend_over_translucent`] so a layer keeps the coverage and color of
+/// what was painted into it.
 #[inline]
 fn blend_px(px: &mut [u8; 4], color: Color) {
     if color.a == 255 {
         *px = [color.r, color.g, color.b, 255];
     } else if color.a > 0 {
+        if px[3] != 255 {
+            blend_over_translucent(px, color);
+            return;
+        }
         let sa = color.a as u16;
         let da = 255 - sa;
         px[0] = ((color.r as u16 * sa + px[0] as u16 * da + 127) / 255) as u8;
         px[1] = ((color.g as u16 * sa + px[1] as u16 * da + 127) / 255) as u8;
         px[2] = ((color.b as u16 * sa + px[2] as u16 * da + 127) / 255) as u8;
-        px[3] = 255;
     }
+}
+
+/// Porter-Duff source-over of a translucent `color` onto a destination
+/// pixel whose alpha is below 255, in straight (non-premultiplied) alpha:
+/// `a = sa + da * (1 - sa)`, `c = (cs * sa + cd * da * (1 - sa)) / a`.
+///
+/// Over a fully transparent pixel the result is exactly `color`; over an
+/// opaque one it equals the fast path of [`blend_px`].
+#[cold]
+fn blend_over_translucent(px: &mut [u8; 4], color: Color) {
+    let sa = color.a as u32;
+    // Destination weight and output alpha, both scaled by 255.
+    let dw = px[3] as u32 * (255 - sa);
+    let out = sa * 255 + dw;
+    if out == 0 {
+        return;
+    }
+    let mix = |s: u8, d: u8| ((s as u32 * sa * 255 + d as u32 * dw + out / 2) / out) as u8;
+    *px = [
+        mix(color.r, px[0]),
+        mix(color.g, px[1]),
+        mix(color.b, px[2]),
+        ((out + 127) / 255) as u8,
+    ];
 }
 
 /// Blend an RGBA source row over an equally long destination row.
@@ -1938,6 +1997,70 @@ mod tests {
             buf.fill_circle(25, 25, r, fill);
             assert_uniform_single_blend(&buf, bg, fill);
         }
+    }
+
+    #[test]
+    fn translucent_thick_line_and_ring_blend_each_pixel_once() {
+        let bg = Color::rgb(0, 0, 0);
+        let fill = Color::rgba(255, 255, 255, 100);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.draw_line(3, 5, 40, 30, 4, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.stroke_circle(25, 25, 20, 5, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.stroke_rounded_rect(2, 2, 44, 30, 9, 3, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+    }
+
+    /// Regression: blending assumed an opaque destination and forced its
+    /// alpha to 255, so translucent paint inside a render-target layer
+    /// (cleared to transparent) came out blended with black and opaque --
+    /// a 50% red fill in an opacity layer composited as dark, solid red.
+    #[test]
+    fn translucent_paint_in_transparent_layer_composites_like_direct_paint() {
+        let paint = Color::rgba(230, 40, 30, 128);
+        let mut layer = SoftwareBuffer::new(4, 1);
+        layer.fill_rect(0, 0, 4, 1, paint);
+        assert_eq!(
+            &layer.data()[..4],
+            &[230, 40, 30, 128],
+            "straight alpha kept"
+        );
+        // A second translucent coat accumulates coverage.
+        layer.fill_rect(2, 0, 2, 1, Color::rgba(40, 90, 240, 160));
+        assert!(layer.data()[3 * 4 + 3] > 200);
+
+        let mut direct = SoftwareBuffer::new(4, 1);
+        direct.clear(Color::WHITE);
+        direct.fill_rect(0, 0, 4, 1, paint);
+        direct.fill_rect(2, 0, 2, 1, Color::rgba(40, 90, 240, 160));
+        let mut composed = SoftwareBuffer::new(4, 1);
+        composed.clear(Color::WHITE);
+        composed.composite_rgba(0, 0, 4, 1, layer.data(), 1.0);
+        for (a, b) in composed.data().iter().zip(direct.data()) {
+            assert!(
+                a.abs_diff(*b) <= 2,
+                "{:?} vs {:?}",
+                composed.data(),
+                direct.data()
+            );
+        }
+    }
+
+    #[test]
+    fn composite_multiply_keeps_transparent_pixels() {
+        let mut layer = SoftwareBuffer::new(2, 1);
+        layer.fill_rect(1, 0, 1, 1, Color::rgb(255, 128, 0));
+        let mut fb = SoftwareBuffer::new(2, 1);
+        fb.clear(Color::rgb(200, 200, 200));
+        fb.composite_rgba_blend(0, 0, 2, 1, layer.data(), 1.0, BlendMode::Multiply);
+        assert_eq!(&fb.data()[..4], &[200, 200, 200, 255], "transparent pixel");
+        assert_eq!(&fb.data()[4..], &[200, 100, 0, 255], "backdrop * source");
     }
 
     #[test]
