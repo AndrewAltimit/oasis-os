@@ -976,6 +976,7 @@ dependencies = [
  "log",
  "oasis-app-media",
  "oasis-app-settings",
+ "oasis-app-system-monitor",
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",
@@ -1005,7 +1006,9 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
  "thiserror",
 ]
@@ -1101,7 +1104,9 @@ dependencies = [
  "oasis-audio",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1121,9 +1126,12 @@ name = "oasis-app-system-monitor"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-platform",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 

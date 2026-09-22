@@ -673,6 +673,10 @@ fn main() -> Result<()> {
     // Drops the gamepad-style twin of a key press already consumed as a
     // shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
     let mut key_filter = oasis_core::input::KeyTwinFilter::default();
+    // Publishes CPU / memory / battery / uptime to /var/sysmon/status for
+    // the System Monitor app.
+    let mut sysmon_probe =
+        oasis_app_system_monitor::probe::HostProbe::new("Desktop (SDL3)", "SDL3");
 
     'running: loop {
         let iter_start = std::time::Instant::now();
@@ -692,6 +696,7 @@ fn main() -> Result<()> {
                 .status_bar
                 .update_info(time.as_ref(), power.as_ref());
             state.ui.bottom_bar.update_info(time.as_ref());
+            let _ = sysmon_probe.publish(&mut vfs, Some(&state.platform), Some(&state.platform));
         }
 
         let events = backend.poll_events();

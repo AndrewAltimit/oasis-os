@@ -3,10 +3,30 @@
 //! Provides a full-featured calculator with operator precedence, parentheses,
 //! memory registers, and calculation history. The expression evaluator is a
 //! pure recursive-descent parser with no external dependencies.
+//!
+//! Input: type `0-9 . + - * / ^ % ( )`, `=` / Enter evaluates, Backspace
+//! deletes, Escape clears (and closes an already-clear calculator), Up /
+//! Down recall history. Windowed mode draws a themed display panel and a
+//! clickable key grid ([`keypad`]); on a gamepad the d-pad moves a keypad
+//! cursor and Confirm presses the key under it. History persists to
+//! [`history::HISTORY_PATH`].
 
-use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
-use oasis_types::input::Button;
+use std::cell::Cell;
+
+use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::SdiBackend;
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
+
+pub mod history;
+pub mod keypad;
+mod render;
+
+use keypad::{CalcKey, CalcLayout, Dir, KEYS};
+pub use render::CalcColors;
 
 // ---------------------------------------------------------------
 // CalcError
@@ -339,6 +359,9 @@ pub struct CalcHistoryEntry {
 // CalculatorApp
 // ---------------------------------------------------------------
 
+/// Frames a pressed key stays drawn in its pressed state.
+const FLASH_FRAMES: u8 = 6;
+
 /// Calculator application state.
 #[derive(Debug)]
 pub struct CalculatorApp {
@@ -347,7 +370,7 @@ pub struct CalculatorApp {
     display: String,
     /// Expression being typed by the user.
     input_buffer: String,
-    /// Previous calculations.
+    /// Previous calculations (oldest first).
     history: Vec<CalcHistoryEntry>,
     /// Memory register (M+, MS, MR, MC).
     memory: f64,
@@ -355,10 +378,25 @@ pub struct CalculatorApp {
     last_result: Option<f64>,
     /// Current error message (cleared on next input).
     error_message: Option<String>,
+    /// Keypad cursor: index into [`keypad::KEYS`] (d-pad navigation).
+    cursor: usize,
+    /// Whether the keypad cursor is drawn (d-pad in use, not mouse/typing).
+    cursor_visible: bool,
+    /// History entry currently recalled with Up/Down (index into `history`).
+    recall_index: Option<usize>,
+    /// Key drawn pressed, with the frames left before it pops back up.
+    flash: Cell<Option<(usize, u8)>>,
+    /// Whether history has been loaded from the VFS yet.
+    history_loaded: bool,
+    /// Whether history changed since it was last written to the VFS.
+    history_dirty: bool,
 }
 
 impl CalculatorApp {
     /// Create a new calculator app at the given VFS path.
+    ///
+    /// Persisted history is loaded from [`history::HISTORY_PATH`] on the
+    /// first [`App::refresh`] / [`App::apply_vfs_ops`] call.
     pub fn new(path: &str) -> Self {
         let content = ContentState::new("Calculator", path);
         let mut app = Self {
@@ -369,6 +407,12 @@ impl CalculatorApp {
             memory: 0.0,
             last_result: None,
             error_message: None,
+            cursor: keypad::index_of(CalcKey::Digit('5')).unwrap_or(0),
+            cursor_visible: false,
+            recall_index: None,
+            flash: Cell::new(None),
+            history_loaded: false,
+            history_dirty: false,
         };
         app.refresh_lines();
         app
@@ -377,6 +421,7 @@ impl CalculatorApp {
     /// Append a digit or decimal point to the input buffer.
     pub fn push_digit(&mut self, d: char) {
         self.error_message = None;
+        self.recall_index = None;
 
         // Prevent multiple leading zeros (allow "0." but not "00").
         if d == '0' && self.input_buffer == "0" {
@@ -409,6 +454,7 @@ impl CalculatorApp {
     /// Append an operator (+, -, *, /, ^, %) to the input buffer.
     pub fn push_operator(&mut self, op: char) {
         self.error_message = None;
+        self.recall_index = None;
 
         // If buffer is empty but we have a last result, start from it.
         if self.input_buffer.is_empty() {
@@ -431,9 +477,28 @@ impl CalculatorApp {
         self.refresh_lines();
     }
 
+    /// Type a `-`: a unary minus at the start of the entry or after an
+    /// operator / `(`, otherwise the subtraction operator.
+    pub fn push_minus(&mut self) {
+        let unary = match self.input_buffer.chars().last() {
+            None => self.last_result.is_none(),
+            Some(c) => "*/^%(".contains(c),
+        };
+        if unary {
+            self.error_message = None;
+            self.recall_index = None;
+            self.input_buffer.push('-');
+            self.display = self.input_buffer.clone();
+            self.refresh_lines();
+        } else {
+            self.push_operator('-');
+        }
+    }
+
     /// Append an opening or closing parenthesis.
     pub fn push_paren(&mut self, open: bool) {
         self.error_message = None;
+        self.recall_index = None;
 
         if open {
             self.input_buffer.push('(');
@@ -446,6 +511,7 @@ impl CalculatorApp {
 
     /// Evaluate the current input expression.
     pub fn evaluate_input(&mut self) {
+        self.recall_index = None;
         if self.input_buffer.is_empty() {
             return;
         }
@@ -457,6 +523,9 @@ impl CalculatorApp {
                     result,
                 };
                 self.history.push(entry);
+                let excess = self.history.len().saturating_sub(history::MAX_HISTORY);
+                self.history.drain(..excess);
+                self.history_dirty = true;
                 self.display = format_number(result);
                 self.last_result = Some(result);
                 self.error_message = None;
@@ -475,22 +544,29 @@ impl CalculatorApp {
         self.input_buffer.clear();
         self.display = "0".to_string();
         self.error_message = None;
+        self.recall_index = None;
         self.refresh_lines();
     }
 
-    /// Clear input and history (AC).
+    /// Clear input, last result and history (AC). The cleared history is
+    /// persisted on the next [`App::apply_vfs_ops`].
     pub fn clear_all(&mut self) {
         self.input_buffer.clear();
         self.display = "0".to_string();
-        self.history.clear();
+        if !self.history.is_empty() {
+            self.history.clear();
+            self.history_dirty = true;
+        }
         self.last_result = None;
         self.error_message = None;
+        self.recall_index = None;
         self.refresh_lines();
     }
 
     /// Delete the last character from the input buffer.
     pub fn backspace(&mut self) {
         self.error_message = None;
+        self.recall_index = None;
         self.input_buffer.pop();
         if self.input_buffer.is_empty() {
             self.display = "0".to_string();
@@ -500,31 +576,51 @@ impl CalculatorApp {
         self.refresh_lines();
     }
 
-    /// Store the current display value to memory (MS).
+    /// Value MS / M+ act on: the typed number if the entry is a plain
+    /// number, otherwise the last result.
+    fn memory_operand(&self) -> Option<f64> {
+        if !self.input_buffer.is_empty() {
+            return self.input_buffer.parse::<f64>().ok().or(self.last_result);
+        }
+        self.last_result
+    }
+
+    /// Store the current value to memory (MS).
     pub fn memory_store(&mut self) {
-        if let Some(result) = self.last_result {
-            self.memory = result;
-        } else if let Ok(val) = self.input_buffer.parse::<f64>() {
-            self.memory = val;
+        if let Some(v) = self.memory_operand() {
+            self.memory = v;
         }
         self.refresh_lines();
     }
 
     /// Recall memory value into the input buffer (MR).
     pub fn memory_recall(&mut self) {
+        self.insert_value(self.memory);
+    }
+
+    /// Insert the last result into the input buffer (Ans).
+    pub fn insert_ans(&mut self) {
+        if let Some(r) = self.last_result {
+            self.insert_value(r);
+        }
+    }
+
+    /// Append `value` to the entry (a fresh entry replaces a lone "0").
+    fn insert_value(&mut self, value: f64) {
         self.error_message = None;
-        let mem_str = format_number(self.memory);
-        self.input_buffer.push_str(&mem_str);
+        self.recall_index = None;
+        if self.input_buffer == "0" {
+            self.input_buffer.clear();
+        }
+        self.input_buffer.push_str(&format_number(value));
         self.display = self.input_buffer.clone();
         self.refresh_lines();
     }
 
-    /// Add the current display value to memory (M+).
+    /// Add the current value to memory (M+).
     pub fn memory_add(&mut self) {
-        if let Some(result) = self.last_result {
-            self.memory += result;
-        } else if let Ok(val) = self.input_buffer.parse::<f64>() {
-            self.memory += val;
+        if let Some(v) = self.memory_operand() {
+            self.memory += v;
         }
         self.refresh_lines();
     }
@@ -538,6 +634,7 @@ impl CalculatorApp {
     /// Toggle the sign of the current input.
     pub fn negate(&mut self) {
         self.error_message = None;
+        self.recall_index = None;
 
         if self.input_buffer.is_empty() {
             if let Some(result) = self.last_result {
@@ -563,7 +660,97 @@ impl CalculatorApp {
         self.refresh_lines();
     }
 
-    /// Format the calculator state into display lines.
+    /// Recall an older (`older == true`) or newer history expression into
+    /// the entry. Stepping newer past the newest entry clears the entry.
+    pub fn recall_history(&mut self, older: bool) {
+        if self.history.is_empty() {
+            return;
+        }
+        let next = match (self.recall_index, older) {
+            (None, true) => Some(self.history.len() - 1),
+            (None, false) => None,
+            (Some(i), true) => Some(i.saturating_sub(1)),
+            (Some(i), false) => (i + 1 < self.history.len()).then_some(i + 1),
+        };
+        self.error_message = None;
+        match next {
+            Some(i) => {
+                self.input_buffer = self.history[i].expression.clone();
+                self.display = self.input_buffer.clone();
+            },
+            None => {
+                self.input_buffer.clear();
+                self.display = "0".to_string();
+            },
+        }
+        self.recall_index = next;
+        self.refresh_lines();
+    }
+
+    /// Press a keypad key (click, d-pad Confirm or a typed character).
+    pub fn press_key(&mut self, key: CalcKey) {
+        if let Some(i) = keypad::index_of(key) {
+            self.flash.set(Some((i, FLASH_FRAMES)));
+        }
+        match key {
+            CalcKey::Digit(d) => self.push_digit(d),
+            CalcKey::Op('-') => self.push_minus(),
+            CalcKey::Op(op) => self.push_operator(op),
+            CalcKey::OpenParen => self.push_paren(true),
+            CalcKey::CloseParen => self.push_paren(false),
+            CalcKey::Equals => self.evaluate_input(),
+            CalcKey::Clear => self.clear(),
+            CalcKey::AllClear => self.clear_all(),
+            CalcKey::Backspace => self.backspace(),
+            CalcKey::Negate => self.negate(),
+            CalcKey::Ans => self.insert_ans(),
+            CalcKey::MemClear => self.memory_clear(),
+            CalcKey::MemRecall => self.memory_recall(),
+            CalcKey::MemStore => self.memory_store(),
+            CalcKey::MemAdd => self.memory_add(),
+        }
+    }
+
+    /// Key a typed character stands for, if any.
+    fn key_for_char(ch: char) -> Option<CalcKey> {
+        Some(match ch {
+            '0'..='9' | '.' => CalcKey::Digit(ch),
+            ',' => CalcKey::Digit('.'),
+            '+' | '-' | '*' | '/' | '^' | '%' => CalcKey::Op(ch),
+            'x' | 'X' => CalcKey::Op('*'),
+            '(' => CalcKey::OpenParen,
+            ')' => CalcKey::CloseParen,
+            '=' | '\n' | '\r' => CalcKey::Equals,
+            _ => return None,
+        })
+    }
+
+    /// Whether Escape has anything to clear (otherwise it closes the app).
+    fn has_entry(&self) -> bool {
+        !self.input_buffer.is_empty() || self.error_message.is_some() || self.display != "0"
+    }
+
+    /// Load persisted history once, keeping entries made before the load.
+    fn ensure_history_loaded(&mut self, vfs: &dyn Vfs) -> bool {
+        if self.history_loaded {
+            return false;
+        }
+        self.history_loaded = true;
+        let mut loaded = history::load(vfs);
+        if loaded.is_empty() {
+            return false;
+        }
+        loaded.append(&mut self.history);
+        let excess = loaded.len().saturating_sub(history::MAX_HISTORY);
+        loaded.drain(..excess);
+        self.history = loaded;
+        self.recall_index = None;
+        self.refresh_lines();
+        true
+    }
+
+    /// Format the calculator state into display lines (full-screen text
+    /// mode and the generic line renderer).
     pub fn format_display_lines(&self) -> Vec<String> {
         let separator = "\u{2500}".repeat(30); // box-drawing horizontal line
 
@@ -583,6 +770,13 @@ impl CalculatorApp {
             }
         }
 
+        // Keypad cursor (d-pad selects, Confirm presses).
+        let key = KEYS.get(self.cursor).map_or("", |d| d.key.label());
+        lines.push(format!(
+            "  Key: [{key}]    Memory: {}",
+            format_number(self.memory)
+        ));
+
         lines.push(separator.clone());
 
         // History section.
@@ -590,8 +784,8 @@ impl CalculatorApp {
             lines.push("  History: (empty)".to_string());
         } else {
             lines.push("  History:".to_string());
-            // Show most recent entries last (up to 20).
-            let start = self.history.len().saturating_sub(20);
+            // Show most recent entries last (up to 10).
+            let start = self.history.len().saturating_sub(10);
             for entry in &self.history[start..] {
                 lines.push(format!(
                     "    {} = {}",
@@ -603,13 +797,9 @@ impl CalculatorApp {
 
         lines.push(separator);
 
-        // Memory.
-        lines.push(format!("  Memory: {}", format_number(self.memory)));
-
         // Controls help.
-        lines.push(String::new());
-        lines.push("  [Confirm]=  [Triangle]=C  [Square]=BS".to_string());
-        lines.push("  [Select]=Op  [Start]=AC  [D-pad]=Digits".to_string());
+        lines.push("  [D-pad]=Move  [Confirm]=Press  [Square]=DEL".to_string());
+        lines.push("  [Triangle]=C  [Start]=AC  [Select]=Recall".to_string());
 
         lines
     }
@@ -649,70 +839,160 @@ fn format_number(n: f64) -> String {
 // ---------------------------------------------------------------
 
 impl App for CalculatorApp {
-    impl_content_app_methods!(content);
+    fn title(&self) -> &str {
+        &self.content.title
+    }
 
-    fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
-        match button {
-            Button::Cancel => AppAction::Exit,
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
 
-            // Confirm = evaluate (=)
+    fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
+        self.ensure_history_loaded(vfs);
+        let dir = match button {
+            Button::Cancel => return AppAction::Exit,
+            Button::Up => Some(Dir::Up),
+            Button::Down => Some(Dir::Down),
+            Button::Left => Some(Dir::Left),
+            Button::Right => Some(Dir::Right),
+            // Confirm presses the key under the keypad cursor.
             Button::Confirm => {
-                self.evaluate_input();
-                AppAction::None
+                if let Some(def) = KEYS.get(self.cursor) {
+                    self.press_key(def.key);
+                }
+                None
             },
-
-            // Triangle = clear (C)
             Button::Triangle => {
-                self.clear();
-                AppAction::None
+                self.press_key(CalcKey::Clear);
+                None
             },
-
-            // Square = backspace
             Button::Square => {
-                self.backspace();
-                AppAction::None
+                self.press_key(CalcKey::Backspace);
+                None
             },
-
-            // Start = clear all (AC)
             Button::Start => {
-                self.clear_all();
-                AppAction::None
+                self.press_key(CalcKey::AllClear);
+                None
             },
-
-            // D-pad: digit entry
-            //   Up = 8, Down = 2, Left = 4, Right = 6
-            Button::Up => {
-                self.push_digit('8');
-                AppAction::None
-            },
-            Button::Down => {
-                self.push_digit('2');
-                AppAction::None
-            },
-            Button::Left => {
-                self.push_digit('4');
-                AppAction::None
-            },
-            Button::Right => {
-                self.push_digit('6');
-                AppAction::None
-            },
-
-            // Select = cycle operators (+, -, *, /, ^, %)
+            // Select steps back through history (gamepad Up/Down move
+            // the keypad cursor).
             Button::Select => {
-                let next_op = match self.input_buffer.chars().last() {
-                    Some('+') => '-',
-                    Some('-') if self.input_buffer.len() > 1 => '*',
-                    Some('*') => '/',
-                    Some('/') => '^',
-                    Some('^') => '%',
-                    Some('%') => '+',
-                    _ => '+',
-                };
-                self.push_operator(next_op);
-                AppAction::None
+                self.recall_history(true);
+                None
             },
+        };
+        if let Some(dir) = dir {
+            self.cursor = keypad::step(self.cursor, dir);
+            self.cursor_visible = true;
+            self.refresh_lines();
         }
+        AppAction::None
+    }
+
+    fn handle_key(&mut self, key: &Key, mods: Modifiers, vfs: &dyn Vfs) -> Option<AppAction> {
+        if mods.has_command() {
+            return None;
+        }
+        self.ensure_history_loaded(vfs);
+        match key {
+            Key::Enter => self.press_key(CalcKey::Equals),
+            Key::Backspace => self.press_key(CalcKey::Backspace),
+            Key::Delete => self.press_key(CalcKey::Clear),
+            // Escape clears; on an already-clear calculator it falls
+            // through to Cancel and closes the app.
+            Key::Escape if self.has_entry() => self.press_key(CalcKey::Clear),
+            Key::Up => self.recall_history(true),
+            Key::Down => self.recall_history(false),
+            _ => return None,
+        }
+        self.cursor_visible = false;
+        Some(AppAction::None)
+    }
+
+    fn accepts_text(&self) -> bool {
+        true
+    }
+
+    fn handle_text_input(&mut self, ch: char) {
+        if let Some(key) = Self::key_for_char(ch) {
+            self.cursor_visible = false;
+            self.press_key(key);
+        }
+    }
+
+    fn handle_backspace(&mut self) {
+        self.press_key(CalcKey::Backspace);
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+        let l = CalcLayout::compute(0, 0, cw, ch);
+        if let Some(i) = l.key_at(lx, ly) {
+            self.cursor = i;
+            self.cursor_visible = false;
+            self.press_key(KEYS[i].key);
+        } else if let Some(row) = l.history_row_at(lx, ly)
+            && let Some(idx) = self.history.len().checked_sub(row + 1)
+        {
+            // History rows are newest first; clicking one recalls it.
+            self.recall_index = Some(idx);
+            self.input_buffer = self.history[idx].expression.clone();
+            self.display = self.input_buffer.clone();
+            self.error_message = None;
+            self.refresh_lines();
+        }
+        AppAction::None
+    }
+
+    fn refresh(&mut self, vfs: &dyn Vfs) {
+        self.ensure_history_loaded(vfs);
+    }
+
+    fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
+        let mut changed = self.ensure_history_loaded(vfs);
+        if self.history_dirty {
+            self.history_dirty = false;
+            if let Err(e) = history::save(vfs, &self.history) {
+                self.error_message = Some(format!("History not saved: {e}"));
+                self.refresh_lines();
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+    }
+
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        self.draw_calculator(cx, cy, cw, ch, backend, at)
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -1164,10 +1444,11 @@ mod tests {
     }
 
     #[test]
-    fn confirm_evaluates() {
+    fn confirm_presses_key_under_cursor() {
         let vfs = make_vfs();
         let mut app = CalculatorApp::new("/apps/calc");
         app.push_digit('7');
+        app.cursor = keypad::index_of(CalcKey::Equals).expect("=");
         app.handle_input(&Button::Confirm, &vfs);
         assert_eq!(app.last_result, Some(7.0));
     }
@@ -1238,5 +1519,313 @@ mod tests {
         app.push_digit('.');
         app.push_digit('5');
         assert_eq!(app.input_buffer, "1.5+2.5");
+    }
+
+    // -- Keypad cursor (gamepad) --
+
+    #[test]
+    fn dpad_moves_cursor_and_confirm_types_digits() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        // Cursor starts on 5. Right -> 6, Up -> 9, Left -> 8.
+        app.handle_input(&Button::Confirm, &vfs);
+        app.handle_input(&Button::Right, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        app.handle_input(&Button::Up, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        app.handle_input(&Button::Left, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(app.input_buffer, "5698");
+        assert!(app.cursor_visible);
+        // The d-pad no longer types digits by itself.
+        app.handle_input(&Button::Down, &vfs);
+        assert_eq!(app.input_buffer, "5698");
+    }
+
+    #[test]
+    fn every_key_reachable_with_dpad() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        let mut seen = vec![false; KEYS.len()];
+        for _ in 0..keypad::ROWS {
+            for _ in 0..keypad::COLS {
+                seen[app.cursor] = true;
+                app.handle_input(&Button::Right, &vfs);
+            }
+            app.handle_input(&Button::Down, &vfs);
+        }
+        assert!(seen.iter().all(|s| *s), "unreachable keys: {seen:?}");
+    }
+
+    #[test]
+    fn memory_keys_via_keypad() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        let press = |app: &mut CalculatorApp, key: CalcKey| {
+            app.cursor = keypad::index_of(key).expect("key on keypad");
+            app.handle_input(&Button::Confirm, &vfs);
+        };
+        type_str(&mut app, "12");
+        press(&mut app, CalcKey::MemStore);
+        assert_eq!(app.memory, 12.0);
+        press(&mut app, CalcKey::Clear);
+        app.handle_text_input('3');
+        press(&mut app, CalcKey::MemAdd);
+        assert_eq!(app.memory, 15.0);
+        press(&mut app, CalcKey::Clear);
+        press(&mut app, CalcKey::MemRecall);
+        assert_eq!(app.input_buffer, "15");
+        press(&mut app, CalcKey::MemClear);
+        assert_eq!(app.memory, 0.0);
+        // Parentheses and negate are reachable too.
+        press(&mut app, CalcKey::Clear);
+        press(&mut app, CalcKey::OpenParen);
+        app.handle_text_input('2');
+        press(&mut app, CalcKey::CloseParen);
+        press(&mut app, CalcKey::Negate);
+        press(&mut app, CalcKey::Equals);
+        assert_eq!(app.last_result, Some(-2.0));
+    }
+
+    // -- Keyboard typing --
+
+    fn type_str(app: &mut CalculatorApp, s: &str) {
+        for ch in s.chars() {
+            app.handle_text_input(ch);
+        }
+    }
+
+    #[test]
+    fn typed_expression_evaluates() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        assert!(app.accepts_text());
+        type_str(&mut app, "(2+3)*4^2-10%4=");
+        assert_eq!(app.last_result, Some(78.0));
+        type_str(&mut app, "7/2");
+        let vfs = make_vfs();
+        assert_eq!(
+            app.handle_key(&Key::Enter, Modifiers::NONE, &vfs),
+            Some(AppAction::None)
+        );
+        assert_eq!(app.last_result, Some(3.5));
+        assert_eq!(app.history.len(), 2);
+    }
+
+    #[test]
+    fn typed_unary_minus() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "-3*-2=");
+        assert_eq!(app.last_result, Some(6.0));
+        // After a result, '-' subtracts from it.
+        type_str(&mut app, "-1=");
+        assert_eq!(app.last_result, Some(5.0));
+    }
+
+    #[test]
+    fn typed_unknown_chars_ignored() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "1a+ b2");
+        assert_eq!(app.input_buffer, "1+2");
+    }
+
+    #[test]
+    fn backspace_and_escape_keys() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "123");
+        app.handle_key(&Key::Backspace, Modifiers::NONE, &vfs);
+        assert_eq!(app.input_buffer, "12");
+        app.handle_backspace();
+        assert_eq!(app.input_buffer, "1");
+        // Escape clears the entry...
+        assert_eq!(
+            app.handle_key(&Key::Escape, Modifiers::NONE, &vfs),
+            Some(AppAction::None)
+        );
+        assert!(app.input_buffer.is_empty());
+        // ...and on a clear calculator falls through (Cancel -> Exit).
+        assert_eq!(app.handle_key(&Key::Escape, Modifiers::NONE, &vfs), None);
+        // Command shortcuts are left to the host.
+        assert_eq!(app.handle_key(&Key::Char('c'), Modifiers::CTRL, &vfs), None);
+    }
+
+    #[test]
+    fn up_down_recall_history() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "1+1=");
+        type_str(&mut app, "2*3=");
+        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
+        assert_eq!(app.input_buffer, "2*3");
+        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
+        assert_eq!(app.input_buffer, "1+1");
+        // Stays on the oldest entry.
+        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
+        assert_eq!(app.input_buffer, "1+1");
+        app.handle_key(&Key::Down, Modifiers::NONE, &vfs);
+        assert_eq!(app.input_buffer, "2*3");
+        app.handle_key(&Key::Down, Modifiers::NONE, &vfs);
+        assert!(app.input_buffer.is_empty());
+        // Gamepad Select recalls too.
+        app.handle_input(&Button::Select, &vfs);
+        assert_eq!(app.input_buffer, "2*3");
+        // Editing a recalled expression and evaluating adds a new entry.
+        type_str(&mut app, "+1=");
+        assert_eq!(app.last_result, Some(7.0));
+        assert_eq!(app.history.len(), 3);
+    }
+
+    // -- Clicks --
+
+    const CW: u32 = 300;
+    const CH: u32 = 220;
+
+    fn click_key(app: &mut CalculatorApp, key: CalcKey) {
+        let l = CalcLayout::compute(0, 0, CW, CH);
+        let r = l.key_rect(keypad::index_of(key).expect("key on keypad"));
+        app.handle_click(r.x + r.w as i32 / 2, r.y + r.h as i32 / 2, CW, CH, false);
+    }
+
+    #[test]
+    fn clicking_keys_builds_and_evaluates() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        for key in [
+            CalcKey::Digit('9'),
+            CalcKey::Op('*'),
+            CalcKey::OpenParen,
+            CalcKey::Digit('1'),
+            CalcKey::Op('+'),
+            CalcKey::Digit('2'),
+            CalcKey::CloseParen,
+        ] {
+            click_key(&mut app, key);
+        }
+        assert_eq!(app.input_buffer, "9*(1+2)");
+        click_key(&mut app, CalcKey::Equals);
+        assert_eq!(app.last_result, Some(27.0));
+        // The clicked key flashes pressed.
+        let eq = keypad::index_of(CalcKey::Equals).expect("=");
+        assert_eq!(app.flash.get().map(|(k, _)| k), Some(eq));
+    }
+
+    #[test]
+    fn click_outside_keys_does_nothing() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        let l = CalcLayout::compute(0, 0, CW, CH);
+        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, false);
+        assert!(app.input_buffer.is_empty());
+        assert!(app.flash.get().is_none());
+    }
+
+    #[test]
+    fn click_history_row_recalls_entry() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "1+1=");
+        type_str(&mut app, "2+2=");
+        let (w, h) = (460, 240);
+        let l = CalcLayout::compute(0, 0, w, h);
+        let pane = l.history.expect("wide layout has history");
+        // Rows are newest first: the second row is the older entry.
+        let y = pane.y + (2 * keypad::HISTORY_ROW_H) as i32 + 2;
+        app.handle_click(pane.x + 4, y, w, h, false);
+        assert_eq!(app.input_buffer, "1+1");
+    }
+
+    // -- Rendering --
+
+    #[test]
+    fn windowed_draw_shows_keys_and_display() {
+        use oasis_test_backend::{DrawCommand, RecordingBackend};
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "12+3");
+        let mut backend = RecordingBackend::new(460, 240);
+        let at = ActiveTheme::default();
+        app.draw_windowed(0, 0, 460, 240, &mut backend, &at)
+            .expect("draw");
+        let texts: Vec<&str> = backend
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for label in ["MC", "MR", "MS", "M+", "7", "=", "DEL", "12+3", "History"] {
+            assert!(texts.contains(&label), "missing {label:?} in {texts:?}");
+        }
+    }
+
+    #[test]
+    fn flash_expires_after_a_few_frames() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        app.handle_text_input('4');
+        assert!(app.flash.get().is_some());
+        let mut backend = oasis_test_backend::RecordingBackend::new(300, 220);
+        let at = ActiveTheme::default();
+        for _ in 0..FLASH_FRAMES {
+            app.draw_windowed(0, 0, 300, 220, &mut backend, &at)
+                .expect("draw");
+        }
+        assert!(app.flash.get().is_none());
+    }
+
+    #[test]
+    fn full_screen_lines_show_keypad_cursor() {
+        let vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        assert!(app.lines().iter().any(|l| l.contains("Key: [5]")));
+        app.handle_input(&Button::Right, &vfs);
+        assert!(app.lines().iter().any(|l| l.contains("Key: [6]")));
+    }
+
+    // -- History persistence --
+
+    #[test]
+    fn history_persists_across_instances() {
+        let mut vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "6*7=");
+        type_str(&mut app, "1/4=");
+        assert!(app.apply_vfs_ops(&mut vfs));
+        // Nothing left to write on the next frame.
+        assert!(!app.apply_vfs_ops(&mut vfs));
+        assert!(vfs.exists(history::HISTORY_PATH));
+
+        let mut reopened = CalculatorApp::new("/apps/calc");
+        reopened.refresh(&vfs);
+        assert_eq!(reopened.history.len(), 2);
+        assert_eq!(reopened.history[0].expression, "6*7");
+        assert_eq!(reopened.history[1].result, 0.25);
+        // Up recalls the persisted entries.
+        reopened.handle_key(&Key::Up, Modifiers::NONE, &vfs);
+        assert_eq!(reopened.input_buffer, "1/4");
+    }
+
+    #[test]
+    fn history_loaded_after_typing_keeps_new_entries() {
+        let mut vfs = make_vfs();
+        let seed = CalcHistoryEntry {
+            expression: "1+1".into(),
+            result: 2.0,
+        };
+        history::save(&mut vfs, &[seed]).expect("seed history");
+        let mut app = CalculatorApp::new("/apps/calc");
+        // Typed before the host's first per-frame hook ran.
+        type_str(&mut app, "3+3=");
+        app.apply_vfs_ops(&mut vfs);
+        let exprs: Vec<_> = app.history.iter().map(|e| e.expression.as_str()).collect();
+        assert_eq!(exprs, ["1+1", "3+3"]);
+        assert_eq!(history::load(&vfs).len(), 2);
+    }
+
+    #[test]
+    fn all_clear_persists_empty_history() {
+        let mut vfs = make_vfs();
+        let mut app = CalculatorApp::new("/apps/calc");
+        type_str(&mut app, "2+2=");
+        app.apply_vfs_ops(&mut vfs);
+        app.clear_all();
+        app.apply_vfs_ops(&mut vfs);
+        assert!(history::load(&vfs).is_empty());
     }
 }
