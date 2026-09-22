@@ -138,6 +138,24 @@ fn close_button_under(state: &AppState, x: i32, y: i32) -> Option<String> {
     hit.then(|| id.to_string())
 }
 
+/// Where leaving the fullscreen terminal lands: back on the desktop while
+/// windows are on screen (the terminal can be entered from there, e.g. an
+/// app's "switch to terminal"), otherwise the dashboard. The dashboard
+/// mode does not route input to windows, so returning there with windows
+/// visible would leave them painted but unusable.
+fn home_mode(state: &AppState) -> Mode {
+    let windows_visible = state
+        .wm
+        .windows()
+        .iter()
+        .any(|w| w.state != oasis_core::wm::window::WindowState::Minimized);
+    if windows_visible {
+        Mode::Desktop
+    } else {
+        Mode::Dashboard
+    }
+}
+
 /// Drive the open start menu with a gamepad-style button (d-pad moves the
 /// highlight, Confirm picks, Cancel closes).
 fn start_menu_button(
@@ -479,6 +497,12 @@ pub fn handle_desktop_input(
                 if state.wm.window_count() == 0 {
                     state.mode = Mode::Dashboard;
                 }
+            } else if let Some(top) = state.wm.topmost_visible().map(str::to_string) {
+                // Nothing focused (e.g. after a click on the bare desktop)
+                // but windows are still on screen: focus the top one, so the
+                // next Cancel reaches it. Switching to the dashboard here
+                // would leave the windows painted but dead to input.
+                let _ = state.wm.focus_window(&top, sdi);
             } else {
                 state.mode = Mode::Dashboard;
             }
@@ -1055,7 +1079,7 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Start) => {
             state.mode = match state.mode {
                 Mode::Dashboard => Mode::Terminal,
-                Mode::Terminal => Mode::Dashboard,
+                Mode::Terminal => home_mode(state),
                 Mode::App => Mode::App,
                 Mode::Osk => Mode::Osk,
                 Mode::Desktop => Mode::Desktop,
@@ -1138,7 +1162,7 @@ pub fn handle_default_input(
                 && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            state.mode = Mode::Dashboard;
+            state.mode = home_mode(state);
             state.ui_sounds.push(UiSound::Close);
         },
 

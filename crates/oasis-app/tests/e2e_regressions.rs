@@ -155,3 +155,55 @@ mod tv {
         assert_eq!(h.mode(), Mode::Dashboard);
     }
 }
+
+/// Leaving the fullscreen terminal with windows open must return to the
+/// desktop. On skins without a window manager F1 opens the fullscreen
+/// terminal even over windows, and Escape used to land on the dashboard,
+/// which draws the windows' chrome but routes no input to them.
+#[test]
+fn leaving_the_terminal_with_windows_open_returns_to_the_desktop() {
+    let mut h = Harness::new("vaporwave");
+    h.settle();
+    assert!(!h.state().skin.features.window_manager);
+    assert!(h.open_app("Calculator"));
+    h.settle();
+    assert_eq!(h.mode(), Mode::Desktop);
+    h.key(Key::F(1));
+    h.settle();
+    assert_eq!(h.mode(), Mode::Terminal);
+    h.key(Key::Escape);
+    h.settle();
+    assert_eq!(h.mode(), Mode::Desktop, "back to the open windows");
+    // The window is usable again: Escape reaches and closes it.
+    h.key(Key::Escape);
+    h.settle();
+    assert!(h.find_window("Calculator").is_none(), "{:?}", h.windows());
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
+
+/// A click on the bare desktop unfocuses every window. Escape used to
+/// switch to the dashboard mode anyway, stranding the still-visible
+/// windows (painted, but dead to input). It now focuses the top window.
+#[test]
+fn escape_with_nothing_focused_keeps_open_windows_usable() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Calculator"));
+    h.settle();
+    let (w, hh) = h.size();
+    h.click(w as i32 - 20, hh as i32 / 2); // bare desktop, right edge
+    h.settle();
+    assert_eq!(
+        h.state().wm.active_window(),
+        None,
+        "desktop click unfocuses"
+    );
+    h.key(Key::Escape);
+    h.settle();
+    assert_eq!(h.mode(), Mode::Desktop);
+    assert_eq!(h.state().wm.active_window(), Some("calculator"));
+    h.key(Key::Escape);
+    h.settle();
+    assert!(h.find_window("Calculator").is_none());
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
