@@ -78,6 +78,64 @@ impl OasisInstance {
 }
 
 // ---------------------------------------------------------------------------
+// Panic containment
+// ---------------------------------------------------------------------------
+
+/// Run the body of an `extern "C"` export, converting any Rust panic into
+/// `default` instead of letting it unwind across the C ABI (which is
+/// undefined behavior and, under `panic = "unwind"`, aborts the host).
+///
+/// Every exported `oasis_*` function wraps its body in this guard. The panic
+/// message is logged at `error` level together with the export `name`.
+///
+/// **Handle policy:** a caught panic does *not* poison the instance -- the
+/// handle stays usable and later calls proceed normally. A panic can only leave
+/// the instance in a state reachable by safe Rust (no memory unsafety), and the
+/// worst realistic outcome is one partially-updated frame that the next
+/// `oasis_tick` redraws. Tearing down a UE5 widget because one frame hit a bug
+/// would be a worse failure mode for the host.
+///
+/// Note: catching requires the library to be built with `panic = "unwind"`
+/// (the `release-ffi` Cargo profile). Under the workspace `release` profile
+/// (`panic = "abort"`) the process aborts before this guard ever runs.
+pub(crate) fn ffi_guard<R>(name: &'static str, default: R, f: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("<non-string panic payload>");
+            log::error!("FFI: panic caught in {name}: {msg}");
+            default
+        },
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only fault injection: when set, the next [`maybe_inject_panic`]
+    /// call panics (and clears the flag). Thread-local so parallel tests
+    /// cannot trip each other.
+    static INJECT_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Arm the test-only panic injection for the current thread.
+#[cfg(test)]
+pub(crate) fn arm_panic_injection() {
+    INJECT_PANIC.with(|f| f.set(true));
+}
+
+/// Panic if [`arm_panic_injection`] was called on this thread (test builds only).
+#[cfg(test)]
+pub(crate) fn maybe_inject_panic() {
+    if INJECT_PANIC.with(|f| f.replace(false)) {
+        panic!("injected test panic");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Safe handle access helpers
 // ---------------------------------------------------------------------------
 

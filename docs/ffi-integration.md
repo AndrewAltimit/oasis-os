@@ -5,13 +5,41 @@ This guide explains how to embed OASIS_OS in a C/C++ application (including Unre
 ## Building the Library
 
 ```bash
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 ```
 
 This produces a shared library:
-- Linux: `target/release/liboasis_ffi.so`
-- macOS: `target/release/liboasis_ffi.dylib`
-- Windows: `target/release/oasis_ffi.dll` (plus the `oasis_ffi.dll.lib` import library)
+- Linux: `target/release-ffi/liboasis_ffi.so`
+- macOS: `target/release-ffi/liboasis_ffi.dylib`
+- Windows: `target/release-ffi/oasis_ffi.dll` (plus the `oasis_ffi.dll.lib` import library)
+
+### Panic safety -- always use the `release-ffi` profile
+
+Every exported `oasis_*` function wraps its body in a `catch_unwind` guard
+(`ffi_guard` in `crates/oasis-ffi/src/handle.rs`). A Rust panic inside an
+export is logged (`log::error!`, "FFI: panic caught in <function>") and the
+function returns its documented failure value instead of unwinding into the
+host:
+
+| Return type | Value on panic |
+|-------------|----------------|
+| `void` | returns normally |
+| `bool` | `false` |
+| pointer (`oasis_create*`, `oasis_send_command`, `oasis_get_buffer`) | `NULL` |
+| `uint64_t` (`oasis_audio_load`) | `UINT64_MAX` |
+| `uint8_t` (`oasis_audio_get_volume`) | `0` |
+| `int32_t` (`oasis_video_*`) | `-1` (`oasis_video_is_playing`: `0`) |
+
+The handle is **not poisoned** by a caught panic: it stays valid and later
+calls (including `oasis_destroy`) work normally. At worst one frame is left
+partially drawn and the next `oasis_tick` redraws it.
+
+`catch_unwind` only works when panics unwind. The workspace `release` profile
+sets `panic = "abort"` (smaller, faster desktop binaries), under which a panic
+kills the whole process -- including the UE5 editor/game -- before the guard
+runs. The `release-ffi` profile inherits `release` but sets
+`panic = "unwind"`; **always build the shared library with
+`--profile release-ffi`** when embedding it in a host process.
 
 The crate is also built as an `rlib`, so Rust hosts can depend on it directly.
 
@@ -25,7 +53,7 @@ The crate is also built as an `rlib`, so Rust hosts can depend on it directly.
 Without either feature, the `oasis_video_*` symbols are **not exported**.
 
 ```bash
-cargo build --release -p oasis-ffi --features video-decode
+cargo build --profile release-ffi -p oasis-ffi --features video-decode
 ```
 
 A complete, runnable C program exercising the API lives in

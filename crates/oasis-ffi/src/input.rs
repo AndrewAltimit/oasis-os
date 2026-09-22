@@ -2,7 +2,7 @@
 
 use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 
-use crate::handle::{OasisInstance, with_instance};
+use crate::handle::{OasisInstance, ffi_guard, with_instance};
 use crate::types::*;
 
 pub(crate) fn button_from_code(code: u32) -> Option<Button> {
@@ -119,19 +119,21 @@ pub unsafe extern "C" fn oasis_send_input(
     handle: *mut OasisInstance,
     event: *const OasisInputEvent,
 ) {
-    // SAFETY: Caller guarantees `event` is valid and non-null per function safety contract.
-    let Some(evt) = (unsafe { event.as_ref() }) else {
-        return;
-    };
+    ffi_guard("oasis_send_input", (), || {
+        // SAFETY: Caller guarantees `event` is valid and non-null per function safety contract.
+        let Some(evt) = (unsafe { event.as_ref() }) else {
+            return;
+        };
 
-    if let Some(ie) = event_from_c(evt) {
-        // SAFETY: Caller guarantees `handle` is valid per function safety contract.
-        unsafe {
-            with_instance(handle, (), |instance| {
-                instance.input.push_event(ie);
-            });
+        if let Some(ie) = event_from_c(evt) {
+            // SAFETY: Caller guarantees `handle` is valid per function safety contract.
+            unsafe {
+                with_instance(handle, (), |instance| {
+                    instance.input.push_event(ie);
+                });
+            }
         }
-    }
+    })
 }
 
 #[cfg(test)]

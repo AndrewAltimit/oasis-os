@@ -1,6 +1,6 @@
 //! Callback registration: `oasis_register_callback`.
 
-use crate::handle::{OasisInstance, with_instance};
+use crate::handle::{OasisInstance, ffi_guard, with_instance};
 use crate::types::OasisCallback;
 
 /// Register a callback for OS events.
@@ -17,10 +17,12 @@ pub unsafe extern "C" fn oasis_register_callback(
     event: u32,
     cb: OasisCallback,
 ) {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            instance.callbacks.insert(event, cb);
-        });
-    }
+    ffi_guard("oasis_register_callback", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                instance.callbacks.insert(event, cb);
+            });
+        }
+    })
 }

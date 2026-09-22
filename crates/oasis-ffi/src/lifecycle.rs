@@ -13,7 +13,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::terminal::{CommandRegistry, register_builtins};
 use oasis_core::vfs::{GameAssetVfs, Vfs};
 
-use crate::handle::{OasisInstance, c_str_to_str};
+use crate::handle::{OasisInstance, c_str_to_str, ffi_guard};
 
 static INIT_LOGGER: Once = Once::new();
 
@@ -57,18 +57,20 @@ pub unsafe extern "C" fn oasis_create(
     layout_toml: *const c_char,
     features_toml: *const c_char,
 ) -> *mut OasisInstance {
-    // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
-    unsafe {
-        create_instance(
-            width,
-            height,
-            skin_toml,
-            layout_toml,
-            features_toml,
-            std::ptr::null(),
-            std::ptr::null(),
-        )
-    }
+    ffi_guard("oasis_create", std::ptr::null_mut(), || {
+        // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
+        unsafe {
+            create_instance(
+                width,
+                height,
+                skin_toml,
+                layout_toml,
+                features_toml,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        }
+    })
 }
 
 /// Create a new OASIS_OS instance from a skin's full TOML set.
@@ -100,18 +102,20 @@ pub unsafe extern "C" fn oasis_create_full(
     theme_toml: *const c_char,
     strings_toml: *const c_char,
 ) -> *mut OasisInstance {
-    // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
-    unsafe {
-        create_instance(
-            width,
-            height,
-            manifest_toml,
-            layout_toml,
-            features_toml,
-            theme_toml,
-            strings_toml,
-        )
-    }
+    ffi_guard("oasis_create_full", std::ptr::null_mut(), || {
+        // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
+        unsafe {
+            create_instance(
+                width,
+                height,
+                manifest_toml,
+                layout_toml,
+                features_toml,
+                theme_toml,
+                strings_toml,
+            )
+        }
+    })
 }
 
 /// Shared instance construction for [`oasis_create`] and [`oasis_create_full`].
@@ -259,11 +263,13 @@ unsafe fn create_instance(
 /// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
-    if !handle.is_null() {
-        // SAFETY: Reclaiming ownership of handle allocated by `oasis_create` via `Box::into_raw`.
-        let mut instance = unsafe { Box::from_raw(handle) };
-        let _ = instance.audio.shutdown();
-        let _ = instance.backend.shutdown();
-        drop(instance);
-    }
+    ffi_guard("oasis_destroy", (), || {
+        if !handle.is_null() {
+            // SAFETY: Reclaiming ownership of handle allocated by `oasis_create` via `Box::into_raw`.
+            let mut instance = unsafe { Box::from_raw(handle) };
+            let _ = instance.audio.shutdown();
+            let _ = instance.backend.shutdown();
+            drop(instance);
+        }
+    })
 }
