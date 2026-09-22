@@ -44,7 +44,13 @@ headlessly:
   audio into the real player (`Harness::inject_video_audio` /
   `inject_video_frame`).
 - **Persistence** is off: no settings file is read or written, no host
-  sample media is loaded, no environment variable is consulted.
+  sample media is loaded, no environment variable is consulted. A
+  scenario that tests persistence sets `HarnessOptions::prefs_path` to a
+  file in a temp directory: it is read at boot like the binary's settings
+  file (saved skin, resolution, volume, font scale, reduced motion,
+  locale) and written as preferences change; `shutdown()` flushes it and
+  a second `Harness` on the same path is the "re-boot". Never point it at
+  the real user settings file.
 
 Frames are presented exactly when the shell's idle-frame elision says so,
 as in the binary. Each input helper runs at least one frame, so state is
@@ -78,7 +84,7 @@ Construction
 | Call | Does |
 |------|------|
 | `Harness::new(skin)` | Boot with defaults (panics if the skin fails to load) |
-| `Harness::with_options(HarnessOptions)` | `skin`, `resolution`, `shader_wallpaper` (off by default: slow in debug), `fixed_time` |
+| `Harness::with_options(HarnessOptions)` | `skin`, `resolution`, `shader_wallpaper` (off by default: slow in debug), `fixed_time`, `prefs_path` (persist preferences to a real file, see above) |
 | `Harness::with_observer(opts, &mut obs)` | Also report boot progress (BIOS lines, splash waits) to a `BootObserver` |
 
 Frames and time
@@ -126,6 +132,7 @@ Observation
 | `sdi_texts()`, `sdi_text_contains(s)` | Text of visible SDI objects |
 | `audio()`, `audio_fed()` | `AudioLog`: PCM chunks (with track / channels / rate), bytes, SFX samples, tracks opened / unloaded, volume |
 | `save_png(path)` | Dump the framebuffer when debugging a failure |
+| `shutdown()` | Shut down like the binary on exit (flushes the settings file) |
 
 ### Guidelines
 
@@ -141,6 +148,14 @@ Observation
 - **Per-skin loops** (`builtin_names()`) catch skin-specific layout and
   feature-flag breakage cheaply: a boot is ~0.1 s, a settled frame a few ms
   (debug build).
+- **Multi-app user journeys** (Settings, File Manager / Text Editor /
+  Photo Viewer, Music, Radio, terminal to apps, locale, several windows)
+  live in `tests/e2e_user_flows.rs`. Its helpers find things by the text
+  painted in the last frame (`click_text_in`, `window_shows`,
+  `click_taskbar`).
+- The UI locale is process-global: a scenario that switches it must not
+  run at the same time as scenarios asserting English text in the same
+  test binary (`e2e_user_flows.rs` serializes them with an `RwLock`).
 - Regression tests for bugs the harness found go in
   `tests/e2e_regressions.rs` with a comment describing the old behavior.
 

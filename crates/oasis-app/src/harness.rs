@@ -297,6 +297,16 @@ pub struct HarnessOptions {
     pub shader_wallpaper: bool,
     /// Frozen platform clock; `None` uses the real clock.
     pub fixed_time: Option<SystemTime>,
+    /// Persist user preferences to this real file, like the binary's
+    /// `$OASIS_SETTINGS_FILE`: it is read at boot (the saved skin, when
+    /// there is one, wins over `skin`, as it does for the binary without
+    /// a skin argument; resolution, volume, font scale, reduced motion and
+    /// locale are restored) and written back as settings change. `None`
+    /// (the default) disables persistence. Use a per-test temp path.
+    ///
+    /// Note: the UI locale is process-global, so a persisted non-English
+    /// locale is applied for every harness in the test binary.
+    pub prefs_path: Option<std::path::PathBuf>,
 }
 
 impl HarnessOptions {
@@ -308,6 +318,7 @@ impl HarnessOptions {
             resolution: None,
             shader_wallpaper: false,
             fixed_time: Some(FIXED_TIME),
+            prefs_path: None,
         }
     }
 }
@@ -367,6 +378,24 @@ impl Harness {
         observer: &mut dyn BootObserver<HeadlessBackend>,
     ) -> Result<Self> {
         let mut boot = BootOptions::hermetic(&opts.skin)?;
+        if let Some(path) = opts.prefs_path.as_ref() {
+            let store = crate::user_prefs::load_from_disk(Some(path));
+            let prefs = oasis_core::settings::UserPrefs::from_store(&store);
+            if let Some(saved) = prefs.skin.as_deref() {
+                boot.skin = oasis_core::skin::resolve_skin(saved)?;
+            }
+            prefs.patch_features(&mut boot.skin.features);
+            crate::shell::resolve_screen_size(&mut boot.config, &boot.skin, &prefs);
+            if store
+                .get_string(oasis_core::settings::pref_keys::LOCALE)
+                .is_some()
+            {
+                oasis_core::i18n::set_ui_locale(prefs.locale());
+            }
+            boot.prefs = prefs;
+            boot.boot_settings = store;
+            boot.settings_disk_path = Some(path.clone());
+        }
         if let Some((w, h)) = opts.resolution {
             boot.config.screen_width = w;
             boot.config.screen_height = h;
@@ -713,6 +742,12 @@ impl Harness {
             .state
             .video_player
             .inject_frame(rgba, w, h, pts_secs)
+    }
+
+    /// Shut the shell down the way the binary does on exit (persists any
+    /// settings changed since the last periodic sync, stops media).
+    pub fn shutdown(self) -> Result<()> {
+        self.shell.shutdown()
     }
 
     // -- observation --------------------------------------------------------
