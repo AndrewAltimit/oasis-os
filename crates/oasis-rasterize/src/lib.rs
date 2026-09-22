@@ -12,7 +12,11 @@
 //! [`TextureDedup`] provides content-addressed texture deduplication with LRU
 //! eviction and reference counting, shared by SDL and WASM backends.
 
+mod glyph;
+mod rows;
 mod texture_dedup;
+pub use glyph::{bitmap_ascent, bitmap_line_height, glyph_cell, glyph_mask, mask_runs};
+pub use rows::{polygon_rows, stroke_circle_rows, stroke_rounded_rect_rows, thick_line_rows};
 pub use texture_dedup::TextureDedup;
 
 #[cfg(feature = "ttf")]
