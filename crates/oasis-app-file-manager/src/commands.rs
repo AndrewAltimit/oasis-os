@@ -64,6 +64,14 @@ impl FileManagerApp {
         }
         let name = trimmed.split("  (").next().unwrap_or(trimmed);
         let file_path = join_path(&p.browse_dir, name);
+        // Typed files open in their app, exactly like Confirm does; only
+        // unknown types fall back to the built-in viewer.
+        if let Some(app_title) = app_for_file(&file_path) {
+            return AppAction::LaunchAppWithFile {
+                app_title: app_title.to_string(),
+                file_path,
+            };
+        }
         self.pending_navigation = Some(NavTarget::File(file_path));
         AppAction::None
     }
