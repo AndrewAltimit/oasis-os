@@ -144,6 +144,92 @@ fn default_constructor() {
     let _backend = StdNetworkBackend::default();
 }
 
+#[test]
+fn connect_resolves_hostname() {
+    // `localhost` must go through name resolution (it may resolve to ::1
+    // first, which is refused, before falling back to 127.0.0.1).
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let _ = listener.accept().unwrap();
+    });
+    let mut backend = StdNetworkBackend::new();
+    let mut stream = backend.connect("localhost", port).unwrap();
+    stream.close().unwrap();
+    handle.join().unwrap();
+}
+
+#[test]
+fn connect_unresolvable_host_errors() {
+    let mut backend = StdNetworkBackend::new();
+    assert!(backend.connect("does-not-exist.invalid", 80).is_err());
+}
+
+#[test]
+fn connect_times_out_instead_of_blocking() {
+    // 10.255.255.1 is a non-routable address: SYNs go unanswered, so a
+    // blocking connect would hang for the OS default (often 20s+). On hosts
+    // without a route it errors immediately instead; either way the call
+    // must return promptly with an error.
+    let mut backend = StdNetworkBackend::new();
+    backend.set_connect_timeout(std::time::Duration::from_millis(300));
+    let start = std::time::Instant::now();
+    let result = backend.connect("10.255.255.1", 9);
+    assert!(result.is_err());
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "connect took {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn listener_without_psk_binds_loopback_only() {
+    let mut backend = StdNetworkBackend::new();
+    let (_port, listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: String::new(),
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
+    assert!(listener.is_listening());
+    let addr = backend.local_addr().unwrap();
+    assert!(addr.ip().is_loopback(), "bound to {addr}");
+}
+
+#[test]
+fn listener_all_interfaces_requires_psk() {
+    let mut backend = StdNetworkBackend::new();
+    let mut listener = RemoteListener::new(ListenerConfig {
+        port: free_port().unwrap_or(0),
+        psk: String::new(),
+        bind: ListenerBind::AllInterfaces,
+        ..ListenerConfig::default()
+    });
+    let err = listener.start(&mut backend).unwrap_err();
+    assert!(err.to_string().contains("PSK"), "{err}");
+    assert!(!listener.is_listening());
+    assert!(backend.local_addr().is_none(), "nothing may be bound");
+}
+
+#[test]
+fn listener_all_interfaces_with_psk_binds_unspecified() {
+    let mut backend = StdNetworkBackend::new();
+    let (_port, listener) = bind_listener_retry(
+        |port| ListenerConfig {
+            port,
+            psk: "secret".to_string(),
+            bind: ListenerBind::AllInterfaces,
+            ..ListenerConfig::default()
+        },
+        &mut backend,
+    );
+    assert!(listener.is_listening());
+    assert!(backend.local_addr().unwrap().ip().is_unspecified());
+}
+
 // ---------------------------------------------------------------------------
 // RemoteListener tests
 // ---------------------------------------------------------------------------

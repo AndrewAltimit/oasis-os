@@ -60,9 +60,13 @@ pub fn process_command_output(
                     .output_lines
                     .push("Listener already running. Use 'listen stop' first.".to_string());
             } else {
+                // No PSK can be supplied from the terminal, so the listener
+                // stays on loopback: an unauthenticated shell must never be
+                // reachable from the network.
                 let cfg = ListenerConfig {
                     port,
                     psk: String::new(),
+                    bind: oasis_core::net::ListenerBind::Loopback,
                     max_connections: 4,
                     ..ListenerConfig::default()
                 };
@@ -72,7 +76,7 @@ pub fn process_command_output(
                         state
                             .terminal
                             .output_lines
-                            .push(format!("Listening on port {port}."));
+                            .push(format!("Listening on 127.0.0.1:{port} (loopback only)."));
                         state.net.listener = Some(l);
                     },
                     Err(e) => {

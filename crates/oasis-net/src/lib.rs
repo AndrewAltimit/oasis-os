@@ -14,9 +14,9 @@ pub mod tls_rustls;
 pub use client::{ClientState, RemoteClient};
 pub use hosts::{HostEntry, parse_hosts};
 #[cfg(not(target_arch = "wasm32"))]
-pub use listener::{ListenerConfig, RemoteListener};
+pub use listener::{ListenerBind, ListenerConfig, RemoteListener};
 #[cfg(not(target_arch = "wasm32"))]
-pub use std_backend::{StdNetworkBackend, StdNetworkStream};
+pub use std_backend::{DEFAULT_CONNECT_TIMEOUT, StdNetworkBackend, StdNetworkStream};
 pub use tls::TlsProvider;
 #[cfg(all(feature = "tls-rustls", not(target_arch = "wasm32")))]
 pub use tls_rustls::RustlsTlsProvider;
