@@ -160,6 +160,14 @@ pub struct SoftwareVideoDecoder {
     /// Whether the demuxer has run out of video packets.
     #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
     video_eof: bool,
+    /// Timestamps of packets fed to the decoder whose pictures have not
+    /// come out yet.  With B-frames the decoder emits pictures in display
+    /// order a few packets after they were fed, so a picture takes the
+    /// smallest pending timestamp -- not the timestamp of the packet that
+    /// happened to release it (which ran every frame late by the reorder
+    /// depth and started post-seek playback one frame past the keyframe).
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    pending_pts: Vec<f64>,
 }
 
 impl SoftwareVideoDecoder {
@@ -266,6 +274,8 @@ impl SoftwareVideoDecoder {
             last_video_ts: (0.0, 0.0),
             #[cfg(feature = "h264")]
             video_eof: false,
+            #[cfg(feature = "h264")]
+            pending_pts: Vec::new(),
         })
     }
 
@@ -376,6 +386,7 @@ impl SoftwareVideoDecoder {
                     _ => &packet.data,
                 };
 
+                self.pending_pts.push(packet.timestamp_secs);
                 let h264 = self
                     .h264
                     .as_mut()
@@ -385,12 +396,22 @@ impl SoftwareVideoDecoder {
                         self.video_width = frame.width;
                         self.video_height = frame.height;
                     }
+                    let ts = pop_min_pts(&mut self.pending_pts).unwrap_or(packet.timestamp_secs);
                     return Ok(Some(VideoFrame {
                         rgba: frame.rgba,
                         width: frame.width,
                         height: frame.height,
-                        timestamp_secs: packet.timestamp_secs,
+                        timestamp_secs: ts,
                     }));
+                }
+
+                if h264.last_failed {
+                    // The packet produced no picture and never will.
+                    self.pending_pts.pop();
+                } else if self.pending_pts.len() > MAX_REORDER_DEPTH {
+                    // A picture was dropped without an error; don't let its
+                    // stale timestamp shift every later frame.
+                    pop_min_pts(&mut self.pending_pts);
                 }
 
                 if h264.last_failed && h264.error_streak >= RESYNC_ERRORS {
@@ -400,6 +421,7 @@ impl SoftwareVideoDecoder {
                     );
                     h264.reinit()?;
                     self.awaiting_idr = true;
+                    self.pending_pts.clear();
                 }
 
                 skipped += 1;
@@ -428,14 +450,17 @@ impl SoftwareVideoDecoder {
             let (last_ts, dur) = self.last_video_ts;
             if let Some(h264) = self.h264.as_mut() {
                 for (i, frame) in h264.flush().into_iter().enumerate() {
+                    let ts = pop_min_pts(&mut self.pending_pts)
+                        .unwrap_or(last_ts + dur * (i + 1) as f64);
                     self.flushed_frames.push_back(VideoFrame {
                         rgba: frame.rgba,
                         width: frame.width,
                         height: frame.height,
-                        timestamp_secs: last_ts + dur * (i + 1) as f64,
+                        timestamp_secs: ts,
                     });
                 }
             }
+            self.pending_pts.clear();
         }
         self.flushed_frames.pop_front()
     }
@@ -596,6 +621,7 @@ impl SoftwareVideoDecoder {
                 self.flushed_frames.clear();
                 self.video_eof = false;
                 self.last_video_ts = (0.0, 0.0);
+                self.pending_pts.clear();
             }
             Ok(())
         }
@@ -625,9 +651,30 @@ impl SoftwareVideoDecoder {
 
         #[cfg(not(feature = "ffmpeg"))]
         {
-            (self.audio_sample_rate, self.audio_channels)
+            // The decoder refines rate/channels from the first decoded
+            // frame (e.g. a mono stream in a 2-channel sample entry).
+            match &self.aac {
+                Some(aac) => (aac.sample_rate(), aac.channels()),
+                None => (self.audio_sample_rate, self.audio_channels),
+            }
         }
     }
+}
+
+/// Most pictures an H.264 decoder may hold for reordering
+/// (`max_dec_frame_buffering` is at most 16).
+#[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+const MAX_REORDER_DEPTH: usize = 16;
+
+/// Remove and return the smallest timestamp in `pending`.
+#[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+fn pop_min_pts(pending: &mut Vec<f64>) -> Option<f64> {
+    let idx = pending
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)?;
+    Some(pending.swap_remove(idx))
 }
 
 /// H.264 NAL unit type of an IDR slice.
