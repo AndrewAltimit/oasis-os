@@ -988,6 +988,8 @@ fn main() -> Result<()> {
                     }
                 },
             )?;
+            // Drag-to-edge snap preview, on top of the windows.
+            render::draw_snap_preview(&state, &mut backend)?;
         } else if state.mode == Mode::Dashboard
             && (state.active_theme.icon.style == "vector"
                 || !state.active_theme.background_layers.is_empty())

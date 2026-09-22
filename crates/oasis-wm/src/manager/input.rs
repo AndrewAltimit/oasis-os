@@ -11,7 +11,7 @@ impl WindowManager {
         match event {
             InputEvent::PointerClick { x, y } => self.handle_click(*x, *y, sdi),
             InputEvent::CursorMove { x, y } => self.handle_cursor_move(*x, *y, sdi),
-            InputEvent::PointerRelease { .. } => self.handle_release(),
+            InputEvent::PointerRelease { .. } => self.handle_release(sdi),
             _ => WmEvent::None,
         }
     }

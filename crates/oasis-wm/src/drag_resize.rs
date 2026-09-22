@@ -202,10 +202,17 @@ impl WindowManager {
                 // Actual drag movement invalidates any pending double-click.
                 // Jitter within DOUBLE_CLICK_RADIUS still counts as a steady
                 // click so release-then-reclick at the same spot toggles maximize.
+                let mut start_win_x = start_win_x;
+                let mut start_win_y = start_win_y;
                 if (x - start_cursor_x).abs() > DOUBLE_CLICK_RADIUS
                     || (y - start_cursor_y).abs() > DOUBLE_CLICK_RADIUS
                 {
                     self.last_titlebar_click = None;
+                    // Dragging a snapped window out restores its size.
+                    if let Some((nx, ny)) = self.unsnap_for_drag(window_id, start_cursor_x, sdi) {
+                        start_win_x = nx;
+                        start_win_y = ny;
+                    }
                 }
 
                 let raw_x = start_win_x + (x - start_cursor_x);
@@ -245,6 +252,7 @@ impl WindowManager {
                         }
                     }
                 }
+                self.update_drag_snap_preview(window_id.as_str(), x, y);
                 WmEvent::WindowMoved(window_id.clone())
             },
             DragState::Resizing {
@@ -283,6 +291,9 @@ impl WindowManager {
                     window.y = new_y;
                     window.outer_w = new_w;
                     window.outer_h = new_h;
+                    // A hand-resized window is no longer snapped.
+                    window.snap_zone = None;
+                    window.pre_snap_geometry = None;
                 }
 
                 self.update_sdi_positions(window_id.as_str(), sdi);
@@ -291,16 +302,60 @@ impl WindowManager {
         }
     }
 
-    pub(crate) fn handle_release(&mut self) -> WmEvent {
+    pub(crate) fn handle_release(&mut self, sdi: &mut SdiRegistry) -> WmEvent {
         self.hover_button = None;
         if let Some(drag) = self.drag.take() {
             let id = match drag {
-                DragState::Moving { window_id, .. } => window_id,
+                DragState::Moving { window_id, .. } => {
+                    // Released inside a snap zone: snap the window there.
+                    if let Some(ev) = self.apply_drag_snap(window_id.as_str(), sdi) {
+                        return ev;
+                    }
+                    window_id
+                },
                 DragState::Resizing { window_id, .. } => window_id,
             };
+            self.snap.clear_preview();
             return WmEvent::WindowMoved(id);
         }
+        self.snap.clear_preview();
         WmEvent::None
+    }
+}
+
+impl WindowManager {
+    /// If the window being dragged is snapped, restore its pre-snap size so
+    /// it detaches from the edge, keeping the grab point under the cursor
+    /// proportionally. Updates the drag state's origin and returns the new
+    /// drag origin `(start_win_x, start_win_y)`; `None` if not snapped.
+    fn unsnap_for_drag(
+        &mut self,
+        id: &WindowId,
+        start_cursor_x: i32,
+        sdi: &mut SdiRegistry,
+    ) -> Option<(i32, i32)> {
+        let window = self.windows.iter_mut().find(|w| w.id == *id)?;
+        window.snap_zone?;
+        let orig = window.pre_snap_geometry.take()?;
+        window.snap_zone = None;
+        let old_w = window.outer_w.max(1) as i64;
+        let grab = i64::from(start_cursor_x - window.x);
+        let new_grab = (grab * i64::from(orig.w) / old_w) as i32;
+        window.x = start_cursor_x - new_grab;
+        window.outer_w = orig.w;
+        window.outer_h = orig.h;
+        let (nx, ny) = (window.x, window.y);
+        if let Some(DragState::Moving {
+            start_win_x,
+            start_win_y,
+            ..
+        }) = self.drag.as_mut()
+        {
+            *start_win_x = nx;
+            *start_win_y = ny;
+        }
+        self.update_sdi_positions(id.as_str(), sdi);
+        Some((nx, ny))
     }
 }
 

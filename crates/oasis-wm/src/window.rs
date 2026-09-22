@@ -12,6 +12,8 @@ use oasis_types::backend::Color;
 use oasis_types::bitmap_font::glyph_advance_scaled;
 use oasis_types::nine_patch::NinePatchSlices;
 
+use crate::snap::SnapZone;
+
 /// Shared, reference-counted window identifier.
 ///
 /// Wraps `Rc<str>` for cheap cloning at 60fps. Compares equal with
@@ -423,6 +425,14 @@ pub struct Window {
     /// Geometry saved when entering kiosk mode (separate from maximize/minimize
     /// `saved_geometry` so that kiosk ↔ maximize don't clobber each other).
     pub kiosk_saved_geometry: Option<Geometry>,
+    /// Snap zone the window is currently snapped to (drag-to-edge or
+    /// keyboard snap), if any. Cleared when the window is unsnapped,
+    /// dragged out of the zone, or resized by hand.
+    pub snap_zone: Option<SnapZone>,
+    /// Geometry to return to when the window is unsnapped.
+    pub pre_snap_geometry: Option<Geometry>,
+    /// Geometry to return to when tiling is switched off.
+    pub pre_tile_geometry: Option<Geometry>,
 }
 
 impl Window {
@@ -458,6 +468,9 @@ impl Window {
             modal: config.modal,
             fullscreen_kiosk: false,
             kiosk_saved_geometry: None,
+            snap_zone: None,
+            pre_snap_geometry: None,
+            pre_tile_geometry: None,
         }
     }
 

@@ -18,6 +18,7 @@ pub mod snap;
 mod stacking;
 pub mod tiling;
 pub mod window;
+mod window_ops;
 
 pub use animation::{
     AnimationDurations, AnimationFrame, AnimationKind, AnimationManager, AnimationState,

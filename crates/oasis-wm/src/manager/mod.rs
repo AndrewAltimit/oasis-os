@@ -11,6 +11,7 @@
 //! - `sdi_objects.rs` — SDI object create/destroy/update
 //! - `drag_resize.rs` — Drag/resize state machine
 //! - `input.rs` — Input dispatch
+//! - `window_ops.rs` — Snapping, keyboard window management, tiling
 //! - `query.rs` — Query/lookup methods and accessors
 
 mod input;
@@ -21,6 +22,8 @@ use oasis_types::error::{OasisError, Result, WmError};
 
 use super::drag_resize::{DragState, clamp_position};
 use super::hit_test::ButtonKind;
+use super::snap::SnapManager;
+use super::tiling::{TilingLayout, TilingManager};
 use super::window::{Window, WindowId, WmTheme};
 
 /// Events produced by the WM in response to input.
@@ -95,6 +98,14 @@ pub struct WindowManager {
     /// Most recent titlebar click, used to detect double-clicks that toggle
     /// maximize/restore.
     pub(crate) last_titlebar_click: Option<TitlebarClickStamp>,
+    /// Drag-to-edge snap zone detection and preview state.
+    pub(crate) snap: SnapManager,
+    /// Whether drag-to-edge snapping is enabled.
+    pub(crate) snap_enabled: bool,
+    /// Tiling layout engine used by [`WindowManager::cycle_tiling`].
+    pub(crate) tiling: TilingManager,
+    /// Active tiling layout (`None` = windows float freely).
+    pub(crate) tiling_layout: Option<TilingLayout>,
 }
 
 impl WindowManager {
@@ -111,6 +122,10 @@ impl WindowManager {
             drag: None,
             hover_button: None,
             last_titlebar_click: None,
+            snap: SnapManager::new(),
+            snap_enabled: true,
+            tiling: TilingManager::new(),
+            tiling_layout: None,
         }
     }
 
