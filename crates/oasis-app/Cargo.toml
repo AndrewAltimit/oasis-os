@@ -52,6 +52,7 @@ oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 oasis-app-settings = { workspace = true }
 oasis-app-media = { workspace = true }
+oasis-app-system-monitor = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
 oasis-shader = { workspace = true, features = ["gl-native"] }
