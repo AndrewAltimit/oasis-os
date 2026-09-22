@@ -423,7 +423,14 @@ impl BrowserWidget {
                 self.pending_page_load = None;
                 let requested_url = self.pending_page_url.take();
                 match result.result {
-                    Ok(loaded) => {
+                    Ok(mut loaded) => {
+                        // `304 Not Modified` answers our conditional
+                        // request: the body to show is the cached one.
+                        if loaded.response.status == 304
+                            && let Some(cached) = self.cache.peek_response(&loaded.response.url)
+                        {
+                            loaded.response = cached;
+                        }
                         let url_str = loaded.response.url.clone();
                         let etag = loaded.etag.clone();
                         let last_modified = loaded.last_modified.clone();
@@ -464,7 +471,14 @@ impl BrowserWidget {
 
             match result.result {
                 Ok(loaded) => {
-                    let body = loaded.response.body;
+                    // A 304 revalidation carries no body: use the cached one.
+                    let cached = (loaded.response.status == 304)
+                        .then(|| self.cache.peek_response(&loaded.response.url))
+                        .flatten();
+                    let body = match cached {
+                        Some(cached) => cached.body,
+                        None => loaded.response.body,
+                    };
                     // Dispatch to the background decode thread.
                     self.ensure_decode_thread();
                     let sent = if let Some(ref tx) = self.image_decode_tx {
