@@ -475,7 +475,16 @@ pub fn handle_desktop_input(
             None => {},
         },
         InputEvent::MouseWheel { delta } => {
-            match state.wm.active_window() {
+            // The wheel scrolls the window under the pointer (like desktop
+            // OSes), falling back to the focused window when the pointer
+            // is over the bare desktop. Scrolling never changes focus.
+            let (px, py) = (state.ui.mouse_cursor.x, state.ui.mouse_cursor.y);
+            let target = state
+                .wm
+                .window_at(px, py)
+                .or_else(|| state.wm.active_window())
+                .map(str::to_string);
+            match target.as_deref() {
                 Some("browser") => {
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
