@@ -54,3 +54,6 @@ fn find_tv_guide_runner<'a>(
 
 #[cfg(all(test, feature = "_video"))]
 mod tests;
+
+#[cfg(all(test, feature = "_video"))]
+mod e2e_tests;
