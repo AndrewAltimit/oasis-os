@@ -335,10 +335,11 @@ impl WindowManager {
 }
 
 impl WindowManager {
-    /// If the window being dragged is snapped, restore its pre-snap size so
-    /// it detaches from the edge, keeping the grab point under the cursor
-    /// proportionally. Updates the drag state's origin and returns the new
-    /// drag origin `(start_win_x, start_win_y)`; `None` if not snapped.
+    /// If the window being dragged is snapped or maximized, restore its
+    /// floating size so it detaches from the edge, keeping the grab point
+    /// under the cursor proportionally. Updates the drag state's origin and
+    /// returns the new drag origin `(start_win_x, start_win_y)`; `None` if
+    /// the window was floating.
     fn unsnap_for_drag(
         &mut self,
         id: &WindowId,
@@ -346,9 +347,20 @@ impl WindowManager {
         sdi: &mut SdiRegistry,
     ) -> Option<(i32, i32)> {
         let window = self.windows.iter_mut().find(|w| w.id == *id)?;
-        window.snap_zone?;
-        let orig = window.pre_snap_geometry.take()?;
-        window.snap_zone = None;
+        let orig = if window.snap_zone.is_some() {
+            let g = window.pre_snap_geometry.take()?;
+            window.snap_zone = None;
+            g
+        } else if window.state == WindowState::Maximized {
+            // Dragging a maximized window by its titlebar un-maximizes it
+            // (otherwise a screen-sized window would slide off-screen while
+            // still claiming to be maximized).
+            let g = window.saved_geometry.take()?;
+            window.state = WindowState::Normal;
+            g
+        } else {
+            return None;
+        };
         let old_w = window.outer_w.max(1) as i64;
         let grab = i64::from(start_cursor_x - window.x);
         let new_grab = (grab * i64::from(orig.w) / old_w) as i32;
