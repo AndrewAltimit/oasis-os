@@ -6,8 +6,15 @@
 //! 1. `parse_moov_duration` reads the `mvhd` child of an MP4 `moov` atom to get
 //!    the file duration in seconds.
 //! 2. `linear_seek_interpolation` uses that duration plus the `mdat` byte
-//!    range to estimate `(seek_secs / duration) * mdat_size` -- the same
-//!    approximation symphonia's `SeekMode::Coarse` falls back on.
+//!    range to estimate `(seek_secs / duration) * mdat_size`.
+//!
+//! Both are only fallbacks: `estimate_seek_byte` prefers the exact byte from
+//! the moov sample tables (`oasis_video::demux_lite::seek_point_from_moov`),
+//! which is where the demuxer will actually start reading.  The decoder
+//! seeks to the same keyframe (`SoftwareVideoDecoder::seek` snaps to it), so
+//! the Range restart and the first packet read agree.  A linear estimate can
+//! be off by many MB on variable-bitrate video; restarting past the real
+//! position made every read hit the evicted region below the window.
 //!
 //! `parse_tail_for_moov` handles moov-at-end MP4 files by scanning a
 //! tail-fetched buffer for the `moov` fourcc and validating the atom header.
@@ -96,6 +103,92 @@ pub(crate) fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
     None
 }
 
+/// How far before the exact seek byte (from the moov sample tables) a Range
+/// restart begins.  The exact byte is where the demuxer's first read lands,
+/// so this is only a safety margin; keeping it small means the prebuffer
+/// (`MIN_PREBUFFER`, counted from the restart point) is mostly data the
+/// decoder will actually consume.
+#[cfg(feature = "_video")]
+pub(crate) const EXACT_SEEK_MARGIN: u64 = 256 * 1024;
+
+/// Margin before a *linear* (duration-proportional) seek estimate, which can
+/// land well away from the real sample on variable-bitrate video.
+#[cfg(feature = "_video")]
+pub(crate) const LINEAR_SEEK_MARGIN: u64 = 2 * 1024 * 1024;
+
+/// A byte position the demuxer will read from after seeking.
+#[cfg(feature = "_video")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeekEstimate {
+    /// Estimated first byte the demuxer reads.
+    pub(crate) byte: u64,
+    /// `true` when computed from the moov sample tables (exact), `false`
+    /// for the linear fallback.
+    pub(crate) exact: bool,
+}
+
+#[cfg(feature = "_video")]
+impl SeekEstimate {
+    /// Where a Range restart should begin to cover this seek.
+    pub(crate) fn restart_from(self) -> u64 {
+        let margin = if self.exact {
+            EXACT_SEEK_MARGIN
+        } else {
+            LINEAR_SEEK_MARGIN
+        };
+        self.byte.saturating_sub(margin)
+    }
+}
+
+/// Estimate the first byte the demuxer reads after seeking to `seek_secs`.
+///
+/// Uses the exact position from the moov sample tables when available
+/// (the lower of the video keyframe at or before the target and the audio
+/// sample at that time -- the decoder seeks to that keyframe).  Falls back
+/// to linear interpolation over `mdat` (`(offset, size)`) when the tables
+/// can't be parsed.
+#[cfg(feature = "_video")]
+pub(crate) fn estimate_seek_byte(
+    moov_data: &[u8],
+    seek_secs: u64,
+    mdat: Option<(u64, u64)>,
+) -> Option<SeekEstimate> {
+    let exact = oasis_video::demux_lite::seek_point_from_moov(moov_data, seek_secs as f64);
+    let linear = mdat.and_then(|(mdat_off, mdat_size)| {
+        parse_moov_duration(moov_data)
+            .map(|dur| linear_seek_interpolation(seek_secs as f64, dur, mdat_off, mdat_size))
+    });
+    match (exact, linear) {
+        (Some(point), linear) => {
+            log::info!(
+                "TV: seek estimate: {seek_secs}s -> keyframe {:.2}s at byte {:.1}MB \
+                 (linear estimate {})",
+                point.keyframe_secs,
+                point.min_byte as f64 / (1024.0 * 1024.0),
+                linear.map_or_else(
+                    || "n/a".to_string(),
+                    |l| format!("{:.1}MB", l as f64 / (1024.0 * 1024.0))
+                ),
+            );
+            Some(SeekEstimate {
+                byte: point.min_byte,
+                exact: true,
+            })
+        },
+        (None, Some(linear)) => {
+            log::info!(
+                "TV: seek estimate: {seek_secs}s -> ~{:.1}MB (linear; no sample tables)",
+                linear as f64 / (1024.0 * 1024.0),
+            );
+            Some(SeekEstimate {
+                byte: linear,
+                exact: false,
+            })
+        },
+        (None, None) => None,
+    }
+}
+
 /// Check if a moov-at-start file should restart download from a seek position.
 /// Returns `Some(byte_offset)` if restart is worthwhile.
 #[cfg(feature = "_video")]
@@ -105,53 +198,12 @@ pub(crate) fn check_moov_at_start_restart(
     bytes_received: u64,
 ) -> Option<u64> {
     let moov_data = s.moov.as_ref().map(|(_, d)| d)?;
-
-    // Compute seek position two ways and take the minimum.
-    // Our exact seek-byte from MP4 sample tables only considers the video
-    // track, but symphonia's own seek considers both audio and video tracks
-    // and may land at a significantly earlier byte position.  Using the
-    // minimum of both estimates ensures the Range download covers wherever
-    // symphonia will actually seek to.
-    let exact_byte = oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64);
-
-    let linear_byte = parse_moov_duration(moov_data).and_then(|dur| {
-        let (mdat_off, mdat_size) = s
-            .atoms
-            .iter()
-            .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
-            .map(|(off, size, _)| (*off, *size))?;
-        Some(linear_seek_interpolation(
-            seek_secs as f64,
-            dur,
-            mdat_off,
-            mdat_size,
-        ))
-    });
-
-    // Use the LINEAR estimate as start_from (it tracks where symphonia
-    // actually seeks, since symphonia uses time-based coarse seek which
-    // maps roughly linearly within the mdat).  The exact seek-byte from
-    // our sample tables may differ significantly because it only
-    // considers the video track's stco/stsz tables.
-    let seek_byte = match (linear_byte, exact_byte) {
-        (Some(linear), Some(exact)) => {
-            log::info!(
-                "TV: seek estimates: linear={:.1}MB, exact={:.1}MB, using linear",
-                linear as f64 / (1024.0 * 1024.0),
-                exact as f64 / (1024.0 * 1024.0),
-            );
-            linear
-        },
-        (Some(linear), None) => linear,
-        (None, Some(exact)) => {
-            log::info!(
-                "TV: exact seek-byte from sample tables: {:.1}MB",
-                exact as f64 / (1024.0 * 1024.0),
-            );
-            exact
-        },
-        (None, None) => return None,
-    };
+    let mdat = s
+        .atoms
+        .iter()
+        .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
+        .map(|(off, size, _)| (*off, *size));
+    let estimate = estimate_seek_byte(moov_data, seek_secs, mdat)?;
 
     // Clamp seek byte to file boundaries.
     let total = bytes_received.max(
@@ -161,17 +213,17 @@ pub(crate) fn check_moov_at_start_restart(
             .max()
             .unwrap_or(0),
     );
-    let seek_byte = seek_byte.min(total);
-    // Back up 2MB before the estimated position to give symphonia room
-    // to find sync points -- its internal seek may land somewhat before
-    // our estimate.
-    let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
+    let estimate = SeekEstimate {
+        byte: estimate.byte.min(total),
+        ..estimate
+    };
+    let start_from = estimate.restart_from();
     let downloaded = bytes_received;
     if start_from > downloaded + SHORT_SEEK_THRESHOLD {
         log::info!(
             "TV: moov-at-start: seek={seek_secs}s -> byte ~{:.1}MB \
              (downloaded {:.1}MB), restarting from {:.1}MB",
-            seek_byte as f64 / (1024.0 * 1024.0),
+            estimate.byte as f64 / (1024.0 * 1024.0),
             downloaded as f64 / (1024.0 * 1024.0),
             start_from as f64 / (1024.0 * 1024.0),
         );
@@ -251,37 +303,22 @@ pub(crate) fn parse_tail_for_moov(
     // If seeking, compute byte offset and set base_offset so the
     // main download thread can restart from the seek position.
     if seek_secs > 0 {
-        // Compute seek position two ways and take the minimum.
-        // Our exact seek-byte only considers video track, but symphonia
-        // may seek to an earlier position when considering both tracks.
-        let exact_byte = oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64);
-
-        let linear_byte = parse_moov_duration(&moov_data)
-            .map(|dur| linear_seek_interpolation(seek_secs as f64, dur, 0, file_off));
-
-        let seek_byte = match (linear_byte, exact_byte) {
-            (Some(linear), Some(exact)) => {
-                log::info!(
-                    "TV: tail seek estimates: linear={:.1}MB, exact={:.1}MB, using linear",
-                    linear as f64 / (1024.0 * 1024.0),
-                    exact as f64 / (1024.0 * 1024.0),
-                );
-                linear
-            },
-            (Some(linear), None) => linear,
-            (None, Some(exact)) => exact,
-            (None, None) => {
-                // Cannot estimate -- retain moov and let decoder seek.
-                let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-                s.moov = Some((file_off, std::sync::Arc::new(moov_data)));
-                buffer.condvar.notify_all();
-                return;
-            },
+        // mdat for the linear fallback: moov-at-end files put mdat before
+        // moov, so it spans (roughly) [0, file_off).
+        let Some(estimate) = estimate_seek_byte(&moov_data, seek_secs, Some((0, file_off))) else {
+            // Cannot estimate -- retain moov and let decoder seek.
+            let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+            s.moov = Some((file_off, std::sync::Arc::new(moov_data)));
+            buffer.condvar.notify_all();
+            return;
         };
         // Clamp to file size to avoid requesting bytes beyond EOF.
-        let seek_byte = seek_byte.min(content_length.saturating_sub(1));
-        // Back up 2MB for symphonia's seek margin.
-        let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
+        let estimate = SeekEstimate {
+            byte: estimate.byte.min(content_length.saturating_sub(1)),
+            ..estimate
+        };
+        let seek_byte = estimate.byte;
+        let start_from = estimate.restart_from();
         log::info!(
             "TV: tail probe: seek={seek_secs}s -> byte ~{:.1}MB, \
              need download from {:.1}MB",

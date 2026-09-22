@@ -110,6 +110,10 @@ pub struct VideoPlayer {
     /// Frame waiting to be displayed (held until wall-clock catches up to its PTS).
     #[cfg(feature = "_video")]
     pending_frame: Option<VideoFrame>,
+    /// The decoder had no frame ready at the last poll (it is behind, not
+    /// the UI thread) -- see [`stall_rebased_start`].
+    #[cfg(feature = "_video")]
+    video_starved: bool,
 }
 
 impl VideoPlayer {
@@ -134,6 +138,8 @@ impl VideoPlayer {
             base_pts: 0.0,
             #[cfg(feature = "_video")]
             pending_frame: None,
+            #[cfg(feature = "_video")]
+            video_starved: false,
         }
     }
 
@@ -398,12 +404,13 @@ impl VideoPlayer {
                 },
             );
             let t0 = std::time::Instant::now();
-            // With the symphonia backend, extract avcC from moov to skip
-            // the full-file scan. With ffmpeg, it handles avcC internally.
+            // With the symphonia backend, extract avcC (and the keyframe
+            // index, so the seek below lands on a keyframe) from moov to
+            // skip the full-file scan. With ffmpeg, it handles both
+            // internally.
             #[cfg(not(feature = "video-decode-ffmpeg"))]
             let open_result = if let Some(ref moov) = moov_data {
-                let avcc = oasis_video::find_avcc_in_mp4(moov);
-                oasis_video::SoftwareVideoDecoder::open_stream_with_avcc(source, avcc)
+                oasis_video::SoftwareVideoDecoder::open_stream_with_moov(source, moov)
             } else {
                 oasis_video::SoftwareVideoDecoder::open_stream(source)
             };
@@ -620,6 +627,17 @@ impl VideoPlayer {
                             );
                         }
                     },
+                    // The demuxer is shared by both tracks: a read failure
+                    // (e.g. the stream no longer holds the requested bytes)
+                    // stops audio too, so end the session instead of
+                    // spinning in audio-only mode on the same error.
+                    Err(e @ oasis_video::VideoError::Demux(_)) => {
+                        log::error!(
+                            "VideoPlayer: stream read failed after {frame_count} frames, \
+                             ending playback: {e}",
+                        );
+                        break;
+                    },
                     Err(e) => {
                         log::error!(
                             "VideoPlayer: video decode error after {frame_count} frames: {e}",
@@ -650,6 +668,10 @@ impl VideoPlayer {
                     },
                     Ok(None) => {
                         log::info!("VideoPlayer: audio EOF in audio-only mode");
+                        break;
+                    },
+                    Err(e @ oasis_video::VideoError::Demux(_)) => {
+                        log::error!("VideoPlayer: stream read failed in audio-only mode: {e}");
                         break;
                     },
                     Err(e) => {
@@ -730,8 +752,34 @@ impl VideoPlayer {
                 // Try to fill pending_frame from the channel if empty.
                 if self.pending_frame.is_none() {
                     match video_rx.try_recv() {
-                        Ok(frame) => self.pending_frame = Some(frame),
-                        Err(TryRecvError::Empty) => {},
+                        Ok(frame) => {
+                            // A late frame after the channel ran dry means
+                            // decode stalled (network underrun, slow decode)
+                            // and audio stalled with it: resume the clock from
+                            // this frame instead of fast-forwarding video past
+                            // the audio.  (Frames that queued up while the UI
+                            // thread was busy are skipped as before.)
+                            let starved = std::mem::take(&mut self.video_starved);
+                            if starved
+                                && let Some(start) = self.playback_start
+                                && let Some(rebased) = stall_rebased_start(
+                                    start,
+                                    self.base_pts,
+                                    frame.timestamp_secs,
+                                    Instant::now(),
+                                )
+                            {
+                                log::info!(
+                                    "VideoPlayer: stall of {:.2}s before ts={:.2}s, \
+                                     resuming clock",
+                                    rebased.duration_since(start).as_secs_f64(),
+                                    frame.timestamp_secs,
+                                );
+                                self.playback_start = Some(rebased);
+                            }
+                            self.pending_frame = Some(frame);
+                        },
+                        Err(TryRecvError::Empty) => self.video_starved = true,
                         Err(TryRecvError::Disconnected) => video_disconnected = true,
                     }
                 }
@@ -800,18 +848,13 @@ impl VideoPlayer {
             #[cfg(feature = "_video")]
             let frame_ts = frame.timestamp_secs;
 
-            // Scale on the main thread (moved from decode thread to avoid
-            // blocking decode with CPU-intensive scaling).
-            let needs_scale = fw != self.frame_width || fh != self.frame_height;
-            let scaled;
-            let (tex_data, upload_w, upload_h) = if needs_scale {
-                scaled = simple_scale(&frame.data, fw, fh, self.frame_width, self.frame_height);
-                (scaled.as_slice(), self.frame_width, self.frame_height)
-            } else {
-                (frame.data.as_slice(), fw, fh)
-            };
-
-            match backend.load_texture(upload_w, upload_h, tex_data) {
+            // Upload at the decoded resolution: every consumer blits the
+            // texture into an explicit destination rect and the backend
+            // scales it there (on the GPU for SDL).  Pre-scaling on the CPU
+            // here cost a full-frame pass on the UI thread per video frame
+            // (tens of ms in dev builds -- visible as stutter) and
+            // nearest-neighbour resampling degraded the picture.
+            match backend.load_texture(fw, fh, &frame.data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
                     self.last_frame_time = Some(Instant::now());
@@ -962,38 +1005,42 @@ impl VideoPlayer {
             self.playback_start = None;
             self.base_pts = 0.0;
             self.pending_frame = None;
+            self.video_starved = false;
         }
         self.state = PlayerState::Idle;
         self.error_msg = None;
     }
 }
 
-/// Nearest-neighbor RGBA scale.
+/// Lateness (seconds) past which a frame is treated as arriving after a
+/// decode stall rather than as a frame to skip toward "now".
 #[cfg(feature = "_video")]
-fn simple_scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
-    let sw = src_w as usize;
-    let sh = src_h as usize;
-    let dw = dst_w as usize;
-    let dh = dst_h as usize;
-    let mut dst = vec![0u8; dw * dh * 4];
+const STALL_REBASE_SECS: f64 = 0.3;
 
-    for y in 0..dh {
-        let sy = (y * sh / dh).min(sh - 1);
-        let src_row = sy * sw * 4;
-        let dst_row = y * dw * 4;
-
-        for x in 0..dw {
-            let sx = (x * sw / dw).min(sw - 1);
-            let si = src_row + sx * 4;
-            let di = dst_row + x * 4;
-            // SAFETY: si + 4 <= src.len() because sy < src_h and sx < src_w,
-            // di + 4 <= dst.len() because y < dst_h and x < dst_w.
-            unsafe {
-                std::ptr::copy_nonoverlapping(src.as_ptr().add(si), dst.as_mut_ptr().add(di), 4);
-            }
-        }
+/// If a frame with presentation time `frame_pts` arrives more than
+/// [`STALL_REBASE_SECS`] after it was due on the clock started at `start`
+/// (for `base_pts`), return the clock start that makes it due `now`.
+///
+/// Decode produces audio and video on one thread, so a stall (download
+/// underrun, slow decode) starves both.  Without rebasing, every frame after
+/// the stall is "late" and gets skipped until video catches up with the
+/// wall clock -- a visible jump that leaves video ahead of the audio, which
+/// resumes where it stopped.
+#[cfg(feature = "_video")]
+fn stall_rebased_start(
+    start: Instant,
+    base_pts: f64,
+    frame_pts: f64,
+    now: Instant,
+) -> Option<Instant> {
+    let offset = std::time::Duration::try_from_secs_f64((frame_pts - base_pts).max(0.0)).ok()?;
+    let due = start.checked_add(offset)?;
+    let late = now.checked_duration_since(due)?;
+    if late.as_secs_f64() > STALL_REBASE_SECS {
+        start.checked_add(late)
+    } else {
+        None
     }
-    dst
 }
 
 impl Drop for VideoPlayer {
@@ -1149,6 +1196,52 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    #[cfg(feature = "_video")]
+    #[test]
+    fn stall_rebase_ignores_on_time_and_slightly_late_frames() {
+        let start = Instant::now();
+        let ms = std::time::Duration::from_millis;
+        // Due at start+1s, arrives on time or 100ms late: keep the clock.
+        assert_eq!(
+            stall_rebased_start(start, 10.0, 11.0, start + ms(1000)),
+            None
+        );
+        assert_eq!(
+            stall_rebased_start(start, 10.0, 11.0, start + ms(1100)),
+            None
+        );
+        // Early frames are never "late".
+        assert_eq!(
+            stall_rebased_start(start, 10.0, 11.0, start + ms(500)),
+            None
+        );
+    }
+
+    #[cfg(feature = "_video")]
+    #[test]
+    fn stall_rebase_resumes_clock_at_the_late_frame() {
+        let start = Instant::now();
+        let ms = std::time::Duration::from_millis;
+        // Due at start+1s, arrives 2s late: the new clock makes it due now,
+        // so it and its successors play at normal pace instead of being
+        // skipped to catch up.
+        let now = start + ms(3000);
+        let rebased = stall_rebased_start(start, 10.0, 11.0, now).unwrap();
+        assert_eq!(rebased, start + ms(2000));
+        let due = rebased + ms(1000);
+        assert_eq!(due, now);
+    }
+
+    #[cfg(feature = "_video")]
+    #[test]
+    fn stall_rebase_handles_pts_before_base() {
+        // Reordered/odd timestamps below the base never panic.
+        let start = Instant::now();
+        let ms = std::time::Duration::from_millis;
+        assert_eq!(stall_rebased_start(start, 10.0, 9.0, start + ms(100)), None);
+        assert!(stall_rebased_start(start, 10.0, 9.0, start + ms(1000)).is_some());
+    }
+
     #[test]
     fn audio_output_variants() {
         #[cfg(not(feature = "_video"))]
@@ -1159,27 +1252,5 @@ mod tests {
 
         let none = AudioOutput::None;
         assert!(matches!(none, AudioOutput::None));
-    }
-
-    #[cfg(feature = "_video")]
-    #[test]
-    fn simple_scale_identity() {
-        let src = vec![255u8; 4 * 4 * 4]; // 4x4 white
-        let dst = simple_scale(&src, 4, 4, 4, 4);
-        assert_eq!(dst, src);
-    }
-
-    #[cfg(feature = "_video")]
-    #[test]
-    fn simple_scale_downscale() {
-        // 4x4 → 2x2
-        let mut src = vec![0u8; 4 * 4 * 4];
-        // Set top-left pixel to red.
-        src[0] = 255;
-        src[3] = 255;
-        let dst = simple_scale(&src, 4, 4, 2, 2);
-        assert_eq!(dst.len(), 2 * 2 * 4);
-        // Top-left of downscaled should sample top-left of source.
-        assert_eq!(dst[0], 255); // R
     }
 }
