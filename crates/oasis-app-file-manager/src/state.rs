@@ -12,7 +12,7 @@ use oasis_ui::menu_bar::MenuBar;
 use oasis_vfs::Vfs;
 
 use crate::commands::default_menu_bar;
-use crate::model::{FileOp, FilePanel, NavTarget, ViewMode};
+use crate::model::{Clipboard, Dialog, FileOp, FilePanel, NavTarget, ViewMode};
 
 use oasis_app_core::file_viewer::list_directory;
 
@@ -25,8 +25,16 @@ pub struct FileManagerApp {
     pub panels: [FilePanel; 2],
     /// Which panel is active (0 = left, 1 = right).
     pub active_panel: usize,
-    /// Pending file operation to be applied by the runner.
-    pub pending_op: Option<FileOp>,
+    /// File operations queued by input handlers, applied in order by
+    /// `App::apply_vfs_ops` (the only hook with mutable VFS access).
+    pub pending_ops: Vec<FileOp>,
+    /// Open modal prompt (delete confirmation / name entry), if any.
+    pub dialog: Option<Dialog>,
+    /// Copy / Cut clipboard for Paste.
+    pub clipboard: Option<Clipboard>,
+    /// One-line feedback for the last operation (shown in the hint /
+    /// status strip until the next key press).
+    pub status: Option<String>,
     /// Active view mode (toggled via Button::Select).
     pub view_mode: ViewMode,
     /// Cached column count for the Explorer icon grid (written by the
@@ -66,7 +74,10 @@ impl FileManagerApp {
             content,
             panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
             active_panel: 0,
-            pending_op: None,
+            pending_ops: Vec::new(),
+            dialog: None,
+            clipboard: None,
+            status: None,
             view_mode: ViewMode::Explorer,
             explorer_cols: Cell::new(1),
             explorer_visible_rows: Cell::new(1),
@@ -86,9 +97,13 @@ impl FileManagerApp {
         };
     }
 
-    /// Take and clear the pending file operation.
+    /// Take the oldest queued file operation, if any.
     pub fn take_file_op(&mut self) -> Option<FileOp> {
-        self.pending_op.take()
+        if self.pending_ops.is_empty() {
+            None
+        } else {
+            Some(self.pending_ops.remove(0))
+        }
     }
 
     /// Currently active panel (the one driving Explorer view too).

@@ -131,12 +131,80 @@ impl FilePanel {
 // ---------------------------------------------------------------
 
 /// A pending VFS operation for the file manager.
-#[derive(Debug, Clone)]
+///
+/// Queued by input handlers (which only see a shared `&dyn Vfs`) and
+/// applied by `App::apply_vfs_ops` with mutable VFS access.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileOp {
-    /// Delete the file or directory at this path.
+    /// Delete the file or directory (recursively) at this path.
     Delete(String),
-    /// Create a directory at this path.
+    /// Create a directory at this path. If the name is taken, a unique
+    /// `name (2)`-style sibling is created instead.
     Mkdir(String),
+    /// Rename `from` to the absolute path `to` (fails if `to` exists).
+    Rename {
+        /// Existing path.
+        from: String,
+        /// New absolute path.
+        to: String,
+    },
+    /// Copy `from` (recursively for directories) into directory `to_dir`,
+    /// picking a unique name on collision.
+    Copy {
+        /// Source path.
+        from: String,
+        /// Destination directory.
+        to_dir: String,
+    },
+    /// Move `from` into directory `to_dir`, picking a unique name on
+    /// collision.
+    Move {
+        /// Source path.
+        from: String,
+        /// Destination directory.
+        to_dir: String,
+    },
+}
+
+/// What a name-entry dialog creates or changes on commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamePurpose {
+    /// Create a new folder inside `dir`.
+    NewFolder {
+        /// Parent directory of the new folder.
+        dir: String,
+    },
+    /// Rename the entry at `from`.
+    Rename {
+        /// Path being renamed.
+        from: String,
+    },
+}
+
+/// A modal prompt blocking normal browsing input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dialog {
+    /// "Delete X?" Yes / No confirmation.
+    ConfirmDelete {
+        /// Path that will be deleted on confirmation.
+        path: String,
+    },
+    /// Inline text entry for a new folder or rename.
+    NameEntry {
+        /// What the entered name is for.
+        purpose: NamePurpose,
+        /// Current text of the name field.
+        text: String,
+    },
+}
+
+/// Clipboard contents for Copy/Cut + Paste.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clipboard {
+    /// Absolute path of the copied / cut entry.
+    pub path: String,
+    /// `true` for Cut (paste moves), `false` for Copy.
+    pub cut: bool,
 }
 
 /// A target the user activated by clicking and that needs vfs to apply.
