@@ -122,9 +122,17 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
 
     instance.cwd = env.cwd;
 
-    CString::new(output)
-        .map(|cs| cs.into_raw())
-        .unwrap_or(std::ptr::null_mut())
+    output_to_c_string(output).into_raw()
+}
+
+/// Convert command output to a C string. Interior NUL bytes (e.g. `cat` of a
+/// binary file) cannot be represented, so each is replaced with U+FFFD
+/// instead of failing the whole call -- NULL is reserved for invalid input.
+fn output_to_c_string(output: String) -> CString {
+    CString::new(output).unwrap_or_else(|e| {
+        let text = String::from_utf8_lossy(&e.into_vec()).replace('\0', "\u{FFFD}");
+        CString::new(text).unwrap_or_default()
+    })
 }
 
 /// Free a string previously returned by `oasis_send_command`.
