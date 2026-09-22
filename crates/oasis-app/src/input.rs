@@ -175,24 +175,37 @@ pub fn handle_osk_input(
             },
             InputEvent::ButtonPress(btn) => {
                 osk_state.handle_input(btn);
+                let for_terminal = osk_state.config.title == TERMINAL_OSK_TITLE;
+                let back_to = if for_terminal {
+                    Mode::Terminal
+                } else {
+                    Mode::Dashboard
+                };
                 if let Some(text) = osk_state.confirmed_text() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push(format!("[OSK] Input: {text}"));
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if for_terminal {
+                        // The OSK edited the prompt line: put it back.
+                        state.terminal.session.set_line(text);
+                    } else {
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("[OSK] Input: {text}"));
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 } else if osk_state.is_cancelled() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("[OSK] Cancelled".to_string());
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if !for_terminal {
+                        state
+                            .terminal
+                            .output_lines
+                            .push("[OSK] Cancelled".to_string());
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 }
             },
             _ => {},
@@ -200,6 +213,12 @@ pub fn handle_osk_input(
     }
     InputResult::Continue
 }
+
+/// OSK title for the general-purpose keyboard (result echoed to the
+/// terminal scrollback).
+const DEFAULT_OSK_TITLE: &str = "On-Screen Keyboard";
+/// OSK title when it edits the terminal prompt (result returns to it).
+const TERMINAL_OSK_TITLE: &str = "Terminal Input";
 
 /// Handle input in Desktop (windowed WM) mode.
 pub fn handle_desktop_input(
@@ -1006,11 +1025,22 @@ pub fn handle_default_input(
             };
         },
         InputEvent::ButtonPress(Button::Select) if state.mode != Mode::Osk => {
+            // Opened from the terminal, the OSK edits the prompt line and
+            // hands the result back to it (see `handle_osk_input`).
+            let from_terminal = state.mode == Mode::Terminal;
+            let (title, initial) = if from_terminal {
+                (
+                    TERMINAL_OSK_TITLE,
+                    state.terminal.session.buffer().to_string(),
+                )
+            } else {
+                (DEFAULT_OSK_TITLE, String::new())
+            };
             let osk_cfg = OskConfig {
-                title: "On-Screen Keyboard".to_string(),
+                title: title.to_string(),
                 ..OskConfig::for_screen(state.active_theme.screen_w, state.active_theme.screen_h)
             };
-            state.osk = Some(OskState::new(osk_cfg, ""));
+            state.osk = Some(OskState::new(osk_cfg, &initial));
             state.mode = Mode::Osk;
             log::info!("OSK opened");
         },
