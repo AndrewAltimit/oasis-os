@@ -75,8 +75,9 @@ The original PSP-style dashboard icons. Current factories include:
 
 Three coordinated sets keyed by `IconCategory` (the live enum lists every
 category; common ones include browser, files, audio, tv, radio, settings,
-video, home, network, power, gallery, weather, terminal, and a generic
-fallback):
+video, home, network, power, gallery, weather, terminal, packages, monitor,
+calculator, paint, text editor, games, and a generic fallback; every
+built-in app maps to a non-generic category):
 
 - `outline_icon(category, color)` — 2 px stroke, transparent body.
 - `solid_icon(category, color)` — filled, high-contrast.
@@ -153,7 +154,10 @@ dashboard icons; use `render_scene` directly for full-viewport overlays.
 
 - `oasis-core/src/dashboard/vector_icons.rs` — `icon_for_app` picks the
   preset (altimit / outline / solid / pixel) based on theme config and
-  invokes the right factory; `altimit_icon` layers per-icon animations.
+  invokes the right factory; `altimit_icon` maps apps by `IconCategory`
+  (browser → the world, audio → audio, files → data, text editor →
+  accessory, other categories → their `solid` glyph, uncategorised apps →
+  the legacy by-position cycle) and layers per-icon animations.
 - `oasis-core/src/vector_overlay.rs` — `render_vector_background` builds an
   `AnimClock`, calls `BackgroundScene::build_ops`, and renders the result
   full-frame.
@@ -170,7 +174,9 @@ dashboard icons; use `render_scene` directly for full-viewport overlays.
 3. Choose a grid: 22×22 for Altimit, 24×24 for outline / solid, 32×32 for
    pixel.
 4. Add a unit test next to existing ones (around `icons.rs:690`) asserting
-   name, dimensions, and op count.
+   name, dimensions, and op count. `icon_set::ops_bounds` gives an op
+   list's conservative pixel bounds; the icon-set tests assert every glyph
+   stays inside its design box.
 5. Register in the dispatcher: `icon_for_app` for app-keyed icons,
    `outline_icon` / `solid_icon` / `pixel_icon` match arms for new
    `IconCategory` entries.

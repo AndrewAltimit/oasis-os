@@ -20,7 +20,11 @@ use super::{AppEntry, DashboardState, IconGeometry, IconNames};
 
 /// Get a vector icon for an app based on the preset, app index, and animation state.
 ///
-/// - "altimit": cycles through the 6 Altimit-inspired icons by position.
+/// - "altimit": picks an Altimit-inspired glyph by [`IconCategory`] (globe
+///   for browsers, play button for audio, memory card for files, pen nib for
+///   text editors — with their spin/pulse/blink animations), falling back to
+///   the matching `solid` glyph for other categories and to the legacy
+///   by-position cycle for uncategorised (plugin) apps.
 /// - "geometric": circles, hexagons, and abstract shapes by position.
 /// - "hud": military/tactical diamond/chevron icons by position.
 /// - "outline": app-semantic icons, 2px strokes — picks by [`IconCategory`]
@@ -39,39 +43,77 @@ pub(super) fn icon_for_app(
     anim_cfg: &IconTheme,
 ) -> IconDef {
     match preset {
-        "altimit" => altimit_icon(app.color, index, frame, anim_cfg),
+        "altimit" => altimit_icon(app, index, frame, anim_cfg),
         "geometric" => geometric_icon(app.color, index),
         "hud" => hud_icon(app.color, index),
         "outline" => icon_set::outline_icon(IconCategory::from_app_title(&app.title), app.color),
         "solid" => icon_set::solid_icon(IconCategory::from_app_title(&app.title), app.color),
         "pixel" => icon_set::pixel_icon(IconCategory::from_app_title(&app.title), app.color),
-        _ => altimit_icon(app.color, index, frame, anim_cfg),
+        _ => altimit_icon(app, index, frame, anim_cfg),
     }
 }
 
-/// Select an Altimit icon by cycling through the 6 available designs.
+/// Which Altimit design (if any) represents an app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AltimitGlyph {
+    /// Square-in-square globe (spins).
+    World,
+    Mailer,
+    News,
+    Accessory,
+    /// Play button (inner triangle pulses).
+    Audio,
+    /// Memory card (LED blinks).
+    Data,
+    /// No Altimit design fits: use the category's `solid` glyph.
+    Solid(IconCategory),
+}
+
+/// Map an app to its Altimit glyph by category. Uncategorised apps keep
+/// the historical by-position cycle through the six designs.
+fn altimit_glyph(category: IconCategory, index: usize) -> AltimitGlyph {
+    match category {
+        IconCategory::Browser | IconCategory::Home => AltimitGlyph::World,
+        IconCategory::Audio => AltimitGlyph::Audio,
+        IconCategory::Files => AltimitGlyph::Data,
+        IconCategory::TextEditor => AltimitGlyph::Accessory,
+        IconCategory::Generic => match index % 6 {
+            0 => AltimitGlyph::World,
+            1 => AltimitGlyph::Mailer,
+            2 => AltimitGlyph::News,
+            3 => AltimitGlyph::Accessory,
+            4 => AltimitGlyph::Audio,
+            _ => AltimitGlyph::Data,
+        },
+        other => AltimitGlyph::Solid(other),
+    }
+}
+
+/// Build the Altimit icon for an app.
 ///
 /// Applies per-icon animations when enabled in the theme config.
-fn altimit_icon(color: Color, index: usize, frame: u32, cfg: &IconTheme) -> IconDef {
-    match index % 6 {
-        0 if cfg.spin_enabled && frame > 0 => {
+fn altimit_icon(app: &AppEntry, index: usize, frame: u32, cfg: &IconTheme) -> IconDef {
+    let color = app.color;
+    match altimit_glyph(IconCategory::from_app_title(&app.title), index) {
+        AltimitGlyph::World if cfg.spin_enabled && frame > 0 => {
             let angle = frame as f32 * cfg.spin_speed;
             icons::icon_the_world_animated(color, angle)
         },
-        0 => icons::icon_the_world(color),
-        1 => icons::icon_mailer(color),
-        2 => icons::icon_news(color),
-        3 => icons::icon_accessory(color, Color::rgba(0, 0, 0, 60)),
-        4 if cfg.pulse_enabled && frame > 0 => {
+        AltimitGlyph::World => icons::icon_the_world(color),
+        AltimitGlyph::Mailer => icons::icon_mailer(color),
+        AltimitGlyph::News => icons::icon_news(color),
+        AltimitGlyph::Accessory => icons::icon_accessory(color, Color::rgba(0, 0, 0, 60)),
+        AltimitGlyph::Audio if cfg.pulse_enabled && frame > 0 => {
             let alpha = anim::pulse_alpha(frame, cfg.pulse_speed, 80);
             icons::icon_audio_animated(color, alpha)
         },
-        4 => icons::icon_audio(color),
-        _ if cfg.blink_enabled && frame > 0 => {
+        AltimitGlyph::Audio => icons::icon_audio(color),
+        AltimitGlyph::Data if cfg.blink_enabled && frame > 0 => {
             let visible = anim::blink_visible(frame, cfg.blink_interval);
             icons::icon_data_animated(color, cfg.data_led_color, visible)
         },
-        _ => icons::icon_data(color, cfg.data_led_color),
+        AltimitGlyph::Data => icons::icon_data(color, cfg.data_led_color),
+        AltimitGlyph::Solid(category) => icon_set::solid_icon(category, color),
     }
 }
 
@@ -375,6 +417,8 @@ fn hud_icon(color: Color, index: usize) -> IconDef {
 #[derive(Debug)]
 pub(super) struct CachedIconScene {
     preset: String,
+    /// App title the glyph was picked for (semantic presets map by title).
+    title: String,
     color: Color,
     icon_w: u32,
     icon_h: u32,
@@ -384,14 +428,17 @@ pub(super) struct CachedIconScene {
 /// Whether an icon's glyph depends on the frame counter (spin / pulse /
 /// blink variants). Only the altimit preset (and unknown presets, which
 /// fall back to it) has animated variants.
-fn icon_is_animated(preset: &str, global_index: usize, cfg: &IconTheme) -> bool {
+fn icon_is_animated(preset: &str, app: &AppEntry, global_index: usize, cfg: &IconTheme) -> bool {
     match preset {
         "geometric" | "hud" | "outline" | "solid" | "pixel" => false,
-        _ => match global_index % 6 {
-            0 => cfg.spin_enabled,
-            4 => cfg.pulse_enabled,
-            5 => cfg.blink_enabled,
-            _ => false,
+        _ => {
+            let any = cfg.spin_enabled || cfg.pulse_enabled || cfg.blink_enabled;
+            any && match altimit_glyph(IconCategory::from_app_title(&app.title), global_index) {
+                AltimitGlyph::World => cfg.spin_enabled,
+                AltimitGlyph::Audio => cfg.pulse_enabled,
+                AltimitGlyph::Data => cfg.blink_enabled,
+                _ => false,
+            }
         },
     }
 }
@@ -540,7 +587,7 @@ impl DashboardState {
             let global_index = page_start + i;
             let flashing = self.press_flash_frame > 0 && i == self.press_flash_index;
             let fresh: Option<VectorScene> =
-                if flashing || icon_is_animated(preset, global_index, &at.icon) {
+                if flashing || icon_is_animated(preset, app, global_index, &at.icon) {
                     let flash = flashing
                         .then(|| oasis_types::color::lighten(app.color, at.press_flash_lighten));
                     Some(build_icon_scene(
@@ -561,6 +608,7 @@ impl DashboardState {
                 None => {
                     let build = || CachedIconScene {
                         preset: preset.clone(),
+                        title: app.title.clone(),
                         color: app.color,
                         icon_w,
                         icon_h,
@@ -576,6 +624,7 @@ impl DashboardState {
                     };
                     let entry = cache.entry(global_index).or_insert_with(build);
                     if entry.preset != *preset
+                        || entry.title != app.title
                         || entry.color != app.color
                         || entry.icon_w != icon_w
                         || entry.icon_h != icon_h
@@ -991,6 +1040,112 @@ mod tests {
                 icon_for_app("outline", &app, i, 0, &cfg).name,
                 "outline_settings"
             );
+        }
+    }
+
+    fn app(title: &str) -> AppEntry {
+        AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn no_builtin_app_gets_a_generic_icon() {
+        let cfg = default_icon_theme();
+        for title in crate::apps::registered_app_titles() {
+            assert_ne!(
+                IconCategory::from_app_title(title),
+                IconCategory::Generic,
+                "{title}"
+            );
+            for preset in ["outline", "solid", "pixel", "altimit"] {
+                let name = icon_for_app(preset, &app(title), 0, 0, &cfg).name;
+                assert!(!name.ends_with("generic"), "{preset} {title} -> {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn altimit_maps_by_category_not_position() {
+        let cfg = default_icon_theme();
+        // Settings used to land on the mail envelope by position.
+        for i in 0..6 {
+            assert_eq!(
+                icon_for_app("altimit", &app("Settings"), i, 0, &cfg).name,
+                "solid_settings"
+            );
+        }
+        assert_eq!(
+            icon_for_app("altimit", &app("Browser"), 3, 0, &cfg).name,
+            "the_world"
+        );
+        assert_eq!(
+            icon_for_app("altimit", &app("Music Player"), 0, 0, &cfg).name,
+            "audio"
+        );
+        assert_eq!(
+            icon_for_app("altimit", &app("File Manager"), 0, 0, &cfg).name,
+            "data"
+        );
+        // Radio and System Monitor used to share the "N" glyph.
+        let radio = icon_for_app("altimit", &app("Internet Radio"), 2, 0, &cfg).name;
+        let monitor = icon_for_app("altimit", &app("System Monitor"), 2, 0, &cfg).name;
+        assert_ne!(radio, monitor);
+    }
+
+    #[test]
+    fn builtin_altimit_icons_are_distinct() {
+        let cfg = default_icon_theme();
+        let mut seen = std::collections::HashSet::new();
+        for (i, title) in crate::apps::registered_app_titles().into_iter().enumerate() {
+            let name = icon_for_app("altimit", &app(title), i, 0, &cfg).name;
+            assert!(seen.insert(name), "{title} reuses {name}");
+        }
+    }
+
+    #[test]
+    fn altimit_keeps_spin_pulse_blink_by_category() {
+        let mut cfg = default_icon_theme();
+        cfg.spin_enabled = true;
+        cfg.pulse_enabled = true;
+        cfg.blink_enabled = true;
+        // Browser spins regardless of its grid position.
+        assert!(icon_is_animated("altimit", &app("Browser"), 1, &cfg));
+        assert!(icon_is_animated("altimit", &app("Music Player"), 1, &cfg));
+        assert!(icon_is_animated("altimit", &app("File Manager"), 1, &cfg));
+        assert!(!icon_is_animated("altimit", &app("Settings"), 0, &cfg));
+        // Semantic presets never animate.
+        assert!(!icon_is_animated("solid", &app("Browser"), 0, &cfg));
+        let spun = icon_for_app("altimit", &app("Browser"), 1, 100, &cfg);
+        assert!(matches!(spun.ops[1], VectorOp::FillPolygon { .. }));
+    }
+
+    #[test]
+    fn builtin_icons_stay_inside_their_box() {
+        // Semantic sets are strict; the legacy Altimit glyphs are drawn
+        // edge-to-edge, so allow their centred 2px strokes 1px of overhang.
+        let cfg = default_icon_theme();
+        for title in crate::apps::registered_app_titles() {
+            for preset in ["outline", "solid", "pixel", "altimit"] {
+                let icon = icon_for_app(preset, &app(title), 0, 0, &cfg);
+                let (x0, y0, x1, y1) = icon_set::ops_bounds(&icon.ops).expect("icon has ops");
+                let legacy = matches!(
+                    icon.name,
+                    "the_world" | "mailer" | "news" | "accessory" | "audio" | "data"
+                );
+                let tol = i32::from(legacy);
+                assert!(
+                    x0 >= -tol
+                        && y0 >= -tol
+                        && x1 <= icon.width as i32 + tol
+                        && y1 <= icon.height as i32 + tol,
+                    "{preset} {title} ({}) bounds ({x0},{y0})-({x1},{y1})",
+                    icon.name
+                );
+            }
         }
     }
 
