@@ -128,6 +128,32 @@ fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
     }
 }
 
+/// Drive the open start menu with a gamepad-style button (d-pad moves the
+/// highlight, Confirm picks, Cancel closes).
+fn start_menu_button(
+    btn: Button,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) -> InputResult {
+    if matches!(btn, Button::Up | Button::Down) {
+        state.ui_sounds.push_nav(state.frame_counter);
+    }
+    let action = state.ui.start_menu.handle_input(&btn);
+    if action == StartMenuAction::Exit {
+        return InputResult::Quit;
+    }
+    if action != StartMenuAction::None {
+        handle_start_menu_action(&action, state, sdi, vfs);
+    }
+    InputResult::Continue
+}
+
+/// Whether the start menu is open and receiving the keyboard.
+fn start_menu_focused(state: &AppState) -> bool {
+    state.ui.start_menu.open && matches!(state.mode, Mode::Dashboard | Mode::Desktop)
+}
+
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputResult {
@@ -348,6 +374,13 @@ pub fn handle_desktop_input(
                 state.content.fullscreen_app = Some(active_id);
             }
         },
+        // An open start menu owns the d-pad, Confirm and Cancel, ahead of
+        // the focused window.
+        InputEvent::ButtonPress(btn) if state.ui.start_menu.open => {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
+        // Text typed while the menu is open is not meant for the window.
+        InputEvent::TextInput(_) | InputEvent::Backspace if state.ui.start_menu.open => {},
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 // App windows own Cancel: it backs out of dialogs, leaves
@@ -820,6 +853,11 @@ pub fn handle_event(
             key_filter.suppress_twin(*key, *mods);
             return InputResult::Continue;
         }
+        // An open start menu takes the keyboard: the key's gamepad twin
+        // (arrows, Enter, Escape) navigates it instead of the focused app.
+        if start_menu_focused(state) {
+            return InputResult::Continue;
+        }
         // Terminal line-editing shortcuts (Home/End/Delete, Ctrl+A/E/K/...,
         // Ctrl+R search). Their twins (e.g. Ctrl+E's R-trigger) are dropped.
         if terminal_input::focused(state)
@@ -852,6 +890,14 @@ pub fn handle_default_input(
 ) -> InputResult {
     match event {
         InputEvent::Quit => return InputResult::Quit,
+        // An open start menu owns the d-pad, Confirm and Cancel (Cancel
+        // closes it): checked before the dashboard's own Confirm (launch
+        // the selected icon) and Cancel (quit) bindings.
+        InputEvent::ButtonPress(btn)
+            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
+        {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Dashboard => {
             return InputResult::Quit;
         },
@@ -980,22 +1026,6 @@ pub fn handle_default_input(
         },
         InputEvent::TriggerRelease(Trigger::Right) => {
             state.ui.bottom_bar.r_pressed = false;
-        },
-
-        // Start menu intercepts input when open.
-        InputEvent::ButtonPress(btn)
-            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
-        {
-            if matches!(btn, Button::Up | Button::Down) {
-                state.ui_sounds.push_nav(state.frame_counter);
-            }
-            let action = state.ui.start_menu.handle_input(btn);
-            if action == StartMenuAction::Exit {
-                return InputResult::Quit;
-            }
-            if action != StartMenuAction::None {
-                handle_start_menu_action(&action, state, sdi, vfs);
-            }
         },
 
         // Dashboard input: D-pad navigation.
