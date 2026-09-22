@@ -2,15 +2,18 @@
 //!
 //! The `oasis-app` binary (`main.rs`) is a thin host around [`shell::Shell`]:
 //! it opens the SDL window and audio device, plays the boot splash and runs
-//! the frame loop. Keeping the shell itself in this library lets other
-//! hosts (a headless test harness, for one) drive the exact same boot
-//! sequence, input dispatch, per-frame ticking and rendering.
+//! the frame loop. Keeping the shell itself in this library lets the
+//! headless end-to-end harness ([`harness`]) drive the exact same boot
+//! sequence, input dispatch, per-frame ticking and rendering against a
+//! software framebuffer — see `docs/testing.md`.
 
 pub mod app_state;
 pub mod audio_out;
 pub mod boot_splash;
 mod commands;
 mod frame_stats;
+pub mod harness;
+pub mod headless;
 #[cfg(feature = "skin-dev")]
 mod hot_reload;
 mod icon_drag;
