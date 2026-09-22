@@ -1,7 +1,7 @@
 //! File I/O for Paint: BMP decoding, unique save paths and the picture
 //! folder listing used by the Open picker.
 //!
-//! Encoding lives next to the canvas in [`crate::canvas::encode_bmp`].
+//! Encoding lives next to the canvas in `canvas::encode_bmp`.
 
 use oasis_types::backend::Color;
 use oasis_vfs::{EntryKind, Vfs};

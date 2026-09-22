@@ -5,7 +5,7 @@
 //! a 16-color palette, undo/redo, grid overlay, and BMP save / open.
 //! The canvas is rendered scaled up to fit the content area; the menu
 //! bar, info strip, canvas and palette positions all come from
-//! [`layout::PaintLayout`], which both drawing and hit-testing use.
+//! `layout::PaintLayout`, which both drawing and hit-testing use.
 //!
 //! Pointer input: hosts only forward discrete clicks to apps (no drag /
 //! pointer-move events), so freehand strokes are drawn click-by-click or
