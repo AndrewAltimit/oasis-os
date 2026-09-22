@@ -1096,3 +1096,6 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+mod e2e_tests;
