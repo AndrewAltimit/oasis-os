@@ -57,6 +57,31 @@ impl Canvas {
         }
     }
 
+    /// Create a single-layer canvas from existing flattened pixels (e.g. a
+    /// decoded BMP). Missing pixels are padded with transparent black.
+    pub fn from_pixels(width: u32, height: u32, mut pixels: Vec<Color>) -> Self {
+        pixels.resize((width * height) as usize, Color::rgba(0, 0, 0, 0));
+        let bg = Layer {
+            name: "Background".to_string(),
+            pixels,
+            visible: true,
+            opacity: 255,
+        };
+        let pixels = bg.pixels.clone();
+        Self {
+            width,
+            height,
+            pixels,
+            layers: vec![bg],
+            active_layer: 0,
+        }
+    }
+
+    /// Whether a layer is currently visible (`false` for bad indices).
+    pub fn layer_visible(&self, index: usize) -> bool {
+        self.layers.get(index).is_some_and(|l| l.visible)
+    }
+
     /// Canvas width.
     pub fn width(&self) -> u32 {
         self.width

@@ -13,6 +13,10 @@ oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
+oasis-ui = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
