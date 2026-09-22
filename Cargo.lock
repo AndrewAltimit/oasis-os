@@ -1032,6 +1032,7 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
