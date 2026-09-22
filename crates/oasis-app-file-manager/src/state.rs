@@ -62,7 +62,14 @@ pub struct FileManagerApp {
     pub(crate) last_click_tile: Cell<Option<usize>>,
     /// Click target waiting for vfs (applied on the next refresh tick).
     pub pending_navigation: Option<NavTarget>,
+    /// Wall time since the panels were last compared against the VFS
+    /// (see [`FileManagerApp::rescan`]).
+    pub(crate) rescan_elapsed_ms: u32,
 }
+
+/// How often open panels re-list their directory to pick up changes made
+/// by other apps (a Text Editor save, terminal `mkdir`, ...).
+pub(crate) const RESCAN_INTERVAL_MS: u32 = 500;
 
 impl FileManagerApp {
     /// Create a new File Manager app.
@@ -86,7 +93,46 @@ impl FileManagerApp {
             menu: default_menu_bar(),
             last_click_tile: Cell::new(None),
             pending_navigation: None,
+            rescan_elapsed_ms: 0,
         }
+    }
+
+    /// Re-list both panels and pick up entries created, renamed or
+    /// deleted by other apps. The selection stays on the same entry when
+    /// it still exists; a panel whose directory vanished moves to the
+    /// nearest surviving ancestor. Returns `true` if any listing changed.
+    pub(crate) fn rescan(&mut self, vfs: &dyn Vfs) -> bool {
+        let mut changed = false;
+        for panel in &mut self.panels {
+            let mut dir = panel.browse_dir.clone();
+            while dir != "/" && !vfs.exists(&dir) {
+                dir = oasis_app_core::file_viewer::parent_dir(&dir);
+            }
+            if dir != panel.browse_dir {
+                panel.navigate_to(&dir, vfs);
+                changed = true;
+                continue;
+            }
+            let lines = list_directory(vfs, &dir);
+            if lines == panel.lines {
+                continue;
+            }
+            let selected = panel.lines.get(panel.scroll + panel.cursor).cloned();
+            panel.refresh(vfs);
+            if let Some(i) = selected.and_then(|sel| panel.lines.iter().position(|l| *l == sel)) {
+                if i >= panel.scroll {
+                    panel.cursor = i - panel.scroll;
+                } else {
+                    panel.scroll = i;
+                    panel.cursor = 0;
+                }
+            }
+            changed = true;
+        }
+        if changed && self.content.viewing_file.is_none() {
+            self.content.browse_dir = Some(self.active().browse_dir.clone());
+        }
+        changed
     }
 
     /// Toggle between dual-panel and Explorer view modes.

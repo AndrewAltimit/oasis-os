@@ -99,6 +99,15 @@ impl App for FileManagerApp {
         self.apply_pending_ops(vfs)
     }
 
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.rescan_elapsed_ms = self.rescan_elapsed_ms.saturating_add(dt_ms);
+        if self.rescan_elapsed_ms < state::RESCAN_INTERVAL_MS {
+            return false;
+        }
+        self.rescan_elapsed_ms = 0;
+        self.rescan(vfs)
+    }
+
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
         if self.content.viewing_file.is_some() {
             return AppAction::None;
@@ -1018,5 +1027,47 @@ mod tests {
         fm.commit_dialog();
         fm.apply_vfs_ops(&mut vfs);
         assert_eq!(fm.panels[1].browse_dir, "/home");
+    }
+
+    #[test]
+    fn tick_picks_up_changes_made_by_other_apps() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[0].navigate_to("/home/user", &vfs);
+        fm.panels[1].navigate_to("/home/user/music", &vfs);
+        select(&mut fm, &vfs, 0, "/home/user", "readme.txt");
+
+        // Another app writes a file and removes the right panel's folder.
+        vfs.write("/home/user/a_new.txt", b"x").unwrap();
+        vfs.write("/home/user/b_new.txt", b"y").unwrap();
+        vfs.remove("/home/user/music").unwrap();
+
+        // Nothing happens before the rescan interval elapses.
+        assert!(!fm.tick(100, &vfs));
+        assert!(
+            !fm.panels[0]
+                .lines
+                .iter()
+                .any(|l| l.starts_with("a_new.txt"))
+        );
+        assert!(
+            fm.tick(state::RESCAN_INTERVAL_MS, &vfs),
+            "rescan reports a change"
+        );
+        assert!(
+            fm.panels[0]
+                .lines
+                .iter()
+                .any(|l| l.starts_with("a_new.txt"))
+        );
+        // The selection stays on the same entry although it moved down.
+        let p = &fm.panels[0];
+        assert!(p.lines[p.scroll + p.cursor].starts_with("readme.txt"));
+        assert_eq!(
+            fm.panels[1].browse_dir, "/home/user",
+            "vanished dir -> parent"
+        );
+        // Unchanged listings don't report a change.
+        assert!(!fm.tick(state::RESCAN_INTERVAL_MS, &vfs));
     }
 }
