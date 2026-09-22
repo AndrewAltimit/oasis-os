@@ -9,6 +9,7 @@ Runnable code samples live in [`examples/`](../examples/README.md).
 | Doc | What it covers |
 |-----|----------------|
 | [getting-started.md](getting-started.md) | Dependencies and build/run instructions for desktop, WASM, UE5/FFI and PSP; feature flags; tests and lint |
+| [writing-apps.md](writing-apps.md) | Writing an app: the `App` trait lifecycle and hooks, idle-frame rules, a minimal example, registration |
 | [skin-authoring.md](skin-authoring.md) | Writing a skin: directory layout and the full TOML reference |
 | [adding-commands.md](adding-commands.md) | Adding a terminal command |
 | [plugin-development.md](plugin-development.md) | Writing a runtime plugin |
@@ -28,6 +29,8 @@ Runnable code samples live in [`examples/`](../examples/README.md).
 | [javascript-engine.md](javascript-engine.md) | QuickJS-NG integration and the PSP cross-compile |
 | [oasis-js.md](oasis-js.md) | `oasis-js` desktop API and DOM bindings catalogue |
 | [terminal-commands.md](terminal-commands.md) | Catalogue of built-in terminal commands by module |
+| [ui-widgets.md](ui-widgets.md) | `oasis-ui` widget catalogue with source paths |
+| [window-manager.md](window-manager.md) | `oasis-wm` API: windows, snapping, keyboard shortcuts, tiling, animations, decorations |
 | [networking.md](networking.md) | TCP transport, PSK auth, remote terminal, TLS, file transfer |
 | [mcp-server.md](mcp-server.md) | Optional MCP control server for agent-driven UI |
 | [audio-engine.md](audio-engine.md) | Audio manager, playlists, radio, streaming back-pressure |

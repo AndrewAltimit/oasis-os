@@ -16,6 +16,10 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 |:---:|:---:|:---:|:---:|:---:|
 | ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) | ![Altimit](screenshots/altimit/01_dashboard.png) | ![PSIX Tribute](screenshots/psix-tribute/01_dashboard.png) |
 
+| PSIX HiFi | Corrupted |
+|:---:|:---:|
+| ![PSIX HiFi](screenshots/psix-hifi/01_dashboard.png) | ![Corrupted](screenshots/corrupted/01_dashboard.png) |
+
 ## Terminals
 
 | Classic | XP | Modern | Desktop | macOS |
@@ -29,6 +33,10 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 | High Contrast | GNOME | Retro CGA | Paper | Altimit | PSIX Tribute |
 |:---:|:---:|:---:|:---:|:---:|:---:|
 | ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) | ![CGA](screenshots/retro-cga/04_terminal.png) | ![Paper](screenshots/paper/04_terminal.png) | ![Altimit](screenshots/altimit/04_terminal.png) | ![PSIX Tribute](screenshots/psix-tribute/04_terminal.png) |
+
+| PSIX HiFi |
+|:---:|
+| ![PSIX HiFi](screenshots/psix-hifi/04_terminal.png) |
 
 ## Media Tabs
 
@@ -45,13 +53,13 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 ## Generating Screenshots
 
 ```bash
-# All skins (captures every built-in + external skin, incl. psix-tribute)
+# All skins (captures all 17 built-in skins, incl. psix-tribute and psix-hifi)
 cargo run -p oasis-app --bin oasis-screenshot --all
 
 # ...or one skin at a time
 for skin in classic xp modern desktop corrupted macos gnome balatro \
             retro-cga paper win95 solarized vaporwave highcontrast \
-            altimit psix-tribute; do
+            altimit psix-tribute psix-hifi; do
   cargo run -p oasis-app --bin oasis-screenshot "$skin"
 done
 ```

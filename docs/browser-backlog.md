@@ -4,13 +4,46 @@ Forward-looking gap analysis for `oasis-browser`. Open work only —
 shipped epics are summarised in a single "Recently shipped" section
 and otherwise tracked via `git log`.
 
-Last updated: 2026-04-18
+Last updated: 2026-09-22
 
 ## Recently shipped (pointers only)
 
 The big compatibility and architecture epics are done. See git log
 for the detailed commit history; each bullet names the merge branch
 so you can `git show` for specifics.
+
+- **CSS Grid track lists, auto-repeat and placement** (commit
+  `75ea47b`, follow-up `73939e5`). Raw-text grid values parsed by a
+  paren/bracket-aware tokenizer (`css/values/grid.rs`): nested
+  `repeat()`, `repeat(auto-fill | auto-fit, ...)`, `minmax()`,
+  `fit-content()`, content-sized tracks, line numbers / `span` /
+  slash syntax / area names, `grid-auto-flow: dense`, and the spec
+  auto-placement + track sizing algorithm in `layout/grid.rs`.
+  Catalogued in [`browser-engine.md`](browser-engine.md).
+- **`var()` at computed-value time** (`4dc7e34`). Declarations
+  containing `var(` are stored unresolved and substituted during the
+  cascade, then re-parsed with the property's parser (incl.
+  shorthands); nested fallbacks, cycle detection and
+  invalid-at-computed-value-time semantics.
+- **Origin-aware `fetch` + per-origin Web Storage** (`beb5dc8`,
+  `4f96bc6`). Promise-based `fetch()` with real `Response`/`Headers`,
+  URL resolution against the document, loopback/private-network
+  blocking (checked per redirect hop), CORS for cross-origin
+  requests, and `localStorage`/`sessionStorage` partitioned per
+  origin with a 5 MiB quota. See [`oasis-js.md`](oasis-js.md).
+- **DOM API completeness** (`cee91d0`). Cached node wrappers (stable
+  identity), the Node/Element/Text/Comment/DocumentFragment
+  hierarchy, tree mutation methods, `closest`/`matches`, `dataset`,
+  full `classList`, Event/CustomEvent/MouseEvent/KeyboardEvent,
+  document lifecycle events and `requestAnimationFrame`.
+- **JS execution watchdog** (`79d0513`). Event dispatch, microtask
+  drains and timer callbacks run under a deadline
+  (`JsEngine::with_context_guarded`); timer count / interval limits.
+- **`js_dom` module split** (`831913e`). The 3.5k-line `js_dom.rs`
+  is now `src/js_dom/` (bindings, fetch, storage, serialize, canvas,
+  compat shims) with the JS sources in `.js` files.
+- **Decompression-bomb cap** (`2ac54a5`). gzip/deflate/brotli bodies
+  are decoded through an 8 MB limit on HTTP/1.1 and HTTP/2.
 
 - **Smooth triangle glyphs** (same branch). The 8×8 bitmap font's
   ▲ / ▼ glyphs scaled up chunky — a 6-row triangle pattern stretched
@@ -362,8 +395,38 @@ surfaces breakage. Skipping these does not block launch.
 
 - **View Transitions API** (`view-transition-*`).
 - **Anchor Positioning** (CSS Anchor Positioning Module Level 1).
-- **Subgrid**.
+- **Subgrid** (`grid-template-*: subgrid` is not parsed).
 - **`scroll-timeline` / `animation-timeline`**.
+
+---
+
+## Known gaps (verified against the code)
+
+Real, reproducible holes in features that are otherwise marked
+shipped. Each is small enough for a focused PR.
+
+- **`line-clamp` is parsed but never applied.** `-webkit-line-clamp`
+  / `line-clamp` populate `ComputedStyle::line_clamp`
+  (`css/values/apply/mod.rs`), but nothing in `layout/` reads it, so
+  clamped text renders every line and no ellipsis is drawn.
+- **`position: sticky` never releases at its containing block.**
+  `compute_sticky_dy` (`paint/record.rs`, mirrored in
+  `paint/display_list/replay.rs`) pins against the viewport `top` /
+  `bottom` only; a sticky header keeps sticking after its parent has
+  scrolled away instead of being pushed out with it.
+- **Grid line-name references.** `[name]` groups in track lists are
+  skipped by the tokenizer (`parse_plain_tracks`), so placements like
+  `grid-column: content-start / content-end` only resolve when the
+  names come from `grid-template-areas`, not from explicit line names.
+- **Grid `align-items` / `align-self`.** Items are stretched to the
+  cell width, but block-axis alignment is ignored: items are not
+  stretched to the row height and `align-items: center | end` has no
+  effect.
+- **Subgrid** (see above).
+- **`parallel-style` feature does not pass clippy.** `cargo clippy
+  -p oasis-browser --features parallel-style -- -D warnings` fails
+  in `css/cascade/mod.rs` (unused `cascade_yield_fn`, needless
+  `return`). CI only lints default features, so this rots silently.
 
 ---
 
