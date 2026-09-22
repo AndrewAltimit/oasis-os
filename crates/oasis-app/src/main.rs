@@ -47,7 +47,7 @@ use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::DesktopPlatform;
-use oasis_core::platform::{PowerService, TimeService};
+use oasis_core::platform::{NetworkService, PowerService, TimeService};
 use oasis_core::plugin::{PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::resolve_skin;
@@ -413,7 +413,10 @@ fn main() -> Result<()> {
             cwd: "/".to_string(),
             session: ShellSession::new(),
             output_lines: vec![
-                "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
+                format!(
+                    "OASIS_OS v{} -- Type 'help' for commands",
+                    env!("CARGO_PKG_VERSION")
+                ),
                 "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
                 String::new(),
             ],
@@ -516,6 +519,8 @@ fn main() -> Result<()> {
             .ui
             .status_bar
             .update_info(time.as_ref(), power.as_ref());
+        let wifi = state.platform.wifi_info().ok();
+        state.ui.status_bar.update_wifi(wifi.as_ref());
         state.ui.bottom_bar.update_info(time.as_ref());
     }
 
@@ -701,6 +706,8 @@ fn main() -> Result<()> {
                 .ui
                 .status_bar
                 .update_info(time.as_ref(), power.as_ref());
+            let wifi = state.platform.wifi_info().ok();
+            state.ui.status_bar.update_wifi(wifi.as_ref());
             state.ui.bottom_bar.update_info(time.as_ref());
             let _ = sysmon_probe.publish(&mut vfs, Some(&state.platform), Some(&state.platform));
         }
@@ -1084,6 +1091,11 @@ fn main() -> Result<()> {
                 &mut state.chrome_layer_cache,
             )?;
         }
+
+        // Status bar indicator glyphs (battery / AC / Wi-Fi) are vector
+        // art, painted over the bar after the SDI pass. No-op while the
+        // bar is hidden.
+        oasis_core::statusbar::render_status_glyphs(&mut backend, &sdi)?;
 
         // Paint terminal scrollbar when in terminal mode.
         if state.mode == Mode::Terminal {

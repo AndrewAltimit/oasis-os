@@ -23,7 +23,7 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         .expect("vfs write /home/user/readme.txt");
     vfs.write("/etc/hostname", b"oasis")
         .expect("vfs write /etc/hostname");
-    vfs.write("/etc/version", b"0.1.0")
+    vfs.write("/etc/version", env!("CARGO_PKG_VERSION").as_bytes())
         .expect("vfs write /etc/version");
     vfs.write(
         "/etc/hosts.toml",
@@ -403,7 +403,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         super::populate_demo_vfs(&mut vfs);
         let data = vfs.read("/etc/version").expect("/etc/version should exist");
-        assert_eq!(data, b"0.1.0");
+        assert_eq!(data, env!("CARGO_PKG_VERSION").as_bytes());
     }
 
     #[test]

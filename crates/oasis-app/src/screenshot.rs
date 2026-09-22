@@ -473,10 +473,12 @@ fn render_and_save_inner(
             v.dashboard.render_vector_icons(b, v.theme, fixed_frame)?;
             s.draw_overlay_layer(b)?;
             render_chrome(b, vector.as_ref(), fixed_frame)?;
+            oasis_core::statusbar::render_status_glyphs(b, s)?;
             return Ok(());
         }
         s.draw(b)?;
         render_chrome(b, vector.as_ref(), fixed_frame)?;
+        oasis_core::statusbar::render_status_glyphs(b, s)?;
         Ok(())
     };
 
@@ -510,21 +512,37 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
 }
 
 const DEMO_OUTPUT: [&str; 5] = [
-    "OASIS_OS v0.1.0 -- Type 'help' for commands",
+    concat!(
+        "OASIS_OS v",
+        env!("CARGO_PKG_VERSION"),
+        " -- Type 'help' for commands"
+    ),
     "F1=terminal  F2=on-screen keyboard  Escape=quit",
     "",
     "> status",
-    "System: OASIS_OS v0.1.0  CPU: 333MHz  Battery: 75%",
+    concat!(
+        "System: OASIS_OS v",
+        env!("CARGO_PKG_VERSION"),
+        "  CPU: 333MHz  Battery: 75%"
+    ),
 ];
 
 const DEMO_TERMINAL_CONTENT: [&str; 8] = [
-    "OASIS_OS v0.1.0 -- Type 'help' for commands",
+    concat!(
+        "OASIS_OS v",
+        env!("CARGO_PKG_VERSION"),
+        " -- Type 'help' for commands"
+    ),
     "",
     "> ls /home/user",
     "readme.txt  music/  photos/",
     "",
     "> status",
-    "System: OASIS_OS v0.1.0  CPU: 333MHz  Battery: 75%",
+    concat!(
+        "System: OASIS_OS v",
+        env!("CARGO_PKG_VERSION"),
+        "  CPU: 333MHz  Battery: 75%"
+    ),
     "/home/user> _",
 ];
 
@@ -736,7 +754,7 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         .expect("VFS write readme.txt");
     vfs.write("/etc/hostname", b"oasis")
         .expect("VFS write hostname");
-    vfs.write("/etc/version", b"0.1.0")
+    vfs.write("/etc/version", env!("CARGO_PKG_VERSION").as_bytes())
         .expect("VFS write version");
 
     vfs.mkdir("/apps").expect("VFS mkdir /apps");

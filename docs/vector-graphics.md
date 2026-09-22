@@ -85,6 +85,24 @@ built-in app maps to a non-generic category):
   band, and body. Pair with `icon_container = "none"` in the skin so the
   chrome doesn't double up.
 
+### Status-bar glyphs
+
+`status_glyphs.rs` holds the tiny status-bar indicators, recoloured with
+the skin's `bar.battery_color`:
+
+- `battery(level, charging, color)` — outline + nub with `level` of
+  `BATTERY_LEVELS` (5) cells; charging dims the cells under a bolt.
+  `battery_level(percent)` maps 0-100% to a level.
+- `ac_plug(color)` — two-prong plug (wall power, no battery).
+- `wifi(connected, color)` — two arcs over a dot, dimmed when
+  disconnected.
+
+`oasis-core`'s `StatusBar` reserves invisible "glyph slot" SDI objects for
+them (placement + state key, so dirty tracking stays exact) and the shell
+paints them after the SDI pass with `statusbar::render_status_glyphs`.
+`StatusBar::indicator_style = IndicatorStyle::Text` restores the legacy
+`AC` / `75% [|||| ]` text.
+
 ### Background and overlay helpers
 
 `icons.rs:476–622` defines:

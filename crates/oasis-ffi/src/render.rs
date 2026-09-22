@@ -195,6 +195,8 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     } else {
         let _ = instance.sdi.draw(&mut instance.backend);
     }
+    // Status bar battery / AC / Wi-Fi glyphs (vector art over the bar).
+    let _ = oasis_core::statusbar::render_status_glyphs(&mut instance.backend, &instance.sdi);
 
     let _ = instance.backend.swap_buffers();
 }
