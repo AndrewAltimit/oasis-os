@@ -350,6 +350,24 @@ pub fn handle_desktop_input(
         },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                // App windows own Cancel: it backs out of dialogs, leaves
+                // viewers, untunes the TV and raises the Text Editor's
+                // unsaved-changes prompt. The window only closes when the
+                // app answers `Exit` (which every app does at top level).
+                // The browser and the windowed terminal are not `App`s and
+                // keep the plain close-on-Cancel behavior.
+                if active_id != "browser"
+                    && active_id != "terminal"
+                    && let Some((_, runner)) = state
+                        .content
+                        .open_runners
+                        .iter_mut()
+                        .find(|(id, _)| *id == active_id)
+                {
+                    let action = runner.handle_input(&Button::Cancel, vfs);
+                    apply_window_action(action, active_id, state, sdi, vfs);
+                    return InputResult::Continue;
+                }
                 state.ui_sounds.push(UiSound::Close);
                 // If closing the fullscreen window, clear fullscreen state first.
                 if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
