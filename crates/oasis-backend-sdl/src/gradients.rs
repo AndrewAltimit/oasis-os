@@ -4,37 +4,43 @@
 //! horizontal, and four-corner gradient fills on both rectangular and
 //! rounded-rectangular regions.
 
-use oasis_core::backend::{Color, GradientStyle, SdiGradients, SdiShapes};
+use oasis_core::backend::{Color, GradientStyle, SdiGradients};
 use oasis_core::error::Result;
 use oasis_types::color::lerp_color_ratio;
-use oasis_types::geometry::rounded_rect_inset;
 
 use super::{SdlBackend, frect};
 
 impl SdlBackend {
-    /// Fill one coalesced run of rounded-gradient scanlines
-    /// (`start_dy..end_dy`, same color and corner inset).
-    #[allow(clippy::too_many_arguments)]
-    fn flush_rounded_gradient_run(
+    /// Fill `x0..x1` of row `y` with the columns' colors of a horizontal
+    /// gradient `color_of(dx)` (relative to `origin_x`), one `fill_rect`
+    /// per run of equal colors (`h` rows tall).
+    fn fill_gradient_columns(
         &mut self,
-        tx: i32,
-        ty: i32,
-        w: u32,
-        start_dy: i32,
-        end_dy: i32,
-        color: Color,
-        inset: i32,
+        origin_x: i32,
+        y: i32,
+        h: u32,
+        (x0, x1): (i32, i32),
+        color_of: impl Fn(u32) -> Color,
     ) {
-        let lx = tx + inset;
-        let rx = tx + w as i32 - 1 - inset;
-        if lx <= rx && end_dy > start_dy {
-            self.set_color(color);
-            let _ = self.canvas.fill_rect(frect(
-                lx,
-                ty + start_dy,
-                (rx - lx + 1) as u32,
-                (end_dy - start_dy) as u32,
-            ));
+        if x0 >= x1 {
+            return;
+        }
+        let mut run_start = x0;
+        let mut run_color = color_of((x0 - origin_x) as u32);
+        for x in (x0 + 1)..=x1 {
+            let color = if x < x1 {
+                color_of((x - origin_x) as u32)
+            } else {
+                run_color
+            };
+            if x == x1 || color != run_color {
+                self.set_color(run_color);
+                let _ = self
+                    .canvas
+                    .fill_rect(frect(run_start, y, (x - run_start) as u32, h));
+                run_start = x;
+                run_color = color;
+            }
         }
     }
 }
@@ -140,37 +146,84 @@ impl SdiGradients for SdlBackend {
         if radius == 0 || w == 0 || h == 0 {
             return self.fill_rect_gradient(x, y, w, h, gradient);
         }
-        // Currently only Vertical gradients get rounded-rect acceleration;
-        // other styles fall back to a flat rounded rect to preserve shape.
-        let (top_color, bottom_color) = match *gradient {
-            GradientStyle::Vertical { top, bottom } => (top, bottom),
-            _ => return self.fill_rounded_rect(x, y, w, h, radius, gradient.primary_color()),
-        };
         let (tx, ty) = self.translate(x, y);
-        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
-        let h_max = (h as i32 - 1).max(1);
+        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
+        let h_max = h.saturating_sub(1).max(1);
+        let w_max = w.saturating_sub(1).max(1);
 
-        // Draw scanline by scanline, clipping to the rounded rect shape.
-        // Runs of rows with the same color AND the same corner inset (the
-        // whole straight middle section, plus repeated colors on tall
-        // rects) collapse into one fill_rect — identical pixels, far
-        // fewer SDL calls.
-        let mut run_start: Option<(i32, Color, i32)> = None; // (start_dy, color, inset)
-        for dy in 0..h as i32 {
-            let color = lerp_color_ratio(top_color, bottom_color, dy as u32, h_max as u32);
-            let inset = rounded_rect_inset(dy, h as i32, r);
-
-            let extends = matches!(run_start, Some((_, rc, ri)) if rc == color && ri == inset);
-            if !extends {
-                if let Some((start, rc, ri)) = run_start.take() {
-                    self.flush_rounded_gradient_run(tx, ty, w, start, dy, rc, ri);
+        // Exactly the rows of `fill_rounded_rect` (shared with the
+        // software rasterizer), so a gradient card and a flat card with
+        // the same radius have the same silhouette. Horizontal and
+        // four-corner gradients used to degrade to a flat fill.
+        let mut rows = std::mem::take(&mut self.rect_batch);
+        rows.clear();
+        oasis_rasterize::rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| {
+            rows.push(frect(x0, dy, (x1 - x0) as u32, 1));
+        });
+        rows.sort_by_key(|row| row.y as i32);
+        match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                // Coalesce rows of the same color and span into one rect.
+                let mut i = 0;
+                while i < rows.len() {
+                    let first = rows[i];
+                    let color = lerp_color_ratio(top, bottom, first.y as u32, h_max);
+                    let mut j = i + 1;
+                    while j < rows.len()
+                        && rows[j].x == first.x
+                        && rows[j].w == first.w
+                        && lerp_color_ratio(top, bottom, rows[j].y as u32, h_max) == color
+                    {
+                        j += 1;
+                    }
+                    self.set_color(color);
+                    let _ = self.canvas.fill_rect(frect(
+                        tx + first.x as i32,
+                        ty + first.y as i32,
+                        first.w as u32,
+                        (j - i) as u32,
+                    ));
+                    i = j;
                 }
-                run_start = Some((dy, color, inset));
-            }
+            },
+            GradientStyle::Horizontal { left, right } => {
+                // Rows with the same span share their column runs.
+                let mut i = 0;
+                while i < rows.len() {
+                    let first = rows[i];
+                    let mut j = i + 1;
+                    while j < rows.len() && rows[j].x == first.x && rows[j].w == first.w {
+                        j += 1;
+                    }
+                    let span = (tx + first.x as i32, tx + (first.x + first.w) as i32);
+                    self.fill_gradient_columns(
+                        tx,
+                        ty + first.y as i32,
+                        (j - i) as u32,
+                        span,
+                        |dx| lerp_color_ratio(left, right, dx, w_max),
+                    );
+                    i = j;
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                for row in rows.iter().copied() {
+                    let dy = row.y as u32;
+                    let l = lerp_color_ratio(top_left, bottom_left, dy, h_max);
+                    let rt = lerp_color_ratio(top_right, bottom_right, dy, h_max);
+                    let span = (tx + row.x as i32, tx + (row.x + row.w) as i32);
+                    self.fill_gradient_columns(tx, ty + dy as i32, 1, span, |dx| {
+                        lerp_color_ratio(l, rt, dx, w_max)
+                    });
+                }
+            },
         }
-        if let Some((start, run_color, run_inset)) = run_start {
-            self.flush_rounded_gradient_run(tx, ty, w, start, h as i32, run_color, run_inset);
-        }
+        self.rect_batch = rows;
         Ok(())
     }
 }
