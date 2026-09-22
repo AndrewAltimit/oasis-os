@@ -253,50 +253,139 @@ API on top":
 | File | Contents |
 | --- | --- |
 | `mod.rs` | Shared handle types, `install_document_global_*` entry points, inline `on*` handler registration. |
-| `bindings.rs` | Node / attribute / tree / selector / classList / inline-style / navigation / `getComputedStyle` bindings. |
+| `bindings.rs` | Attribute / text / tree-mutation / innerHTML / selector / inline-style / navigation / `getComputedStyle` bindings. |
+| `node_api.rs` | Node types, text-inclusive child lists, raw parent / sibling links, detached-safe insertion (fragments, cycle checks), `cloneNode`, fragment parsing, `matches`, `getElementsBy*`, and the freed-slot log that evicts stale wrappers. |
 | `fetch.rs` | `BrowserFetchHandler`: origin-aware `FetchHandler` behind `oasis-js`'s `fetch()` (URL resolution, TLS, CSP `connect-src`, private-network and same-origin policy). |
 | `storage.rs` | Per-origin, quota'd `localStorage` / `sessionStorage`; page-scoped `document.cookie`. |
-| `serialize.rs` | `innerHTML` serialization + fragment deep-copy. |
+| `serialize.rs` | `innerHTML` / `outerHTML` serialization + fragment deep-copy. |
 | `canvas.rs` | `__oasis_canvas_*` (feature `canvas`). |
 | `compat_shims.rs` | Site-compat helpers (reddit `togglecomment` & co.). |
 | `bootstrap.js` / `canvas.js` / `compat_shims.js` | The JS halves, embedded with `include_str!`. |
 
+### Node wrappers and identity
+
+Each DOM node id maps to exactly **one** JS wrapper object, cached in
+`bootstrap.js`, so identity comparisons work (`a.parentNode === b`,
+`list.children[0] === el`) and expando properties stick (`el._state = …`).
+`new Element(nid)` returns the cached wrapper too. Wrappers follow the
+standard hierarchy: `Node` → `CharacterData` → `Text` / `Comment`, plus
+`Element` (aliased as `HTMLElement`), `DocumentFragment` and `Document`
+(`HTMLDocument`); `instanceof` checks behave as in browsers.
+
+Node removal (`remove()`, `removeChild`, `replaceChild`, moving a node with
+`appendChild`/`insertBefore`) **detaches** the subtree without freeing it, so
+script can re-insert it later. Subtrees replaced by an `innerHTML`,
+`outerHTML` or `textContent` write are freed; their ids are logged
+(`__oasis_take_freed`) and the JS side drops the matching wrappers and
+listeners so a reused arena slot never resolves to a stale object. Removed
+nodes stay allocated until the page unloads.
+
 ### Document
 
-| API | Source | Notes |
-| --- | --- | --- |
-| `document.getElementById(id)` | bootstrap.js | Returns `Element \| null`. |
-| `document.createElement(tag)` | bootstrap.js | Creates a detached element. |
-| `document.createTextNode(text)` | bootstrap.js | Returns a `#text` node. |
-| `document.querySelector(sel)` | bootstrap.js | First match in document order. |
-| `document.querySelectorAll(sel)` | bootstrap.js | Live `Element[]`. |
-| `document.body` | bootstrap.js | Getter only. |
-| `document.title` | bootstrap.js | Getter and setter. |
-| `document.cookie` | storage.rs | Getter and setter; raw string. Page-scoped jar, fresh per page load (never shared across origins, not sent on requests). |
-| `document.addEventListener(type, fn, opts)` | bootstrap.js | |
-| `document.removeEventListener(type, fn, opts)` | bootstrap.js | |
-| `document.dispatchEvent(evt)` | bootstrap.js | |
+| API | Notes |
+| --- | --- |
+| `getElementById(id)` | Connected elements only (detached nodes and clones are skipped). |
+| `getElementsByTagName(tag)` / `getElementsByClassName(names)` / `getElementsByName(name)` | Static lists (`item()` supported), `'*'` matches all tags. |
+| `querySelector(sel)` / `querySelectorAll(sel)` | Searched from the document root, so `head` content (e.g. `title`) is reachable. |
+| `createElement(tag)` / `createElementNS(ns, name)` | Detached element; tag lower-cased. |
+| `createTextNode(text)` / `createComment(text)` / `createDocumentFragment()` | Appending a fragment moves its children. |
+| `createEvent(kind)` | Legacy; pair with `initEvent` / `initCustomEvent`. |
+| `documentElement`, `head`, `body`, `activeElement` | Getters (`activeElement` is always `body`). |
+| `title` | Getter and setter. |
+| `readyState` | `loading` while parser-inserted scripts run, then `interactive` → `complete`. |
+| `URL`, `documentURI`, `location`, `defaultView`, `characterSet`, `compatMode`, `visibilityState`, `hidden` | Getters. |
+| `cookie` | Getter and setter; raw string (storage.rs). Page-scoped jar, fresh per page load (never shared across origins, not sent on requests). |
+| Node / ParentNode API | `childNodes`, `children`, `firstElementChild`, `append`, `prepend`, `replaceChildren`, `contains`, events, … as on elements. |
+
+### Node (all node kinds)
+
+- `nodeType` (plus the `Node.ELEMENT_NODE` … constants), `nodeName`,
+  `nodeValue`, `textContent` (get/set; setting `''` empties the node),
+  `isConnected`, `ownerDocument`.
+- Navigation including text and comment nodes: `parentNode`, `parentElement`,
+  `childNodes`, `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,
+  `getRootNode()`, `hasChildNodes()`, `contains(other)`, `isSameNode()`.
+- Mutation: `appendChild`, `insertBefore` (a `null` or foreign reference
+  appends), `removeChild` / `replaceChild` (throw `NotFoundError` when the
+  node is not a child), `cloneNode(deep)`. Inserting an ancestor into its own
+  descendant throws `HierarchyRequestError`.
+- `Text` / `Comment` add `data`, `length`, `wholeText` (Text) and the
+  ChildNode methods below.
 
 ### Element
 
-- Tree navigation: `parentElement`, `parentNode`, `firstChild`, `lastChild`,
-  `childNodes`, `nextSibling`, `previousSibling`.
-- Content: `textContent`, `innerHTML` (getter/setter in bootstrap.js).
-- Attributes: `getAttribute`, `setAttribute`, `removeAttribute`
-  (bootstrap.js).
-- Mutation: `appendChild`, `removeChild`, `insertBefore`
-  (bootstrap.js).
-- Selectors: `querySelector`, `querySelectorAll` (bootstrap.js).
-- Events: `addEventListener`, `removeEventListener`, `dispatchEvent`
-  (bootstrap.js). Options accept `{capture, once, passive}` or a bare
-  boolean for capture.
-- `classList.add / remove / toggle / contains` (bootstrap.js).
-- `style.<property>` proxy with camelCase ↔ kebab-case conversion plus
-  `getPropertyValue` / `setProperty` (bootstrap.js).
+- Element navigation: `children`, `firstElementChild`, `lastElementChild`,
+  `childElementCount`, `nextElementSibling`, `previousElementSibling`.
+- ChildNode / ParentNode: `remove()`, `before()`, `after()`,
+  `replaceWith()`, `append()`, `prepend()`, `replaceChildren()` (strings
+  become text nodes).
+- Content: `innerHTML` (get/set), `outerHTML` (get/set), `innerText`
+  (alias of `textContent`), `insertAdjacentHTML`, `insertAdjacentElement`,
+  `insertAdjacentText` (`beforebegin` / `afterbegin` / `beforeend` /
+  `afterend`, case-insensitive; others throw `SyntaxError`).
+- Identity: `tagName`, `nodeName`, `localName`, `id`, `className`.
+- Attributes: `getAttribute`, `setAttribute`, `removeAttribute`,
+  `hasAttribute`, `hasAttributes`, `toggleAttribute(name, force)`,
+  `getAttributeNames`, `attributes` (static `{name, value}` list),
+  `dataset` (proxy over `data-*`, camelCase ↔ kebab-case, supports
+  `in` / `delete` / `Object.keys`).
+- Selectors: `querySelector`, `querySelectorAll`, `getElementsByTagName`,
+  `getElementsByClassName`, `matches` (+ `webkitMatchesSelector` /
+  `msMatchesSelector`), `closest`. Invalid selectors throw `SyntaxError`
+  from `matches`/`closest`; `querySelector*` return no match.
+- `classList` (a cached `DOMTokenList`): `add` / `remove` (multiple tokens),
+  `toggle(token, force)`, `contains`, `replace`, `item`, `length`, `value`,
+  `forEach`, iteration. Tokens with whitespace throw
+  `InvalidCharacterError`. Only real token changes write the attribute (and
+  so trigger a relayout).
+- `style.<property>` proxy with camelCase ↔ kebab-case conversion,
+  `cssText`, `getPropertyValue` / `setProperty`.
+- Form controls reflect onto DOM attributes (not the form manager's live
+  edit state): `value` (input / option /
+  textarea — which also rewrites its text — and `<select>`, which selects
+  the matching option), `checked` (unchecks same-name radios), `selectedIndex`,
+  `options`, `type`, `htmlFor`, `name`, `href`, `src`, `title`, `alt`,
+  `placeholder`, `rel`, `target`, `lang`, `action`, `method`, and the
+  boolean `disabled`, `selected`, `hidden`, `required`, `readOnly`,
+  `multiple`.
+- `click()` dispatches a bubbling, cancelable `MouseEvent`; `focus()` and
+  `blur()` are no-ops.
 
-Click / keydown / keyup have a fast path
-(`__oasis_dispatch_*_fast`, bootstrap.js) used by the browser's input layer
-to avoid a full event dispatch on hot paths.
+### Events
+
+- `addEventListener(type, fn, opts)` on every node and on `window`; options
+  accept a bare capture boolean or `{capture, once, passive, signal}`
+  (`signal` needs an `AbortSignal`-like object with `addEventListener`).
+  Listener objects with `handleEvent` work. `on<type>` handler properties
+  (`el.onclick = fn`, `window.onload = fn`) run after listeners at the target
+  and bubble phases; returning `false` calls `preventDefault()`.
+- `dispatchEvent(evt)` runs capture → target → bubble (bubble only when
+  `evt.bubbles`), with the path continuing from `document` to `window` for
+  connected nodes, and returns `!evt.defaultPrevented`. Plain `{type}`
+  objects and type strings are accepted for legacy callers.
+- `Event`, `CustomEvent` (`detail`), `UIEvent`, `MouseEvent`,
+  `KeyboardEvent`, `FocusEvent`, `InputEvent` constructors with init dicts;
+  `stopPropagation`, `stopImmediatePropagation`, `preventDefault` (only on
+  `cancelable` events), `composedPath`, `eventPhase`, `currentTarget`,
+  `target`.
+- A listener that throws is reported through `console.error` and does not
+  stop the remaining listeners. Watchdog interrupts are uncatchable and
+  still abort the dispatch.
+- Host input (`__oasis_dispatch_with_bubbling` and the
+  `__oasis_dispatch_*_fast` helpers the input layer calls without re-parsing
+  JS) fires trusted, bubbling, cancelable `MouseEvent` / `KeyboardEvent` /
+  `Event` objects and reports `defaultPrevented` back to Rust.
+
+### Page lifecycle and animation frames
+
+After parser-inserted scripts, the site-compat shims and inline `on*`
+handlers are installed, the host calls `js_dom::fire_document_lifecycle`,
+which fires, in order: `readystatechange` (`interactive`),
+`DOMContentLoaded` on `document` (bubbling to `window`),
+`readystatechange` (`complete`), then `load` on `window`. `<body onload>`
+registers a `window` load listener. `requestAnimationFrame(cb)` schedules
+`cb(performance.now())` on a 16 ms timer; `cancelAnimationFrame(id)`
+clears it. `performance.now()` is provided when the engine lacks one.
 
 ### Window, location, history
 
@@ -363,10 +452,11 @@ checked there.
 
 These are intentional — file an issue or extend `js_dom/` if you need them:
 
-- `getComputedStyle()` — partially captured in `SharedStyles` but not exposed
-  to JS.
+- `getComputedStyle()` only offers `getPropertyValue` (styles from the last
+  cascade), not property access or live updates.
 - `getBoundingClientRect()` and the `scroll*` family.
-- `requestAnimationFrame` — substitute `setInterval(fn, 16)`.
+- `MutationObserver`, `IntersectionObserver`, Shadow DOM, custom elements.
+- Removed nodes stay allocated until the page unloads (no GC hook).
 
 ## Adding a host capability
 
@@ -376,7 +466,10 @@ The pattern for new bindings is the one `oasis-browser` already follows.
    `__oasis_<verb>` that takes only primitives (`i32`, `String`, `f64`,
    `Vec<i32>`) and returns a primitive or small struct convertible via rquickjs.
 2. Mark the DOM dirty via `mark_dirty(&dirty)` if the call mutates the tree
-   (`js_dom/mod.rs`).
+   (`js_dom/mod.rs`). If it frees arena slots, go through
+   `node_api::free_children_logged` (or push the ids onto the `FreedLog`) and
+   call `__sync_freed()` from the JS wrapper so cached wrappers are evicted;
+   prefer `detach_node` over `remove_child` for nodes script may still hold.
 3. Clone shared `Rc` handles for any move-into-closure capture.
 4. Register the function during `with_context`:
 

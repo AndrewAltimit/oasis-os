@@ -1305,3 +1305,519 @@ fn net_class_and_ip_literal_parsing() {
     assert_eq!(class("example.com"), None);
     assert_eq!(class("256.1.1.1"), None);
 }
+
+// ------------------------------------------------------------------
+// DOM API completeness (wrapper identity, text nodes, tree mutation,
+// events, lifecycle)
+// ------------------------------------------------------------------
+
+/// Parse `html` into a document and install the DOM bindings.
+fn setup_html(html: &str) -> (JsEngine, SharedDoc) {
+    use crate::html::tokenizer::Tokenizer;
+    use crate::html::tree_builder::TreeBuilder;
+    setup(TreeBuilder::build(Tokenizer::new(html).tokenize()))
+}
+
+/// Evaluate `expr` and assert it produces the string `want`.
+fn check(engine: &JsEngine, expr: &str, want: &str) {
+    assert_eq!(js_str(engine, expr), want, "expression: {expr}");
+}
+
+const TREE_HTML: &str = "<html><head><title>T</title></head><body>\
+    <div id=\"outer\" class=\"outer\">\
+      <p id=\"p\">a<b id=\"b\">b</b>c</p>\
+      <ul id=\"list\"><li class=\"x\">1</li> <li class=\"x y\">2</li> <li>3</li></ul>\
+    </div><section id=\"other\"></section></body></html>";
+
+#[test]
+fn wrappers_are_cached_per_node_id() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var b = document.getElementById('b'); var p = document.getElementById('p'); \
+         [b.parentNode === p, p.parentNode === document.getElementById('outer'), \
+          document.querySelector('#b') === b, p.children[0] === b, \
+          new Element(b.__oasis_node_id) === b, document.body.parentNode === \
+          document.documentElement, document.documentElement.parentNode === document, \
+          p.firstChild === p.firstChild].join()",
+        "true,true,true,true,true,true,true,true",
+    );
+    // Expando properties survive re-lookup.
+    check(
+        &engine,
+        "document.getElementById('b').__mark = 7; document.querySelector('b').__mark",
+        "7",
+    );
+}
+
+#[test]
+fn freed_nodes_are_evicted_from_wrapper_cache() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var outer = document.getElementById('outer'); var old = outer.firstElementChild; \
+         var hits = 0; old.addEventListener('click', function() { hits++; }); \
+         outer.innerHTML = '<i>x</i><i>y</i><i>z</i>'; \
+         var fresh = outer.children; \
+         fresh.forEach(function(n) { n.dispatchEvent(new Event('click')); }); \
+         [fresh[0] !== old, fresh[0].tagName, hits, fresh[0] === outer.firstChild].join()",
+        "true,I,0,true",
+    );
+}
+
+#[test]
+fn child_nodes_include_text_nodes() {
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var p = document.getElementById('p'); var t = p.firstChild; \
+         [p.childNodes.length, p.children.length, t.nodeType, t.nodeName, t.data, \
+          t.nodeValue, t.length, t.nextSibling.tagName, p.lastChild.textContent, \
+          t.nextSibling.nextSibling.previousSibling.id, t.parentNode === p].join()",
+        "3,1,3,#text,a,a,1,B,c,b,true",
+    );
+    engine
+        .eval("var p = document.getElementById('p'); p.firstChild.data = 'z'; p.lastChild.nodeValue = 'q'")
+        .unwrap();
+    let doc = shared.borrow();
+    let p = doc.get_element_by_id("p").unwrap();
+    assert_eq!(doc.text_content(p), "zbq");
+}
+
+#[test]
+fn node_type_and_name_cover_every_kind() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "[document.nodeType, document.nodeName, document.body.nodeType, \
+          document.body.nodeName, document.body.localName, \
+          document.createComment('c').nodeType, document.createComment('c').nodeName, \
+          document.createDocumentFragment().nodeType, \
+          document.createDocumentFragment().nodeName, document.createTextNode('t').nodeName, \
+          Node.ELEMENT_NODE, document.body.TEXT_NODE, \
+          document.body instanceof Node, document.createTextNode('') instanceof Text, \
+          document.body instanceof HTMLElement].join()",
+        "9,#document,1,BODY,body,8,#comment,11,#document-fragment,#text,1,3,true,true,true",
+    );
+}
+
+#[test]
+fn closest_and_matches() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var b = document.getElementById('b'); \
+         [b.closest('.outer').id, b.closest('b') === b, b.closest('section'), \
+          b.matches('#p > b'), b.matches('i'), b.webkitMatchesSelector('b'), \
+          (function() { try { b.matches('!!'); return 'no'; } \
+                        catch (e) { return e.name; } })()].join()",
+        "outer,true,,true,false,true,SyntaxError",
+    );
+}
+
+#[test]
+fn attribute_helpers_and_dataset() {
+    let (engine, shared) = setup_html(
+        "<html><body><div id=\"d\" data-foo-bar=\"1\" data-x=\"2\"></div></body></html>",
+    );
+    check(
+        &engine,
+        "var d = document.getElementById('d'); \
+         [d.hasAttribute('data-x'), d.hasAttribute('nope'), d.toggleAttribute('hidden'), \
+          d.hasAttribute('hidden'), d.toggleAttribute('hidden'), \
+          d.toggleAttribute('open', true), d.toggleAttribute('open', true), \
+          d.dataset.fooBar, d.dataset.missing, 'x' in d.dataset, \
+          Object.keys(d.dataset).join('+'), d.getAttributeNames().length, \
+          d.dataset === d.dataset].join()",
+        "true,false,true,true,false,true,true,1,,true,fooBar+x,4,true",
+    );
+    engine
+        .eval(
+            "var d = document.getElementById('d'); d.dataset.newKey = 'v'; \
+             delete d.dataset.x; d.className = 'a b';",
+        )
+        .unwrap();
+    let doc = shared.borrow();
+    let d = doc.element(doc.get_element_by_id("d").unwrap()).unwrap();
+    assert_eq!(d.get_attribute("data-new-key"), Some("v"));
+    assert_eq!(d.get_attribute("data-x"), None);
+    assert_eq!(d.get_attribute("open"), Some(""));
+    assert_eq!(d.get_attribute("class"), Some("a b"));
+}
+
+#[test]
+fn element_sibling_and_child_navigation() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var ul = document.getElementById('list'); var f = ul.firstElementChild; \
+         [ul.childNodes.length, ul.children.length, ul.childElementCount, \
+          f.textContent, f.nextElementSibling.textContent, \
+          f.nextSibling.nodeType, ul.lastElementChild.textContent, \
+          ul.lastElementChild.previousElementSibling.textContent, \
+          f.previousElementSibling, ul.children.item(1).textContent, \
+          ul.children.item(9)].join()",
+        "5,3,3,1,2,3,3,2,,2,",
+    );
+}
+
+#[test]
+fn remove_keeps_subtree_for_reinsertion() {
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var p = document.getElementById('p'); p.remove(); \
+         var gone = [p.isConnected, document.getElementById('p'), p.parentNode].join(); \
+         document.getElementById('other').appendChild(p); \
+         [gone, p.isConnected, p.textContent, document.getElementById('p') === p, \
+          p.parentNode.id].join()",
+        "false,,,true,abc,true,other",
+    );
+    let doc = shared.borrow();
+    let other = doc.get_element_by_id("other").unwrap();
+    assert_eq!(doc.text_content(other), "abc");
+}
+
+#[test]
+fn append_prepend_before_after_replace_with() {
+    let (engine, _doc) =
+        setup_html("<html><body><div id=\"c\"><span id=\"s\">s</span></div></body></html>");
+    check(
+        &engine,
+        "var c = document.getElementById('c'); var s = document.getElementById('s'); \
+         c.append('x', document.createElement('i')); c.prepend('0'); \
+         s.before('<'); s.after('>', document.createElement('b')); c.innerHTML",
+        "0&lt;<span id=\"s\">s</span>&gt;<b></b>x<i></i>",
+    );
+    check(
+        &engine,
+        "var s = document.getElementById('s'); s.replaceWith('R', document.createElement('u')); \
+         [document.getElementById('c').innerHTML, s.isConnected].join('|')",
+        "0&lt;R<u></u>&gt;<b></b>x<i></i>|false",
+    );
+    check(
+        &engine,
+        "var c = document.getElementById('c'); c.replaceChildren('only'); c.innerHTML",
+        "only",
+    );
+}
+
+#[test]
+fn clone_node_shallow_and_deep() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var p = document.getElementById('p'); var deep = p.cloneNode(true); \
+         var shallow = p.cloneNode(); \
+         [deep !== p, deep.id, deep.childNodes.length, deep.textContent, \
+          shallow.childNodes.length, deep.isConnected, deep.parentNode, \
+          document.getElementById('p') === p, \
+          document.createTextNode('t').cloneNode().data].join()",
+        "true,p,3,abc,0,false,,true,t",
+    );
+}
+
+#[test]
+fn replace_child_insert_before_and_hierarchy_errors() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var ul = document.getElementById('list'); var n = document.createElement('li'); \
+         n.textContent = 'N'; var old = ul.firstElementChild; \
+         var ret = ul.replaceChild(n, old); \
+         var m = document.createElement('li'); m.textContent = 'M'; \
+         ul.insertBefore(m, n); \
+         var err1 = (function() { try { document.getElementById('b')\
+           .appendChild(document.getElementById('outer')); return 'no'; } \
+           catch (e) { return e.name; } })(); \
+         var err2 = (function() { try { ul.removeChild(document.body); return 'no'; } \
+           catch (e) { return e.name; } })(); \
+         [ret === old, old.isConnected, ul.firstElementChild.textContent, \
+          ul.children[1].textContent, err1, err2].join()",
+        "true,false,M,N,HierarchyRequestError,NotFoundError",
+    );
+}
+
+#[test]
+fn insert_adjacent_html_and_element() {
+    let (engine, _doc) =
+        setup_html("<html><body><div id=\"w\"><p id=\"t\">t</p></div></body></html>");
+    check(
+        &engine,
+        "var t = document.getElementById('t'); \
+         t.insertAdjacentHTML('beforebegin', '<a>1</a>'); \
+         t.insertAdjacentHTML('afterbegin', '<b>2</b>'); \
+         t.insertAdjacentHTML('beforeend', '<i>3</i>'); \
+         t.insertAdjacentHTML('afterend', '<u>4</u>'); \
+         var em = document.createElement('em'); \
+         var r = t.insertAdjacentElement('afterEnd', em); \
+         t.insertAdjacentText('beforeEnd', '!'); \
+         var err = (function() { try { t.insertAdjacentHTML('nowhere', 'x'); return 'no'; } \
+           catch (e) { return e.name; } })(); \
+         [document.getElementById('w').innerHTML, r === em, err].join('|')",
+        "<a>1</a><p id=\"t\"><b>2</b>t<i>3</i>!</p><em></em><u>4</u>|true|SyntaxError",
+    );
+}
+
+#[test]
+fn outer_html_get_and_set() {
+    let (engine, shared) =
+        setup_html("<html><body><div id=\"w\"><p id=\"t\" class=\"k\">hi</p></div></body></html>");
+    check(
+        &engine,
+        "document.getElementById('t').outerHTML",
+        "<p id=\"t\" class=\"k\">hi</p>",
+    );
+    engine
+        .eval("document.getElementById('t').outerHTML = '<span id=\"n\">new</span>!'")
+        .unwrap();
+    check(
+        &engine,
+        "[document.getElementById('w').innerHTML, document.getElementById('t')].join('|')",
+        "<span id=\"n\">new</span>!|",
+    );
+    let doc = shared.borrow();
+    assert!(doc.get_element_by_id("n").is_some());
+}
+
+#[test]
+fn text_content_set_replaces_and_clears_children() {
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var ul = document.getElementById('list'); ul.textContent = 'plain'; \
+         var a = [ul.childNodes.length, ul.firstChild.nodeType].join(); \
+         ul.textContent = ''; [a, ul.childNodes.length, ul.innerText].join('|')",
+        "1,3|0|",
+    );
+    let doc = shared.borrow();
+    let ul = doc.get_element_by_id("list").unwrap();
+    assert!(doc.get(ul).children.is_empty());
+}
+
+#[test]
+fn form_control_value_and_checked() {
+    let (engine, shared) = setup_html(
+        "<html><body><form>\
+         <input id=\"i\" value=\"v0\"><input id=\"cb\" type=\"checkbox\">\
+         <input id=\"r1\" type=\"radio\" name=\"g\" checked><input id=\"r2\" type=\"radio\" name=\"g\">\
+         <select id=\"s\"><option value=\"a\">A</option><option selected>B</option></select>\
+         <textarea id=\"ta\">txt</textarea></form></body></html>",
+    );
+    check(
+        &engine,
+        "var $ = function(id) { return document.getElementById(id); }; \
+         var before = [$('i').value, $('cb').checked, $('cb').value, $('s').value, \
+                       $('s').selectedIndex, $('ta').value, $('i').type].join(); \
+         $('i').value = 'v1'; $('cb').checked = true; $('r2').checked = true; \
+         $('s').value = 'a'; $('ta').value = 'new'; \
+         [before, $('i').value, $('cb').checked, $('r1').checked, $('r2').checked, \
+          $('s').value, $('s').selectedIndex, $('ta').value].join('|')",
+        "v0,false,on,B,1,txt,text|v1|true|false|true|a|0|new",
+    );
+    let doc = shared.borrow();
+    let i = doc.element(doc.get_element_by_id("i").unwrap()).unwrap();
+    assert_eq!(i.get_attribute("value"), Some("v1"));
+    let cb = doc.element(doc.get_element_by_id("cb").unwrap()).unwrap();
+    assert_eq!(cb.get_attribute("checked"), Some(""));
+}
+
+#[test]
+fn get_elements_by_class_and_tag_name() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "[document.getElementsByClassName('x').length, \
+          document.getElementsByClassName('y x').length, \
+          document.getElementsByTagName('li').length, \
+          document.getElementsByTagName('LI')[2].textContent, \
+          document.getElementById('outer').getElementsByTagName('*').length, \
+          document.getElementById('list').getElementsByClassName('x')[1].textContent, \
+          document.getElementsByTagName('title')[0].textContent].join()",
+        "2,1,3,3,6,2,T",
+    );
+}
+
+#[test]
+fn document_accessors_and_factories() {
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var frag = document.createDocumentFragment(); \
+         frag.appendChild(document.createElement('em')); \
+         frag.appendChild(document.createTextNode('tail')); \
+         var other = document.getElementById('other'); other.appendChild(frag); \
+         [document.documentElement.tagName, document.head.tagName, document.body.tagName, \
+          document.readyState, frag.childNodes.length, other.innerHTML, \
+          document.querySelector('title').textContent, \
+          document.createElement('DIV').tagName, \
+          document.createComment('x').data, document.defaultView === window].join()",
+        "HTML,HEAD,BODY,loading,0,<em></em>tail,T,DIV,x,true",
+    );
+    let doc = shared.borrow();
+    let other = doc.get_element_by_id("other").unwrap();
+    assert_eq!(doc.text_content(other), "tail");
+}
+
+#[test]
+fn lifecycle_fires_in_order_and_sets_ready_state() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    engine
+        .eval(
+            "var log = []; \
+             document.addEventListener('readystatechange', function() { \
+               log.push('rs:' + document.readyState); }); \
+             document.addEventListener('DOMContentLoaded', function(e) { \
+               log.push('dcl:doc:' + e.bubbles); }); \
+             window.addEventListener('DOMContentLoaded', function() { log.push('dcl:win'); }); \
+             window.addEventListener('load', function() { \
+               log.push('load:' + document.readyState); }); \
+             window.onload = function() { log.push('onload'); };",
+        )
+        .unwrap();
+    fire_document_lifecycle(&engine);
+    // A second call is a no-op.
+    fire_document_lifecycle(&engine);
+    check(
+        &engine,
+        "log.join(' ')",
+        "rs:interactive dcl:doc:true dcl:win rs:complete load:complete onload",
+    );
+}
+
+#[test]
+fn body_onload_attribute_runs_on_window_load() {
+    let (engine, shared) = setup_html(
+        "<html><body onload=\"window.__loaded = (window.__loaded || 0) + 1\"></body></html>",
+    );
+    register_inline_handlers(&engine, &shared.borrow());
+    fire_document_lifecycle(&engine);
+    check(&engine, "String(window.__loaded)", "1");
+}
+
+#[test]
+fn custom_event_bubbles_flag_and_default_prevented() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var b = document.getElementById('b'); var log = []; \
+         document.getElementById('outer').addEventListener('ping', function(e) { \
+           log.push('outer:' + e.detail.n + ':' + (e.target === b) + ':' + e.eventPhase); }); \
+         b.addEventListener('ping', function(e) { log.push('b'); e.preventDefault(); }); \
+         var r1 = b.dispatchEvent(new CustomEvent('ping', {detail: {n: 1}})); \
+         var r2 = b.dispatchEvent(new CustomEvent('ping', \
+           {detail: {n: 2}, bubbles: true, cancelable: true})); \
+         var ce = new CustomEvent('x'); \
+         [log.join(' '), r1, r2, ce.detail, ce instanceof Event].join('|')",
+        "b b outer:2:true:3|true|false||true",
+    );
+}
+
+#[test]
+fn stop_immediate_propagation_and_once() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var b = document.getElementById('b'); var log = []; \
+         document.getElementById('p').addEventListener('go', function() { log.push('p'); }); \
+         b.addEventListener('go', function(e) { log.push('1'); \
+           if (e.detail === 'imm') e.stopImmediatePropagation(); \
+           else e.stopPropagation(); }); \
+         b.addEventListener('go', function() { log.push('2'); }); \
+         b.addEventListener('go', function() { log.push('once'); }, {once: true}); \
+         b.dispatchEvent(new CustomEvent('go', {bubbles: true, detail: 'stop'})); \
+         b.dispatchEvent(new CustomEvent('go', {bubbles: true, detail: 'imm'})); \
+         b.dispatchEvent(new CustomEvent('go', {bubbles: true, detail: 'stop'})); \
+         log.join(' ')",
+        "1 2 once 1 1 2",
+    );
+}
+
+#[test]
+fn listener_exception_does_not_block_others_and_handler_props() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var b = document.getElementById('b'); var log = []; \
+         b.addEventListener('click', function() { throw new Error('boom'); }); \
+         b.addEventListener('click', function(e) { log.push(e instanceof MouseEvent); }); \
+         b.onclick = function() { log.push('prop'); return false; }; \
+         b.click(); \
+         var prevented = __oasis_dispatch_with_bubbling(b.__oasis_node_id, 'click', null); \
+         [log.join(' '), prevented].join('|')",
+        "true prop true prop|true",
+    );
+}
+
+#[test]
+fn host_click_bubbles_to_document_and_window() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var log = []; \
+         document.addEventListener('click', function(e) { log.push('doc:' + e.target.id); }); \
+         window.addEventListener('click', function() { log.push('win'); }); \
+         __oasis_dispatch_with_bubbling(document.getElementById('b').__oasis_node_id, \
+           'click', {clientX: 3, clientY: 4}); \
+         log.join(' ')",
+        "doc:b win",
+    );
+}
+
+#[test]
+fn request_animation_frame_maps_to_timers() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    engine
+        .eval(
+            "var frames = []; var id1 = requestAnimationFrame(function(t) { \
+               frames.push(typeof t); }); \
+             var id2 = requestAnimationFrame(function() { frames.push('cancelled'); }); \
+             cancelAnimationFrame(id2);",
+        )
+        .unwrap();
+    check(&engine, "String(frames.length)", "0");
+    engine.tick_timers(20.0);
+    check(&engine, "frames.join() + '|' + (id1 > 0)", "number|true");
+}
+
+#[test]
+fn class_list_full_api() {
+    let (engine, shared) =
+        setup_html("<html><body><div id=\"d\" class=\"a b\"></div></body></html>");
+    check(
+        &engine,
+        "var cl = document.getElementById('d').classList; \
+         cl.add('c', 'd'); cl.remove('a', 'zz'); \
+         var r1 = cl.replace('b', 'B'); var r2 = cl.replace('nope', 'x'); \
+         var t1 = cl.toggle('c', true); var t2 = cl.toggle('e', false); \
+         var err = (function() { try { cl.add('has space'); return 'no'; } \
+           catch (e) { return e.name; } })(); \
+         [cl.length, cl.item(0), cl.item(7), r1, r2, t1, t2, cl.value, \
+          Array.from(cl).join('+'), err, \
+          cl === document.getElementById('d').classList].join()",
+        "3,B,,true,false,true,false,B c d,B+c+d,InvalidCharacterError,true",
+    );
+    let doc = shared.borrow();
+    let d = doc.element(doc.get_element_by_id("d").unwrap()).unwrap();
+    assert_eq!(d.get_attribute("class"), Some("B c d"));
+}
+
+#[test]
+fn reddit_shim_identity_check_skips_clicked_arrow() {
+    // togglevote's `s !== el` guard relies on wrapper identity: the
+    // clicked arrow must not be treated as the "opposite" arrow.
+    let (engine, _doc) = setup_html(
+        "<html><body><div class=\"midcol\">\
+         <div id=\"up\" class=\"arrow up downmod\"></div>\
+         <div id=\"down\" class=\"arrow downmod\"></div>\
+         <div class=\"score\">5 points</div></div></body></html>",
+    );
+    install_site_compat_shims(&engine);
+    check(
+        &engine,
+        "var up = document.getElementById('up'); togglevote(up, 1); \
+         [up.className, document.getElementById('down').className, \
+          document.querySelector('.score').textContent].join('|')",
+        "arrow downmod upmod|arrow down|6 points",
+    );
+}

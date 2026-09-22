@@ -791,12 +791,8 @@ impl BrowserWidget {
                         let doc_borrow = shared.borrow();
                         js_dom::register_inline_handlers(&engine, &doc_borrow);
                     }
-                    // Fire DOMContentLoaded event.
-                    let _ = engine.eval(
-                        "if (typeof document !== 'undefined' && document.dispatchEvent) { \
-                         document.dispatchEvent(new Event('DOMContentLoaded')); \
-                         }",
-                    );
+                    // readystatechange -> DOMContentLoaded -> window load.
+                    js_dom::fire_document_lifecycle(&engine);
                     self.console_output = engine.console_output();
                     // Retain engine + shared doc for event dispatch.
                     self.js_engine = Some(engine);
