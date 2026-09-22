@@ -15,6 +15,7 @@ pub mod icons;
 pub mod op;
 pub mod render;
 pub mod scene;
+pub mod status_glyphs;
 
 pub use anim::AnimClock;
 pub use background::{BackgroundLayer, BackgroundScene};

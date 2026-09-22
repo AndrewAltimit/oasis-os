@@ -267,11 +267,13 @@ fn render_and_save(
 ) -> anyhow::Result<()> {
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
+    oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
     backend.swap_buffers()?;
 
     // Render again after swap so read_pixels gets the presented frame.
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
+    oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
     save_png(path, w, h, &pixels)?;
@@ -296,11 +298,13 @@ fn render_and_save_themed(
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
     oasis_core::vector_overlay::render_vector_chrome(backend, at, 0, &mut cache)?;
+    oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
     backend.swap_buffers()?;
 
     backend.clear(Color::rgb(10, 10, 18))?;
     sdi.draw(backend)?;
     oasis_core::vector_overlay::render_vector_chrome(backend, at, 0, &mut cache)?;
+    oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
     // The cache is per-scenario but the backend lives on: free any
     // baked layer textures before the cache drops.
     cache.release_targets(backend);
@@ -583,7 +587,8 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     vfs.write("/home/user/readme.txt", b"Welcome to OASIS_OS!")
         .unwrap();
     vfs.write("/etc/hostname", b"oasis").unwrap();
-    vfs.write("/etc/version", b"0.1.0").unwrap();
+    vfs.write("/etc/version", env!("CARGO_PKG_VERSION").as_bytes())
+        .unwrap();
 
     vfs.mkdir("/apps").unwrap();
     for name in &[
@@ -798,7 +803,10 @@ fn run_skin_scenario(
             setup_terminal_objects(
                 &mut sdi,
                 &[
-                    "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
+                    format!(
+                        "OASIS_OS v{} -- Type 'help' for commands",
+                        env!("CARGO_PKG_VERSION")
+                    ),
                     String::new(),
                     "> ls /home/user".to_string(),
                     "music/  photos/  readme.txt".to_string(),

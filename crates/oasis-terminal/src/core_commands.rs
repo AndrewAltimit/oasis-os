@@ -194,7 +194,7 @@ define_command!(
     "general",
     |_args, env| {
         let mut lines = Vec::new();
-        lines.push("OASIS_OS v0.1.0".to_string());
+        lines.push(concat!("OASIS_OS v", env!("CARGO_PKG_VERSION")).to_string());
         lines.push(format!("cwd: {}", env.cwd));
         match env.vfs.readdir("/") {
             Ok(entries) => lines.push(format!("root entries: {}", entries.len())),

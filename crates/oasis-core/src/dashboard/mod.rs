@@ -21,7 +21,7 @@ use crate::skin::SkinFeatures;
 use crate::ui::flex::GridLayout;
 use crate::ui::layout::Padding;
 
-/// Base-layer z for free-layout icons: above the skin's layout chrome
+/// Base-layer z for dashboard icons: above the skin's layout chrome
 /// (auto z stays in low single digits) and the selection highlight
 /// (`FREE_ICON_Z - 10`), below the overlay pass (bars, start menu).
 pub const FREE_ICON_Z: i32 = 50;
@@ -31,6 +31,18 @@ pub const FREE_ICON_DRAG_Z: i32 = 60;
 /// Left padding (px) for column-layout icons and their labels, so the
 /// left-aligned column hugs the grid's left margin.
 pub(crate) const COLUMN_LEFT_PAD: i32 = 6;
+
+/// Minimum free/column-layout cell width (px). Wide enough that every
+/// word of every built-in app title fits a label line (widest: 66px,
+/// "Calculator" at the 8px bitmap font) plus the label gutters.
+pub(crate) const FREE_CELL_MIN_W: u32 = 70;
+
+/// How far (px) a hovered icon lifts at the top of its eased animation.
+const HOVER_LIFT_PX: f32 = 3.0;
+/// Hover lift progress per frame (~5 frames / 80ms to fully lift).
+const HOVER_LIFT_STEP: f32 = 0.2;
+/// Hover highlight opacity relative to the selection highlight colour.
+const HOVER_HIGHLIGHT_ALPHA_PCT: u16 = 45;
 
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
@@ -107,8 +119,10 @@ impl DashboardConfig {
 
         // Free-mode cells are a fixed size derived from the theme's icon
         // dimensions (2x leaves room for a two-line label) instead of
-        // stretching to fill the grid area like grid cells do.
-        let free_cell_w = (at.icon_width * 2).max(48);
+        // stretching to fill the grid area like grid cells do. The width
+        // floor keeps neighbouring labels apart: labels are clipped to
+        // their cell, so a cell narrower than a title word ellipsizes it.
+        let free_cell_w = (at.icon_width * 2).max(FREE_CELL_MIN_W);
         let free_cell_h = if is_column {
             // Taller pitch so the column reads sparse: icon + two label
             // lines + a comfortable gap. Scales with the theme's icon size
@@ -227,6 +241,9 @@ struct IconGeometry {
     /// Left-align the label under the icon instead of centering it in the
     /// cell (column layout).
     left_align: bool,
+    /// Hover lift (px) already subtracted from `iy`; the label adds it
+    /// back so only the icon body rises.
+    lift: i32,
 }
 
 /// Runtime state for the icon grid dashboard.
@@ -265,6 +282,12 @@ pub struct DashboardState {
     /// [`labels::LabelWrapCache`]). `RefCell` for the same reason as
     /// `scene_cache`: the icon draw methods borrow `self` immutably.
     label_wrap_cache: labels::LabelWrapCache,
+    /// Icon index (within the current page) under the pointer, if any.
+    /// Set from pointer motion via [`DashboardState::set_hover`].
+    pub hover_index: Option<usize>,
+    /// Per-slot hover lift progress, 0.0 (resting) ..= 1.0 (lifted),
+    /// eased toward the hover target in [`DashboardState::tick_animation`].
+    hover_lift: Vec<f32>,
 }
 
 impl DashboardState {
@@ -287,7 +310,46 @@ impl DashboardState {
             drag_index: None,
             scene_cache: std::cell::RefCell::new(HashMap::new()),
             label_wrap_cache: labels::LabelWrapCache::default(),
+            hover_index: None,
+            hover_lift: vec![0.0; per_page],
         }
+    }
+
+    /// Update the pointer-hover icon (`None` = pointer over no icon).
+    /// Indices past the current page's apps are treated as `None`.
+    /// Returns whether the hover target changed.
+    pub fn set_hover(&mut self, index: Option<usize>) -> bool {
+        let index = index.filter(|&i| i < self.current_page_apps().len());
+        let changed = self.hover_index != index;
+        self.hover_index = index;
+        changed
+    }
+
+    /// Lift target for slot `i`: 1.0 while hovered (and not dragged).
+    fn hover_target(&self, i: usize) -> f32 {
+        if self.hover_index == Some(i) && self.drag_index != Some(i) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Current hover lift (px) for slot `i`. Always 0 under
+    /// `reduced_motion`.
+    fn hover_lift_px(&self, i: usize, at: &ActiveTheme) -> i32 {
+        if at.ui_theme.reduced_motion {
+            return 0;
+        }
+        let p = self.hover_lift.get(i).copied().unwrap_or(0.0);
+        (crate::transition::ease_out_cubic(p) * HOVER_LIFT_PX).round() as i32
+    }
+
+    /// Whether any hover lift is still easing toward its target.
+    fn hover_lift_animating(&self) -> bool {
+        self.hover_lift
+            .iter()
+            .enumerate()
+            .any(|(i, &p)| p != self.hover_target(i))
     }
 
     /// Number of pages needed to show all apps.
@@ -365,6 +427,7 @@ impl DashboardState {
             direction: -1, // slide left (next)
         });
         self.entrance_elapsed_ms = Some(0);
+        self.reset_hover();
     }
 
     /// Switch to the previous page (wraps around) with slide animation.
@@ -387,6 +450,13 @@ impl DashboardState {
             direction: 1, // slide right (prev)
         });
         self.entrance_elapsed_ms = Some(0);
+        self.reset_hover();
+    }
+
+    /// Drop hover state (page change: slot indices now mean other apps).
+    fn reset_hover(&mut self) {
+        self.hover_index = None;
+        self.hover_lift.iter_mut().for_each(|p| *p = 0.0);
     }
 
     /// Advance page-slide and cursor-lerp animations by one frame.
@@ -408,6 +478,16 @@ impl DashboardState {
         }
         // Track selected index for focus glow.
         self.selected_index = self.selected;
+        // Ease hover lifts toward their targets.
+        for i in 0..self.hover_lift.len() {
+            let target = self.hover_target(i);
+            let p = &mut self.hover_lift[i];
+            *p = if *p < target {
+                (*p + HOVER_LIFT_STEP).min(target)
+            } else {
+                (*p - HOVER_LIFT_STEP).max(target)
+            };
+        }
     }
 
     /// Whether any dashboard animation is (or may be) live this frame.
@@ -421,6 +501,10 @@ impl DashboardState {
     pub fn has_active_animation(&self, at: &ActiveTheme) -> bool {
         // Transient animations: page slide, press flash, icon drag.
         if self.page_anim.is_some() || self.press_flash_frame > 0 || self.drag_index.is_some() {
+            return true;
+        }
+        // Hover lift easing (skipped under reduced motion: nothing moves).
+        if !at.ui_theme.reduced_motion && self.hover_lift_animating() {
             return true;
         }
         // Entrance animation. `entrance_elapsed_ms` saturates upward and
@@ -510,7 +594,8 @@ impl DashboardState {
             } else {
                 cell_x + (cell_w as i32 - icon_w as i32) / 2
             };
-            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4;
+            let lift = self.hover_lift_px(i, at);
+            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4 - lift;
 
             let geo = IconGeometry {
                 ix,
@@ -520,6 +605,7 @@ impl DashboardState {
                 cell_x,
                 text_pad,
                 left_align,
+                lift,
             };
             match at.icon.style.as_str() {
                 "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
@@ -528,71 +614,89 @@ impl DashboardState {
                 _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
             }
 
-            // In free layout, lift icons into an explicit z band above the
-            // skin's base-layer chrome (layout objects take single-digit
-            // auto z), with the dragged icon raised above its siblings so
-            // it stays visible while crossing them.
-            if self.config.free_layout {
-                let z = if self.drag_index == Some(i) {
-                    FREE_ICON_DRAG_Z
-                } else {
-                    FREE_ICON_Z
-                };
-                for name in names.all() {
-                    if let Ok(obj) = sdi.get_mut(name) {
-                        obj.z = z;
-                    }
+            // Lift icons into an explicit z band above the skin's
+            // base-layer chrome (layout objects take single-digit auto z)
+            // and the selection/hover highlights, with a dragged icon
+            // raised above its siblings so it stays visible while crossing
+            // them.
+            let z = if self.drag_index == Some(i) {
+                FREE_ICON_DRAG_Z
+            } else {
+                FREE_ICON_Z
+            };
+            for name in names.all() {
+                if let Ok(obj) = sdi.get_mut(name) {
+                    obj.z = z;
                 }
             }
         }
 
-        // Grid mode keeps the historical behaviour: icons respond directly
-        // to clicks and no selection box is drawn. Free layout shows a
-        // themed highlight behind the selected icon (skin `cursor_style`:
-        // "stroke" outlines it, "fill" paints a backdrop, "none" disables).
-        let cursor_name = "cursor_highlight";
-        if !sdi.contains(cursor_name) {
-            sdi.create(cursor_name);
-        }
-        let sel_rect = (self.config.free_layout
-            && at.icon.cursor_style != "none"
-            && self.drag_index.is_none()
-            && self.selected < page_apps.len())
-        .then(|| {
-            let (ox, oy) = origins[self.selected];
+        // Themed highlight behind the selected icon (skin `cursor_style`:
+        // "stroke" outlines it, "fill" paints a backdrop, "none" disables),
+        // in grid and free layouts alike so d-pad users always see the
+        // selection. A fainter copy marks the pointer-hovered icon.
+        let highlight_rect = |i: usize| -> Option<(i32, i32, u32, u32)> {
+            if at.icon.cursor_style == "none" || self.drag_index.is_some() {
+                return None;
+            }
+            let &(ox, oy) = origins.get(i)?;
             let pad = self.config.cursor_pad.max(0);
             let ix = if self.config.left_align_icons {
                 ox + slide_offset + COLUMN_LEFT_PAD
             } else {
                 ox + slide_offset + (cell_w as i32 - icon_w as i32) / 2
             };
-            let iy = oy + (cell_h as i32 - icon_h as i32) / 4;
-            (
+            let iy = oy + (cell_h as i32 - icon_h as i32) / 4 - self.hover_lift_px(i, at);
+            Some((
                 ix - pad,
                 iy - pad,
                 icon_w + 2 * pad as u32,
                 icon_h + 2 * pad as u32,
-            )
-        });
-        if let Ok(cursor) = sdi.get_mut(cursor_name) {
-            match sel_rect {
+            ))
+        };
+        let sel_rect = highlight_rect(self.selected);
+        let hover_rect = self
+            .hover_index
+            .filter(|&h| h != self.selected)
+            .and_then(highlight_rect);
+        let hover_color = {
+            let c = at.icon.cursor_color;
+            let a = (c.a as u16 * HOVER_HIGHLIGHT_ALPHA_PCT / 100) as u8;
+            Color::rgba(c.r, c.g, c.b, a)
+        };
+        for (name, rect, color, z) in [
+            (
+                "cursor_highlight",
+                sel_rect,
+                at.icon.cursor_color,
+                FREE_ICON_Z - 10,
+            ),
+            ("hover_highlight", hover_rect, hover_color, FREE_ICON_Z - 11),
+        ] {
+            if !sdi.contains(name) {
+                sdi.create(name);
+            }
+            let Ok(cursor) = sdi.get_mut(name) else {
+                continue;
+            };
+            match rect {
                 Some((x, y, w, h)) => {
                     cursor.visible = true;
                     cursor.x = x;
                     cursor.y = y;
                     cursor.w = w;
                     cursor.h = h;
-                    cursor.z = FREE_ICON_Z - 10;
+                    cursor.z = z;
                     cursor.text = None;
                     cursor.border_radius = Some(at.icon.cursor_border_radius);
                     if at.icon.cursor_style == "fill" {
-                        cursor.color = at.icon.cursor_color;
+                        cursor.color = color;
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     } else {
                         cursor.color = Color::rgba(0, 0, 0, 0);
                         cursor.stroke_width = Some(at.icon.cursor_stroke_width);
-                        cursor.stroke_color = Some(at.icon.cursor_color);
+                        cursor.stroke_color = Some(color);
                     }
                 },
                 None => cursor.visible = false,
@@ -609,8 +713,10 @@ impl DashboardState {
                 }
             }
         }
-        if let Ok(obj) = sdi.get_mut("cursor_highlight") {
-            obj.visible = false;
+        for name in ["cursor_highlight", "hover_highlight"] {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
         }
     }
 }
@@ -800,12 +906,101 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn grid_layout_keeps_selection_highlight_hidden() {
+    fn grid_layout_shows_selection_highlight() {
+        let mut dash = DashboardState::new(test_config(), test_apps(3));
+        let mut sdi = SdiRegistry::new();
+        let mut at = crate::active_theme::ActiveTheme::default();
+        dash.selected = 2;
+        dash.update_sdi(&mut sdi, &at);
+        let cursor = sdi.get("cursor_highlight").unwrap();
+        assert!(
+            cursor.visible,
+            "d-pad selection must be visible in grid mode"
+        );
+        // The highlight surrounds the selected icon's cell, not icon 0's.
+        let (cx, cy, cw, ch) = dash.icon_rect(2).unwrap();
+        assert!(cursor.x >= cx && cursor.x < cx + cw as i32);
+        assert!(cursor.y >= cy && cursor.y < cy + ch as i32);
+        // It sits below the icon bodies.
+        assert!(cursor.z < sdi.get("icon_2").unwrap().z);
+        // `cursor_style = "none"` still disables it.
+        at.icon.cursor_style = "none".to_string();
+        dash.update_sdi(&mut sdi, &at);
+        assert!(!sdi.get("cursor_highlight").unwrap().visible);
+    }
+
+    #[test]
+    fn set_hover_tracks_pointer_target() {
+        let mut dash = DashboardState::new(test_config(), test_apps(3));
+        assert!(dash.set_hover(Some(1)));
+        assert_eq!(dash.hover_index, Some(1));
+        assert!(!dash.set_hover(Some(1)), "same target is not a change");
+        // Slots without an app on this page never hover.
+        assert!(dash.set_hover(Some(3)));
+        assert_eq!(dash.hover_index, None);
+        dash.set_hover(Some(0));
+        dash.next_page();
+        assert_eq!(dash.hover_index, None, "page change drops hover");
+    }
+
+    #[test]
+    fn hover_shows_faint_highlight_and_lifts_icon() {
         let mut dash = DashboardState::new(test_config(), test_apps(3));
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
+        dash.tick_animation();
         dash.update_sdi(&mut sdi, &at);
-        assert!(!sdi.get("cursor_highlight").unwrap().visible);
+        let rest_y = sdi.get("icon_1").unwrap().y;
+        let rest_label_y = sdi.get("icon_label_1").unwrap().y;
+        assert!(!sdi.get("hover_highlight").unwrap().visible);
+
+        dash.set_hover(Some(1));
+        assert!(dash.has_active_animation(&at), "lift must request frames");
+        let mut prev = rest_y;
+        for _ in 0..10 {
+            dash.tick_animation();
+            dash.update_sdi(&mut sdi, &at);
+            let y = sdi.get("icon_1").unwrap().y;
+            assert!(y <= prev, "lift eases monotonically");
+            prev = y;
+        }
+        let lifted = rest_y - sdi.get("icon_1").unwrap().y;
+        assert!((2..=3).contains(&lifted), "lift {lifted}px");
+        assert_eq!(sdi.get("icon_label_1").unwrap().y, rest_label_y);
+        assert!(!dash.has_active_animation(&at), "settled lift is idle");
+        let hover = sdi.get("hover_highlight").unwrap();
+        assert!(hover.visible);
+        let sel = sdi.get("cursor_highlight").unwrap();
+        let hover_a = hover.stroke_color.unwrap().a;
+        assert!(hover_a < sel.stroke_color.unwrap().a, "hover is fainter");
+
+        // Pointer leaves: highlight hides and the icon settles back.
+        dash.set_hover(None);
+        for _ in 0..10 {
+            dash.tick_animation();
+        }
+        dash.update_sdi(&mut sdi, &at);
+        assert_eq!(sdi.get("icon_1").unwrap().y, rest_y);
+        assert!(!sdi.get("hover_highlight").unwrap().visible);
+    }
+
+    #[test]
+    fn hover_does_not_lift_under_reduced_motion() {
+        let mut dash = DashboardState::new(test_config(), test_apps(3));
+        let mut sdi = SdiRegistry::new();
+        let mut at = crate::active_theme::ActiveTheme::default();
+        at.ui_theme.reduced_motion = true;
+        dash.update_sdi(&mut sdi, &at);
+        let rest_y = sdi.get("icon_1").unwrap().y;
+        dash.set_hover(Some(1));
+        assert!(!dash.has_active_animation(&at));
+        for _ in 0..10 {
+            dash.tick_animation();
+            dash.update_sdi(&mut sdi, &at);
+            assert_eq!(sdi.get("icon_1").unwrap().y, rest_y);
+        }
+        // The static hover highlight still shows.
+        assert!(sdi.get("hover_highlight").unwrap().visible);
     }
 
     #[test]

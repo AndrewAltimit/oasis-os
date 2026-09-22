@@ -15,6 +15,20 @@ use oasis_core::terminal_sdi;
 
 use crate::{commands, icon_drag, launch, terminal_input};
 
+/// Point the dashboard's hover highlight / lift at the icon under the
+/// pointer. `reachable` is false when something (a window) covers the
+/// icons at this point; an open start menu, the media tabs, or an icon
+/// drag also clear the hover.
+fn update_dashboard_hover(state: &mut AppState, x: i32, y: i32, reachable: bool) {
+    let target = (reachable
+        && !state.ui.start_menu.open
+        && state.ui.bottom_bar.active_tab == MediaTab::None
+        && !icon_drag::active(state))
+    .then(|| state.ui.dashboard.icon_at(x, y))
+    .flatten();
+    state.ui.dashboard.set_hover(target);
+}
+
 /// Launch the dashboard app at page index `idx` as a floating window.
 ///
 /// `fade` adds the fullscreen fade transition (used from dashboard mode
@@ -295,6 +309,12 @@ pub fn handle_desktop_input(
         InputEvent::CursorMove { x, y } => {
             state.ui.taskbar.set_hover(*x, *y);
             state.ui.start_menu.set_hover(*x, *y);
+            // Desktop icons sit behind windows: only hover them where the
+            // pointer reaches the bare desktop.
+            let on_desktop =
+                oasis_core::wm::hit_test::hit_test(state.wm.windows(), *x, *y, state.wm.theme())
+                    == oasis_core::wm::HitRegion::Desktop;
+            update_dashboard_hover(state, *x, *y, on_desktop);
             if icon_drag::active(state) {
                 // Desktop-icon drag in progress: the press already missed
                 // every window, so the WM has nothing to track.
@@ -883,6 +903,7 @@ pub fn handle_default_input(
         // Free-layout icon drag tracking (no-ops when nothing is armed).
         InputEvent::CursorMove { x, y } if state.mode == Mode::Dashboard => {
             icon_drag::on_move(state, *x, *y);
+            update_dashboard_hover(state, *x, *y, true);
             // Hover focus (B6): in free layout the selection follows the
             // pointer, driving the existing focus_scale / focus_glow /
             // selection-highlight micro-motion. Grid skins keep their
@@ -1728,6 +1749,38 @@ mod tests {
         let result = handle_osk_input(&InputEvent::ButtonPress(Button::Up), &mut state, &mut sdi);
         assert_eq!(result, InputResult::Continue);
         assert!(state.osk.is_some());
+    }
+
+    #[test]
+    fn dashboard_pointer_move_updates_hover() {
+        use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState};
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let cfg = DashboardConfig::from_features(
+            &oasis_core::skin::SkinFeatures::default(),
+            &state.active_theme,
+        );
+        let apps = (0..3)
+            .map(|i| AppEntry {
+                title: format!("App {i}"),
+                path: format!("/apps/app{i}"),
+                icon_png: Vec::new(),
+                color: oasis_core::backend::Color::WHITE,
+            })
+            .collect();
+        state.ui.dashboard = DashboardState::new(cfg, apps);
+        let (x, y, w, h) = state.ui.dashboard.icon_rect(1).unwrap();
+        let mut move_to = |state: &mut AppState, x: i32, y: i32| {
+            handle_default_input(&InputEvent::CursorMove { x, y }, state, &mut sdi, &mut vfs);
+        };
+        move_to(&mut state, x + w as i32 / 2, y + h as i32 / 2);
+        assert_eq!(state.ui.dashboard.hover_index, Some(1));
+        move_to(&mut state, -10, -10);
+        assert_eq!(state.ui.dashboard.hover_index, None);
+        // An open start menu takes the pointer.
+        state.ui.start_menu.open = true;
+        move_to(&mut state, x + w as i32 / 2, y + h as i32 / 2);
+        assert_eq!(state.ui.dashboard.hover_index, None);
     }
 
     #[test]
