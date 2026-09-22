@@ -1,7 +1,7 @@
 //! Canvas 2D rendering context for `<canvas>` elements.
 //!
 //! Drawing commands are recorded into a [`CanvasState`] by JavaScript
-//! (via the `__oasis_canvas_*` bindings in `js_dom.rs`) and then
+//! (via the `__oasis_canvas_*` bindings in `js_dom/canvas.rs`) and then
 //! replayed at paint time through the SDI backend.
 //!
 //! Supported API: `fillRect`, `strokeRect`, `clearRect`, `fillText`,

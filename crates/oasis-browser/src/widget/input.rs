@@ -1027,6 +1027,10 @@ impl BrowserWidget {
     /// `engine.eval()` (every call re-parsed + re-compiled the snippet).
     /// The helper is installed once by the DOM bootstrap JS; if it's
     /// missing (engine not fully initialised) we fall back to `false`.
+    ///
+    /// All event dispatch goes through `JsEngine::with_context_guarded`,
+    /// so a runaway handler (`onclick="while(1){}"`) is interrupted after
+    /// the engine's execution budget instead of freezing the OS.
     #[cfg(feature = "javascript")]
     fn dispatch_js_event_prevent(
         engine: &oasis_js::JsEngine,
@@ -1035,7 +1039,7 @@ impl BrowserWidget {
     ) -> bool {
         use oasis_js::rquickjs;
         engine
-            .with_context(|ctx| -> rquickjs::Result<bool> {
+            .with_context_guarded(|ctx| -> rquickjs::Result<bool> {
                 let globals = ctx.globals();
                 let Ok(dispatch): rquickjs::Result<rquickjs::Function> =
                     globals.get("__oasis_dispatch_click_fast")
@@ -1076,7 +1080,7 @@ impl BrowserWidget {
         event_type: &str,
     ) {
         use oasis_js::rquickjs;
-        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+        let _ = engine.with_context_guarded(|ctx| -> rquickjs::Result<()> {
             let globals = ctx.globals();
             if let Ok(dispatch) =
                 globals.get::<_, rquickjs::Function>("__oasis_dispatch_mouse_fast")
@@ -1105,7 +1109,7 @@ impl BrowserWidget {
         // single-quoted JS string literal (`'`, `\`, newline, CR).
         use oasis_js::rquickjs;
         let key_str = key.to_string();
-        let _ = engine.with_context(|ctx| -> rquickjs::Result<()> {
+        let _ = engine.with_context_guarded(|ctx| -> rquickjs::Result<()> {
             let globals = ctx.globals();
             if let Ok(dispatch) = globals.get::<_, rquickjs::Function>("__oasis_dispatch_key_fast")
             {
@@ -1372,7 +1376,7 @@ impl BrowserWidget {
 
         // Rebuild inline-style cache from the mutated DOM. JS may have
         // overwritten `style=""` attributes via `element.style.prop = ...`
-        // (`__oasis_style_set` in js_dom.rs) or inserted new nodes with
+        // (`__oasis_style_set` in js_dom/bindings.rs) or inserted new nodes with
         // inline styles via `innerHTML`; the cached list was captured at
         // page load and is now stale.
         if let Some(doc) = &self.document {
