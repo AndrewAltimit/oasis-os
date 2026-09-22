@@ -107,9 +107,19 @@ impl WindowManager {
             }
         }
 
-        // Update active window.
+        // Focus passes to the topmost *visible* window: a minimized one
+        // must not become the (invisible) keyboard target.
         if self.active_window.as_deref() == Some(id) {
-            self.active_window = self.windows.last().map(|w| w.id.clone());
+            self.active_window = None;
+            if let Some(next) = self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.state != WindowState::Minimized)
+                .map(|w| w.id.clone())
+            {
+                self.focus_window_internal(&next, sdi);
+            }
         }
 
         // Hide modal overlay if no more modal windows remain.

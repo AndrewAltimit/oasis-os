@@ -728,4 +728,16 @@ mod tests {
         wm.fit_to_screen(&mut sdi);
         assert_eq!(geom(&wm, "a"), (0, 0, 320, 240));
     }
+
+    #[test]
+    fn closing_the_active_window_never_focuses_a_minimized_one() {
+        let (mut wm, mut sdi) = setup(&["a", "b", "c"]);
+        wm.minimize_window("c", &mut sdi).expect("minimize");
+        wm.focus_window("b", &mut sdi).expect("focus");
+        // Stack (bottom..top): a, c (minimized), b.
+        wm.close_window("b", &mut sdi).expect("close");
+        assert_eq!(wm.active_window(), Some("a"));
+        wm.close_window("a", &mut sdi).expect("close");
+        assert_eq!(wm.active_window(), None, "only a minimized window left");
+    }
 }
