@@ -23,6 +23,8 @@
 //!   same-origin / private-network policy)
 //! - [`storage`] -- per-origin, quota'd `localStorage` / `sessionStorage`
 //!   and `document.cookie`
+//! - [`node_api`] -- node types, text-inclusive child lists, detached-safe
+//!   insertion, cloning, fragment parsing, `matches()` / `getElementsBy*`
 //! - [`serialize`] -- `innerHTML` serialization and fragment deep-copy
 //! - [`compat_shims`] -- site-compat helpers for inline `onclick` code
 //! - `canvas` -- `<canvas>` 2D context bindings (feature `canvas`)
@@ -34,6 +36,7 @@ mod bindings;
 mod canvas;
 mod compat_shims;
 mod fetch;
+mod node_api;
 mod serialize;
 mod storage;
 
@@ -53,9 +56,9 @@ use oasis_js::rquickjs::{Ctx, Result as JsResult};
 use oasis_net::tls::TlsProvider;
 
 use crate::css::values::ComputedStyle;
-use crate::html::dom::{Document, NodeKind};
 #[cfg(test)]
-use crate::html::dom::{ElementData, TagName};
+use crate::html::dom::ElementData;
+use crate::html::dom::{Document, NodeKind, TagName};
 
 /// Shared, interior-mutable document used during JS execution.
 pub type SharedDoc = Rc<RefCell<Document>>;
@@ -186,7 +189,9 @@ fn install_document_global_full(
     // its own handle. `Option<Rc<Cell<bool>>>` is cheap to clone.
     let dirty = dom_dirty.map(Rc::clone);
 
-    bindings::install_dom_bindings(ctx, doc, &dirty)?;
+    let freed: node_api::FreedLog = Rc::new(RefCell::new(Vec::new()));
+    bindings::install_dom_bindings(ctx, doc, &dirty, &freed)?;
+    node_api::install_node_bindings(ctx, doc, &dirty, &freed)?;
     bindings::install_nav_bindings(ctx, nav_actions)?;
     fetch::install_fetch_binding(ctx, url, csp, tls)?;
     bindings::install_computed_style_binding(ctx, styles)?;
@@ -207,6 +212,15 @@ const JS_DOM_BOOTSTRAP: &str = include_str!("bootstrap.js");
 /// Drain and return all pending navigation actions from the queue.
 pub fn drain_nav_actions(nav: &SharedNavActions) -> Vec<JsNavAction> {
     std::mem::take(&mut nav.borrow_mut())
+}
+
+/// Run the page lifecycle once parser-inserted scripts, site shims and
+/// inline handlers are in place: `document.readyState` goes
+/// `interactive` -> `complete`, firing `readystatechange`,
+/// `DOMContentLoaded` (bubbling to `window`) and then `window` `load`.
+pub fn fire_document_lifecycle(engine: &oasis_js::JsEngine) {
+    let _ =
+        engine.eval("if (typeof __oasis_fire_lifecycle === 'function') __oasis_fire_lifecycle();");
 }
 
 /// Inline event handler attribute names and the corresponding DOM
@@ -232,13 +246,19 @@ pub fn register_inline_handlers(engine: &oasis_js::JsEngine, doc: &Document) {
         if let NodeKind::Element(elem) = &node.kind {
             for &(attr_name, event_type) in INLINE_HANDLERS {
                 if let Some(handler_body) = elem.get_attribute(attr_name) {
+                    // `<body onload>` is a window `load` handler.
+                    let target = if elem.tag == TagName::Body && event_type == "load" {
+                        "window".to_string()
+                    } else {
+                        format!("new Element({id})")
+                    };
                     // Wrap the handler so `return false` / a falsy
                     // return calls `event.preventDefault()`, matching
                     // the HTML spec. Without this, reddit-style
                     // `onclick="return togglecomment(this)"` would
                     // toggle the class then navigate to `#` anyway.
                     let js = format!(
-                        "(function(){{ var el = new Element({id}); \
+                        "(function(){{ var el = {target}; \
                          el.addEventListener(\"{event_type}\", \
                          function(event) {{ \
                            var __r = (function(){{ {handler_body} }}).call(el); \

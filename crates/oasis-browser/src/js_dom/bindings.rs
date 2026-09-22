@@ -6,7 +6,11 @@ use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
-use super::serialize::{deep_copy_node, serialize_node};
+use super::node_api::{
+    FreedLog, INSERT_INVALID, connected_element_by_id, free_children_logged, insert_node,
+    parse_into,
+};
+use super::serialize::serialize_node;
 use super::{
     JsNavAction, NO_NODE, SharedDirty, SharedDoc, SharedNavActions, SharedStyles, mark_dirty,
 };
@@ -20,6 +24,7 @@ pub(super) fn install_dom_bindings(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
+    freed: &FreedLog,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -147,18 +152,27 @@ pub(super) fn install_dom_bindings(
     }
 
     // -- __oasis_settext(nid, text) -----------------------------------
+    // Text/comment nodes get their data replaced; other nodes lose all
+    // children (freed + logged) in favour of one text node (none when
+    // `text` is empty, per the DOM spec).
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let freed = Rc::clone(freed);
         globals.set(
             "__oasis_settext",
             Function::new(ctx.clone(), move |nid: i32, text: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id < doc.nodes.len() {
-                    doc.set_text_content(id, &text);
-                    mark_dirty(&dirty);
+                if id >= doc.nodes.len() {
+                    return;
                 }
+                if let NodeKind::Text(s) | NodeKind::Comment(s) = &mut doc.nodes[id].kind {
+                    *s = text;
+                } else {
+                    set_text_logged(&mut doc, id, &text, &freed);
+                }
+                mark_dirty(&dirty);
             })?,
         )?;
     }
@@ -185,34 +199,13 @@ pub(super) fn install_dom_bindings(
         )?;
     }
 
-    // -- __oasis_parent(nid) -> i32 -----------------------------------
-    {
-        let d = Rc::clone(doc);
-        globals.set(
-            "__oasis_parent",
-            Function::new(ctx.clone(), move |nid: i32| -> i32 {
-                let doc = d.borrow();
-                let id = nid as NodeId;
-                if id >= doc.nodes.len() {
-                    return NO_NODE;
-                }
-                doc.nodes[id]
-                    .parent
-                    .filter(|&pid| matches!(doc.nodes[pid].kind, NodeKind::Element(_)))
-                    .map_or(NO_NODE, |pid| pid as i32)
-            })?,
-        )?;
-    }
-
     // -- __oasis_getbyid(id) -> i32 -----------------------------------
     {
         let d = Rc::clone(doc);
         globals.set(
             "__oasis_getbyid",
             Function::new(ctx.clone(), move |id: String| -> i32 {
-                d.borrow()
-                    .get_element_by_id(&id)
-                    .map_or(NO_NODE, |nid| nid as i32)
+                connected_element_by_id(&d.borrow(), &id).map_or(NO_NODE, |nid| nid as i32)
             })?,
         )?;
     }
@@ -242,28 +235,38 @@ pub(super) fn install_dom_bindings(
         )?;
     }
 
-    // -- __oasis_append(parent_nid, child_nid) ------------------------
+    // -- __oasis_append(parent_nid, child_nid) -> i32 (0 = ok) --------
+    // Moves the child (detaching it from any old parent without freeing
+    // its subtree); fragments contribute their children.
     {
         let d = Rc::clone(doc);
         globals.set(
             "__oasis_append",
             Function::new(ctx.clone(), {
                 let dirty = dirty.clone();
-                move |parent_nid: i32, child_nid: i32| {
+                move |parent_nid: i32, child_nid: i32| -> i32 {
                     let mut doc = d.borrow_mut();
-                    let pid = parent_nid as NodeId;
-                    let cid = child_nid as NodeId;
-                    if pid < doc.nodes.len() && cid < doc.nodes.len() {
-                        doc.remove_child(cid);
-                        doc.append_child(pid, cid);
+                    let (Ok(pid), Ok(cid)) =
+                        (usize::try_from(parent_nid), usize::try_from(child_nid))
+                    else {
+                        return INSERT_INVALID;
+                    };
+                    if pid >= doc.nodes.len() || cid >= doc.nodes.len() {
+                        return INSERT_INVALID;
+                    }
+                    let rc = insert_node(&mut doc, pid, cid, None);
+                    if rc == 0 {
                         mark_dirty(&dirty);
                     }
+                    rc
                 }
             })?,
         )?;
     }
 
     // -- __oasis_remove(child_nid) -> i32 (former parent or -1) --------
+    // Detaches without freeing: script may still hold the node and
+    // re-insert it later (`el.remove(); other.appendChild(el)`).
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
@@ -271,11 +274,13 @@ pub(super) fn install_dom_bindings(
             "__oasis_remove",
             Function::new(ctx.clone(), move |child_nid: i32| -> i32 {
                 let mut doc = d.borrow_mut();
-                let cid = child_nid as NodeId;
+                let Ok(cid) = usize::try_from(child_nid) else {
+                    return NO_NODE;
+                };
                 if cid >= doc.nodes.len() {
                     return NO_NODE;
                 }
-                let res = doc.remove_child(cid);
+                let res = doc.detach_node(cid);
                 if res.is_some() {
                     mark_dirty(&dirty);
                 }
@@ -284,7 +289,7 @@ pub(super) fn install_dom_bindings(
         )?;
     }
 
-    // -- __oasis_insertbefore(parent_nid, new_nid, ref_nid) -----------
+    // -- __oasis_insertbefore(parent_nid, new_nid, ref_nid) -> i32 ----
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
@@ -292,33 +297,23 @@ pub(super) fn install_dom_bindings(
             "__oasis_insertbefore",
             Function::new(
                 ctx.clone(),
-                move |parent_nid: i32, new_nid: i32, ref_nid: i32| {
+                move |parent_nid: i32, new_nid: i32, ref_nid: i32| -> i32 {
                     let mut doc = d.borrow_mut();
-                    let pid = parent_nid as NodeId;
-                    let nid = new_nid as NodeId;
-                    if pid >= doc.nodes.len() || nid >= doc.nodes.len() {
-                        return;
-                    }
-                    // Remove new_nid from its current parent first.
-                    doc.remove_child(nid);
-                    // Find the position of ref_nid in parent's children.
-                    let pos = if ref_nid >= 0 {
-                        let rid = ref_nid as NodeId;
-                        doc.nodes[pid].children.iter().position(|&c| c == rid)
-                    } else {
-                        None
+                    let (Ok(pid), Ok(nid)) =
+                        (usize::try_from(parent_nid), usize::try_from(new_nid))
+                    else {
+                        return INSERT_INVALID;
                     };
-                    match pos {
-                        Some(idx) => {
-                            doc.nodes[pid].children.insert(idx, nid);
-                            doc.nodes[nid].parent = Some(pid);
-                        },
-                        None => {
-                            // ref_nid not found or -1: append.
-                            doc.append_child(pid, nid);
-                        },
+                    if pid >= doc.nodes.len() || nid >= doc.nodes.len() {
+                        return INSERT_INVALID;
                     }
-                    mark_dirty(&dirty);
+                    // ref_nid of -1 (or one that isn't a child) appends.
+                    let reference = usize::try_from(ref_nid).ok();
+                    let rc = insert_node(&mut doc, pid, nid, reference);
+                    if rc == 0 {
+                        mark_dirty(&dirty);
+                    }
+                    rc
                 },
             )?,
         )?;
@@ -350,12 +345,13 @@ pub(super) fn install_dom_bindings(
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let freed = Rc::clone(freed);
         globals.set(
             "__oasis_settitle",
             Function::new(ctx.clone(), move |val: String| {
                 let mut doc = d.borrow_mut();
                 if let Some(tid) = doc.title_element() {
-                    doc.set_text_content(tid, &val);
+                    set_text_logged(&mut doc, tid, &val, &freed);
                     mark_dirty(&dirty);
                 }
             })?,
@@ -386,6 +382,7 @@ pub(super) fn install_dom_bindings(
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let freed = Rc::clone(freed);
         globals.set(
             "__oasis_set_inner_html",
             Function::new(ctx.clone(), move |nid: i32, html: String| {
@@ -397,39 +394,22 @@ pub(super) fn install_dom_bindings(
                 // Serialize existing children so we can detect no-op writes
                 // (e.g. animation loops setting innerHTML to the same string
                 // each frame). Mirrors the guard pattern in
-                // `classlist_op_mutated` / `__oasis_setattr`.
+                // `__oasis_setattr`.
                 let mut old_html = String::new();
                 for &child in &doc.nodes[id].children {
                     serialize_node(&doc, child, &mut old_html);
                 }
                 // Recursively free existing children and all descendants
-                // (ID index entries, arena slots).
-                let old: Vec<NodeId> = doc.nodes[id].children.clone();
-                for child_id in old {
-                    doc.free_subtree(child_id);
-                }
-                doc.nodes[id].children.clear();
+                // (ID index entries, arena slots), logging the freed ids
+                // so the JS wrapper cache can evict them.
+                free_children_logged(&mut doc, id, &freed);
 
                 // Parse and transplant unconditionally — the before/after
                 // serialize comparison below uses the post-transplant state
                 // to detect no-ops. The DOM is always updated to the parsed
                 // result; only mark_dirty (cascade + relayout) is skipped
                 // when old_html == new_html.
-                use crate::html::tokenizer::Tokenizer;
-                use crate::html::tree_builder::TreeBuilder;
-                let wrapped = format!("<html><body>{html}</body></html>");
-                let tokens = Tokenizer::new(&wrapped).tokenize();
-                let frag = TreeBuilder::build(tokens);
-                // Collect body children from fragment.
-                let body_id = frag.body();
-                let src_children: Vec<NodeId> = body_id
-                    .map(|b| frag.nodes[b].children.clone())
-                    .unwrap_or_default();
-                // Deep-copy nodes into the live document.
-                for &src_child in &src_children {
-                    let new_id = deep_copy_node(&frag, &mut doc, src_child);
-                    doc.append_child(id, new_id);
-                }
+                parse_into(&mut doc, id, &html);
 
                 // Re-serialize the freshly-transplanted subtree and compare
                 // against the pre-mutation serialization. Only trigger a
@@ -489,34 +469,6 @@ pub(super) fn install_dom_bindings(
         )?;
     }
 
-    // -- __oasis_classlist_op(nid, op, cls) -> bool -------------------
-    {
-        let d = Rc::clone(doc);
-        let dirty = dirty.clone();
-        globals.set(
-            "__oasis_classlist_op",
-            Function::new(
-                ctx.clone(),
-                move |nid: i32, op: String, cls: String| -> bool {
-                    let mut doc = d.borrow_mut();
-                    let id = nid as NodeId;
-                    if id >= doc.nodes.len() {
-                        return false;
-                    }
-                    let e = match &mut doc.nodes[id].kind {
-                        NodeKind::Element(e) => e,
-                        _ => return false,
-                    };
-                    let (js_ret, mutated) = classlist_op_mutated(e, &op, &cls);
-                    if mutated {
-                        mark_dirty(&dirty);
-                    }
-                    js_ret
-                },
-            )?,
-        )?;
-    }
-
     // -- __oasis_style_set(nid, prop, value) --------------------------
     {
         let d = Rc::clone(doc);
@@ -561,6 +513,16 @@ pub(super) fn install_dom_bindings(
     }
 
     Ok(())
+}
+
+/// Replace `id`'s children with a single text node (none for empty
+/// `text`), logging the freed subtree ids.
+fn set_text_logged(doc: &mut Document, id: NodeId, text: &str, freed: &FreedLog) {
+    free_children_logged(doc, id, freed);
+    if !text.is_empty() {
+        let text_id = doc.add_node(NodeKind::Text(text.to_string()));
+        doc.append_child(id, text_id);
+    }
 }
 
 /// Install `location.assign()` / `history.back()` / `history.forward()`
@@ -705,64 +667,6 @@ fn find_matching(
         }
     }
     results
-}
-
-// ------------------------------------------------------------------
-// classList operations
-// ------------------------------------------------------------------
-
-/// Perform a classList operation on an element's `class` attribute.
-/// Returns a bool (meaningful for "contains" and "toggle").
-/// Apply a `classList` op. Returns `(js_return_value, mutated)` where
-/// `mutated` is `true` only if the serialized `class` attribute actually
-/// changed — `classList.add` of a token the element already has is a
-/// DOM no-op and shouldn't force a relayout.
-fn classlist_op_mutated(elem: &mut ElementData, op: &str, cls: &str) -> (bool, bool) {
-    let current = elem.get_attribute("class").unwrap_or("").to_string();
-    let mut parts: Vec<String> = current.split_ascii_whitespace().map(String::from).collect();
-
-    let (js_ret, new_parts): (bool, Option<Vec<String>>) = match op {
-        "add" => {
-            if parts.iter().any(|c| c == cls) {
-                (true, None)
-            } else {
-                parts.push(cls.to_string());
-                (true, Some(parts))
-            }
-        },
-        "remove" => {
-            if parts.iter().any(|c| c == cls) {
-                parts.retain(|c| c != cls);
-                (false, Some(parts))
-            } else {
-                (false, None)
-            }
-        },
-        "toggle" => {
-            let had = parts.iter().any(|c| c == cls);
-            if had {
-                parts.retain(|c| c != cls);
-            } else {
-                parts.push(cls.to_string());
-            }
-            (!had, Some(parts))
-        },
-        "contains" => (parts.iter().any(|c| c == cls), None),
-        _ => (false, None),
-    };
-
-    match new_parts {
-        Some(tokens) => {
-            let serialized = tokens.join(" ");
-            if serialized == current {
-                (js_ret, false)
-            } else {
-                elem.set_attribute("class", &serialized);
-                (js_ret, true)
-            }
-        },
-        None => (js_ret, false),
-    }
 }
 
 // ------------------------------------------------------------------
