@@ -355,91 +355,10 @@ fn collect_inline_fragments(
                 fragments.extend(text_fragments_for_inline(child, available_width, measurer));
             },
             BoxType::InlineBlock => {
-                // InlineBlock boxes participate in inline flow but
-                // establish their own block formatting context. We
-                // must lay them out now so dimensions are known.
-                let mut lb = child.clone();
-                layout_block(&mut lb, available_width, measurer);
-                if matches!(lb.style.width, Dimension::Auto) {
-                    // Shrink content width to actual children extent.
-                    let max_child_right = lb
-                        .children
-                        .iter()
-                        .map(|c| {
-                            let bb = c.dimensions.border_box();
-                            bb.x + bb.width - lb.dimensions.content.x
-                        })
-                        .fold(0.0_f32, f32::max);
-                    lb.dimensions.content.width = max_child_right;
-                }
-                // InlineBlock margins must not be inflated by the
-                // block-level over-constrained rule. Reset to declared
-                // values (auto margins resolve to zero for inline-block).
-                lb.dimensions.margin.left = if lb.style.margin_left_auto {
-                    0.0
-                } else {
-                    lb.style.margin_left
-                };
-                lb.dimensions.margin.right = if lb.style.margin_right_auto {
-                    0.0
-                } else {
-                    lb.style.margin_right
-                };
-                fragments.push(InlineFragment::InlineBox { layout_box: lb });
+                push_inline_block_fragment(&mut fragments, child, available_width, measurer);
             },
             BoxType::Replaced(replaced) => {
-                let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced, &child.style);
-                // Apply CSS width/height if set, falling back to intrinsic.
-                let w = match child.style.width {
-                    crate::css::values::Dimension::Px(px) => px,
-                    _ => intrinsic_w,
-                };
-                let h = match child.style.height {
-                    crate::css::values::Dimension::Px(px) => px,
-                    _ => intrinsic_h,
-                };
-                // Determine the effective aspect ratio: CSS `aspect-ratio`
-                // overrides the intrinsic ratio for replaced elements.
-                let ratio = if let Some(r) = child.style.aspect_ratio
-                    && r > 0.0
-                {
-                    r
-                } else if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
-                    intrinsic_w / intrinsic_h
-                } else {
-                    0.0
-                };
-                // Preserve aspect ratio when only one dimension is set.
-                let (w, h) = if child.style.width != crate::css::values::Dimension::Auto
-                    && child.style.height == crate::css::values::Dimension::Auto
-                    && ratio > 0.0
-                {
-                    (w, w / ratio)
-                } else if child.style.height != crate::css::values::Dimension::Auto
-                    && child.style.width == crate::css::values::Dimension::Auto
-                    && ratio > 0.0
-                {
-                    (h * ratio, h)
-                } else if child.style.width == crate::css::values::Dimension::Auto
-                    && child.style.height == crate::css::values::Dimension::Auto
-                    && child.style.aspect_ratio.is_some()
-                    && ratio > 0.0
-                    && intrinsic_w > 0.0
-                {
-                    // Both auto + explicit aspect-ratio: use intrinsic
-                    // width and derive height from the CSS ratio.
-                    (w, w / ratio)
-                } else {
-                    (w, h)
-                };
-                fragments.push(InlineFragment::ReplacedInline {
-                    replaced: replaced.clone(),
-                    x: 0.0,
-                    width: w,
-                    height: h,
-                    style: child.style.clone(),
-                    node: child.node,
-                });
+                push_replaced_fragment(&mut fragments, child, replaced);
             },
             _ => {
                 // Nested children (shouldn't happen in a well-formed
@@ -454,6 +373,113 @@ fn collect_inline_fragments(
     }
 
     fragments
+}
+
+/// `collect_inline_fragments` arm for inline-block children.
+///
+/// Out of line so the cloned `LayoutBox` (~1.7 KB) does not sit in the
+/// frame of the recursive inline walk, which is multiplied by the
+/// inline nesting depth.
+#[inline(never)]
+fn push_inline_block_fragment(
+    fragments: &mut Vec<InlineFragment>,
+    child: &LayoutBox,
+    available_width: f32,
+    measurer: &dyn TextMeasurer,
+) {
+        // InlineBlock boxes participate in inline flow but
+        // establish their own block formatting context. We
+        // must lay them out now so dimensions are known.
+        let mut lb = child.clone();
+        layout_block(&mut lb, available_width, measurer);
+        if matches!(lb.style.width, Dimension::Auto) {
+            // Shrink content width to actual children extent.
+            let max_child_right = lb
+                .children
+                .iter()
+                .map(|c| {
+                    let bb = c.dimensions.border_box();
+                    bb.x + bb.width - lb.dimensions.content.x
+                })
+                .fold(0.0_f32, f32::max);
+            lb.dimensions.content.width = max_child_right;
+        }
+        // InlineBlock margins must not be inflated by the
+        // block-level over-constrained rule. Reset to declared
+        // values (auto margins resolve to zero for inline-block).
+        lb.dimensions.margin.left = if lb.style.margin_left_auto {
+            0.0
+        } else {
+            lb.style.margin_left
+        };
+        lb.dimensions.margin.right = if lb.style.margin_right_auto {
+            0.0
+        } else {
+            lb.style.margin_right
+        };
+        fragments.push(InlineFragment::InlineBox { layout_box: lb });
+}
+
+/// `collect_inline_fragments` arm for replaced children (out of line
+/// for the same stack-depth reason as [`push_inline_block_fragment`]).
+#[inline(never)]
+fn push_replaced_fragment(
+    fragments: &mut Vec<InlineFragment>,
+    child: &LayoutBox,
+    replaced: &ReplacedContent,
+) {
+        let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced, &child.style);
+        // Apply CSS width/height if set, falling back to intrinsic.
+        let w = match child.style.width {
+            crate::css::values::Dimension::Px(px) => px,
+            _ => intrinsic_w,
+        };
+        let h = match child.style.height {
+            crate::css::values::Dimension::Px(px) => px,
+            _ => intrinsic_h,
+        };
+        // Determine the effective aspect ratio: CSS `aspect-ratio`
+        // overrides the intrinsic ratio for replaced elements.
+        let ratio = if let Some(r) = child.style.aspect_ratio
+            && r > 0.0
+        {
+            r
+        } else if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
+            intrinsic_w / intrinsic_h
+        } else {
+            0.0
+        };
+        // Preserve aspect ratio when only one dimension is set.
+        let (w, h) = if child.style.width != crate::css::values::Dimension::Auto
+            && child.style.height == crate::css::values::Dimension::Auto
+            && ratio > 0.0
+        {
+            (w, w / ratio)
+        } else if child.style.height != crate::css::values::Dimension::Auto
+            && child.style.width == crate::css::values::Dimension::Auto
+            && ratio > 0.0
+        {
+            (h * ratio, h)
+        } else if child.style.width == crate::css::values::Dimension::Auto
+            && child.style.height == crate::css::values::Dimension::Auto
+            && child.style.aspect_ratio.is_some()
+            && ratio > 0.0
+            && intrinsic_w > 0.0
+        {
+            // Both auto + explicit aspect-ratio: use intrinsic
+            // width and derive height from the CSS ratio.
+            (w, w / ratio)
+        } else {
+            (w, h)
+        };
+        fragments.push(InlineFragment::ReplacedInline {
+            replaced: replaced.clone(),
+            x: 0.0,
+            width: w,
+            height: h,
+            style: child.style.clone(),
+            node: child.node,
+        });
 }
 
 /// Generate text fragments for an inline box (splitting on word
@@ -472,15 +498,7 @@ fn text_fragments_for_inline(
     }
 
     if layout_box.children.is_empty() {
-        // Leaf inline with no text: emit a zero-width placeholder.
-        return vec![InlineFragment::Text {
-            text: String::new(),
-            x: 0.0,
-            width: 0.0,
-            style: style.clone(),
-            node: layout_box.node,
-            soft_hyphen: false,
-        }];
+        return empty_inline_placeholder(layout_box);
     }
 
     // Recurse into children.
@@ -515,6 +533,20 @@ fn text_fragments_for_inline(
     }
 
     frags
+}
+
+/// Leaf inline with no text: a zero-width placeholder fragment. Out of
+/// line to keep its style clone out of the recursive inline walk's frame.
+#[inline(never)]
+fn empty_inline_placeholder(layout_box: &LayoutBox) -> Vec<InlineFragment> {
+    vec![InlineFragment::Text {
+        text: String::new(),
+        x: 0.0,
+        width: 0.0,
+        style: layout_box.style.clone(),
+        node: layout_box.node,
+        soft_hyphen: false,
+    }]
 }
 
 /// Get the dimensions of a replaced inline element.
