@@ -15,5 +15,13 @@ oasis-skin = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-vfs = { workspace = true }
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+oasis-test-backend = { workspace = true }
+
+[[bench]]
+name = "render"
+harness = false
+
 [lints]
 workspace = true

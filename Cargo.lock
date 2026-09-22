@@ -1139,9 +1139,11 @@ dependencies = [
 name = "oasis-app-text-editor"
 version = "1.4.0"
 dependencies = [
+ "criterion",
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",

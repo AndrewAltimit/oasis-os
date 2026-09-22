@@ -1,28 +1,37 @@
-//! Text editor application with modal editing, undo/redo, and find.
+//! Text editor application with modal editing, selection, clipboard,
+//! grouped undo/redo, find/replace and Save As.
 //!
-//! `TextEditorApp` provides a simple text editor with Normal, Insert,
-//! Find, and Saving modes. It tracks modifications via an undo/redo
-//! stack and formats content with line numbers for display.
+//! `TextEditorApp` is a Notepad-style editor. Keyboard hosts drive it
+//! through `App::handle_key` (Ctrl+N/S/Shift+S/Z/Y/X/C/V/A/F/H/G, arrows
+//! with Shift selection, Ctrl word jumps, Home/End, PageUp/PageDown,
+//! Delete); gamepad hosts reach every feature through `handle_input`
+//! (Normal / Insert / Find / Replace / prompt modes).
 
 use std::any::Any;
+use std::cell::Cell;
 
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome};
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
-use oasis_types::input::Button;
+use oasis_types::backend::{InMemoryClipboard, SdiBackend};
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
 use oasis_vfs::Vfs;
 
 pub mod buffer;
+mod cache;
+pub mod colors;
 mod editor;
 pub mod highlight;
+mod input;
 mod render;
 
-pub use buffer::{EditOperation, EditorBuffer};
+pub use buffer::{EditOperation, EditorBuffer, Pos};
 pub use highlight::{FileType, detect_file_type};
 pub use render::hide_notepad_sdi_objects;
+
+use editor::UndoGroup;
 
 // ---------------------------------------------------------------
 // EditorMode
@@ -35,10 +44,27 @@ pub enum EditorMode {
     Normal,
     /// Typing text.
     Insert,
-    /// Find bar active.
+    /// Find bar active (typing edits the query).
     Find,
+    /// Find + replace bar active (Tab / Triangle switches field).
+    Replace,
+    /// "Go to line" prompt.
+    GoToLine,
+    /// "Save as" path prompt.
+    SaveAs,
     /// Save confirmation pending.
     Saving,
+    /// "Unsaved changes: Save / Discard / Cancel" prompt.
+    ConfirmDiscard,
+}
+
+/// What to do once unsaved changes are resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingClose {
+    /// Close the editor.
+    Exit,
+    /// Start a new, empty document.
+    New,
 }
 
 // ---------------------------------------------------------------
@@ -52,16 +78,41 @@ pub struct TextEditorApp {
     pub(crate) buffer: EditorBuffer,
     pub(crate) mode: EditorMode,
     pub(crate) cursor_line: usize,
+    /// Byte column, always on a character boundary.
     pub(crate) cursor_col: usize,
+    /// Selection anchor; the selection spans anchor..cursor.
+    pub(crate) anchor: Option<Pos>,
     pub(crate) scroll_x: usize,
     pub(crate) file_path: Option<String>,
     pub(crate) modified: bool,
     pub(crate) status_message: Option<String>,
     pub(crate) find_query: String,
+    pub(crate) replace_text: String,
+    /// In Replace mode: typing goes to the replacement (vs. the query).
+    pub(crate) replace_focus: bool,
     pub(crate) find_active: bool,
-    pub(crate) undo_stack: Vec<EditOperation>,
-    pub(crate) redo_stack: Vec<EditOperation>,
+    /// Text of the Go-to-line / Save-as prompt.
+    pub(crate) prompt_input: String,
+    pub(crate) undo_stack: Vec<UndoGroup>,
+    pub(crate) redo_stack: Vec<UndoGroup>,
+    /// Whether the newest undo group may still absorb typing.
+    pub(crate) group_open: bool,
+    pub(crate) clipboard: InMemoryClipboard,
     pub(crate) file_type: FileType,
+    /// Queued write `(path, data, buffer generation)`, flushed by
+    /// `apply_vfs_ops`.
+    pub(crate) pending_save: Option<(String, String, u64)>,
+    /// Close / New waiting on the unsaved-changes prompt or a save.
+    pub(crate) pending_close: Option<PendingClose>,
+    /// Set once "Save & close" finished; every input hook returns Exit.
+    pub(crate) close_requested: bool,
+    /// A printable key consumed by `handle_key`; its `TextInput` twin
+    /// (which hosts still deliver) must not also type.
+    pub(crate) swallow_text: Option<char>,
+    /// Text lines that fit the last rendered viewport (0 = not drawn yet).
+    pub(crate) viewport_lines: Cell<usize>,
+    /// Row height of the last rendered viewport (0 = not drawn yet).
+    pub(crate) viewport_line_h: Cell<i32>,
     /// Top menu bar widget (File / Edit / View / Help) with drop-downs.
     pub(crate) menu: MenuBar,
 }
@@ -74,6 +125,7 @@ fn default_menu_bar() -> MenuBar {
             vec![
                 MenuEntry::action("New", "file.new").with_shortcut("Ctrl+N"),
                 MenuEntry::action("Save", "file.save").with_shortcut("Ctrl+S"),
+                MenuEntry::action("Save As…", "file.save_as").with_shortcut("Ctrl+Shift+S"),
                 MenuEntry::Separator,
                 MenuEntry::action("Exit", "file.exit").with_shortcut("Esc"),
             ],
@@ -84,7 +136,15 @@ fn default_menu_bar() -> MenuBar {
                 MenuEntry::action("Undo", "edit.undo").with_shortcut("Ctrl+Z"),
                 MenuEntry::action("Redo", "edit.redo").with_shortcut("Ctrl+Y"),
                 MenuEntry::Separator,
+                MenuEntry::action("Cut", "edit.cut").with_shortcut("Ctrl+X"),
+                MenuEntry::action("Copy", "edit.copy").with_shortcut("Ctrl+C"),
+                MenuEntry::action("Paste", "edit.paste").with_shortcut("Ctrl+V"),
+                MenuEntry::action("Select All", "edit.select_all").with_shortcut("Ctrl+A"),
+                MenuEntry::Separator,
                 MenuEntry::action("Find…", "edit.find").with_shortcut("Ctrl+F"),
+                MenuEntry::action("Find Next", "edit.find_next").with_shortcut("F3"),
+                MenuEntry::action("Replace…", "edit.replace").with_shortcut("Ctrl+H"),
+                MenuEntry::action("Go To Line…", "edit.goto").with_shortcut("Ctrl+G"),
             ],
         ),
         Menu::new("View", vec![MenuEntry::action("Status Bar", "view.status")]),
@@ -93,28 +153,44 @@ fn default_menu_bar() -> MenuBar {
 }
 
 impl TextEditorApp {
-    /// Create a new empty text editor.
-    pub fn new(path: &str) -> Self {
-        let content = ContentState::new("Text Editor", path);
+    fn with_state(content: ContentState, buffer: EditorBuffer, path: Option<&str>) -> Self {
         let mut editor = Self {
             content,
-            buffer: EditorBuffer::new(),
+            buffer,
             mode: EditorMode::Normal,
             cursor_line: 0,
             cursor_col: 0,
+            anchor: None,
             scroll_x: 0,
-            file_path: None,
+            file_path: path.map(String::from),
             modified: false,
             status_message: None,
             find_query: String::new(),
+            replace_text: String::new(),
+            replace_focus: false,
             find_active: false,
+            prompt_input: String::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            file_type: FileType::Plain,
+            group_open: false,
+            clipboard: InMemoryClipboard::new(),
+            file_type: path.map_or(FileType::Plain, detect_file_type),
+            pending_save: None,
+            pending_close: None,
+            close_requested: false,
+            swallow_text: None,
+            viewport_lines: Cell::new(0),
+            viewport_line_h: Cell::new(0),
             menu: default_menu_bar(),
         };
         editor.rebuild_display_lines();
         editor
+    }
+
+    /// Create a new empty text editor.
+    pub fn new(path: &str) -> Self {
+        let content = ContentState::new("Text Editor", path);
+        Self::with_state(content, EditorBuffer::new(), None)
     }
 
     /// Open a file from the VFS. If the file doesn't exist or can't be
@@ -138,75 +214,42 @@ impl TextEditorApp {
         let file_name = path.rsplit('/').next().unwrap_or(path);
         let title = format!("Text Editor - {file_name}");
         let cs = ContentState::new(&title, "/apps/editor");
-        let ft = detect_file_type(path);
-        let mut editor = Self {
-            content: cs,
-            buffer: EditorBuffer::from_text(content),
-            mode: EditorMode::Normal,
-            cursor_line: 0,
-            cursor_col: 0,
-            scroll_x: 0,
-            file_path: Some(path.to_string()),
-            modified: false,
-            status_message: None,
-            find_query: String::new(),
-            find_active: false,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            file_type: ft,
-            menu: default_menu_bar(),
-        };
-        editor.rebuild_display_lines();
-        editor
+        Self::with_state(cs, EditorBuffer::from_text(content), Some(path))
     }
 
     /// Execute a menu action by its registered id string. Returns an
     /// `AppAction` so the host can act on exit requests.
     pub(crate) fn run_menu_action(&mut self, id: &str) -> AppAction {
         match id {
-            "file.new" => {
-                self.buffer = EditorBuffer::new();
-                self.cursor_line = 0;
-                self.cursor_col = 0;
-                self.undo_stack.clear();
-                self.redo_stack.clear();
-                self.modified = false;
-                self.file_path = None;
-                self.status_message = Some("New document".into());
-                self.rebuild_display_lines();
+            "file.new" => return self.request_close(PendingClose::New),
+            "file.save" => self.save(),
+            "file.save_as" => self.enter_mode(EditorMode::SaveAs),
+            "file.exit" => return self.request_close(PendingClose::Exit),
+            "edit.undo" => self.undo(),
+            "edit.redo" => self.redo(),
+            "edit.cut" => {
+                self.cut();
             },
-            "file.save" => {
-                // Mirror the Start-button flow used by the keyboard:
-                // enter Saving mode, the host writes on Confirm. For
-                // menu users we skip the confirmation modal and just
-                // queue the write immediately.
-                if let Some(ref path) = self.file_path {
-                    self.content.pending_vfs_request = Some((path.clone(), self.save_content()));
-                    self.modified = false;
-                    self.status_message = Some(format!("Saved {path}"));
-                } else {
-                    self.status_message = Some("No file path — Save As not yet implemented".into());
-                }
-                self.rebuild_display_lines();
+            "edit.copy" => {
+                self.copy();
             },
-            "file.exit" => return AppAction::Exit,
-            "edit.undo" => {
-                self.undo();
+            "edit.paste" => {
+                self.paste();
             },
-            "edit.redo" => {
-                self.redo();
+            "edit.select_all" => self.select_all(),
+            "edit.find" => self.enter_mode(EditorMode::Find),
+            "edit.find_next" => {
+                self.find_next();
             },
-            "edit.find" => {
-                self.mode = EditorMode::Find;
-                self.rebuild_display_lines();
-            },
+            "edit.replace" => self.enter_mode(EditorMode::Replace),
+            "edit.goto" => self.enter_mode(EditorMode::GoToLine),
             "view.status" => {
                 self.status_message = Some("Status bar is always visible.".into());
                 self.rebuild_display_lines();
             },
             "help.about" => {
                 self.status_message =
-                    Some("OASIS_OS Text Editor — Ctrl+S to save, Ctrl+F to find.".into());
+                    Some("OASIS_OS Text Editor — Ctrl+S save, Ctrl+F find, Ctrl+H replace.".into());
                 self.rebuild_display_lines();
             },
             _ => {},
@@ -236,15 +279,30 @@ impl App for TextEditorApp {
             self.menu.close();
             return AppAction::None;
         }
-        match self.mode {
-            EditorMode::Normal => self.handle_normal_input(button),
-            EditorMode::Insert => self.handle_insert_input(button),
-            EditorMode::Find => self.handle_find_input(button),
-            EditorMode::Saving => self.handle_saving_input(button),
+        self.handle_button(button)
+    }
+
+    fn handle_key(&mut self, key: &Key, mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+        self.swallow_text = None;
+        let result = self.handle_key_impl(key, mods);
+        if result.is_some() && !mods.has_command() {
+            // The host still delivers the key's TextInput after a consumed
+            // printable key (e.g. "s" in the unsaved-changes prompt).
+            self.swallow_text = match key {
+                Key::Char(c) => Some(*c),
+                Key::Space => Some(' '),
+                _ => None,
+            };
         }
+        result
     }
 
     fn handle_text_input(&mut self, ch: char) {
+        if let Some(swallow) = self.swallow_text.take()
+            && swallow.eq_ignore_ascii_case(&ch)
+        {
+            return;
+        }
         // Typing while a drop-down is open cancels it rather than
         // inserting a glyph behind the menu.
         if self.menu.is_open() {
@@ -252,22 +310,12 @@ impl App for TextEditorApp {
             return;
         }
         // Non-printable control characters (Enter, Tab, etc. that
-        // already come through as ButtonPress events) are filtered
+        // already come through as ButtonPress / Key events) are filtered
         // out so they don't produce spurious glyphs in the buffer.
         if ch.is_control() {
             return;
         }
-        // Typing in Normal mode auto-drops into Insert mode — it's
-        // what every casual user expects from a Notepad-style editor
-        // and matches Windows Notepad behaviour.
-        if self.mode == EditorMode::Normal {
-            self.mode = EditorMode::Insert;
-        }
-        if self.mode == EditorMode::Insert {
-            self.insert_char(ch);
-        } else if self.mode == EditorMode::Find {
-            self.find_query.push(ch);
-        }
+        self.handle_text_impl(ch);
     }
 
     fn accepts_text(&self) -> bool {
@@ -277,23 +325,13 @@ impl App for TextEditorApp {
     }
 
     fn handle_backspace(&mut self) {
-        match self.mode {
-            EditorMode::Insert => self.delete_char(),
-            EditorMode::Find => {
-                self.find_query.pop();
-            },
-            EditorMode::Normal => {
-                // Backspace in Normal mode also deletes — matches
-                // what a user expects after clicking into a window
-                // and pressing Backspace without hitting Enter first.
-                self.mode = EditorMode::Insert;
-                self.delete_char();
-            },
-            EditorMode::Saving => {},
-        }
+        self.handle_backspace_impl();
     }
 
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+        if self.close_requested {
+            return AppAction::Exit;
+        }
         // Layout constants — must mirror `draw_notepad`: the menu bar sits
         // at the very top of the content area (no inner title bar — the WM
         // titlebar shows the app title), text area below it, status strip
@@ -339,8 +377,8 @@ impl App for TextEditorApp {
         }
 
         // Clicks in the title / menu-bar / status strips outside the
-        // menu labels are ignored.
-        if ly < area_top || ly >= area_bottom {
+        // menu labels are ignored, as are clicks while a prompt is up.
+        if ly < area_top || ly >= area_bottom || self.mode == EditorMode::ConfirmDiscard {
             return AppAction::None;
         }
 
@@ -349,20 +387,25 @@ impl App for TextEditorApp {
         // font; we don't have a backend here to call `measure_text`.
         let pad_left = 8i32;
         let pad_top = 6i32;
-        let line_h = 14i32;
+        let line_h = match self.viewport_line_h.get() {
+            0 => 14,
+            h => h,
+        };
         let relative_y = ly - area_top - pad_top;
         let clicked_line = (relative_y / line_h).max(0) as usize;
         let target_line =
             (self.content.scroll + clicked_line).min(self.buffer.line_count().saturating_sub(1));
         let line_text = self.buffer.get_line(target_line).unwrap_or("");
         let approx_col = ((lx - pad_left - 8).max(0) / 7) as usize;
-        let target_col = approx_col.min(line_text.chars().count());
+        let target_col = line_text
+            .char_indices()
+            .nth(approx_col)
+            .map_or(line_text.len(), |(i, _)| i);
 
-        self.cursor_line = target_line;
-        self.cursor_col = target_col;
-        self.mode = EditorMode::Insert;
-        self.ensure_cursor_visible();
-        self.rebuild_display_lines();
+        if matches!(self.mode, EditorMode::Normal | EditorMode::Saving) {
+            self.mode = EditorMode::Insert;
+        }
+        self.move_to((target_line, target_col), false);
         AppAction::None
     }
 
@@ -405,6 +448,10 @@ impl App for TextEditorApp {
 
     fn peek_pending_request(&self) -> Option<&(String, String)> {
         self.content.pending_vfs_request.as_ref()
+    }
+
+    fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
+        self.flush_save(vfs)
     }
 
     fn lines(&self) -> &[String] {
@@ -513,9 +560,12 @@ mod tests {
     }
 
     /// Clicking a File > Save item runs the save action, closes the
-    /// menu, and emits the VFS IPC.
+    /// menu, and writes the file on the next `apply_vfs_ops`.
     #[test]
     fn click_file_save_item_emits_vfs_write() {
+        use oasis_vfs::Vfs;
+        let mut vfs = make_vfs();
+        vfs.mkdir("/tmp").expect("mkdir");
         let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
         // Open the File menu.
         let _ = app.handle_click(10, 8, 400, 300, false);
@@ -526,9 +576,8 @@ mod tests {
         let action = app.handle_click(20, 46, 400, 300, false);
         assert_eq!(action, AppAction::None);
         assert!(!app.menu.is_open(), "menu should close after dispatch");
-        let req = app.content.pending_vfs_request.take().expect("vfs write");
-        assert_eq!(req.0, "/tmp/notes.txt");
-        assert_eq!(req.1, "hello");
+        assert!(app.apply_vfs_ops(&mut vfs), "save must be applied");
+        assert_eq!(vfs.read("/tmp/notes.txt").expect("written"), b"hello");
     }
 
     /// Clicking File > Exit returns `AppAction::Exit` so the host
@@ -537,9 +586,9 @@ mod tests {
     fn click_file_exit_item_returns_exit() {
         let mut app = TextEditorApp::new("/apps/editor");
         let _ = app.handle_click(10, 8, 400, 300, false);
-        // Exit is the 4th entry (New, Save, Separator, Exit).
-        // y=22+20+20+6 = 68 is the exit row.
-        let action = app.handle_click(20, 72, 400, 300, false);
+        // Exit is the 5th entry (New, Save, Save As, Separator, Exit):
+        // y=22+20+20+20+6 = 88 is the exit row.
+        let action = app.handle_click(20, 92, 400, 300, false);
         assert_eq!(action, AppAction::Exit);
     }
 
@@ -1275,34 +1324,38 @@ mod tests {
     }
 
     #[test]
-    fn save_creates_pending_request() {
-        let vfs = make_vfs();
+    fn save_via_start_confirm_writes_file() {
+        use oasis_vfs::Vfs;
+        let mut vfs = make_vfs();
         let mut app = TextEditorApp::open_file("/test.txt", "data");
+        app.insert_char('!');
         // Enter saving mode and confirm.
         app.handle_input(&Button::Start, &vfs);
         app.handle_input(&Button::Confirm, &vfs);
-        let req = app.take_pending_request();
-        assert!(req.is_some());
-        let (path, data) = req.expect("expected request");
-        assert_eq!(path, "/test.txt");
-        assert_eq!(data, "data");
+        assert!(app.apply_vfs_ops(&mut vfs));
+        assert_eq!(vfs.read("/test.txt").expect("written"), b"!data");
+        assert!(!app.is_modified(), "a successful write clears the flag");
+        assert!(!app.apply_vfs_ops(&mut vfs), "nothing left to apply");
     }
 
     #[test]
     fn undo_redo_multiple_steps() {
+        // Undo is grouped by word: each word (plus the spaces typed after
+        // it) is one step.
         let mut app = TextEditorApp::open_file("/test.txt", "");
-        app.insert_char('a');
-        app.insert_char('b');
-        app.insert_char('c');
-        assert_eq!(app.buffer.get_line(0), Some("abc"));
+        for ch in "ab cd ef".chars() {
+            app.insert_char(ch);
+        }
+        assert_eq!(app.buffer.get_line(0), Some("ab cd ef"));
         app.undo();
-        assert_eq!(app.buffer.get_line(0), Some("ab"));
+        assert_eq!(app.buffer.get_line(0), Some("ab cd "));
         app.undo();
-        assert_eq!(app.buffer.get_line(0), Some("a"));
+        assert_eq!(app.buffer.get_line(0), Some("ab "));
         app.redo();
-        assert_eq!(app.buffer.get_line(0), Some("ab"));
+        assert_eq!(app.buffer.get_line(0), Some("ab cd "));
         app.redo();
-        assert_eq!(app.buffer.get_line(0), Some("abc"));
+        assert_eq!(app.buffer.get_line(0), Some("ab cd ef"));
+        assert_eq!(app.cursor_col, 8);
     }
 
     #[test]
