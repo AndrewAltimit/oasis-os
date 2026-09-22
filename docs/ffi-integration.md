@@ -11,11 +11,32 @@ cargo build --release -p oasis-ffi
 This produces a shared library:
 - Linux: `target/release/liboasis_ffi.so`
 - macOS: `target/release/liboasis_ffi.dylib`
-- Windows: `target/release/oasis_ffi.dll`
+- Windows: `target/release/oasis_ffi.dll` (plus the `oasis_ffi.dll.lib` import library)
+
+The crate is also built as an `rlib`, so Rust hosts can depend on it directly.
+
+### Cargo features
+
+| Feature | Default | Effect |
+|---------|---------|--------|
+| `video-decode` | No | Exports the `oasis_video_*` functions using the software decoder (openh264 + symphonia; needs only a C/C++ compiler) |
+| `video-decode-ffmpeg` | No | Exports the `oasis_video_*` functions using ffmpeg (needs the ffmpeg dev libraries + `pkg-config`, see [getting-started.md](getting-started.md#ffmpeg-video-decode)) |
+
+Without either feature, the `oasis_video_*` symbols are **not exported**.
+
+```bash
+cargo build --release -p oasis-ffi --features video-decode
+```
+
+A complete, runnable C program exercising the API lives in
+[`examples/ffi_demo.c`](../examples/ffi_demo.c) (build instructions in its
+header comment and in [`examples/README.md`](../examples/README.md)).
 
 ## C Header Reference
 
-Below is the equivalent C header for the exported API. The actual exports are defined in `crates/oasis-ffi/src/lib.rs`.
+Below is the equivalent C header for the exported API. The exports are defined across
+`crates/oasis-ffi/src/` (`lifecycle.rs`, `render.rs`, `input.rs`, `commands.rs`, `vfs.rs`,
+`callbacks.rs`, `audio.rs`, `video.rs`); the constants live in `types.rs`.
 
 ```c
 #pragma once
@@ -33,14 +54,19 @@ typedef struct OasisInstance OasisInstance;
  * Lifecycle
  * ---------------------------------------------------------------- */
 
-/* Create a new instance.
+/* Create a new instance with the default theme.
  *
- * width/height: Virtual screen dimensions (typically 480x272).
- * skin_toml:    Optional TOML skin definition (NULL for default).
- * layout_toml:  Optional TOML layout definition (NULL for default).
- * features_toml: Optional TOML features definition (NULL for default).
+ * width/height:  Virtual screen dimensions, each 1..=4096 (typically 480x272;
+ *                the theme and layout are scaled to this size).
+ * skin_toml:     Optional skin manifest (the skin's skin.toml).
+ * layout_toml:   Optional layout (layout.toml).
+ * features_toml: Optional feature gates (features.toml).
  *
- * Returns an opaque handle, or NULL on failure.
+ * The skin is only applied when all three strings are non-NULL; otherwise
+ * the built-in defaults are used. The strings are parsed during the call and
+ * may be freed afterwards.
+ *
+ * Returns an opaque handle, or NULL on failure (e.g. invalid dimensions).
  */
 OasisInstance* oasis_create(
     uint32_t width,
@@ -48,6 +74,24 @@ OasisInstance* oasis_create(
     const char* skin_toml,
     const char* layout_toml,
     const char* features_toml
+);
+
+/* Create a new instance from a skin's full TOML set.
+ *
+ * Like oasis_create(), but also takes the skin's theme.toml (color scheme)
+ * and strings.toml (display strings) so the instance renders with the skin's
+ * real theme instead of the default. theme_toml and strings_toml may be NULL
+ * (defaults are used); the skin itself still requires manifest, layout and
+ * features to all be non-NULL.
+ */
+OasisInstance* oasis_create_full(
+    uint32_t width,
+    uint32_t height,
+    const char* manifest_toml,
+    const char* layout_toml,
+    const char* features_toml,
+    const char* theme_toml,
+    const char* strings_toml
 );
 
 /* Destroy an instance and free all memory.
@@ -178,7 +222,10 @@ void oasis_free_string(char* ptr);
  * Virtual File System
  * ---------------------------------------------------------------- */
 
-/* Reset the VFS to a clean state. Also resets cwd to "/". */
+/* Reset the VFS to a clean state (empty /home, /etc, /tmp) and the cwd to
+ * "/". `path` is currently ignored. Note: this also drops the /apps
+ * directories seeded at creation, so the dashboard has no icons afterwards
+ * unless the host re-adds them. */
 void oasis_set_vfs_root(OasisInstance* handle, const char* path);
 
 /* Add a file to the VFS base layer.
@@ -219,12 +266,38 @@ void oasis_register_callback(
  * Audio
  * ---------------------------------------------------------------- */
 
+/* The instance only tracks audio state; the host performs actual output.
+ * The callback fires on every state change so the host can mirror it. */
+
+/* Audio callback event codes (AudioEvent in oasis-backend-ue5) */
+#define OASIS_AUDIO_PLAY           0
+#define OASIS_AUDIO_PAUSE          1
+#define OASIS_AUDIO_RESUME         2
+#define OASIS_AUDIO_STOP           3
+#define OASIS_AUDIO_VOLUME_CHANGE  4  /* value = new volume (0-100) */
+#define OASIS_AUDIO_TRACK_LOADED   5
+#define OASIS_AUDIO_TRACK_UNLOADED 6
+#define OASIS_AUDIO_SHUTDOWN       7
+
+/* track_id is 0 when not applicable. */
 typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t value);
 
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
 
+/* Load audio data; returns a track ID, or UINT64_MAX on failure. */
+uint64_t oasis_audio_load(OasisInstance* handle, const uint8_t* data, uint32_t data_len);
+/* The following return true on success. */
+bool oasis_audio_play(OasisInstance* handle, uint64_t track_id);
+bool oasis_audio_pause(OasisInstance* handle);
+bool oasis_audio_resume(OasisInstance* handle);
+bool oasis_audio_stop(OasisInstance* handle);
+bool oasis_audio_set_volume(OasisInstance* handle, uint8_t volume);  /* 0-100 */
+uint8_t oasis_audio_get_volume(OasisInstance* handle);
+bool oasis_audio_is_playing(OasisInstance* handle);
+
 /* ----------------------------------------------------------------
- * Video Playback (requires video-decode feature)
+ * Video Playback (only exported with the video-decode or
+ * video-decode-ffmpeg Cargo feature)
  * ---------------------------------------------------------------- */
 
 /* Start software video playback from a local file path.
@@ -263,15 +336,6 @@ int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
 int32_t oasis_video_get_audio(OasisInstance* handle, float* buf,
                               uint32_t max_samples);
 
-uint64_t oasis_audio_load(OasisInstance* handle, const uint8_t* data, uint32_t data_len);
-bool oasis_audio_play(OasisInstance* handle, uint64_t track_id);
-bool oasis_audio_pause(OasisInstance* handle);
-bool oasis_audio_resume(OasisInstance* handle);
-bool oasis_audio_stop(OasisInstance* handle);
-bool oasis_audio_set_volume(OasisInstance* handle, uint8_t volume);
-uint8_t oasis_audio_get_volume(OasisInstance* handle);
-bool oasis_audio_is_playing(OasisInstance* handle);
-
 #ifdef __cplusplus
 }
 #endif
@@ -289,7 +353,20 @@ if (!os) {
 }
 ```
 
-The native resolution is 480x272. You can use a larger resolution, but the UI is designed for this size.
+The native resolution is 480x272. Larger resolutions (up to 4096x4096) work too: the
+theme and skin layout are scaled to the requested buffer size.
+
+To render with a specific skin, pass its TOML files (the contents of
+`skins/<name>/skin.toml`, `layout.toml`, `features.toml`, `theme.toml`, `strings.toml`)
+to `oasis_create_full`:
+
+```c
+OasisInstance* os = oasis_create_full(480, 272,
+    manifest, layout, features, theme, strings);  /* any may be NULL */
+```
+
+The instance starts with an empty `/home`, `/etc`, `/tmp` and one `/apps/<name>`
+directory per default dashboard app.
 
 ### 2. Populate the Virtual File System
 
@@ -367,7 +444,7 @@ For UE5 specifically, the `oasis-backend-ue5` crate provides a software RGBA fra
    - Forwards UE5 input events via `oasis_send_input()`
    - Calls `oasis_destroy()` in `EndPlay`
 
-The `GameAssetVfs` backend in `oasis-backend-ue5` supports overlay writes on top of read-only UE5 game assets, enabling VFS files to be backed by packaged content.
+The instance's VFS is a `GameAssetVfs` (from `oasis-vfs`), which supports overlay writes on top of read-only UE5 game assets, enabling VFS files to be backed by packaged content.
 
 ## Thread Safety
 
@@ -377,5 +454,6 @@ Each `OasisInstance` must be accessed from a single thread. The FFI functions ar
 
 - `oasis_create()` allocates; `oasis_destroy()` frees
 - `oasis_send_command()` allocates; `oasis_free_string()` frees
-- All other functions use borrowed pointers (no allocation)
+- All other functions use borrowed pointers (no allocation); TOML strings passed to
+  `oasis_create` / `oasis_create_full` are parsed during the call and can be freed afterwards
 - The framebuffer pointer from `oasis_get_buffer()` is valid until the next `oasis_tick()` or `oasis_destroy()`

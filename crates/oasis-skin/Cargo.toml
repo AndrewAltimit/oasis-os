@@ -41,3 +41,8 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+# Repo-level example (lives in /examples so all examples sit together).
+[[example]]
+name = "custom_skin"
+path = "../../examples/custom_skin.rs"

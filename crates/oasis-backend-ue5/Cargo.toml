@@ -27,3 +27,8 @@ workspace = true
 [[bench]]
 name = "dense_frame"
 harness = false
+
+# Repo-level example (lives in /examples so all examples sit together).
+[[example]]
+name = "headless_screenshot"
+path = "../../examples/headless_screenshot.rs"
