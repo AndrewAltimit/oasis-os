@@ -17,6 +17,6 @@ pub use oasis_terminal::{
 };
 
 pub use agent_commands::register_agent_commands;
-pub use browser_commands::register_browser_commands;
+pub use browser_commands::{BROWSER_REQUEST_PATH, register_browser_commands};
 pub use plugin_commands::register_plugin_commands;
 pub use tv_commands::register_tv_commands;
