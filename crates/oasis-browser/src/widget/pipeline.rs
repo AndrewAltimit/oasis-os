@@ -29,6 +29,7 @@ impl BrowserWidget {
     /// `Content-Type: application/x-www-form-urlencoded`.
     pub fn navigate_post(&mut self, url: &str, body: Vec<u8>, vfs: &dyn Vfs) {
         self.reset_for_navigation();
+        self.skip_nav_push = false;
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -110,8 +111,26 @@ impl BrowserWidget {
             }
         }
 
-        // Cache miss or non-HTML content — fetch from network.
-        self.navigate_vfs(url, vfs);
+        // Cache miss or non-HTML content — fetch from network. The
+        // history entry already moved (back/forward), so the load must
+        // not push a new one: that would clear the forward stack.
+        self.navigate_vfs_inner(url, vfs, false);
+    }
+
+    /// Reload the current page from its source (VFS or network),
+    /// keeping the history entry and the scroll position.
+    pub fn reload(&mut self, vfs: &dyn Vfs) {
+        let Some(url) = self.nav.current_url().map(str::to_string) else {
+            return;
+        };
+        let scroll_y = self.scroll.scroll_y;
+        self.nav.update_scroll(scroll_y);
+        self.navigate_vfs_inner(&url, vfs, false);
+        // Synchronous (VFS) reloads are laid out already; restore the
+        // offset. Network reloads land at the top like a fresh load.
+        if self.document.is_some() {
+            self.scroll.scroll_to(scroll_y);
+        }
     }
 
     /// Reset browser state in preparation for a new navigation.
@@ -150,6 +169,12 @@ impl BrowserWidget {
 
     /// Navigate to a URL using the VFS as the resource source.
     pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+        self.navigate_vfs_inner(url, vfs, true);
+    }
+
+    /// [`Self::navigate_vfs`]; `push_history` is false for loads of the
+    /// current history entry (reload, back/forward cache misses).
+    fn navigate_vfs_inner(&mut self, url: &str, vfs: &dyn Vfs, push_history: bool) {
         // iframe-overlay mode (WASM): an external browser iframe paints
         // http(s) pages. The OASIS engine only needs to track the URL
         // for the chrome bar and history, so skip the sync fetch, DOM
@@ -175,14 +200,22 @@ impl BrowserWidget {
         }
 
         self.reset_for_navigation();
+        // Consumed by `load_html` when this load (sync or from the I/O
+        // thread) finishes; a later navigation overrides it.
+        self.skip_nav_push = !push_history;
 
         // Internal pages: serve directly without hitting the VFS or
         // network. Only `vfs://bookmarks` is wired up for now — the
         // bookmarks button in the chrome navigates here. History is
         // available through `nav.history_page_html()` if we ever wire
         // a second button for it.
-        if url == "vfs://bookmarks" || url == "oasis://bookmarks" {
-            let body = self.nav.bookmarks_page_html().into_bytes();
+        let internal = match url {
+            "vfs://bookmarks" | "oasis://bookmarks" => Some(self.nav.bookmarks_page_html()),
+            "vfs://history" | "oasis://history" => Some(self.nav.history_page_html()),
+            _ => None,
+        };
+        if let Some(html) = internal {
+            let body = html.into_bytes();
             let response = crate::loader::ResourceResponse {
                 url: url.to_string(),
                 content_type: crate::loader::ContentType::Html,

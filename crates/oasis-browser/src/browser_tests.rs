@@ -3412,6 +3412,41 @@ fn static_page_stops_wanting_frames() {
     assert!(!browser.wants_frame());
 }
 
+/// Going back to a page that fell out of the resource cache refetches
+/// it; that load used to push a fresh history entry, wiping the forward
+/// stack (Forward did nothing after such a Back).
+#[test]
+fn back_after_cache_eviction_keeps_forward_history() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.cache.clear();
+    browser.go_back(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/index.html"));
+    assert!(browser.navigation().can_go_forward(), "forward entry kept");
+    browser.go_forward(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+}
+
+/// Reload keeps the history entry (no duplicate) and the scroll offset.
+#[test]
+fn reload_keeps_history_and_scroll() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.reload(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+    browser.go_back(&vfs);
+    assert_eq!(
+        browser.current_url(),
+        Some("vfs://sites/home/index.html"),
+        "reload added no history entry"
+    );
+    assert!(!browser.navigation().can_go_back());
+}
+
 /// A page whose display list records nothing (empty body, zero-size
 /// content) used to keep `wants_frame` true forever: an empty display
 /// list was taken to mean "not recorded yet", so the host never elided a

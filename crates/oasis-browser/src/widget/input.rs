@@ -1,6 +1,6 @@
 //! Input handling methods for [`BrowserWidget`].
 
-use oasis_types::input::{Button, InputEvent, Trigger};
+use oasis_types::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_vfs::Vfs;
 use rustc_hash::FxHashMap;
 
@@ -186,6 +186,66 @@ impl BrowserWidget {
         self.focus == Focus::UrlBar || self.form_manager.focused_accepts_text()
     }
 
+    /// Handle a raw keyboard shortcut (hosts deliver [`InputEvent::Key`]
+    /// here before its gamepad-style twin). Returns `true` if the key was
+    /// a browser shortcut and has been handled; the host must then drop
+    /// the twin.
+    ///
+    /// | Key | Action |
+    /// |---|---|
+    /// | F5, Ctrl+R | Reload |
+    /// | Alt+Left / Alt+Right | Back / forward |
+    /// | Ctrl+L, F6 | Focus the URL bar (whole URL selected) |
+    /// | Page Up / Page Down | Scroll one page (not while typing) |
+    /// | Home / End | Scroll to top / bottom (not while typing) |
+    pub fn handle_key(&mut self, key: Key, mods: Modifiers, vfs: &dyn Vfs) -> bool {
+        match key {
+            Key::F(5) if mods.is_empty() => self.reload(vfs),
+            Key::Char('r') if mods.only(Modifiers::CTRL) => self.reload(vfs),
+            Key::Left if mods.only(Modifiers::ALT) => {
+                self.leave_url_bar();
+                self.go_back(vfs);
+            },
+            Key::Right if mods.only(Modifiers::ALT) => {
+                self.leave_url_bar();
+                self.go_forward(vfs);
+            },
+            Key::F(6) if mods.is_empty() => self.focus_url_bar(),
+            Key::Char('l') if mods.only(Modifiers::CTRL) => self.focus_url_bar(),
+            _ if !mods.is_empty() || self.accepts_text() => return false,
+            Key::PageUp => self.scroll.page_up(),
+            Key::PageDown => self.scroll.page_down(),
+            Key::Home => self.scroll.scroll_to_top(),
+            Key::End => self.scroll.scroll_to_bottom(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Put keyboard focus in the URL bar with the whole URL selected, as
+    /// a click on it does.
+    pub fn focus_url_bar(&mut self) {
+        self.focus = Focus::UrlBar;
+        self.url_input = self.nav.current_url().unwrap_or("about:blank").to_string();
+        self.url_cursor = self.url_input.len();
+        self.url_selection_anchor = if self.url_input.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+    }
+
+    /// Whether the URL bar has keyboard focus.
+    pub fn url_bar_focused(&self) -> bool {
+        self.focus == Focus::UrlBar
+    }
+
+    /// Leave URL-bar editing without navigating.
+    fn leave_url_bar(&mut self) {
+        self.focus = Focus::Content;
+        self.url_selection_anchor = None;
+    }
+
     /// Handle an input event. Returns `true` if the event was
     /// consumed.
     pub fn handle_input(&mut self, event: &InputEvent, vfs: &dyn Vfs) -> bool {
@@ -324,6 +384,14 @@ impl BrowserWidget {
                 true
             },
             InputEvent::ButtonPress(Button::Cancel) => {
+                // Cancel in a focused text field leaves the field (like
+                // Escape blurring an input); otherwise it goes back.
+                if self.form_manager.focused_accepts_text() {
+                    self.form_manager.focused_element = None;
+                    self.form_manager.focused_form = None;
+                    self.layout_dirty = true;
+                    return true;
+                }
                 self.go_back(vfs);
                 true
             },
@@ -651,14 +719,7 @@ impl BrowserWidget {
                 // URL so the next keystroke replaces it (Firefox/Chrome
                 // address-bar behaviour). Users reported "hard to
                 // highlight and replace text" — this is the fix.
-                self.focus = Focus::UrlBar;
-                self.url_input = self.nav.current_url().unwrap_or("about:blank").to_string();
-                self.url_cursor = self.url_input.len();
-                self.url_selection_anchor = if self.url_input.is_empty() {
-                    None
-                } else {
-                    Some(0)
-                };
+                self.focus_url_bar();
             }
             return;
         }

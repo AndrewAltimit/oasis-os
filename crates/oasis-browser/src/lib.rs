@@ -831,6 +831,25 @@ impl BrowserWidget {
         self.scroll.set_viewport_width(w as i32);
     }
 
+    /// Adopt the chrome colors of `themed` (a config built for a new
+    /// skin theme, [`BrowserConfig::from_skin_theme`]) while keeping this
+    /// session's features, zoom and limits. Hosts call it on a skin swap
+    /// so an open browser doesn't keep the previous skin's chrome.
+    pub fn apply_chrome_theme(&mut self, themed: &BrowserConfig) {
+        let c = &mut self.config;
+        c.chrome_bg = themed.chrome_bg;
+        c.chrome_text = themed.chrome_text;
+        c.chrome_button_bg = themed.chrome_button_bg;
+        c.chrome_button_hover = themed.chrome_button_hover;
+        c.url_bar_bg = themed.url_bar_bg;
+        c.url_bar_text = themed.url_bar_text;
+        c.status_bar_bg = themed.status_bar_bg;
+        c.status_bar_text = themed.status_bar_text;
+        c.default_link_color = themed.default_link_color;
+        c.use_themed_chrome = themed.use_themed_chrome;
+        self.full_repaint_needed = true;
+    }
+
     /// Returns whether the layout tree needs rebuilding.
     pub fn is_layout_dirty(&self) -> bool {
         self.layout_dirty
