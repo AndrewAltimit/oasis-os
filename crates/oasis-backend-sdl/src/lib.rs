@@ -660,27 +660,29 @@ impl SdiBatch for SdlBackend {
 // SdiRenderTarget: Offscreen compositing layers (compositor PR4)
 // -------------------------------------------------------------------
 
-/// Map a CSS blend mode onto SDL3's built-in blend-mode enum.
+/// Map a CSS blend mode onto the SDL3 blend mode that composites a
+/// render target with it.
 ///
-/// SDL3 only ships a handful of blend modes natively: `NONE`, `BLEND`,
-/// `ADD`, `MOD`, `MUL`. Anything CSS-specific (`Overlay`, `ColorDodge`,
-/// the non-separable HSL modes, …) falls back to plain alpha blending
-/// for the moment — documented as accepted degradation in
-/// `docs/archive/compositor-overhaul-plan.md` §3.4 step 4. A CPU compositor
-/// extension is queued for a follow-up PR.
-fn sdl_blend_for(mode: BlendMode) -> sdl3::render::BlendMode {
-    use sdl3::render::BlendMode as Sdl;
+/// Layer contents are straight-alpha primitives blended (`BLEND`) into a
+/// target cleared to transparent black, which leaves the target holding
+/// *premultiplied* colors (`rgb * a`). They must therefore be composited
+/// with premultiplied operators:
+///
+/// - `Normal` -> `BLEND_PREMULTIPLIED` (`dst = src + dst * (1 - srcA)`).
+///   Plain `BLEND` multiplied translucent layer content by its alpha a
+///   second time, so e.g. a 50% red fill inside an opacity layer came out
+///   at 25% (visibly darker than the same fill painted directly).
+/// - `Multiply` -> `MUL` (`dst = dst * src + dst * (1 - srcA)`), which is
+///   exactly CSS `multiply` for a premultiplied source, including the
+///   layer's transparent pixels, which leave the backdrop untouched.
+///
+/// SDL has no other CSS modes; they degrade to `Normal` (the software
+/// rasterizer does the same, so all backends agree).
+fn sdl_blend_for(mode: BlendMode) -> sdl3::sys::blendmode::SDL_BlendMode {
+    use sdl3::sys::blendmode as bm;
     match mode {
-        BlendMode::Normal => Sdl::Blend,
-        // SDL3 `MUL` is `dst * src + dst * (1 - srcA)`. Layer contents are
-        // alpha-blended into a transparent target, so its colors are
-        // premultiplied and this is exactly CSS `multiply`, including the
-        // layer's transparent pixels, which leave the backdrop untouched.
-        // (`MOD`, plain `dst * src`, ignored alpha and blackened them.)
-        BlendMode::Multiply => Sdl::Mul,
-        // Everything else: software path is TODO, degrade to standard
-        // alpha blending so the page still renders.
-        _ => Sdl::Blend,
+        BlendMode::Multiply => bm::SDL_BLENDMODE_MUL,
+        _ => bm::SDL_BLENDMODE_BLEND_PREMULTIPLIED,
     }
 }
 
@@ -829,14 +831,28 @@ impl SdiRenderTarget for SdlBackend {
         let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
             OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
         })?;
-        tex.set_blend_mode(sdl_blend_for(blend));
+        // SAFETY: the raw pointer comes from a live texture owned by
+        // `render_targets` (borrowed above) and is only used for this call.
+        let premultiplied = unsafe {
+            sdl3::sys::render::SDL_SetTextureBlendMode(sdl_texture_raw(tex), sdl_blend_for(blend))
+        };
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if premultiplied {
+            // Opacity scales a premultiplied source uniformly: color and
+            // alpha alike.
+            tex.set_color_mod(alpha, alpha, alpha);
+        } else {
+            // Renderer without premultiplied / MUL support: straight alpha
+            // (translucent layer content comes out too dark).
+            tex.set_blend_mode(sdl3::render::BlendMode::Blend);
+            tex.set_color_mod(255, 255, 255);
+        }
         tex.set_alpha_mod(alpha);
-        tex.set_color_mod(255, 255, 255);
         let r = canvas
             .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
             .backend_err();
         tex.set_alpha_mod(255);
+        tex.set_color_mod(255, 255, 255);
         tex.set_blend_mode(sdl3::render::BlendMode::Blend);
         r
     }
