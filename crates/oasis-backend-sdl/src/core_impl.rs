@@ -78,8 +78,8 @@ impl SdiCore for SdlBackend {
             .backend_err()?;
 
         texture
-            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                copy_rows_to_pitch(buffer, pitch, rgba_data, width);
             })
             .backend_err()?;
 
@@ -220,8 +220,8 @@ impl SdlBackend {
         }
 
         texture
-            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                copy_rows_to_pitch(buffer, pitch, rgba_data, width);
             })
             .backend_err()?;
 
@@ -242,5 +242,51 @@ impl SdlBackend {
                 sdl3::sys::mouse::SDL_HideCursor();
             }
         }
+    }
+}
+
+/// Copy tightly packed RGBA rows (`width * 4` bytes each) into a locked
+/// texture buffer whose rows are `pitch` bytes apart.
+///
+/// Hardware renderers pad rows (Direct3D 11/12 use 256-byte alignment),
+/// so a flat `copy_from_slice` shears every texture whose row is not
+/// already a multiple of the padding into diagonal stripes.
+fn copy_rows_to_pitch(dst: &mut [u8], pitch: usize, rgba_data: &[u8], width: u32) {
+    let row_bytes = width as usize * 4;
+    if row_bytes == 0 {
+        return;
+    }
+    if pitch == row_bytes {
+        let n = rgba_data.len().min(dst.len());
+        dst[..n].copy_from_slice(&rgba_data[..n]);
+        return;
+    }
+    for (src_row, dst_row) in rgba_data.chunks_exact(row_bytes).zip(dst.chunks_mut(pitch)) {
+        let n = row_bytes.min(dst_row.len());
+        dst_row[..n].copy_from_slice(&src_row[..n]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_rows_to_pitch;
+
+    #[test]
+    fn copy_rows_honours_padded_pitch() {
+        // 3x2 image, 12-byte rows, into a 16-byte pitch buffer.
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0xAA; 32];
+        copy_rows_to_pitch(&mut dst, 16, &src, 3);
+        assert_eq!(&dst[..12], &src[..12]);
+        assert_eq!(&dst[12..16], &[0xAA; 4], "row padding untouched");
+        assert_eq!(&dst[16..28], &src[12..24]);
+    }
+
+    #[test]
+    fn copy_rows_tight_pitch_is_flat_copy() {
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0; 24];
+        copy_rows_to_pitch(&mut dst, 12, &src, 3);
+        assert_eq!(dst, src);
     }
 }

@@ -1324,6 +1324,52 @@ mod tests {
         );
     }
 
+    /// RGBA pattern where every pixel of a `w` x `h` image is distinct,
+    /// so a row-stride mismatch shows up as a mismatch rather than
+    /// happening to reproduce the same colours.
+    fn stride_pattern(w: u32, h: u32) -> Vec<u8> {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                px.extend_from_slice(&[(x * 6) as u8, (y * 40) as u8, 200, 255]);
+            }
+        }
+        px
+    }
+
+    /// Texture uploads must honour the locked texture's row pitch.
+    /// Hardware renderers (Direct3D 11/12, SDL GPU, Metal) commonly pad
+    /// rows to 64- or 256-byte boundaries, so a width whose row is not a
+    /// multiple of that (here 37 px = 148 bytes) turned every uploaded
+    /// image into diagonal stripes when the pitch was ignored. The
+    /// software renderer packs rows tightly, so run this under a
+    /// hardware `SDL_RENDER_DRIVER` to exercise the padded path.
+    #[test]
+    #[ignore]
+    fn render_texture_odd_width_honours_pitch() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let (w, h) = (37u32, 6u32);
+        let pattern = stride_pattern(w, h);
+
+        let tex = backend.load_texture(w, h, &pattern).unwrap();
+        backend.clear(Color::BLACK).unwrap();
+        backend.blit(tex, 0, 0, w, h).unwrap();
+        assert_eq!(backend.read_pixels(0, 0, w, h).unwrap(), pattern);
+
+        // update_texture takes the same lock path.
+        let mut flipped = pattern.clone();
+        for px in flipped.chunks_exact_mut(4) {
+            px[2] = 40;
+        }
+        backend.update_texture(tex, w, h, &flipped).unwrap();
+        backend.clear(Color::BLACK).unwrap();
+        backend.blit(tex, 0, 0, w, h).unwrap();
+        assert_eq!(backend.read_pixels(0, 0, w, h).unwrap(), flipped);
+    }
+
     #[test]
     #[ignore]
     fn render_fill_rect_at_position() {
