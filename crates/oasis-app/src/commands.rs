@@ -709,20 +709,10 @@ pub fn apply_resolution_change(
     );
 
     state.wm.set_screen_size(new_w, new_h);
-    // `set_screen_size` updates the viewport bounds but leaves open windows
-    // at their original coordinates. On a downward resize a window near the
-    // old right/bottom edge can end up fully off-screen and unreachable.
-    // `move_window(id, 0, 0, sdi)` is a no-op delta but runs the positions
-    // through `clamp_position`, which pulls each titlebar back on-screen.
-    let window_ids: Vec<String> = state
-        .wm
-        .windows()
-        .iter()
-        .map(|w| w.id.as_str().to_string())
-        .collect();
-    for id in window_ids {
-        let _ = state.wm.move_window(&id, 0, 0, sdi);
-    }
+    // Refit open windows: maximized / snapped / tiled / fullscreen ones
+    // take the new screen's geometry and floating ones are pulled back on
+    // screen, so no titlebar or close button ends up out of reach.
+    state.wm.fit_to_screen(sdi);
     state.ui.mouse_cursor = CursorState::new(new_w, new_h);
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 

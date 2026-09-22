@@ -34,6 +34,28 @@ fn geometry_of(w: &Window) -> Geometry {
     }
 }
 
+/// `g` shrunk to fit `area` and, unless it already lies fully on the
+/// `sw` x `sh` screen, moved inside `area`.
+fn fit_geometry(g: Geometry, area: Geometry, sw: u32, sh: u32) -> Geometry {
+    let w = g.w.min(area.w);
+    let h = g.h.min(area.h);
+    let on_screen = g.x >= 0
+        && g.y >= 0
+        && i64::from(g.x) + i64::from(w) <= i64::from(sw)
+        && i64::from(g.y) + i64::from(h) <= i64::from(sh);
+    if on_screen {
+        return Geometry { w, h, ..g };
+    }
+    let max_x = area.x + area.w.saturating_sub(w) as i32;
+    let max_y = area.y + area.h.saturating_sub(h) as i32;
+    Geometry {
+        x: g.x.clamp(area.x, max_x),
+        y: g.y.clamp(area.y, max_y),
+        w,
+        h,
+    }
+}
+
 /// Whether a window can be snapped or tiled at all.
 fn snappable(w: &Window) -> bool {
     w.is_resizable() && w.state != WindowState::Minimized
@@ -251,6 +273,73 @@ impl WindowManager {
                 }
             },
         }
+    }
+
+    // -- Screen changes ---------------------------------------------------
+
+    /// Refit every window to the current screen size (call after
+    /// [`WindowManager::set_screen_size`]):
+    ///
+    /// - kiosk-fullscreen windows fill the new screen,
+    /// - maximized windows fill the new work area,
+    /// - snapped windows take their zone's new geometry,
+    /// - tiled windows are re-tiled,
+    /// - floating windows larger than the work area shrink to fit, and any
+    ///   window no longer fully on screen is moved back inside the work
+    ///   area, so every titlebar and close button stays reachable.
+    ///
+    /// Remembered geometries (restore-from-maximize, unsnap, untile,
+    /// leave-kiosk) are fitted the same way, so restoring later also lands
+    /// on screen.
+    pub fn fit_to_screen(&mut self, sdi: &mut SdiRegistry) {
+        let area = self.work_area();
+        let (sw, sh) = (self.screen_w, self.screen_h);
+        let ids: Vec<_> = self.windows.iter().map(|w| w.id.clone()).collect();
+        for id in &ids {
+            let zone_geom = self
+                .windows
+                .iter()
+                .find(|w| w.id == *id)
+                .and_then(|w| w.snap_zone)
+                .and_then(|z| self.snap_zone_geometry(z));
+            let Some(w) = self.windows.iter_mut().find(|w| w.id == *id) else {
+                continue;
+            };
+            for g in [
+                &mut w.saved_geometry,
+                &mut w.pre_snap_geometry,
+                &mut w.pre_tile_geometry,
+                &mut w.kiosk_saved_geometry,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                *g = fit_geometry(*g, area, sw, sh);
+            }
+            let target = if w.fullscreen_kiosk {
+                Geometry {
+                    x: 0,
+                    y: 0,
+                    w: sw,
+                    h: sh,
+                }
+            } else if w.state == WindowState::Maximized {
+                area
+            } else if let Some(g) = zone_geom {
+                g
+            } else {
+                fit_geometry(geometry_of(w), area, sw, sh)
+            };
+            w.x = target.x;
+            w.y = target.y;
+            w.outer_w = target.w;
+            w.outer_h = target.h;
+            self.update_sdi_positions(id, sdi);
+        }
+        if let Some(layout) = self.tiling_layout {
+            self.apply_tiling(layout, sdi);
+        }
+        self.snap.clear_preview();
     }
 
     // -- Tiling -----------------------------------------------------------
@@ -596,5 +685,47 @@ mod tests {
         assert_eq!(geom(&wm, "a"), before_a);
         // b alone fills the usable area.
         assert!(geom(&wm, "b").2 > SW / 2);
+    }
+
+    #[test]
+    fn fit_to_screen_refits_maximized_snapped_and_offscreen_windows() {
+        let (mut wm, mut sdi) = setup(&["max", "snap", "far", "kiosk"]);
+        wm.maximize_window("max", &mut sdi).expect("maximize");
+        wm.snap_window("snap", SnapZone::Right, &mut sdi);
+        wm.move_window("far", 500, 400, &mut sdi).expect("move");
+        wm.enter_fullscreen("kiosk", &mut sdi).expect("kiosk");
+
+        wm.set_screen_size(400, 300);
+        wm.fit_to_screen(&mut sdi);
+
+        assert_eq!(geom(&wm, "max"), (0, 0, 400, 300));
+        assert_eq!(geom(&wm, "snap"), (200, 0, 200, 300));
+        assert_eq!(geom(&wm, "kiosk"), (0, 0, 400, 300));
+        let (x, y, w, h) = geom(&wm, "far");
+        assert!(x >= 0 && y >= 0 && x + w as i32 <= 400 && y + h as i32 <= 300);
+        assert_eq!(sdi.get("max.frame").expect("frame").w, 400);
+
+        // Restoring later lands on the new screen too.
+        wm.restore_window("max", &mut sdi).expect("restore");
+        let (x, y, w, h) = geom(&wm, "max");
+        assert!(x >= 0 && y >= 0 && x + w as i32 <= 400 && y + h as i32 <= 300);
+    }
+
+    #[test]
+    fn fit_to_screen_keeps_on_screen_windows_in_place() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        let before = geom(&wm, "a");
+        wm.set_screen_size(1024, 768);
+        wm.fit_to_screen(&mut sdi);
+        assert_eq!(geom(&wm, "a"), before);
+    }
+
+    #[test]
+    fn fit_to_screen_shrinks_oversized_windows() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        wm.resize_window("a", 700, 500, &mut sdi).expect("resize");
+        wm.set_screen_size(320, 240);
+        wm.fit_to_screen(&mut sdi);
+        assert_eq!(geom(&wm, "a"), (0, 0, 320, 240));
     }
 }
