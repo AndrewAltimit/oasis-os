@@ -73,8 +73,8 @@ mod inner {
     /// keep resource usage predictable.
     ///
     /// On drop, the sender channel is closed and the worker thread is
-    /// joined to ensure it has fully exited before any resources it
-    /// references (e.g. `TlsProvider`) are freed.
+    /// joined. The worker owns an `Arc` clone of the `TlsProvider`, so the
+    /// provider can never be freed while the thread may still use it.
     pub struct IoThread {
         tx: mpsc::Sender<IoWork>,
         rx: mpsc::Receiver<IoResult>,
@@ -100,7 +100,13 @@ mod inner {
         ///
         /// `tls` is cloned into the thread for HTTPS support.
         /// `cookie_jar` is cloned so the thread can send/receive cookies.
-        pub fn spawn(tls: Option<Arc<dyn TlsProvider>>, cookie_jar: CookieJar) -> Self {
+        ///
+        /// Returns the OS error if the thread cannot be spawned (e.g. thread
+        /// or memory limits), so callers can degrade instead of panicking.
+        pub fn spawn(
+            tls: Option<Arc<dyn TlsProvider>>,
+            cookie_jar: CookieJar,
+        ) -> std::io::Result<Self> {
             let (work_tx, work_rx) = mpsc::channel::<IoWork>();
             let (result_tx, result_rx) = mpsc::channel::<IoResult>();
 
@@ -108,16 +114,15 @@ mod inner {
                 .name("browser-io".into())
                 .spawn(move || {
                     Self::worker_loop(work_rx, result_tx, tls, cookie_jar);
-                })
-                .expect("failed to spawn browser-io thread");
+                })?;
 
-            IoThread {
+            Ok(IoThread {
                 tx: work_tx,
                 rx: result_rx,
                 handle: Some(handle),
                 next_id: 1,
                 in_flight: 0,
-            }
+            })
         }
 
         /// Submit a request to the I/O thread. Returns the request ID.
@@ -316,3 +321,53 @@ mod inner {
 
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 pub use inner::*;
+
+#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use oasis_net::tls::TlsProvider;
+    use oasis_types::backend::NetworkStream;
+
+    use super::IoThread;
+    use crate::loader::cookies::CookieJar;
+
+    /// TLS provider that records when it is dropped.
+    struct DropFlagProvider(Arc<AtomicBool>);
+
+    impl Drop for DropFlagProvider {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl TlsProvider for DropFlagProvider {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> oasis_types::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+    }
+
+    #[test]
+    fn worker_keeps_tls_provider_alive_after_caller_drops_it() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let provider: Arc<dyn TlsProvider> = Arc::new(DropFlagProvider(Arc::clone(&dropped)));
+
+        let io = IoThread::spawn(Some(Arc::clone(&provider)), CookieJar::new())
+            .expect("spawn I/O thread");
+        // The caller's handle goes away (e.g. `set_tls_provider` replaced it).
+        drop(provider);
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "provider must outlive the I/O thread that references it"
+        );
+
+        // Joining the worker releases the last strong reference.
+        drop(io);
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+}

@@ -21,53 +21,6 @@ use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 use crate::loader::io_thread::{IoRequestKind, IoThread};
 
-/// Wrapper to share a `TlsProvider` reference with the I/O thread.
-///
-/// # Safety
-///
-/// The raw pointer is valid for the lifetime of the `BrowserWidget` that
-/// owns the original `Box<dyn TlsProvider>`. `IoThread::drop()` closes
-/// the sender channel and joins the worker thread, ensuring it has fully
-/// exited before `tls` (and thus the pointee) is freed.
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-struct SharedTlsProvider(*const dyn oasis_net::tls::TlsProvider);
-
-// SAFETY: TlsProvider is Send + Sync, and the pointer is valid for the
-// lifetime of the BrowserWidget. The I/O thread never outlives the widget.
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-unsafe impl Send for SharedTlsProvider {}
-// SAFETY: TlsProvider is Send + Sync, and the pointer is valid for the
-// lifetime of the BrowserWidget. The I/O thread never outlives the widget.
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-unsafe impl Sync for SharedTlsProvider {}
-
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-impl oasis_net::tls::TlsProvider for SharedTlsProvider {
-    fn connect_tls(
-        &self,
-        stream: Box<dyn oasis_types::backend::NetworkStream>,
-        server_name: &str,
-    ) -> oasis_types::error::Result<Box<dyn oasis_types::backend::NetworkStream>> {
-        // SAFETY: pointer is valid for our lifetime (see above).
-        unsafe { &*self.0 }.connect_tls(stream, server_name)
-    }
-
-    fn connect_tls_with_alpn(
-        &self,
-        stream: Box<dyn oasis_types::backend::NetworkStream>,
-        server_name: &str,
-        alpn_protocols: &[&[u8]],
-    ) -> oasis_types::error::Result<oasis_types::tls::TlsConnection> {
-        // SAFETY: pointer is valid for our lifetime (see above).
-        // Forwarding this is load-bearing: without it the default
-        // trait impl silently drops the ALPN offer and the HTTP/2
-        // path in the loader never gets taken, which makes sites
-        // like wikipedia.org (h2-only) fail with "malformed HTTP
-        // response" when the HTTP/1.1 parser sees an h2 frame.
-        unsafe { &*self.0 }.connect_tls_with_alpn(stream, server_name, alpn_protocols)
-    }
-}
-
 impl BrowserWidget {
     /// Navigate via HTTP POST to a URL with the given body.
     ///
@@ -96,7 +49,9 @@ impl BrowserWidget {
         // POST requests always go to the network, so offload to IO thread.
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
-            if self.should_use_io_thread(&request, vfs) {
+            // `ensure_io_thread` fails only if the OS refuses to spawn a
+            // thread; fall through to the synchronous load in that case.
+            if self.should_use_io_thread(&request, vfs) && self.ensure_io_thread() {
                 self.submit_page_load_to_io_thread(request);
                 return;
             }
@@ -251,7 +206,9 @@ impl BrowserWidget {
         // Determine if this is a network request that can be offloaded.
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
-            if self.should_use_io_thread(&request, vfs) {
+            // `ensure_io_thread` fails only if the OS refuses to spawn a
+            // thread; fall through to the synchronous load in that case.
+            if self.should_use_io_thread(&request, vfs) && self.ensure_io_thread() {
                 self.submit_page_load_to_io_thread(request);
                 return;
             }
@@ -359,43 +316,30 @@ impl BrowserWidget {
         }
     }
 
-    /// Ensure the I/O thread is running and return a mutable reference.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-    fn ensure_io_thread(&mut self) {
-        if self.io_thread.is_some() {
-            return;
-        }
-        let tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>> =
-            self.tls.as_ref().map(|t| {
-                // Share the TLS provider with the IO thread via a raw
-                // pointer wrapper (SharedTlsProvider). See its SAFETY
-                // documentation above.
-                std::sync::Arc::from(Self::clone_tls_provider_to_arc(t.as_ref()))
-            });
-
-        let cookie_jar = self.cookie_jar.clone();
-        self.io_thread = Some(IoThread::spawn(tls, cookie_jar));
-    }
-
-    /// Clone a `Box<dyn TlsProvider>` reference into a boxed trait object
-    /// suitable for wrapping in `Arc`.
+    /// Ensure the I/O thread is running. Returns `false` when it could
+    /// not be spawned (the error is logged; callers fall back to
+    /// synchronous loading or skip the request).
     ///
-    /// Since `TlsProvider` doesn't require `Clone`, we use a wrapper
-    /// that shares the original provider via a raw pointer. This is safe
-    /// because the IO thread lifetime is bounded by `BrowserWidget`'s
-    /// lifetime (the thread is joined/dropped when BrowserWidget drops).
+    /// The worker receives its own `Arc` clone of the TLS provider, so the
+    /// provider stays alive for as long as the thread can use it -- even if
+    /// [`BrowserWidget::set_tls_provider`] replaces `self.tls` meanwhile.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
-    fn clone_tls_provider_to_arc(
-        provider: &dyn oasis_net::tls::TlsProvider,
-    ) -> Box<dyn oasis_net::tls::TlsProvider + 'static> {
-        // We use a SharedTlsProvider that holds a raw pointer.
-        // SAFETY: The IoThread is dropped before BrowserWidget (which
-        // owns the TLS provider), so the pointer remains valid.
-        let ptr = provider as *const dyn oasis_net::tls::TlsProvider;
-        // SAFETY: We are erasing the lifetime. The IoThread is destroyed
-        // before the BrowserWidget (and thus before the TLS provider).
-        let ptr: *const dyn oasis_net::tls::TlsProvider = unsafe { std::mem::transmute(ptr) };
-        Box::new(SharedTlsProvider(ptr))
+    pub(crate) fn ensure_io_thread(&mut self) -> bool {
+        if self.io_thread.is_some() {
+            return true;
+        }
+        let tls = self.tls.clone();
+        let cookie_jar = self.cookie_jar.clone();
+        match IoThread::spawn(tls, cookie_jar) {
+            Ok(io) => {
+                self.io_thread = Some(io);
+                true
+            },
+            Err(e) => {
+                log::error!("browser: failed to spawn I/O thread: {e}");
+                false
+            },
+        }
     }
 
     /// Submit a page load request to the I/O thread.
