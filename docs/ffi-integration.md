@@ -126,6 +126,8 @@ OasisInstance* oasis_create_full(
  * Safe to call with NULL.
  */
 void oasis_destroy(OasisInstance* handle);
+/* (Destroying fires the audio SHUTDOWN callback. The handle is invalid
+ * afterwards: destroying it twice is undefined behaviour.) */
 
 /* Advance the OS by one frame.
  *
@@ -229,7 +231,12 @@ typedef struct {
     uint32_t character;   /* Unicode codepoint (TEXT_INPUT, KEY with OASIS_KEY_CHAR) */
 } OasisInputEvent;
 
-/* Deliver an input event to the instance. */
+/* Deliver an input event to the instance. It is processed on the next
+ * oasis_tick(). On the dashboard (skinned instances): d-pad buttons move
+ * the selection, CONFIRM launches the selected app, the L/R triggers
+ * change page, a POINTER_CLICK on an icon selects and launches it, and
+ * CURSOR_MOVE drives the icon hover effect. Launching fires
+ * OASIS_CB_APP_LAUNCH with the app title. */
 void oasis_send_input(OasisInstance* handle, const OasisInputEvent* event);
 
 /* ----------------------------------------------------------------
@@ -243,7 +250,9 @@ void oasis_send_input(OasisInstance* handle, const OasisInputEvent* event);
  */
 char* oasis_send_command(OasisInstance* handle, const char* cmd);
 
-/* Free a string returned by oasis_send_command(). */
+/* Free a string returned by oasis_send_command(). Safe with NULL; each
+ * string must be freed exactly once. Interior NUL bytes in command output
+ * (e.g. `cat` of a binary file) are replaced with U+FFFD. */
 void oasis_free_string(char* ptr);
 
 /* ----------------------------------------------------------------
@@ -273,7 +282,9 @@ void oasis_add_vfs_file(
  * Callbacks
  * ---------------------------------------------------------------- */
 
-/* Callback event types */
+/* Callback event types. Currently fired: OASIS_CB_COMMAND_EXEC (detail =
+ * the command line, from oasis_send_command) and OASIS_CB_APP_LAUNCH
+ * (detail = app title). The other codes are reserved and never fire yet. */
 #define OASIS_CB_FILE_ACCESS   1
 #define OASIS_CB_COMMAND_EXEC  2
 #define OASIS_CB_APP_LAUNCH    3
@@ -284,6 +295,7 @@ void oasis_add_vfs_file(
 typedef void (*OasisCallback)(uint32_t event, const char* detail);
 
 /* Register a callback for OS events. */
+/* Registering the same event again replaces the previous callback. */
 void oasis_register_callback(
     OasisInstance* handle,
     uint32_t event,
@@ -312,7 +324,9 @@ typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t v
 
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
 
-/* Load audio data; returns a track ID, or UINT64_MAX on failure. */
+/* Load audio data; returns a track ID, or UINT64_MAX on failure.
+ * Volume is clamped to 0-100 (VOLUME_CHANGE reports the clamped value);
+ * oasis_audio_resume() fails unless a track is paused. */
 uint64_t oasis_audio_load(OasisInstance* handle, const uint8_t* data, uint32_t data_len);
 /* The following return true on success. */
 bool oasis_audio_play(OasisInstance* handle, uint64_t track_id);
@@ -445,11 +459,11 @@ if (output) {
 ### 5. Register Callbacks
 
 ```c
-void on_file_access(uint32_t event, const char* detail) {
-    printf("File accessed: %s\n", detail);
+void on_app_launch(uint32_t event, const char* detail) {
+    printf("App launched: %s\n", detail);
 }
 
-oasis_register_callback(os, OASIS_CB_FILE_ACCESS, on_file_access);
+oasis_register_callback(os, OASIS_CB_APP_LAUNCH, on_app_launch);
 ```
 
 ### 6. Cleanup
