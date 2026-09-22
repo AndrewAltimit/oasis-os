@@ -903,14 +903,155 @@ fn key_flows_on_every_skin() {
         // Terminal round trip.
         h.key(Key::F(1));
         h.settle();
-        if h.mode() == Mode::Terminal {
-            h.key(Key::Escape);
-            h.settle();
-        } else if let Some(t) = h.find_window("Terminal") {
-            let _ = t;
+        // Fullscreen terminal (PSP-style skins) or a terminal window.
+        if h.mode() == Mode::Terminal || h.find_window("Terminal").is_some() {
             h.key(Key::Escape);
             h.settle();
         }
         assert_eq!(h.mode(), Mode::Dashboard, "{name}: terminal round trip");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard: icon drag, pages, status bar
+// ---------------------------------------------------------------------------
+
+/// Free-layout skins: dragging an icon moves it (no launch), the drop is
+/// persisted in the settings store, and it survives a skin round trip.
+#[test]
+fn icon_drag_reorder_persists() {
+    use oasis_core::vfs::Vfs;
+    let skin = "psix-tribute";
+    let mut h = boot(skin);
+    assert!(h.state().ui.dashboard.config.free_layout);
+    let (x, y, w, hh) = h.app_icon_rect("Calculator").unwrap();
+    let from = (x + w as i32 / 2, y + hh as i32 / 2);
+    let to = (from.0 + 160, from.1 + 90);
+    h.drag(from, to, 8);
+    h.settle();
+    assert!(
+        h.windows().is_empty(),
+        "a drag must not launch: {:?}",
+        h.windows()
+    );
+    assert_eq!(h.mode(), Mode::Dashboard);
+    let moved = h.app_icon_rect("Calculator").unwrap();
+    assert_ne!((moved.0, moved.1), (x, y), "icon moved");
+    let path = h
+        .state()
+        .ui
+        .dashboard
+        .apps
+        .iter()
+        .find(|a| a.title == "Calculator")
+        .unwrap()
+        .path
+        .clone();
+    let key = format!("icon_positions.{skin}.{path}");
+    assert!(
+        h.state().settings.get_string(&key).is_some(),
+        "position saved under {key}"
+    );
+    let saved = String::from_utf8(
+        h.vfs()
+            .read(oasis_core::settings::DEFAULT_PATH)
+            .unwrap_or_default(),
+    )
+    .unwrap();
+    assert!(
+        saved.contains("icon_positions"),
+        "persisted to VFS: {saved}"
+    );
+
+    // Skin round trip: the free position is restored.
+    for name in ["classic", skin] {
+        h.vfs_mut()
+            .write(
+                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                name.as_bytes(),
+            )
+            .unwrap();
+        h.settle();
+    }
+    assert_eq!(h.state().skin.manifest.name, skin);
+    assert_eq!(h.app_icon_rect("Calculator").unwrap(), moved);
+
+    // A plain click (no movement) still launches.
+    let (x, y, w, hh) = moved;
+    h.click(x + w as i32 / 2, y + hh as i32 / 2);
+    h.settle();
+    assert!(h.find_window("Calculator").is_some(), "{:?}", h.windows());
+}
+
+/// Page changes (slide or fade) finish and leave a stable scene, even
+/// when the user pages faster than the animation.
+#[test]
+fn page_change_animations_complete() {
+    let mut tested = 0;
+    for name in builtin_names() {
+        let mut h = boot(name);
+        let pages = h.state().ui.dashboard.page_count();
+        if pages < 2 {
+            continue;
+        }
+        tested += 1;
+        // Rapid paging: next, next, prev without waiting.
+        h.button(Button::Triangle);
+        h.button(Button::Triangle);
+        h.button(Button::Square);
+        let frames = h.settle();
+        assert!(frames < 300, "{name}: paging never settled");
+        let expect = 1.min(pages - 1);
+        assert_eq!(h.state().ui.dashboard.page, expect, "{name}");
+        assert_eq!(h.state().ui.bottom_bar.current_page, expect, "{name}");
+        assert!(h.state().active_transition.is_none(), "{name}");
+        // Every icon on the page is on screen.
+        let (sw, sh) = h.size();
+        for app in h.dashboard_apps() {
+            let (x, y, w, hh) = h.app_icon_rect(&app).unwrap();
+            assert!(
+                x >= 0 && y >= 0 && x + w as i32 <= sw as i32 && y + hh as i32 <= sh as i32,
+                "{name}: {app} icon off screen after paging"
+            );
+        }
+        // And the icons respond: clicking one launches it.
+        let app = h.dashboard_apps()[0].clone();
+        assert!(h.click_app_icon(&app));
+        h.settle();
+        assert!(
+            h.find_window(&app).is_some() || h.mode() == Mode::Terminal,
+            "{name}: {app} launched after paging"
+        );
+    }
+    assert!(tested > 0, "some skin has more than one page");
+}
+
+fn at_time(hour: u8, minute: u8) -> oasis_core::platform::SystemTime {
+    oasis_core::platform::SystemTime {
+        year: 2025,
+        month: 6,
+        day: 15,
+        hour,
+        minute,
+        second: 0,
+    }
+}
+
+/// The status bar clock follows the platform clock (polled once a second).
+#[test]
+fn status_bar_clock_updates() {
+    let mut h = boot("classic");
+    assert!(h.sdi_text_contains("12:00"), "{:?}", h.sdi_texts());
+    h.state_mut().platform.set_fixed_time(Some(at_time(13, 45)));
+    h.advance(std::time::Duration::from_millis(1100));
+    assert!(
+        h.sdi_text_contains("13:45"),
+        "clock updated: {:?}",
+        h.sdi_texts()
+    );
+    // Also with windows open (desktop mode keeps the bars).
+    open(&mut h, "Calculator");
+    h.state_mut().platform.set_fixed_time(Some(at_time(14, 5)));
+    h.advance(std::time::Duration::from_millis(1100));
+    assert!(h.sdi_text_contains("14:05"), "{:?}", h.sdi_texts());
 }
