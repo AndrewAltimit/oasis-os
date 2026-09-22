@@ -20,6 +20,16 @@ pub(crate) const MAX_LOOKAHEAD: u64 = 16 * 1024 * 1024; // 16 MB
 #[cfg(feature = "_video")]
 pub(crate) const MIN_PREBUFFER: u64 = 2 * 1024 * 1024; // 2 MB
 
+/// Probe-mode reads within this distance past the download frontier wait
+/// for the real bytes instead of returning zeros (see `StreamingBuffer`).
+#[cfg(feature = "_video")]
+const PROBE_WAIT_WINDOW: u64 = 64 * 1024;
+
+/// Total time probe-mode reads may wait at the frontier before falling back
+/// to zeros (a stalled download must not hang the decoder's open).
+#[cfg(feature = "_video")]
+const PROBE_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Maximum buffer size before a warning is logged (during init phase).
 /// The demuxer's `read_to_end()` + `seek(0)` pattern requires the full file
 /// in memory during init; eviction MUST NOT remove data before seek-back.
@@ -577,6 +587,8 @@ pub(crate) struct StreamingBuffer {
     /// Cached moov atom — once set it never changes. Reads from the moov
     /// region can be served without acquiring the state mutex.
     cached_moov: Option<(u64, std::sync::Arc<Vec<u8>>)>,
+    /// When probe-mode reads started waiting at the download frontier.
+    probe_wait_start: Option<std::time::Instant>,
 }
 
 #[cfg(feature = "_video")]
@@ -589,6 +601,7 @@ impl StreamingBuffer {
             last_wait_log: None,
             cached_header: None,
             cached_moov: None,
+            probe_wait_start: None,
         }
     }
 }
@@ -710,14 +723,32 @@ impl std::io::Read for StreamingBuffer {
             // by retained data or the sliding buffer.  This lets
             // symphonia's ignore_bytes() skip the mdat body instantly
             // without downloading it.
-            let in_probe = self
-                .inner
-                .probe_mode
-                .load(std::sync::atomic::Ordering::Acquire);
             if in_probe {
+                // Just past the download frontier the bytes are about to
+                // arrive (typically the atom headers right after moov):
+                // wait for them rather than invent zeros.  A zeroed `mdat`
+                // header made the demuxer treat the rest of the file as an
+                // unknown atom, and a mid-episode tune then decoded nothing.
+                // (The probe only starts once moov is retained.)
+                let near_frontier = s.moov.is_some()
+                    && self.pos >= buf_end
+                    && self.pos < buf_end + PROBE_WAIT_WINDOW;
+                if near_frontier && !self.inner.is_done() {
+                    let started = *self
+                        .probe_wait_start
+                        .get_or_insert_with(std::time::Instant::now);
+                    if started.elapsed() < PROBE_WAIT_LIMIT {
+                        let _guard = self
+                            .inner
+                            .condvar
+                            .wait_timeout(s, std::time::Duration::from_millis(50))
+                            .unwrap_or_else(|e| e.into_inner());
+                        continue;
+                    }
+                }
                 // Fill with zeros up to base_offset, total_size, or
                 // buf.len() -- whichever comes first.
-                let limit = if total > 0 { total } else { u64::MAX };
+                let limit = if total > 0 { eof_at } else { u64::MAX };
                 let remaining = (limit - self.pos) as usize;
                 let n = buf.len().min(remaining);
                 if n == 0 {
