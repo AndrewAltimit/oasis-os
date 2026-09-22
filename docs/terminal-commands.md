@@ -234,9 +234,9 @@ VFS metadata only — there is no real Unix permission model behind these.
 | --- | --- | --- |
 | `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>\|maximize <id>]` | Window manager control (the shell publishes `/var/wm/status` and applies `/var/wm/request`). |
 | `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects: `list` prints every object (z-ordered, hidden ones marked); `get` prints all fields of one object (position, size, z, visibility, colors, text, texture, radius, gradient, stroke, shadow). Resolved by the host via `CommandSignal::SdiInspect`. |
-| `theme` | `theme [show\|colors]` | Show the current theme. |
-| `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification. |
-| `screenshot` | `screenshot [path]` | Take a screenshot. |
+| `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
+| `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |
+| `screenshot` | `screenshot [path]` | Save the next presented frame to a VFS path (default `/tmp/screenshot.bmp`; PNG when the path ends in `.png`, else BMP). Queues `/var/screenshot/request`; the shell prints the result. |
 
 ## Skin management (`oasis-terminal/src/skin_commands.rs`)
 
@@ -315,7 +315,7 @@ the wire protocol and PSK auth.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `browse` | `browse <url> \| browse bookmarks \| browse history \| browse home \| browse back \| browse forward \| browse reader \| browse sandbox <url>` | Open URL in browser or manage browser state. |
+| `browse` | `browse <url> \| browse bookmarks \| browse history \| browse home \| browse back \| browse forward \| browse reload \| browse reader \| browse sandbox <url>` | Open URL in browser or manage browser state. Queues `/var/browser/request`; the shell opens or focuses the browser window and applies it. |
 | `fetch` | `fetch <url>` / `fetch headers <url>` | Fetch URL and print raw response. |
 | `gemini` | `gemini <url>` | Open a Gemini URL in the browser. |
 | `curl` | `curl <url>` | Alias for `fetch`. |

@@ -6,12 +6,14 @@
 //! [`poll`] runs once per `Shell::step` (next to the `wm` IPC) and makes
 //! them do what they say:
 //!
-//! | File | Written by | Host action |
-//! |---|---|---|
-//! | `/var/notify/message` (`level:message`) | `notify` | show a toast |
-//! | `/var/screenshot/request` (VFS path) | `screenshot` | capture the next presented frame to that path (PNG for `.png`, else BMP) |
-//! | `/var/theme/current` | host | status the `theme` command prints |
-//! | `/var/browser/request` (`op [arg]`) | `browse` | open the browser, navigate / back / forward / reload / home / reader / bookmarks / history |
+//! - `/var/notify/message` (`level:message`, from `notify`): show a toast.
+//! - `/var/screenshot/request` (a VFS path, from `screenshot`): capture
+//!   the next presented frame to that path (PNG for `.png`, else BMP).
+//! - `/var/theme/current` (written by the host): the status `theme`
+//!   prints.
+//! - `/var/browser/request` (`op [arg]`, from `browse`): open or focus
+//!   the browser, then open a URL / back / forward / reload / home /
+//!   reader / bookmarks / history.
 
 use oasis_core::backend::Color;
 use oasis_core::dashboard::AppEntry;

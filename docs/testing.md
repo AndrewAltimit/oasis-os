@@ -115,7 +115,7 @@ Shell-level actions
 |------|------|
 | `dashboard_apps()`, `app_icon_rect(title)`, `click_app_icon(title)` | Dashboard icons on the current page |
 | `open_app(title)` | Launch like `OASIS_APP` auto-launch (no clicking) |
-| `windows()`, `find_window(title)` | `WindowInfo { id, title, frame, content, close_button, minimized, fullscreen }` |
+| `windows()`, `find_window(title)` | `WindowInfo { id, title, frame, content, close_button, minimized, fullscreen }`; `find_window` falls back to the window id (the browser's title follows the page) |
 | `close_window(title)` | Click the titlebar close button |
 | `app_runner(title)` | The open app's `AppRunner` (e.g. `.tv_guide_state()` to inject fixtures) |
 | `terminal(cmd)` | Open the terminal (Start), type `cmd`, press Enter |
@@ -148,7 +148,14 @@ Observation
   no environment variables (tests run in parallel threads). The one
   exception is loopback: `tests/e2e_remote.rs` starts the remote terminal,
   FTP and MCP servers from the shell terminal and drives them with real
-  `127.0.0.1` clients, stepping the harness between non-blocking reads.
+  `127.0.0.1` clients, stepping the harness between non-blocking reads;
+  `tests/e2e_browser.rs` serves pages from an in-process `127.0.0.1`
+  HTTP server and drives the browser window like a user (dashboard
+  icon, chrome buttons, clicks on painted page text, wheel, keys,
+  typing, forms, JS, resize, skin swap, error pages, closing mid-load,
+  idle frames) plus the `browse` / `notify` / `screenshot` / `theme`
+  terminal commands. Network waits step the harness with a short real
+  sleep under a wall-clock deadline.
 - **Per-skin loops** (`builtin_names()`) catch skin-specific layout and
   feature-flag breakage cheaply: a boot is ~0.1 s, a settled frame a few ms
   (debug build).
