@@ -340,7 +340,8 @@ pub fn apply_skin_object(
 fn clear_component_sdi_objects(sdi: &mut SdiRegistry) {
     const COMPONENT_PREFIXES: &[&str] = &[
         "icon_",            // dashboard icons (icon_label_*, icon_shadow_*, …)
-        "cursor_highlight", // dashboard selector (now invisible, but still rebuilt)
+        "cursor_highlight", // dashboard selection highlight
+        "hover_highlight",  // dashboard pointer-hover highlight
         "bar_",             // status bar + bottom bar
         "taskbar_",         // taskbar buttons + desktop indicator
         "start_btn_",       // start menu button on the taskbar

@@ -494,6 +494,7 @@ impl DashboardState {
             cell_x,
             text_pad,
             left_align,
+            lift,
         } = geo;
 
         // Hide all SDI sub-objects (vector rendering is done directly).
@@ -516,7 +517,7 @@ impl DashboardState {
             names,
             cell_x,
             self.cell_size().0,
-            iy + icon_h as i32 + text_pad,
+            iy + lift + icon_h as i32 + text_pad,
             &app.title,
             left_align.then_some(ix + icon_w as i32 / 2),
             &self.label_wrap_cache,
@@ -580,7 +581,7 @@ impl DashboardState {
             let app = &page_apps[i];
             let (cell_x, cell_y) = (origins[i].0 + slide_offset, origins[i].1);
             let ix = cell_x + (cell_w as i32 - icon_w as i32) / 2;
-            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4;
+            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4 - self.hover_lift_px(i, at);
 
             // Get or build the scaled icon scene: static icons render from
             // the cache; animated or flashing icons rebuild each frame.
