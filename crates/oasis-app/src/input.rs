@@ -1,7 +1,7 @@
 use oasis_audio::RADIO_APP_TITLE;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;
-use oasis_core::input::{Button, InputEvent, Trigger};
+use oasis_core::input::{Button, InputEvent, Key, KeyTwinFilter, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
@@ -467,48 +467,8 @@ pub fn handle_desktop_input(
                     .iter_mut()
                     .find(|(id, _)| *id == active_id)
                 {
-                    match runner.handle_input(btn, vfs) {
-                        AppAction::Exit => {
-                            state.ui_sounds.push(UiSound::Close);
-                            if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                                let _ = state.wm.exit_fullscreen(&active_id, sdi);
-                                state.content.fullscreen_app = None;
-                            }
-                            let _ = state.wm.close_window(&active_id, sdi);
-                            stop_radio_if_radio_runner(state, &active_id);
-                            stop_music_if_music_runner(state, &active_id);
-                            state
-                                .content
-                                .open_runners
-                                .retain(|(rid, _)| *rid != active_id);
-                            if state.wm.window_count() == 0 {
-                                state.mode = Mode::Dashboard;
-                            }
-                        },
-                        AppAction::SwitchToTerminal => {
-                            state.mode = Mode::Terminal;
-                        },
-                        AppAction::RequestFullscreen => {
-                            if state.content.fullscreen_app.is_none() {
-                                let _ = state.wm.enter_fullscreen(&active_id, sdi);
-                                state.content.fullscreen_app = Some(active_id);
-                            }
-                        },
-                        AppAction::LaunchAppWithFile {
-                            app_title,
-                            file_path,
-                        } => {
-                            launch::launch_app_window_for_file(
-                                &app_title,
-                                &file_path,
-                                &mut state.wm,
-                                sdi,
-                                &mut state.content.open_runners,
-                                vfs,
-                            );
-                        },
-                        AppAction::None => {},
-                    }
+                    let action = runner.handle_input(btn, vfs);
+                    apply_window_action(action, active_id, state, sdi, vfs);
                 }
             }
         },
@@ -535,49 +495,233 @@ pub fn handle_app_input(
         match event {
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => {
-                let is_radio = runner.title == RADIO_APP_TITLE;
-                let is_music = runner.title == "Music Player";
-                match runner.handle_input(btn, vfs) {
-                    AppAction::Exit => {
-                        state.ui_sounds.push(UiSound::Close);
-                        AppRunner::hide_sdi(sdi);
-                        state.content.app_runner = None;
-                        state.mode = Mode::Dashboard;
-                        if is_radio {
-                            stop_radio(state);
-                        }
-                        if is_music {
-                            crate::media_controller::shutdown(state);
-                        }
-                    },
-                    AppAction::SwitchToTerminal => {
-                        AppRunner::hide_sdi(sdi);
-                        state.content.app_runner = None;
-                        state.mode = Mode::Terminal;
-                    },
-                    AppAction::LaunchAppWithFile {
-                        app_title,
-                        file_path,
-                    } => {
-                        // Replace the current fullscreen runner with the
-                        // target app, with the file pre-opened.
-                        AppRunner::hide_sdi(sdi);
-                        let entry = oasis_core::dashboard::AppEntry {
-                            title: app_title.clone(),
-                            path: format!("/apps/{app_title}"),
-                            icon_png: Vec::new(),
-                            color: oasis_core::backend::Color::rgb(100, 100, 100),
-                        };
-                        state.content.app_runner =
-                            Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
-                    },
-                    AppAction::RequestFullscreen | AppAction::None => {},
-                }
+                let action = runner.handle_input(btn, vfs);
+                apply_fullscreen_action(action, state, sdi, vfs);
             },
             _ => {},
         }
     }
     InputResult::Continue
+}
+
+/// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
+fn apply_fullscreen_action(
+    action: AppAction,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) {
+    let (is_radio, is_music) = state
+        .content
+        .app_runner
+        .as_ref()
+        .map_or((false, false), |r| {
+            (r.title == RADIO_APP_TITLE, r.title == "Music Player")
+        });
+    match action {
+        AppAction::Exit => {
+            state.ui_sounds.push(UiSound::Close);
+            AppRunner::hide_sdi(sdi);
+            state.content.app_runner = None;
+            state.mode = Mode::Dashboard;
+            if is_radio {
+                stop_radio(state);
+            }
+            if is_music {
+                crate::media_controller::shutdown(state);
+            }
+        },
+        AppAction::SwitchToTerminal => {
+            AppRunner::hide_sdi(sdi);
+            state.content.app_runner = None;
+            state.mode = Mode::Terminal;
+        },
+        AppAction::LaunchAppWithFile {
+            app_title,
+            file_path,
+        } => {
+            // Replace the current fullscreen runner with the
+            // target app, with the file pre-opened.
+            AppRunner::hide_sdi(sdi);
+            let entry = oasis_core::dashboard::AppEntry {
+                title: app_title.clone(),
+                path: format!("/apps/{app_title}"),
+                icon_png: Vec::new(),
+                color: oasis_core::backend::Color::rgb(100, 100, 100),
+            };
+            state.content.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
+        },
+        AppAction::RequestFullscreen | AppAction::None => {},
+    }
+}
+
+/// Apply an [`AppAction`] returned by the windowed runner `active_id`.
+fn apply_window_action(
+    action: AppAction,
+    active_id: String,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) {
+    match action {
+        AppAction::Exit => {
+            state.ui_sounds.push(UiSound::Close);
+            if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                let _ = state.wm.exit_fullscreen(&active_id, sdi);
+                state.content.fullscreen_app = None;
+            }
+            let _ = state.wm.close_window(&active_id, sdi);
+            stop_radio_if_radio_runner(state, &active_id);
+            stop_music_if_music_runner(state, &active_id);
+            state
+                .content
+                .open_runners
+                .retain(|(rid, _)| *rid != active_id);
+            if state.wm.window_count() == 0 {
+                state.mode = Mode::Dashboard;
+            }
+        },
+        AppAction::SwitchToTerminal => {
+            state.mode = Mode::Terminal;
+        },
+        AppAction::RequestFullscreen => {
+            if state.content.fullscreen_app.is_none() {
+                let _ = state.wm.enter_fullscreen(&active_id, sdi);
+                state.content.fullscreen_app = Some(active_id);
+            }
+        },
+        AppAction::LaunchAppWithFile {
+            app_title,
+            file_path,
+        } => {
+            launch::launch_app_window_for_file(
+                &app_title,
+                &file_path,
+                &mut state.wm,
+                sdi,
+                &mut state.content.open_runners,
+                vfs,
+            );
+        },
+        AppAction::None => {},
+    }
+}
+
+/// Whether the current input target is a text-entry surface: the terminal
+/// (fullscreen or windowed), the browser while its URL bar / a form field
+/// has focus, or an app whose [`App::accepts_text`] is true.
+///
+/// [`App::accepts_text`]: oasis_core::apps::App::accepts_text
+pub fn text_focus(state: &AppState) -> bool {
+    match state.mode {
+        Mode::Terminal => true,
+        Mode::App => state
+            .content
+            .app_runner
+            .as_ref()
+            .is_some_and(AppRunner::accepts_text),
+        Mode::Desktop => match state.wm.active_window() {
+            Some("terminal") => true,
+            Some("browser") => state
+                .content
+                .browser
+                .as_ref()
+                .is_some_and(|bw| bw.accepts_text()),
+            Some(active_id) => state
+                .content
+                .open_runners
+                .iter()
+                .any(|(id, runner)| id == active_id && runner.accepts_text()),
+            None => false,
+        },
+        Mode::Dashboard | Mode::Osk => false,
+    }
+}
+
+/// Route a raw key press to the focused app's [`App::handle_key`].
+///
+/// Returns `true` when the app consumed the key (its action has been
+/// applied and the key's gamepad-style twin must be dropped).
+///
+/// [`App::handle_key`]: oasis_core::apps::App::handle_key
+fn route_key(
+    key: &Key,
+    mods: Modifiers,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+) -> bool {
+    match state.mode {
+        Mode::App => {
+            let Some(runner) = state.content.app_runner.as_mut() else {
+                return false;
+            };
+            let Some(action) = runner.handle_key(key, mods, vfs) else {
+                return false;
+            };
+            apply_fullscreen_action(action, state, sdi, vfs);
+            true
+        },
+        Mode::Desktop => {
+            // The browser and terminal windows are not `App`s; they keep
+            // using the legacy events.
+            let Some(active_id) = state
+                .wm
+                .active_window()
+                .filter(|id| *id != "browser" && *id != "terminal")
+                .map(str::to_string)
+            else {
+                return false;
+            };
+            let Some((_, runner)) = state
+                .content
+                .open_runners
+                .iter_mut()
+                .find(|(id, _)| *id == active_id)
+            else {
+                return false;
+            };
+            let Some(action) = runner.handle_key(key, mods, vfs) else {
+                return false;
+            };
+            runner.refresh_app(vfs);
+            apply_window_action(action, active_id, state, sdi, vfs);
+            true
+        },
+        Mode::Dashboard | Mode::Terminal | Mode::Osk => false,
+    }
+}
+
+/// Top-level per-event entry point used by the main loop.
+///
+/// Handles [`InputEvent::Key`] (routing it to the focused app and arming
+/// `key_filter` so the key's gamepad-style twin is dropped when the app
+/// consumed it or when it merely typed text into a text-entry target),
+/// then dispatches every other event to the handler for the current mode.
+pub fn handle_event(
+    event: &InputEvent,
+    key_filter: &mut KeyTwinFilter,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+) -> InputResult {
+    if key_filter.should_drop(event) {
+        return InputResult::Continue;
+    }
+    if let InputEvent::Key { key, mods } = event {
+        let typing = key.produces_text(*mods) && text_focus(state);
+        let consumed = route_key(key, *mods, state, sdi, vfs);
+        if consumed || typing {
+            key_filter.suppress_twin(*key, *mods);
+        }
+        return InputResult::Continue;
+    }
+    match state.mode {
+        Mode::Osk => handle_osk_input(event, state, sdi),
+        Mode::Desktop => handle_desktop_input(event, state, sdi, vfs),
+        Mode::App => handle_app_input(event, state, sdi, vfs),
+        _ => handle_default_input(event, state, sdi, vfs),
+    }
 }
 
 /// Handle input in Dashboard/Terminal modes and global keys.
@@ -1607,5 +1751,113 @@ mod tests {
             &mut vfs,
         );
         assert_eq!(result, InputResult::Continue);
+    }
+
+    // -- raw Key events / typing collisions --
+
+    /// Open `title` as a desktop window on a 4-desktop manager.
+    fn open_window(title: &str) -> (AppState, SdiRegistry, MemoryVfs) {
+        use oasis_core::dashboard::AppEntry;
+
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.ui.desktops = oasis_core::wm::DesktopManager::new(4);
+        let app = AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let result = launch::launch_app_window(
+            &app,
+            &mut state.wm,
+            &mut sdi,
+            &mut state.content.open_runners,
+            &mut state.content.browser,
+            &state.browser_config,
+            &vfs,
+            &state.net.tls_provider,
+            state.skin.features.window_manager,
+            &state.plugin_manager,
+        );
+        launch::apply_launch(result, &mut state.mode);
+        assert_eq!(state.mode, Mode::Desktop);
+        (state, sdi, vfs)
+    }
+
+    /// The event stream the SDL backend produces for typing `ch`.
+    fn sdl_typing(ch: char) -> Vec<InputEvent> {
+        let key = if ch == ' ' { Key::Space } else { Key::Char(ch) };
+        let mut events = vec![InputEvent::Key {
+            key,
+            mods: Modifiers::NONE,
+        }];
+        events.extend(key.legacy_press(Modifiers::NONE));
+        events.push(InputEvent::TextInput(ch));
+        events
+    }
+
+    #[test]
+    fn typing_qe_space_in_text_editor_fires_no_shortcuts() {
+        let (mut state, mut sdi, mut vfs) = open_window("Text Editor");
+        let win_id = state.wm.active_window().map(str::to_string);
+        assert!(text_focus(&state), "text editor must accept text");
+        let mut filter = KeyTwinFilter::default();
+        for ch in ['q', 'e', ' '] {
+            for ev in sdl_typing(ch) {
+                handle_event(&ev, &mut filter, &mut state, &mut sdi, &mut vfs);
+                // No trigger may switch the virtual desktop mid-stream.
+                assert_eq!(state.ui.desktops.active_desktop(), 0, "{ev:?}");
+            }
+        }
+        assert_eq!(state.mode, Mode::Desktop);
+        assert_eq!(state.wm.active_window().map(str::to_string), win_id);
+        let (_, runner) = state
+            .content
+            .open_runners
+            .iter_mut()
+            .find(|(id, _)| Some(&*id) == win_id.as_ref())
+            .expect("editor window still open");
+        // Sync the runner's cached display lines from the editor.
+        runner.refresh_app(&vfs);
+        // Space typed a space instead of Triangle opening Find mode.
+        let text = runner.lines.join("\n");
+        assert!(text.contains("qe "), "editor text: {text:?}");
+        assert!(!text.contains("Find:"), "Triangle leaked: {text:?}");
+    }
+
+    #[test]
+    fn q_without_text_focus_still_switches_desktop() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        assert!(!text_focus(&state));
+        let mut filter = KeyTwinFilter::default();
+        for ev in sdl_typing('e') {
+            handle_event(&ev, &mut filter, &mut state, &mut sdi, &mut vfs);
+        }
+        assert_eq!(state.ui.desktops.active_desktop(), 1);
+    }
+
+    #[test]
+    fn gamepad_trigger_unaffected_by_text_focus() {
+        // A bare TriggerPress (PSP / gamepad, no preceding Key) is never
+        // filtered, even while a text window has focus.
+        let (mut state, mut sdi, mut vfs) = open_window("Text Editor");
+        let mut filter = KeyTwinFilter::default();
+        handle_event(
+            &InputEvent::TriggerPress(Trigger::Right),
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.ui.desktops.active_desktop(), 1);
+    }
+
+    #[test]
+    fn terminal_mode_has_text_focus() {
+        let (mut state, _sdi, _vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        assert!(text_focus(&state));
+        state.mode = Mode::Dashboard;
+        assert!(!text_focus(&state));
     }
 }

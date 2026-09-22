@@ -422,6 +422,12 @@ impl App for VideoEmbedApp {
         self.input_buf.push(ch);
     }
 
+    fn accepts_text(&self) -> bool {
+        // Search box is live in Search and Results (typing starts a new
+        // query); the Playing overlay ignores text.
+        self.state != EmbedState::Playing
+    }
+
     fn handle_backspace(&mut self) {
         if self.state == EmbedState::Playing {
             return;

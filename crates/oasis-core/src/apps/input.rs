@@ -1,6 +1,6 @@
 //! Input handling methods for `AppRunner`.
 
-use crate::input::Button;
+use crate::input::{Button, Key, Modifiers};
 use crate::vfs::Vfs;
 
 use super::app_trait::AppAction;
@@ -17,6 +17,25 @@ impl AppRunner {
         }
 
         AppAction::None
+    }
+
+    /// Forward a raw key press to the app delegate.
+    ///
+    /// Returns `Some(action)` when the app consumed the key (the host must
+    /// then drop the key's gamepad-style twin), `None` otherwise. See
+    /// [`crate::apps::App::handle_key`].
+    pub fn handle_key(&mut self, key: &Key, mods: Modifiers, vfs: &dyn Vfs) -> Option<AppAction> {
+        let app = self.delegate.as_mut()?;
+        let action = app.handle_key(key, mods, vfs);
+        if action.is_some() {
+            self.sync_from_delegate();
+        }
+        action
+    }
+
+    /// Whether the app delegate is currently a text-entry target.
+    pub fn accepts_text(&self) -> bool {
+        self.delegate.as_ref().is_some_and(|app| app.accepts_text())
     }
 
     /// Forward a typed character to the app delegate.

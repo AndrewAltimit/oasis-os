@@ -6,7 +6,7 @@
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
-use oasis_types::input::Button;
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
 
 use crate::AppAction;
@@ -32,6 +32,39 @@ pub trait App: std::fmt::Debug + Send {
 
     /// Handle backspace (delete last character). Default is no-op.
     fn handle_backspace(&mut self) {}
+
+    /// Handle a raw keyboard key press (shortcuts and navigation keys such
+    /// as Ctrl+S, Delete, Home/End, PageUp/PageDown, F-keys).
+    ///
+    /// Called by keyboard hosts (desktop SDL, WASM, FFI) for every key-down
+    /// while this app has focus, *before* the gamepad-style event the key
+    /// maps to (e.g. Enter -> [`Button::Confirm`] via `handle_input`,
+    /// Backspace -> `handle_backspace`). Never called on PSP / gamepad-only
+    /// hosts, so every feature must stay reachable through `handle_input`.
+    ///
+    /// Return `Some(action)` when the key was consumed: the host applies
+    /// `action` and drops the key's gamepad-style twin so the press is not
+    /// handled twice. Return `None` (the default) to let the key fall
+    /// through to the legacy handlers unchanged.
+    ///
+    /// Plain printable keys also arrive as [`Self::handle_text_input`];
+    /// text-entry apps should type from there and only claim `Key::Char`
+    /// here for modifier combinations (`mods.has_command()`).
+    fn handle_key(&mut self, _key: &Key, _mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+        None
+    }
+
+    /// Whether this app is currently a text-entry target.
+    ///
+    /// While a text-accepting app has focus, keys that type a character
+    /// (letters, digits, Space) are treated purely as typing: the host
+    /// suppresses the gamepad-style shortcuts they would otherwise trigger
+    /// (Space -> Triangle, Q/E -> shoulder triggers / desktop switching).
+    /// May depend on internal state (e.g. only while a search box is
+    /// active). Default is `false`.
+    fn accepts_text(&self) -> bool {
+        false
+    }
 
     /// Handle a click/tap in the app content area.
     ///

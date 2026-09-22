@@ -668,6 +668,9 @@ fn main() -> Result<()> {
     let mut last_scene_sig: Option<u64> = None;
     let mut last_input_at = std::time::Instant::now();
     let mut last_present_at = std::time::Instant::now();
+    // Drops the gamepad-style twin of a key press already consumed as a
+    // shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
+    let mut key_filter = oasis_core::input::KeyTwinFilter::default();
 
     'running: loop {
         let iter_start = std::time::Instant::now();
@@ -693,12 +696,8 @@ fn main() -> Result<()> {
         for event in &events {
             state.ui.mouse_cursor.handle_input(event);
 
-            let result = match state.mode {
-                Mode::Osk => input::handle_osk_input(event, &mut state, &mut sdi),
-                Mode::Desktop => input::handle_desktop_input(event, &mut state, &mut sdi, &mut vfs),
-                Mode::App => input::handle_app_input(event, &mut state, &mut sdi, &vfs),
-                _ => input::handle_default_input(event, &mut state, &mut sdi, &mut vfs),
-            };
+            let result =
+                input::handle_event(event, &mut key_filter, &mut state, &mut sdi, &mut vfs);
             if result == input::InputResult::Quit {
                 break 'running;
             }

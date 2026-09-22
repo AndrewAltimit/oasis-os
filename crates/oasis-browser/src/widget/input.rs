@@ -177,6 +177,14 @@ impl BrowserWidget {
     // Input handling
     // ---------------------------------------------------------------
 
+    /// Whether keyboard typing currently goes into a text field (the URL
+    /// bar or a focused form control). Hosts use this to stop printable
+    /// keys from also firing their gamepad-style shortcuts (Space ->
+    /// reader mode, Q/E -> page scroll) while the user is typing.
+    pub fn accepts_text(&self) -> bool {
+        self.focus == Focus::UrlBar || self.form_manager.focused_element.is_some()
+    }
+
     /// Handle an input event. Returns `true` if the event was
     /// consumed.
     pub fn handle_input(&mut self, event: &InputEvent, vfs: &dyn Vfs) -> bool {
