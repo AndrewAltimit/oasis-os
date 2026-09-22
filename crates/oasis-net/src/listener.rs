@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
 
+use crate::std_backend::StdNetworkBackend;
+
 /// Maximum number of simultaneous remote connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 4;
 
@@ -79,13 +81,28 @@ pub(crate) struct AuthFailureRecord {
     pub(crate) window_start: Instant,
 }
 
+/// Which interfaces the remote terminal listener binds to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListenerBind {
+    /// `127.0.0.1` only: reachable from this device alone. The default, and
+    /// the only scope allowed without a PSK.
+    #[default]
+    Loopback,
+    /// `0.0.0.0`: reachable from the network. Requires a non-empty PSK
+    /// ([`RemoteListener::start`] refuses otherwise).
+    AllInterfaces,
+}
+
 /// Configuration for the remote terminal listener.
 #[derive(Debug, Clone)]
 pub struct ListenerConfig {
     /// Port to listen on.
     pub port: u16,
-    /// Pre-shared key for authentication (empty = no auth required).
+    /// Pre-shared key for authentication (empty = no auth required, which is
+    /// only permitted with [`ListenerBind::Loopback`]).
     pub psk: String,
+    /// Interfaces to bind (default: loopback only).
+    pub bind: ListenerBind,
     /// Maximum simultaneous connections.
     pub max_connections: usize,
     /// Idle connection timeout in seconds (0 = no timeout).
@@ -97,6 +114,7 @@ impl Default for ListenerConfig {
         Self {
             port: 9000,
             psk: String::new(),
+            bind: ListenerBind::Loopback,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             idle_timeout_secs: IDLE_TIMEOUT_SECS,
         }
@@ -129,9 +147,24 @@ impl RemoteListener {
         }
     }
 
-    /// Start listening on the configured port.
-    pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
-        backend.listen(self.config.port)?;
+    /// Start listening on the configured port and interfaces.
+    ///
+    /// An empty PSK means connections are accepted without authentication,
+    /// i.e. a shell for anyone who can reach the port. That is therefore only
+    /// allowed on loopback: binding [`ListenerBind::AllInterfaces`] with an
+    /// empty PSK is refused with a config error.
+    pub fn start(&mut self, backend: &mut StdNetworkBackend) -> Result<()> {
+        match self.config.bind {
+            ListenerBind::Loopback => backend.listen_loopback(self.config.port)?,
+            ListenerBind::AllInterfaces => {
+                if self.config.psk.is_empty() {
+                    return Err(OasisError::Config(
+                        "remote terminal: binding all interfaces requires a non-empty PSK".into(),
+                    ));
+                }
+                backend.listen(self.config.port)?;
+            },
+        }
         #[cfg(not(feature = "tls-rustls"))]
         if !self.config.psk.is_empty() {
             log::warn!(
@@ -409,6 +442,7 @@ mod tests {
         let config = ListenerConfig::default();
         assert_eq!(config.port, 9000);
         assert_eq!(config.psk, "");
+        assert_eq!(config.bind, ListenerBind::Loopback);
         assert_eq!(config.max_connections, DEFAULT_MAX_CONNECTIONS);
         assert_eq!(config.idle_timeout_secs, IDLE_TIMEOUT_SECS);
     }
@@ -418,6 +452,7 @@ mod tests {
         let config = ListenerConfig {
             port: 8080,
             psk: "secret123".to_string(),
+            bind: ListenerBind::AllInterfaces,
             max_connections: 10,
             idle_timeout_secs: 600,
         };
@@ -552,6 +587,7 @@ mod tests {
         let config1 = ListenerConfig {
             port: 7777,
             psk: "test".to_string(),
+            bind: ListenerBind::Loopback,
             max_connections: 5,
             idle_timeout_secs: 120,
         };

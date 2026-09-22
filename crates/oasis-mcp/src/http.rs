@@ -24,6 +24,13 @@ pub struct HttpRequest {
     pub keep_alive: bool,
     /// Bearer token from the `Authorization` header, if present.
     pub auth_bearer: Option<String>,
+    /// Value of the `Host` header, if present.
+    pub host: Option<String>,
+    /// Value of the `Origin` header, if present (browsers always send it on
+    /// cross-origin POSTs).
+    pub origin: Option<String>,
+    /// Value of the `Content-Type` header, if present.
+    pub content_type: Option<String>,
     /// Request body bytes.
     pub body: Vec<u8>,
 }
@@ -38,7 +45,7 @@ pub enum Framing {
     Error(u16),
 }
 
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
@@ -77,9 +84,12 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
         return Framing::Error(400);
     }
 
-    let mut content_len: usize = 0;
+    let mut content_len: Option<usize> = None;
     let mut keep_alive = version != "HTTP/1.0";
     let mut auth_bearer = None;
+    let mut host = None;
+    let mut origin = None;
+    let mut content_type = None;
     for line in lines {
         if line.is_empty() {
             break;
@@ -90,7 +100,24 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
         let name_l = name.trim().to_ascii_lowercase();
         let value = value.trim();
         match name_l.as_str() {
-            "content-length" => content_len = value.parse().unwrap_or(0),
+            "content-length" => {
+                // Reject malformed and duplicate lengths outright: accepting
+                // either is a classic request-smuggling / desync vector.
+                if content_len.is_some() {
+                    return Framing::Error(400);
+                }
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Framing::Error(400);
+                }
+                match value.parse::<usize>() {
+                    Ok(n) => content_len = Some(n),
+                    // All digits but overflows usize: certainly too large.
+                    Err(_) => return Framing::Error(413),
+                }
+            },
+            "host" => host = Some(value.to_string()),
+            "origin" => origin = Some(value.to_string()),
+            "content-type" => content_type = Some(value.to_string()),
             "transfer-encoding" if value.eq_ignore_ascii_case("chunked") => {
                 return Framing::Error(411);
             },
@@ -113,6 +140,7 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
         }
     }
 
+    let content_len = content_len.unwrap_or(0);
     if content_len > MAX_BODY_BYTES {
         return Framing::Error(413);
     }
@@ -129,6 +157,9 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
         path,
         keep_alive,
         auth_bearer,
+        host,
+        origin,
+        content_type,
         body,
     })
 }
@@ -140,10 +171,13 @@ fn reason_phrase(status: u16) -> &'static str {
         204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         411 => "Length Required",
         413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
         431 => "Request Header Fields Too Large",
         _ => "OK",
     }
@@ -245,6 +279,40 @@ mod tests {
         assert!(matches!(r1, Framing::Ready(ref r) if r.body == b"a"));
         let r2 = try_frame(&mut buf);
         assert!(matches!(r2, Framing::Ready(ref r) if r.body == b"b"));
+    }
+
+    #[test]
+    fn rejects_duplicate_content_length() {
+        let mut buf =
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\na".to_vec();
+        assert!(matches!(try_frame(&mut buf), Framing::Error(400)));
+    }
+
+    #[test]
+    fn rejects_malformed_content_length() {
+        for bad in ["abc", "-1", "+5", "1 2", ""] {
+            let mut buf =
+                format!("POST /mcp HTTP/1.1\r\nContent-Length: {bad}\r\n\r\n").into_bytes();
+            assert!(
+                matches!(try_frame(&mut buf), Framing::Error(400)),
+                "Content-Length {bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_host_origin_content_type() {
+        let mut buf = b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:7345\r\n\
+            Origin: http://localhost\r\nContent-Type: application/json\r\n\r\n"
+            .to_vec();
+        match try_frame(&mut buf) {
+            Framing::Ready(req) => {
+                assert_eq!(req.host.as_deref(), Some("127.0.0.1:7345"));
+                assert_eq!(req.origin.as_deref(), Some("http://localhost"));
+                assert_eq!(req.content_type.as_deref(), Some("application/json"));
+            },
+            _ => panic!("expected Ready"),
+        }
     }
 
     #[test]
