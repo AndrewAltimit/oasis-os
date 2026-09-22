@@ -90,7 +90,17 @@ struct CssParser {
     /// If we're currently inside a `@layer name { ... }` block, this
     /// is the layer's index in `layers`; otherwise `None`.
     current_layer: Option<u16>,
+    /// Current recursion depth of nested rule bodies / selector
+    /// functions, capped at [`MAX_CSS_NESTING`].
+    nesting: u32,
 }
+
+/// Maximum nesting of CSS rule bodies (CSS Nesting, nested `@media`)
+/// and of selector functions (`:is()` / `:not()` / `:where()` /
+/// `:has()`). Real stylesheets stay in single digits; the cap exists so
+/// adversarial input cannot exhaust the stack during parsing, cascade
+/// or matching.
+const MAX_CSS_NESTING: u32 = 32;
 
 impl CssParser {
     fn new(tokens: Vec<CssToken>, viewport: MediaViewport) -> Self {
@@ -100,6 +110,7 @@ impl CssParser {
             viewport,
             layers: Vec::new(),
             current_layer: None,
+            nesting: 0,
         }
     }
 
@@ -1316,6 +1327,40 @@ impl CssParser {
     /// nested style rules (CSS Nesting). Uses lookahead to distinguish
     /// declarations (`prop: value;`) from nested rules (`selector { ... }`).
     fn parse_rule_body(&mut self) -> (Vec<types::Declaration>, Vec<ParsedRule>) {
+        // Nested rules recurse through here; bound the depth so hostile
+        // CSS (`a{a{a{...` thousands deep) can't overflow the stack.
+        // Anything deeper is dropped, like other unsupported content.
+        if self.nesting >= MAX_CSS_NESTING {
+            self.skip_block_contents();
+            return (Vec::new(), Vec::new());
+        }
+        self.nesting += 1;
+        let body = self.parse_rule_body_inner();
+        self.nesting -= 1;
+        body
+    }
+
+    /// Skip to (not past) the `}` closing the current block, stepping
+    /// over any nested blocks.
+    fn skip_block_contents(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::OpenBrace => depth += 1,
+                CssToken::CloseBrace => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                },
+                _ => {},
+            }
+            self.advance();
+        }
+    }
+
+    fn parse_rule_body_inner(&mut self) -> (Vec<types::Declaration>, Vec<ParsedRule>) {
         let mut decls = Vec::new();
         let mut nested = Vec::new();
         loop {
