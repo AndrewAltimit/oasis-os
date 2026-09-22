@@ -85,6 +85,11 @@ pub fn detect_file_type(path: &str) -> FileType {
 }
 
 /// Color theme for syntax highlighting.
+///
+/// The editor renders with `EditorColors::from_theme`, which fills this from
+/// the active skin; `Default` is only a fallback palette for hosts without a
+/// theme.
+#[derive(Debug, Clone)]
 pub struct SyntaxTheme {
     pub normal: Color,
     pub keyword: Color,

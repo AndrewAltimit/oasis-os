@@ -857,6 +857,14 @@ Recognized slots per app:
 - **`tv_guide`** — `bg`, `grid_line`, `header_bg`, `selected_bg`,
   `live_badge`, and the rest of the grid palette (see
   `TvGuideColors` in `oasis-app-tv-guide`)
+- **`text_editor`** — `bg`, `text`, `current_line_bg`, `selection_bg`,
+  `caret`, `caret_normal`, `status_bg`, `status_text`, `border`,
+  `menu_bg`, `menu_text`, and syntax colors `syntax_keyword`,
+  `syntax_type`, `syntax_string`, `syntax_number`, `syntax_comment`,
+  `syntax_attribute`, `syntax_operator`, `syntax_tag`,
+  `syntax_tag_attribute`, `syntax_section`, `syntax_heading`,
+  `syntax_emphasis`, `syntax_code_span`, `syntax_link` (defaults come
+  from the app-screen colors and the skin's ANSI `[palette]`)
 
 ## Skin Inheritance
 

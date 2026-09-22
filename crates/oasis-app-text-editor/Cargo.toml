@@ -15,5 +15,8 @@ oasis-skin = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-vfs = { workspace = true }
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

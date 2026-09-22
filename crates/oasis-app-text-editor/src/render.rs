@@ -1,8 +1,10 @@
-use crate::highlight::{SyntaxTheme, highlight_line};
+use crate::colors::EditorColors;
+use crate::highlight::highlight_line;
 use crate::{EditorMode, FileType, TextEditorApp};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
+use oasis_ui::menu_bar::MenuStyle;
 
 /// How many editor lines the SDI notepad renderer can show at once.
 /// Used for both sizing (we create objects up front) and teardown.
@@ -180,25 +182,18 @@ impl TextEditorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        let body_bg = Color::rgb(255, 255, 255);
-        let body_fg = Color::rgb(16, 16, 16);
-        let chrome_bg = Color::rgb(240, 240, 240);
-        let chrome_border = Color::rgb(180, 180, 180);
-        let status_bg = Color::rgb(224, 224, 230);
-        let status_fg = Color::rgb(32, 32, 32);
-        let selection_bg = Color::rgb(173, 214, 255);
-        let current_line_bg = Color::rgb(232, 242, 254);
+        let colors = EditorColors::from_theme(at);
+        let body_bg = colors.bg;
+        let body_fg = colors.text;
+        let selection_bg = colors.selection_bg;
+        let current_line_bg = colors.current_line_bg;
 
         // Menu bar at the very top: real widget with live drop-downs.
         let menu_h: u32 = 18;
         let menu_y = cy;
-        let menu_style = oasis_ui::menu_bar::MenuStyle::from_theme(&at.ui_theme);
+        let menu_style = colors.menu;
         self.menu
             .draw_bar(backend, cx, menu_y, cw, menu_h, &menu_style)?;
-        // Suppress unused warnings — still using these palette
-        // entries for text-area chrome below.
-        let _ = chrome_bg;
-        let _ = chrome_border;
 
         // Text area.
         let area_y = menu_y + menu_h as i32;
@@ -214,7 +209,7 @@ impl TextEditorApp {
         // If the file type has syntax highlighting, walk block-comment
         // state from the top of the buffer so multi-line comments
         // render correctly after scrolling.
-        let theme = SyntaxTheme::default();
+        let theme = &colors.syntax;
         let mut in_block_comment = false;
         for i in 0..self.content.scroll.min(self.buffer.line_count()) {
             if self.file_type != FileType::Plain
@@ -297,9 +292,9 @@ impl TextEditorApp {
                 let prefix = &line_text[..line_text.floor_char_boundary(self.cursor_col)];
                 let caret_x = cx + pad_left + backend.measure_text(prefix, font_size) as i32;
                 let (caret_color, caret_w) = if self.mode == EditorMode::Insert {
-                    (Color::rgb(0, 100, 220), 2u32)
+                    (colors.caret, 2u32)
                 } else {
-                    (Color::rgb(60, 60, 60), 2u32)
+                    (colors.caret_normal, 2u32)
                 };
                 backend.fill_rect(caret_x, y - 1, caret_w, line_h as u32, caret_color)?;
             }
@@ -307,8 +302,9 @@ impl TextEditorApp {
 
         // Status bar.
         let status_y = cy + ch as i32 - status_h as i32;
-        backend.fill_rect(cx, status_y, cw, status_h, status_bg)?;
-        backend.fill_rect(cx, status_y, cw, 1, chrome_border)?;
+        let status_fg = colors.status_text;
+        backend.fill_rect(cx, status_y, cw, status_h, colors.status_bg)?;
+        backend.fill_rect(cx, status_y, cw, 1, colors.border)?;
 
         // The file name lives here now that there's no inner title bar.
         let position = self.status_position();
@@ -382,7 +378,7 @@ impl TextEditorApp {
         let content_top = cy + at.app.title_bar_height as i32;
         let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
 
-        let theme = SyntaxTheme::default();
+        let theme = EditorColors::from_theme(at).syntax;
 
         // Track block-comment state across visible lines. We need to
         // start from the first buffer line and track through to the
@@ -489,14 +485,15 @@ impl TextEditorApp {
             }
         }
 
-        let body_bg = Color::rgb(255, 255, 255);
-        let body_fg = Color::rgb(16, 16, 16);
-        let chrome_bg = Color::rgb(240, 240, 240);
-        let chrome_border = Color::rgb(180, 180, 180);
-        let status_bg = Color::rgb(224, 224, 230);
-        let status_fg = Color::rgb(32, 32, 32);
-        let selection_bg = Color::rgb(173, 214, 255);
-        let current_line_bg = Color::rgb(232, 242, 254);
+        let colors = EditorColors::from_theme(at);
+        let body_bg = colors.bg;
+        let body_fg = colors.text;
+        let chrome_bg = colors.menu.bar_bg;
+        let chrome_border = colors.menu.bar_border;
+        let status_bg = colors.status_bg;
+        let status_fg = colors.status_text;
+        let selection_bg = colors.selection_bg;
+        let current_line_bg = colors.current_line_bg;
 
         let sw = at.screen_w;
         let sh = at.screen_h;
@@ -543,9 +540,9 @@ impl TextEditorApp {
             chrome_border,
             104,
         );
-        let label_hot_bg = Color::rgb(49, 106, 197);
-        let label_hot_text = Color::rgb(255, 255, 255);
-        let label_text = Color::rgb(40, 40, 40);
+        let label_hot_bg = colors.menu.label_hot_bg;
+        let label_hot_text = colors.menu.label_hot_text;
+        let label_text = colors.menu.label_text;
         let mut mx = 6i32;
         for (i, m) in self.menu.menus.iter().enumerate() {
             let label_w = m.label.chars().count() as i32 * 7 + 16;
@@ -583,7 +580,7 @@ impl TextEditorApp {
         // Drop-down overlay: a bordered rect + one item row per
         // entry. Rendered with higher z than the text area so items
         // float above buffer content.
-        self.render_dropdown_sdi(sdi, menu_y, menu_h);
+        self.render_dropdown_sdi(sdi, menu_y, menu_h, &colors.menu);
 
         // Text area background.
         rect(sdi, "np_area_bg", 0, area_y, sw, area_h, body_bg, 103);
@@ -619,7 +616,7 @@ impl TextEditorApp {
         );
 
         // Syntax state across the scrolled-over lines.
-        let theme = SyntaxTheme::default();
+        let theme = &colors.syntax;
         let mut in_block_comment = false;
         for i in 0..self.content.scroll.min(self.buffer.line_count()) {
             if self.file_type != FileType::Plain
@@ -705,9 +702,9 @@ impl TextEditorApp {
 
         // Caret on active line (thin vertical bar).
         let caret_color = if self.mode == EditorMode::Insert {
-            Color::rgb(0, 100, 200)
+            colors.caret
         } else {
-            Color::rgb(60, 60, 60)
+            colors.caret_normal
         };
         let caret_visible = sel_visible;
         let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
@@ -750,7 +747,7 @@ impl TextEditorApp {
             status_y,
             sw,
             1,
-            chrome_border,
+            colors.border,
             104,
         );
 
@@ -783,7 +780,13 @@ impl TextEditorApp {
     /// Render the active drop-down (if any) as SDI objects. Uses a
     /// fixed `NP_MAX_ENTRIES` pool of item names so the registry
     /// churn stays bounded across frames.
-    fn render_dropdown_sdi(&self, sdi: &mut SdiRegistry, menu_y: i32, menu_h: u32) {
+    fn render_dropdown_sdi(
+        &self,
+        sdi: &mut SdiRegistry,
+        menu_y: i32,
+        menu_h: u32,
+        style: &MenuStyle,
+    ) {
         // Hide every pooled item first, then repopulate only the
         // slots we actually need this frame.
         for i in 0..NP_MAX_DROPDOWN_ENTRIES {
@@ -815,14 +818,14 @@ impl TextEditorApp {
         let dd_y = menu_y + menu_h as i32;
         let (dd_w, dd_h) = self.menu.dropdown_dimensions(menu);
 
-        let bg = Color::rgb(236, 236, 236);
-        let light = Color::rgb(255, 255, 255);
-        let dark = Color::rgb(105, 105, 105);
-        let item_text_color = Color::rgb(20, 20, 20);
-        let item_hot_bg = Color::rgb(49, 106, 197);
-        let item_hot_text = Color::rgb(255, 255, 255);
-        let disabled = Color::rgb(150, 150, 150);
-        let sep_color = Color::rgb(170, 170, 170);
+        let bg = style.dropdown_bg;
+        let light = style.dropdown_border_light;
+        let dark = style.dropdown_border_dark;
+        let item_text_color = style.item_text;
+        let item_hot_bg = style.item_hot_bg;
+        let item_hot_text = style.item_hot_text;
+        let disabled = style.item_disabled_text;
+        let sep_color = style.separator;
 
         // Background + bezel. Very high z so items float above the
         // text area (z=103) and line text (z=105).
@@ -1045,5 +1048,82 @@ fn text(
 fn hide(sdi: &mut SdiRegistry, name: &str) {
     if let Ok(obj) = sdi.get_mut(name) {
         obj.visible = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use oasis_app_core::App;
+    use oasis_sdi::SdiRegistry;
+    use oasis_skin::ActiveTheme;
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::Color;
+
+    use crate::TextEditorApp;
+
+    fn dark_theme() -> ActiveTheme {
+        let mut at = ActiveTheme::default();
+        at.app.bg = Color::rgb(20, 22, 30);
+        at.app.text = Color::rgb(210, 210, 220);
+        at
+    }
+
+    fn fills(rec: &RecordingBackend) -> Vec<(i32, i32, u32, Color)> {
+        rec.commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::FillRect { x, y, w, color, .. } => Some((*x, *y, *w, *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The windowed text area must paint the skin's app background, not a
+    /// hardcoded white box.
+    #[test]
+    fn windowed_body_background_follows_dark_theme() {
+        let at = dark_theme();
+        let app = TextEditorApp::open_file("/a.rs", "fn main() {}\n// hi");
+        let mut rec = RecordingBackend::new(400, 300);
+        app.draw_windowed(0, 0, 400, 300, &mut rec, &at)
+            .expect("draw");
+        let fills = fills(&rec);
+        // Text area starts right under the 18px menu bar and spans the width.
+        let area = fills
+            .iter()
+            .find(|(x, y, w, _)| *x == 0 && *y == 18 && *w == 400)
+            .expect("text area fill");
+        assert_eq!(area.3, at.app.bg);
+        let white = Color::rgb(255, 255, 255);
+        assert!(
+            fills.iter().all(|f| f.3 != white || f.1 < 18),
+            "no white fills below the menu bar"
+        );
+    }
+
+    #[test]
+    fn windowed_text_uses_theme_text_color() {
+        let at = dark_theme();
+        let app = TextEditorApp::open_file("/a.txt", "plain words");
+        let mut rec = RecordingBackend::new(400, 300);
+        app.draw_windowed(0, 0, 400, 300, &mut rec, &at)
+            .expect("draw");
+        let text_color = rec.commands().iter().find_map(|c| match c {
+            DrawCommand::DrawText { text, color, .. } if text == "plain words" => Some(*color),
+            _ => None,
+        });
+        assert_eq!(text_color, Some(at.app.text));
+    }
+
+    #[test]
+    fn sdi_body_background_follows_dark_theme() {
+        let at = dark_theme();
+        let mut app = TextEditorApp::open_file("/a.txt", "x");
+        let mut sdi = SdiRegistry::new();
+        app.update_sdi(&mut sdi, &at);
+        let area = sdi.get("np_area_bg").expect("area");
+        assert_eq!(area.color, at.app.bg);
+        let line = sdi.get("np_line_0").expect("line");
+        assert_eq!(line.text_color, at.app.text);
     }
 }
