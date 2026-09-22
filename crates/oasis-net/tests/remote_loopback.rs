@@ -171,6 +171,53 @@ fn remote_client_round_trip_without_psk() {
     poll_until(&mut backend, &mut listener, |l| l.connection_count() == 0);
 }
 
+/// The client notices when the server goes away, and a large response
+/// arrives in a reasonable number of polls.
+#[test]
+fn remote_client_large_output_and_server_shutdown() {
+    let (mut backend, mut listener, port) = start(no_psk(4));
+    let mut client_backend = StdNetworkBackend::new();
+    let mut client = RemoteClient::new();
+    client
+        .connect(&mut client_backend, "127.0.0.1", port, None)
+        .unwrap();
+    client.send("dump").unwrap();
+    let big: String = (0..20_000).map(|i| format!("row {i}\n")).collect();
+
+    let start = Instant::now();
+    let mut lines: Vec<String> = Vec::new();
+    let mut polls = 0usize;
+    while !lines.iter().any(|l| l == "row 19999") {
+        for (_, id) in listener.poll(&mut backend) {
+            listener.send_response(id, &big).unwrap();
+        }
+        let got = client.poll();
+        if !got.is_empty() {
+            polls += 1;
+        }
+        lines.extend(got);
+        assert!(start.elapsed() < DEADLINE, "large output stalled");
+    }
+    // ~150 KB: must not trickle in 512 bytes per poll (~290 polls).
+    assert!(polls < 100, "took {polls} data-bearing polls");
+    // The first row shares a line with the banner prompt ("> row 0").
+    let rows = lines
+        .iter()
+        .filter(|l| l.trim_start_matches("> ").starts_with("row "))
+        .count();
+    assert_eq!(rows, 20_000);
+
+    listener.stop();
+    let start = Instant::now();
+    while client.is_connected() {
+        let got = client.poll();
+        lines.extend(got);
+        assert!(start.elapsed() < DEADLINE, "client never noticed shutdown");
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(lines.iter().any(|l| l.contains("Server shutting down.")));
+}
+
 // ---------------------------------------------------------------------------
 // PSK authentication
 // ---------------------------------------------------------------------------

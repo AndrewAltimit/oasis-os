@@ -1346,8 +1346,10 @@ fn mock_client_poll_auth_ok_followed_by_auth_fail_ignored() {
 }
 
 #[test]
-fn mock_client_eof_returns_empty() {
-    // Stream returns EOF (Ok(0)) immediately.
+fn mock_client_eof_disconnects() {
+    // Stream returns EOF (Ok(0)) immediately: the remote side closed, so the
+    // client must stop claiming a live connection (it used to stay
+    // `Connected` forever).
     let stream = Box::new(MockStream::with_eof(b""));
     let mut backend = MockBackend::new().with_connect_stream(stream);
     let mut client = RemoteClient::new();
@@ -1356,7 +1358,21 @@ fn mock_client_eof_returns_empty() {
         .connect(&mut backend, "10.0.0.1", 9000, None)
         .unwrap();
     let lines = client.poll();
-    assert!(lines.is_empty());
+    assert_eq!(lines, vec!["Connection closed by remote host.".to_string()]);
+    assert_eq!(client.state(), ClientState::Disconnected);
+}
+
+#[test]
+fn mock_client_delivers_final_lines_before_eof() {
+    let stream = Box::new(MockStream::with_eof(b"out\nGoodbye.\n"));
+    let mut backend = MockBackend::new().with_connect_stream(stream);
+    let mut client = RemoteClient::new();
+    client
+        .connect(&mut backend, "10.0.0.1", 9000, None)
+        .unwrap();
+    let lines = client.poll();
+    assert_eq!(lines[..2], ["out".to_string(), "Goodbye.".to_string()]);
+    assert!(!client.is_connected());
 }
 
 // ---------------------------------------------------------------------------

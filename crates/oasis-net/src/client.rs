@@ -14,6 +14,9 @@ const AUTH_TIMEOUT_SECS: u64 = 30;
 /// Maximum bytes in a single input line (guard against unbounded buffer growth).
 const MAX_LINE_LEN: usize = 16_384;
 
+/// Maximum bytes read from the socket in a single poll.
+const MAX_READ_PER_POLL: usize = 64 * 1024;
+
 /// State of the remote client connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
@@ -118,9 +121,9 @@ impl RemoteClient {
     /// Poll for received data from the remote host.
     /// Returns new lines received since last poll.
     pub fn poll(&mut self) -> Vec<String> {
-        let Some(ref mut stream) = self.stream else {
+        if self.stream.is_none() {
             return Vec::new();
-        };
+        }
 
         // Check for authentication timeout.
         if self.state == ClientState::Authenticating
@@ -133,55 +136,75 @@ impl RemoteClient {
             return std::mem::take(&mut self.received_lines);
         }
 
-        let mut buf = [0u8; 512];
-        match stream.read(&mut buf) {
-            Ok(0) => {},
-            Ok(n) => {
-                self.read_buf.extend_from_slice(&buf[..n]);
+        // Read until the socket would block, EOF, or the per-poll cap (one
+        // small read per frame made multi-megabyte outputs take minutes).
+        let Some(stream) = self.stream.as_mut() else {
+            return Vec::new();
+        };
+        let mut eof = false;
+        let mut lost = false;
+        let mut buf = [0u8; 4096];
+        let mut total = 0usize;
+        while total < MAX_READ_PER_POLL {
+            match stream.read(&mut buf) {
+                Ok(0) => {
+                    eof = true;
+                    break;
+                },
+                Ok(n) => {
+                    total += n;
+                    self.read_buf.extend_from_slice(&buf[..n]);
+                },
+                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => {
+                    lost = true;
+                    break;
+                },
+            }
+        }
 
-                // Extract complete lines.
-                while let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes: Vec<u8> = self.read_buf.drain(..=pos).collect();
-                    let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+        // Extract complete lines.
+        while let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = self.read_buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
-                    // Handle auth responses.
-                    if self.state == ClientState::Authenticating {
-                        if line == "AUTH_OK" {
-                            self.state = ClientState::Connected;
-                            self.auth_started = None;
-                            continue;
-                        } else if line == "AUTH_FAIL" {
-                            self.auth_started = None;
-                            self.disconnect();
-                            self.received_lines
-                                .push("Authentication failed.".to_string());
-                            break;
-                        }
-                    }
-
-                    if !line.is_empty() {
-                        self.received_lines.push(line);
-                    }
-                }
-
-                // Guard against unbounded buffer growth (no newline received).
-                if self.read_buf.len() > MAX_LINE_LEN {
-                    self.read_buf.clear();
+            // Handle auth responses.
+            if self.state == ClientState::Authenticating {
+                if line == "AUTH_OK" {
+                    self.state = ClientState::Connected;
+                    self.auth_started = None;
+                    continue;
+                } else if line == "AUTH_FAIL" {
+                    self.auth_started = None;
                     self.disconnect();
                     self.received_lines
-                        .push("Error: line too long, disconnected.".to_string());
+                        .push("Authentication failed.".to_string());
+                    self.read_buf.clear();
+                    return std::mem::take(&mut self.received_lines);
                 }
-            },
-            Err(oasis_types::error::OasisError::Io(ref e))
-                if e.kind() == std::io::ErrorKind::WouldBlock =>
-            {
-                // Non-blocking socket has no data yet.
-            },
-            Err(_) => {
-                // Connection likely dropped.
-                self.disconnect();
-                self.received_lines.push("Connection lost.".to_string());
-            },
+            }
+
+            if !line.is_empty() {
+                self.received_lines.push(line);
+            }
+        }
+
+        // Guard against unbounded buffer growth (no newline received).
+        if self.read_buf.len() > MAX_LINE_LEN {
+            self.read_buf.clear();
+            self.disconnect();
+            self.received_lines
+                .push("Error: line too long, disconnected.".to_string());
+        } else if lost {
+            self.disconnect();
+            self.received_lines.push("Connection lost.".to_string());
+        } else if eof {
+            // The remote side closed the connection (quit, shutdown, idle
+            // timeout): stop reporting a live connection.
+            self.read_buf.clear();
+            self.disconnect();
+            self.received_lines
+                .push("Connection closed by remote host.".to_string());
         }
 
         std::mem::take(&mut self.received_lines)
