@@ -115,6 +115,10 @@ impl NetworkBackend for StdNetworkBackend {
         self.listen_on(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
     }
 
+    fn listen_loopback(&mut self, port: u16) -> Result<()> {
+        self.listen_on(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
     fn accept(&mut self) -> Result<Option<Box<dyn NetworkStream>>> {
         let Some(ref listener) = self.listener else {
             return Err(OasisError::Backend("not listening".into()));

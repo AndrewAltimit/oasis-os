@@ -576,6 +576,17 @@ impl CommandRegistry {
 
         let full_path = resolve_path(&env.cwd, path);
 
+        let script_depth = self.script_depth.get();
+        if script_depth >= crate::types::MAX_SCRIPT_DEPTH {
+            return Err(OasisError::Command(
+                format!(
+                    "run {full_path}: maximum script nesting depth ({}) exceeded",
+                    crate::types::MAX_SCRIPT_DEPTH
+                )
+                .into(),
+            ));
+        }
+
         if !env.vfs.exists(&full_path) {
             return Err(OasisError::Command(
                 format!("script not found: {full_path}").into(),
@@ -588,7 +599,10 @@ impl CommandRegistry {
         if count == 0 {
             return Ok(CommandOutput::Text("(empty script)".to_string()));
         }
-        let lines = self.run_script_source(&source, env)?;
+        self.script_depth.set(script_depth + 1);
+        let lines = self.run_script_source(&source, env);
+        self.script_depth.set(script_depth);
+        let lines = lines?;
         if lines.is_empty() {
             Ok(CommandOutput::Text(format!(
                 "Script {full_path}: {count} commands executed."

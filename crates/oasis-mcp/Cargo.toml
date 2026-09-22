@@ -13,5 +13,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+oasis-net = { workspace = true }
+
 [lints]
 workspace = true

@@ -9,6 +9,16 @@ pub trait NetworkBackend {
     /// Start listening for incoming connections on the given port.
     fn listen(&mut self, port: u16) -> Result<()>;
 
+    /// Start listening on the loopback interface only, for servers that do
+    /// not authenticate their peers.
+    ///
+    /// The default falls back to [`Self::listen`] for backends that cannot
+    /// restrict the bind address (e.g. a device with a single interface);
+    /// backends that can should override it.
+    fn listen_loopback(&mut self, port: u16) -> Result<()> {
+        self.listen(port)
+    }
+
     /// Accept a pending connection. Returns `None` if no connection waiting.
     fn accept(&mut self) -> Result<Option<Box<dyn NetworkStream>>>;
 

@@ -167,11 +167,15 @@ pub(crate) const MAX_HISTORY: usize = 500;
 /// Shell builtins intercepted by the executor (not in the command map).
 pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "help", "run", "history", "set", "unset", "env", "alias", "unalias", "which", "return",
-    "break", "continue", "local", "function", "jobs", "fg", "bg", "kill",
+    "break", "continue", "local", "function", "jobs", "fg", "bg", "kill", "true", "false",
 ];
 
 /// Maximum shell function call depth (prevents infinite recursion).
 pub(crate) const MAX_CALL_DEPTH: usize = 64;
+
+/// Maximum nesting of `run <script>` (a script running itself would
+/// otherwise recurse until the host's stack overflows).
+pub(crate) const MAX_SCRIPT_DEPTH: usize = 16;
 
 /// A user-defined shell function.
 #[derive(Clone, Debug)]

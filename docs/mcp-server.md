@@ -22,7 +22,11 @@ OASIS is the long-running process that owns the UI and the framebuffer, so it
 
 The server implements the minimal conformant subset for a single local client:
 `POST /mcp` with a JSON-RPC request returns a single `application/json`
-response; notifications return `202`; `GET /mcp` returns `405` (there is no
+response; notifications (messages without an `id`) return `202` and are never
+answered — a request-only method such as `tools/call` sent without an `id` is
+ignored, not executed; invalid request objects (and batches) get JSON-RPC
+`-32600`; `Expect: 100-continue` gets an interim `100 Continue`; `GET /mcp`
+returns `405` (there is no
 server-initiated SSE stream); no session IDs are issued. It is driven by
 per-frame polling on the main thread — no async runtime, no background threads —
 mirroring the existing remote-terminal and FTP servers.
@@ -161,6 +165,11 @@ misbehaving local client can hold):
 - Each poll reads until the socket would block, capped at **64 KiB** per
   connection, so large bodies do not trickle in at 4 KiB per frame.
 - Headers are capped at 16 KiB (`431`) and bodies at 1 MiB (`413`).
+- A connection closed after its final response (an error, `Connection: close`,
+  HTTP/1.0) *lingers*: further input is read and discarded (never buffered)
+  until the peer has been quiet for 100 ms, reaches EOF, or 2 s pass. Closing
+  on top of unread input would make the OS reset the connection and could
+  destroy the `413` a client streaming an oversized body is about to read.
 - Once **4 MiB** of responses are queued for a peer that is not reading them,
   the server stops reading and dispatching further requests on that
   connection until the backlog drains (backpressure, not data loss).

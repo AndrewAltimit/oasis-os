@@ -1346,8 +1346,10 @@ fn mock_client_poll_auth_ok_followed_by_auth_fail_ignored() {
 }
 
 #[test]
-fn mock_client_eof_returns_empty() {
-    // Stream returns EOF (Ok(0)) immediately.
+fn mock_client_eof_disconnects() {
+    // Stream returns EOF (Ok(0)) immediately: the remote side closed, so the
+    // client must stop claiming a live connection (it used to stay
+    // `Connected` forever).
     let stream = Box::new(MockStream::with_eof(b""));
     let mut backend = MockBackend::new().with_connect_stream(stream);
     let mut client = RemoteClient::new();
@@ -1356,7 +1358,21 @@ fn mock_client_eof_returns_empty() {
         .connect(&mut backend, "10.0.0.1", 9000, None)
         .unwrap();
     let lines = client.poll();
-    assert!(lines.is_empty());
+    assert_eq!(lines, vec!["Connection closed by remote host.".to_string()]);
+    assert_eq!(client.state(), ClientState::Disconnected);
+}
+
+#[test]
+fn mock_client_delivers_final_lines_before_eof() {
+    let stream = Box::new(MockStream::with_eof(b"out\nGoodbye.\n"));
+    let mut backend = MockBackend::new().with_connect_stream(stream);
+    let mut client = RemoteClient::new();
+    client
+        .connect(&mut backend, "10.0.0.1", 9000, None)
+        .unwrap();
+    let lines = client.poll();
+    assert_eq!(lines[..2], ["out".to_string(), "Goodbye.".to_string()]);
+    assert!(!client.is_connected());
 }
 
 // ---------------------------------------------------------------------------
@@ -1948,4 +1964,101 @@ fn mock_listener_multiple_connections_distinct_indices() {
     assert_eq!(commands[0].1, 1);
 
     assert_eq!(listener.connection_count(), 2);
+}
+
+/// A stream whose socket buffer accepts at most `budget` more bytes;
+/// further writes fail with `WouldBlock` until the budget is refilled.
+struct TrickleStream {
+    written: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    budget: std::sync::Arc<std::sync::Mutex<usize>>,
+}
+
+impl NetworkStream for TrickleStream {
+    fn read(&mut self, _buf: &mut [u8]) -> OasisResult<usize> {
+        Err(OasisError::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "would block",
+        )))
+    }
+    fn write(&mut self, data: &[u8]) -> OasisResult<usize> {
+        let mut budget = self.budget.lock().unwrap();
+        if *budget == 0 {
+            return Err(OasisError::Io(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "would block",
+            )));
+        }
+        let n = data.len().min(*budget);
+        *budget -= n;
+        self.written.lock().unwrap().extend_from_slice(&data[..n]);
+        Ok(n)
+    }
+    fn close(&mut self) -> OasisResult<()> {
+        Ok(())
+    }
+}
+
+type Shared<T> = std::sync::Arc<std::sync::Mutex<T>>;
+
+fn trickle_listener(
+    initial_budget: usize,
+) -> (RemoteListener, MockBackend, Shared<Vec<u8>>, Shared<usize>) {
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let budget = std::sync::Arc::new(std::sync::Mutex::new(initial_budget));
+    let stream = TrickleStream {
+        written: std::sync::Arc::clone(&written),
+        budget: std::sync::Arc::clone(&budget),
+    };
+    let mut backend = MockBackend::new().with_accept_stream(Box::new(stream));
+    backend.listening = true;
+    let mut listener = RemoteListener::new(ListenerConfig::default());
+    listener.listening = true;
+    listener.poll(&mut backend);
+    (listener, backend, written, budget)
+}
+
+#[test]
+fn mock_listener_large_response_survives_partial_writes() {
+    let (mut listener, mut backend, written, budget) = trickle_listener(64);
+    let big = "x".repeat(100_000);
+    listener.send_response(0, &big).unwrap();
+    for _ in 0..200 {
+        *budget.lock().unwrap() = 4096;
+        listener.poll(&mut backend);
+    }
+    let out = written.lock().unwrap().clone();
+    let expected = format!("OASIS_OS remote terminal\n> {big}\n> ");
+    assert_eq!(out.len(), expected.len());
+    assert!(out == expected.as_bytes());
+}
+
+#[test]
+fn mock_listener_stalled_peer_is_dropped_at_backlog_cap() {
+    let (mut listener, mut backend, _written, _budget) = trickle_listener(0);
+    let chunk = "y".repeat(1024 * 1024);
+    let failed = (0..16).any(|_| listener.send_response(0, &chunk).is_err());
+    assert!(failed, "backlog never capped");
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 0);
+}
+
+#[test]
+fn mock_listener_ids_survive_earlier_removal() {
+    let mut backend = MockBackend::new()
+        .with_accept_stream(Box::new(MockStream::non_blocking(b"quit\n")))
+        .with_accept_stream(Box::new(MockStream::non_blocking(b"")))
+        .with_accept_stream(Box::new(MockStream::non_blocking(b"")));
+    backend.listening = true;
+    let mut listener = RemoteListener::new(ListenerConfig::default());
+    listener.listening = true;
+    // Accept #0 (quits immediately), then #1 and #2.
+    for _ in 0..3 {
+        listener.poll(&mut backend);
+    }
+    assert_eq!(listener.connection_count(), 2);
+    // Id 0 is gone; ids 1 and 2 still address their own connections.
+    assert!(listener.send_response(0, "x").is_err());
+    assert!(listener.send_response(1, "x").is_ok());
+    assert!(listener.send_response(2, "x").is_ok());
+    assert!(listener.send_response(3, "x").is_err());
 }

@@ -47,7 +47,11 @@ define_command!(
         } else {
             Vec::new()
         };
-        data.extend_from_slice(b"\n");
+        // Separate from existing content with a newline, but do not start
+        // a new file with a blank line or double an existing terminator.
+        if !data.is_empty() && !data.ends_with(b"\n") {
+            data.extend_from_slice(b"\n");
+        }
         data.extend_from_slice(text.as_bytes());
         env.vfs.write(&path, &data)?;
         Ok(CommandOutput::Text(format!(

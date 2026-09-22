@@ -128,12 +128,14 @@ define_command!(
     MkdirCmd,
     "mkdir",
     "Create a directory",
-    "mkdir <path>",
+    "mkdir <path>...",
     "filesystem",
     |args, env| {
-        require_args(args, 1, "mkdir <path>")?;
-        let path = resolve_path(&env.cwd, args[0]);
-        env.vfs.mkdir(&path)?;
+        require_args(args, 1, "mkdir <path>...")?;
+        for arg in args {
+            let path = resolve_path(&env.cwd, arg);
+            env.vfs.mkdir(&path)?;
+        }
         Ok(CommandOutput::None)
     }
 );
@@ -146,12 +148,14 @@ define_command!(
     RmCmd,
     "rm",
     "Remove a file or empty directory",
-    "rm <path>",
+    "rm <path>...",
     "filesystem",
     |args, env| {
-        require_args(args, 1, "rm <path>")?;
-        let path = resolve_path(&env.cwd, args[0]);
-        env.vfs.remove(&path)?;
+        require_args(args, 1, "rm <path>...")?;
+        for arg in args {
+            let path = resolve_path(&env.cwd, arg);
+            env.vfs.remove(&path)?;
+        }
         Ok(CommandOutput::None)
     }
 );
@@ -212,13 +216,15 @@ define_command!(
     TouchCmd,
     "touch",
     "Create an empty file",
-    "touch <file>",
+    "touch <file>...",
     "filesystem",
     |args, env| {
-        require_args(args, 1, "touch <file>")?;
-        let path = resolve_path(&env.cwd, args[0]);
-        if !env.vfs.exists(&path) {
-            env.vfs.write(&path, &[])?;
+        require_args(args, 1, "touch <file>...")?;
+        for arg in args {
+            let path = resolve_path(&env.cwd, arg);
+            if !env.vfs.exists(&path) {
+                env.vfs.write(&path, &[])?;
+            }
         }
         Ok(CommandOutput::None)
     }
@@ -227,6 +233,28 @@ define_command!(
 // ---------------------------------------------------------------------------
 // cp
 // ---------------------------------------------------------------------------
+
+/// Resolve the destination of `cp`/`mv`: an existing directory receives the
+/// source under its own base name (`mv a.txt dir` -> `dir/a.txt`).
+fn transfer_target(env: &crate::interpreter::Environment<'_>, src: &str, dst: String) -> String {
+    let dst_is_dir = env
+        .vfs
+        .stat(&dst)
+        .is_ok_and(|m| m.kind == EntryKind::Directory);
+    if !dst_is_dir || dst == src {
+        return dst;
+    }
+    let base = src.rsplit('/').next().unwrap_or(src);
+    if dst == "/" {
+        format!("/{base}")
+    } else {
+        format!("{dst}/{base}")
+    }
+}
+
+fn same_file_error(src: &str, dst: &str) -> OasisError {
+    OasisError::Command(format!("'{src}' and '{dst}' are the same file").into())
+}
 
 define_command!(
     CpCmd,
@@ -237,8 +265,16 @@ define_command!(
     |args, env| {
         require_args(args, 2, "cp <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
-        let dst = resolve_path(&env.cwd, args[1]);
         let meta = env.vfs.stat(&src)?;
+        if meta.kind == EntryKind::Directory {
+            return Err(OasisError::Command(
+                format!("{src} is a directory (not copied)").into(),
+            ));
+        }
+        let dst = transfer_target(env, &src, resolve_path(&env.cwd, args[1]));
+        if dst == src {
+            return Err(same_file_error(&src, &dst));
+        }
         if meta.size as usize > COPY_MAX_SIZE {
             return Err(OasisError::Command(
                 format!(
@@ -261,26 +297,39 @@ define_command!(
 define_command!(
     MvCmd,
     "mv",
-    "Move/rename a file",
+    "Move/rename a file or directory",
     "mv <src> <dst>",
     "filesystem",
     |args, env| {
         require_args(args, 2, "mv <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
-        let dst = resolve_path(&env.cwd, args[1]);
-        let meta = env.vfs.stat(&src)?;
-        if meta.size as usize > COPY_MAX_SIZE {
+        // Fails (without side effects) when the source does not exist.
+        env.vfs.stat(&src)?;
+        if src == "/" {
+            return Err(OasisError::Command("cannot move the root directory".into()));
+        }
+        let dst = transfer_target(env, &src, resolve_path(&env.cwd, args[1]));
+        // Moving a path onto itself used to copy it and then delete the
+        // source -- i.e. the only copy.
+        if dst == src {
+            return Err(same_file_error(&src, &dst));
+        }
+        if dst.starts_with(&format!("{src}/")) {
             return Err(OasisError::Command(
-                format!(
-                    "file too large ({} bytes, max {})",
-                    meta.size, COPY_MAX_SIZE
-                )
-                .into(),
+                format!("cannot move '{src}' into itself ('{dst}')").into(),
             ));
         }
-        let data = env.vfs.read(&src)?;
-        env.vfs.write(&dst, &data)?;
-        env.vfs.remove(&src)?;
+        if env
+            .vfs
+            .stat(&dst)
+            .is_ok_and(|m| m.kind == EntryKind::Directory)
+        {
+            return Err(OasisError::Command(
+                format!("destination exists and is a directory: {dst}").into(),
+            ));
+        }
+        // A rename moves files and whole directories without copying.
+        env.vfs.rename(&src, &dst)?;
         Ok(CommandOutput::None)
     }
 );

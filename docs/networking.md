@@ -217,8 +217,8 @@ Verbs:
 > line. Effective inline payload is therefore roughly
 > `1024 - 5 - len(path)` bytes, and the body cannot contain a literal
 > `\n` (it would be parsed as the end of the request and split the
-> payload across the next command). Exceeding the cap clears the read
-> buffer and replies `500 line too long`. There is no chunked /
+> payload across the next command). Exceeding the cap replies
+> `500 line too long` and closes the connection. There is no chunked /
 > multi-line upload mode today; for files larger than ~1 KiB or files
 > containing newlines, tunnel through the TLS-protected remote terminal
 > session instead and use shell redirection on the remote side.
@@ -227,10 +227,9 @@ Verbs:
 > integrators should be aware of, in addition to the plaintext-on-wire
 > warning above.
 >
-> 1. **Comparison is not constant-time.** The password check uses a
->    plain `==` byte-string comparison (`transfer/mod.rs:306`), unlike
->    the remote-terminal PSK path which uses an explicit constant-time
->    XOR loop (`listener.rs:32`).
+> 1. **Comparison is constant-time** (`constant_time_eq` in
+>    `transfer/mod.rs`), like the remote-terminal PSK check. Lines sent
+>    after the third failure on a connection are discarded.
 > 2. **No cross-connection brute-force protection.** The 3-attempt
 >    limit (`MAX_AUTH_FAILURES` at `transfer/mod.rs:152`) is tracked
 >    per-connection only (`FtpConnection::failed_attempts` at
@@ -264,7 +263,10 @@ trigger transfers via the VFS.
 
 Authentication is optional and password-based: `ftp start <port> --password
 <pass>` arms `FtpServer::with_password` (`transfer/mod.rs:203`). Without
-`--password` every accepted connection is immediately authenticated. The
+`--password` (or with an empty one) every accepted connection is
+immediately authenticated, so the server then binds **loopback only**
+(`NetworkBackend::listen_loopback`); with a password it listens on all
+interfaces. The
 protocol does **not** speak TLS, so the password and all subsequent traffic
 travel in plaintext — treat the service as trusted-LAN-only and never reuse
 a remote-terminal PSK as the FTP password. For authenticated, encrypted

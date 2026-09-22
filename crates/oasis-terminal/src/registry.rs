@@ -42,6 +42,8 @@ pub struct CommandRegistry {
     pub(crate) exec_depth: Cell<usize>,
     /// Background jobs queued with a trailing `&`.
     pub(crate) jobs: RefCell<JobManager>,
+    /// Nesting depth of `run <script>` calls.
+    pub(crate) script_depth: Cell<usize>,
 }
 
 impl CommandRegistry {
@@ -65,6 +67,7 @@ impl CommandRegistry {
             local_scopes: RefCell::new(Vec::new()),
             exec_depth: Cell::new(0),
             jobs: RefCell::new(JobManager::new()),
+            script_depth: Cell::new(0),
         }
     }
 
@@ -387,7 +390,12 @@ impl CommandRegistry {
     fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
         match name {
             "CWD" => cwd.to_string(),
-            "?" => self.last_exit_code.get().to_string(),
+            // The status of the previous command (the chain executor
+            // updates `?` once a pipeline finishes).
+            "?" => vars
+                .get("?")
+                .cloned()
+                .unwrap_or_else(|| self.last_exit_code.get().to_string()),
             _ => vars.get(name).cloned().unwrap_or_default(),
         }
     }

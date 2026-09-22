@@ -438,18 +438,18 @@ pub(crate) fn write_redirect(
 ) -> Result<()> {
     let path = resolve_path(cwd, raw_path.trim());
     if append {
-        let existing = if vfs.exists(&path) {
-            let data = vfs.read(&path)?;
-            String::from_utf8_lossy(&data).into_owned()
+        // Work on raw bytes so appending never rewrites (lossily re-encodes)
+        // existing non-UTF-8 content.
+        let mut combined = if vfs.exists(&path) {
+            vfs.read(&path)?
         } else {
-            String::new()
+            Vec::new()
         };
-        let combined = if existing.is_empty() {
-            text.to_string()
-        } else {
-            format!("{existing}\n{text}")
-        };
-        vfs.write(&path, combined.as_bytes())?;
+        if !combined.is_empty() && !combined.ends_with(b"\n") {
+            combined.push(b'\n');
+        }
+        combined.extend_from_slice(text.as_bytes());
+        vfs.write(&path, &combined)?;
     } else {
         vfs.write(&path, text.as_bytes())?;
     }

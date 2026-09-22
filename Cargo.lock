@@ -1342,6 +1342,7 @@ name = "oasis-mcp"
 version = "1.4.0"
 dependencies = [
  "log",
+ "oasis-net",
  "oasis-types",
  "serde",
  "serde_json",

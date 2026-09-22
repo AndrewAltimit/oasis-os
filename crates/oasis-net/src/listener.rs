@@ -28,6 +28,19 @@ const AUTH_RATE_LIMIT_BASE_SECS: u64 = 30;
 /// Idle connection timeout (seconds).
 const IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// Maximum bytes read from one connection in a single poll.
+const MAX_READ_PER_POLL: usize = 64 * 1024;
+
+/// Maximum unsent output queued for one connection. A peer that stops
+/// reading while this much is pending is disconnected, bounding memory.
+const MAX_WRITE_BUF: usize = 8 * 1024 * 1024;
+
+/// Sent bytes are compacted out of the write buffer past this offset.
+const WRITE_COMPACT_THRESHOLD: usize = 1024 * 1024;
+
+/// How long a closing connection may take to drain its queued output.
+const CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Constant-time comparison of two byte slices.
 ///
 /// Always compares every byte to avoid leaking length or content via timing.
@@ -56,22 +69,105 @@ enum AuthState {
 
 /// A single remote client connection.
 struct RemoteConnection {
+    /// Stable id handed out with each command (see [`RemoteListener::poll`]).
+    id: usize,
     stream: Box<dyn NetworkStream>,
     auth: AuthState,
     /// Accumulates partial line data between polls.
     read_buf: Vec<u8>,
+    /// Output not yet accepted by the non-blocking socket; bytes before
+    /// `write_pos` have been sent.
+    write_buf: Vec<u8>,
+    write_pos: usize,
+    /// Commands dispatched to the host that have not been answered with
+    /// [`RemoteListener::send_response`] yet.
+    inflight: usize,
     /// Timestamp of last received data (for idle timeout).
     last_activity: Instant,
+    /// Set when the connection should close once its output has drained.
+    closing_since: Option<Instant>,
+    /// Hard failure (read/write error or output backlog overflow): drop now.
+    dead: bool,
 }
 
 impl RemoteConnection {
-    fn new(stream: Box<dyn NetworkStream>) -> Self {
+    fn new(id: usize, stream: Box<dyn NetworkStream>) -> Self {
         Self {
+            id,
             stream,
             auth: AuthState::AwaitingAuth,
             read_buf: Vec::with_capacity(256),
+            write_buf: Vec::new(),
+            write_pos: 0,
+            inflight: 0,
             last_activity: Instant::now(),
+            closing_since: None,
+            dead: false,
         }
+    }
+
+    fn pending(&self) -> usize {
+        self.write_buf.len() - self.write_pos
+    }
+
+    /// Queue `data` for sending. A peer that lets more than
+    /// [`MAX_WRITE_BUF`] bytes pile up is not reading and gets dropped.
+    fn queue(&mut self, data: &[u8]) -> bool {
+        if self.dead {
+            return false;
+        }
+        if self.pending() + data.len() > MAX_WRITE_BUF {
+            log::warn!(
+                "remote connection {}: output backlog over {MAX_WRITE_BUF} bytes, dropping",
+                self.id
+            );
+            self.dead = true;
+            self.write_buf = Vec::new();
+            self.write_pos = 0;
+            return false;
+        }
+        self.write_buf.extend_from_slice(data);
+        true
+    }
+
+    /// Write as much queued output as the non-blocking socket accepts.
+    fn flush(&mut self) {
+        while !self.dead && self.write_pos < self.write_buf.len() {
+            match self.stream.write(&self.write_buf[self.write_pos..]) {
+                Ok(0) => break,
+                Ok(n) => self.write_pos += n,
+                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => {
+                    log::debug!("remote connection {} write error: {e}", self.id);
+                    self.dead = true;
+                },
+            }
+        }
+        if self.write_pos == self.write_buf.len() {
+            self.write_buf.clear();
+            self.write_pos = 0;
+        } else if self.write_pos > WRITE_COMPACT_THRESHOLD {
+            self.write_buf.drain(..self.write_pos);
+            self.write_pos = 0;
+        }
+        let _ = self.stream.flush();
+    }
+
+    fn close_after_flush(&mut self) {
+        if self.closing_since.is_none() {
+            self.closing_since = Some(Instant::now());
+        }
+    }
+
+    /// Whether the connection can be dropped now.
+    fn finished(&self) -> bool {
+        if self.dead {
+            return true;
+        }
+        let Some(since) = self.closing_since else {
+            return false;
+        };
+        (self.pending() == 0 && self.inflight == 0) || since.elapsed() > CLOSE_DRAIN_TIMEOUT
     }
 }
 
@@ -129,6 +225,8 @@ pub struct RemoteListener {
     config: ListenerConfig,
     connections: Vec<RemoteConnection>,
     pub(crate) listening: bool,
+    /// Id for the next accepted connection.
+    next_id: usize,
     /// Rate-limiting tracker for auth failures.
     pub(crate) auth_failures: AuthFailureRecord,
 }
@@ -140,6 +238,7 @@ impl RemoteListener {
             config,
             connections: Vec::new(),
             listening: false,
+            next_id: 0,
             auth_failures: AuthFailureRecord {
                 count: 0,
                 window_start: Instant::now(),
@@ -229,9 +328,11 @@ impl RemoteListener {
 
     /// Poll for new connections and incoming data.
     ///
-    /// Returns a list of (command_line, connection_index) pairs from
-    /// authenticated clients. After executing commands, call
-    /// `send_response()` to return output to the client.
+    /// Returns `(command_line, connection_id)` pairs from authenticated
+    /// clients. The id is stable for the connection's lifetime (it is not a
+    /// position that shifts when other clients disconnect), so after
+    /// executing a command pass it to [`Self::send_response`] to return
+    /// output to that same client.
     pub fn poll(&mut self, backend: &mut dyn NetworkBackend) -> Vec<(String, usize)> {
         if !self.listening {
             return Vec::new();
@@ -242,153 +343,208 @@ impl RemoteListener {
         // Accept new connections (reject if rate-limited).
         if self.connections.len() < self.config.max_connections {
             match backend.accept() {
-                Ok(Some(stream)) => {
-                    if !self.config.psk.is_empty() && self.is_rate_limited() {
-                        // Rate limit in effect -- reject new connections.
-                        let mut conn = RemoteConnection::new(stream);
-                        let _ = conn.stream.write(b"RATE_LIMITED\n");
-                        let _ = conn.stream.close();
-                    } else {
-                        let mut conn = RemoteConnection::new(stream);
-                        if self.config.psk.is_empty() {
-                            // No auth required.
-                            conn.auth = AuthState::Authenticated;
-                            let _ = conn.stream.write(b"OASIS_OS remote terminal\n> ");
-                            self.connections.push(conn);
-                        } else {
-                            #[cfg(not(feature = "tls-rustls"))]
-                            {
-                                // Reject PSK auth without TLS.
-                                let _ = conn.stream.write(b"AUTH_FAIL TLS required for PSK auth\n");
-                                let _ = conn.stream.close();
-                            }
-                            #[cfg(feature = "tls-rustls")]
-                            {
-                                let _ = conn.stream.write(b"AUTH_REQUIRED\n");
-                                self.connections.push(conn);
-                            }
-                        }
-                    }
-                },
+                Ok(Some(stream)) => self.admit(stream),
                 Ok(None) => {},
                 Err(e) => log::warn!("accept error: {e}"),
             }
         }
 
-        // Read from all connections.
         let mut commands = Vec::new();
-        let mut to_remove = Vec::new();
+        let mut auth_failures = 0u32;
         let psk_bytes = self.config.psk.as_bytes().to_vec();
 
-        for (idx, conn) in self.connections.iter_mut().enumerate() {
-            // Check idle timeout.
-            if self.config.idle_timeout_secs > 0 && conn.last_activity.elapsed() > idle_timeout {
-                let _ = conn.stream.write(b"\nIdle timeout. Goodbye.\n");
-                to_remove.push(idx);
+        for conn in &mut self.connections {
+            conn.flush();
+            if conn.dead || conn.closing_since.is_some() {
                 continue;
             }
 
-            let mut buf = [0u8; 512];
-            match conn.stream.read(&mut buf) {
-                Ok(0) => {
-                    // Connection closed (EOF).
-                },
-                Err(oasis_types::error::OasisError::Io(ref e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock =>
-                {
-                    // Non-blocking socket has no data yet.
-                },
-                Ok(n) => {
-                    conn.last_activity = Instant::now();
-                    conn.read_buf.extend_from_slice(&buf[..n]);
-
-                    // Process complete lines.
-                    while let Some(newline_pos) = conn.read_buf.iter().position(|&b| b == b'\n') {
-                        let line_bytes: Vec<u8> = conn.read_buf.drain(..=newline_pos).collect();
-                        let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
-
-                        if line.is_empty() {
-                            continue;
-                        }
-
-                        match conn.auth {
-                            AuthState::AwaitingAuth => {
-                                if constant_time_eq(line.as_bytes(), &psk_bytes) {
-                                    conn.auth = AuthState::Authenticated;
-                                    let _ = conn.stream.write(b"AUTH_OK\n> ");
-                                } else {
-                                    let _ = conn.stream.write(b"AUTH_FAIL\n");
-                                    to_remove.push(idx);
-                                }
-                            },
-                            AuthState::Authenticated => {
-                                if line == "quit" || line == "exit" {
-                                    let _ = conn.stream.write(b"Goodbye.\n");
-                                    to_remove.push(idx);
-                                } else {
-                                    commands.push((line, idx));
-                                }
-                            },
-                        }
-                    }
-
-                    // Guard against overlong lines -- disconnect the peer.
-                    if conn.read_buf.len() > MAX_LINE_LEN {
-                        conn.read_buf.clear();
-                        let _ = conn.stream.write(b"error: line too long\n");
-                        to_remove.push(idx);
-                    }
-                },
-                Err(e) => {
-                    log::debug!("connection {idx} read error: {e}");
-                    to_remove.push(idx);
-                },
+            // Check idle timeout.
+            if self.config.idle_timeout_secs > 0 && conn.last_activity.elapsed() > idle_timeout {
+                conn.queue(b"\nIdle timeout. Goodbye.\n");
+                conn.close_after_flush();
+                conn.flush();
+                continue;
             }
+
+            // Read until the socket would block, EOF, or the per-poll cap.
+            let mut eof = false;
+            let mut buf = [0u8; 4096];
+            let mut total = 0usize;
+            while total < MAX_READ_PER_POLL {
+                match conn.stream.read(&mut buf) {
+                    Ok(0) => {
+                        eof = true;
+                        break;
+                    },
+                    Ok(n) => {
+                        total += n;
+                        conn.last_activity = Instant::now();
+                        conn.read_buf.extend_from_slice(&buf[..n]);
+                    },
+                    Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        break;
+                    },
+                    Err(e) => {
+                        log::debug!("connection {} read error: {e}", conn.id);
+                        conn.dead = true;
+                        break;
+                    },
+                }
+            }
+            if conn.dead {
+                continue;
+            }
+
+            // Process complete lines.
+            let mut overlong = false;
+            while let Some(newline_pos) = conn.read_buf.iter().position(|&b| b == b'\n') {
+                if newline_pos > MAX_LINE_LEN {
+                    overlong = true;
+                    break;
+                }
+                let line_bytes: Vec<u8> = conn.read_buf.drain(..=newline_pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                match conn.auth {
+                    AuthState::AwaitingAuth => {
+                        if constant_time_eq(line.as_bytes(), &psk_bytes) {
+                            conn.auth = AuthState::Authenticated;
+                            conn.queue(b"AUTH_OK\n> ");
+                        } else {
+                            conn.queue(b"AUTH_FAIL\n");
+                            conn.close_after_flush();
+                            auth_failures += 1;
+                            // Ignore the rest of the buffer: no further PSK
+                            // guesses on this connection.
+                            conn.read_buf.clear();
+                            break;
+                        }
+                    },
+                    AuthState::Authenticated => {
+                        if line == "quit" || line == "exit" {
+                            conn.queue(b"Goodbye.\n");
+                            conn.close_after_flush();
+                            // Nothing after `quit` may run.
+                            conn.read_buf.clear();
+                            break;
+                        }
+                        conn.inflight += 1;
+                        commands.push((line, conn.id));
+                    },
+                }
+            }
+
+            // Guard against overlong lines -- disconnect the peer.
+            if overlong || conn.read_buf.len() > MAX_LINE_LEN {
+                conn.read_buf.clear();
+                conn.queue(b"error: line too long\n");
+                conn.close_after_flush();
+                if conn.auth == AuthState::AwaitingAuth {
+                    auth_failures += 1;
+                }
+            }
+
+            if eof {
+                // Peer closed its side: free the slot as soon as the replies
+                // to anything it sent before closing have been delivered.
+                conn.close_after_flush();
+            }
+            conn.flush();
         }
 
-        // Record auth failures from this poll cycle.
-        let auth_failure_count = to_remove
-            .iter()
-            .filter(|&&idx| {
-                self.connections
-                    .get(idx)
-                    .is_some_and(|c| c.auth == AuthState::AwaitingAuth)
-            })
-            .count();
-        for _ in 0..auth_failure_count {
+        // Record auth failures from this poll cycle (a wrong PSK or garbage
+        // before authenticating; a plain disconnect is not a failed guess).
+        for _ in 0..auth_failures {
             self.record_auth_failure();
         }
 
-        // Remove closed/failed connections (in reverse to preserve indices).
-        to_remove.sort_unstable();
-        to_remove.dedup();
-        for idx in to_remove.into_iter().rev() {
-            let mut conn = self.connections.remove(idx);
-            let _ = conn.stream.close();
-        }
-
+        self.reap();
         commands
     }
 
-    /// Send command output back to a specific client.
+    /// Set up a freshly accepted connection (or turn it away).
+    fn admit(&mut self, stream: Box<dyn NetworkStream>) {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let mut conn = RemoteConnection::new(id, stream);
+        if !self.config.psk.is_empty() && self.is_rate_limited() {
+            // Rate limit in effect -- reject new connections.
+            let _ = conn.stream.write(b"RATE_LIMITED\n");
+            let _ = conn.stream.close();
+            return;
+        }
+        if self.config.psk.is_empty() {
+            // No auth required.
+            conn.auth = AuthState::Authenticated;
+            conn.queue(b"OASIS_OS remote terminal\n> ");
+            conn.flush();
+            self.connections.push(conn);
+            return;
+        }
+        #[cfg(not(feature = "tls-rustls"))]
+        {
+            // Reject PSK auth without TLS.
+            let _ = conn.stream.write(b"AUTH_FAIL TLS required for PSK auth\n");
+            let _ = conn.stream.close();
+        }
+        #[cfg(feature = "tls-rustls")]
+        {
+            conn.queue(b"AUTH_REQUIRED\n");
+            conn.flush();
+            self.connections.push(conn);
+        }
+    }
+
+    /// Drop connections that failed or finished closing.
+    fn reap(&mut self) {
+        self.connections.retain_mut(|conn| {
+            if conn.finished() {
+                let _ = conn.stream.close();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// Send command output back to the client with id `conn_idx` (as
+    /// returned by [`Self::poll`]).
+    ///
+    /// Output is queued and written as the socket accepts it (over later
+    /// polls if needed), so large responses arrive intact. A client that
+    /// lets more than 8 MiB of output back up is disconnected.
     pub fn send_response(&mut self, conn_idx: usize, text: &str) -> Result<()> {
         let conn = self
             .connections
-            .get_mut(conn_idx)
+            .iter_mut()
+            .find(|c| c.id == conn_idx && !c.dead)
             .ok_or_else(|| OasisError::Backend("invalid connection index".into()))?;
-        conn.stream
-            .write(text.as_bytes())
-            .map_err(|e| OasisError::Backend(format!("send: {e}").into()))?;
-        conn.stream
-            .write(b"\n> ")
-            .map_err(|e| OasisError::Backend(format!("send prompt: {e}").into()))?;
+        conn.inflight = conn.inflight.saturating_sub(1);
+        if !conn.queue(text.as_bytes()) || !conn.queue(b"\n> ") {
+            return Err(OasisError::Backend(
+                "send: client is not reading; disconnected".into(),
+            ));
+        }
+        conn.flush();
+        if conn.dead {
+            return Err(OasisError::Backend("send: connection lost".into()));
+        }
         Ok(())
     }
 
     /// Shut down all connections and stop listening.
+    ///
+    /// Pending output and the shutdown notice are flushed best-effort (one
+    /// non-blocking pass) before each socket is closed.
     pub fn stop(&mut self) {
         for conn in &mut self.connections {
-            let _ = conn.stream.write(b"\nServer shutting down.\n");
+            conn.queue(b"\nServer shutting down.\n");
+            conn.flush();
             let _ = conn.stream.close();
         }
         self.connections.clear();
