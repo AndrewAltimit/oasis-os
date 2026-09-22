@@ -87,6 +87,20 @@ impl HeadlessBackend {
         self.frames_presented
     }
 
+    /// Record a text draw for [`Self::frame_text`].
+    fn record_text(&mut self, text: &str, x: i32, y: i32, font_size: u16, color: Color) {
+        // Fully transparent text (glyph-cache warm-up) paints nothing.
+        if color.a > 0 && !text.is_empty() {
+            self.drawing.push(DrawnText {
+                text: text.to_string(),
+                x,
+                y,
+                font_size,
+                color,
+            });
+        }
+    }
+
     /// Queue an input event for the next `poll_events`.
     pub fn push_input(&mut self, event: InputEvent) {
         self.input.push_back(event);
@@ -157,16 +171,7 @@ impl SdiCore for HeadlessBackend {
         font_size: u16,
         color: Color,
     ) -> Result<()> {
-        // Fully transparent text (glyph-cache warm-up) paints nothing.
-        if color.a > 0 && !text.is_empty() {
-            self.drawing.push(DrawnText {
-                text: text.to_string(),
-                x,
-                y,
-                font_size,
-                color,
-            });
-        }
+        self.record_text(text, x, y, font_size, color);
         self.inner.draw_text(text, x, y, font_size, color)
     }
 
@@ -279,9 +284,28 @@ impl SdiShapes for HeadlessBackend {
     ) -> Result<()> {
         self.inner.fill_triangle(x1, y1, x2, y2, x3, y3, color)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) -> Result<()> {
+        self.inner
+            .stroke_rounded_rect(x, y, w, h, radius, stroke_width, color)
+    }
 }
 
-impl SdiVector for HeadlessBackend {}
+impl SdiVector for HeadlessBackend {
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        self.inner.fill_polygon(points, color)
+    }
+}
 
 impl SdiGradients for HeadlessBackend {
     fn fill_rect_gradient(
@@ -293,6 +317,19 @@ impl SdiGradients for HeadlessBackend {
         gradient: &GradientStyle,
     ) -> Result<()> {
         self.inner.fill_rect_gradient(x, y, w, h, gradient)
+    }
+
+    fn fill_rounded_rect_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        gradient: &GradientStyle,
+    ) -> Result<()> {
+        self.inner
+            .fill_rounded_rect_gradient(x, y, w, h, radius, gradient)
     }
 }
 
@@ -307,6 +344,22 @@ impl SdiAlpha for HeadlessBackend {
 }
 
 impl SdiText for HeadlessBackend {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        self.record_text(text, x, y, font_size, color);
+        self.inner
+            .draw_text_styled(text, x, y, font_size, color, bold, italic)
+    }
+
     fn measure_text_height(&self, font_size: u16) -> u32 {
         self.inner.measure_text_height(font_size)
     }
