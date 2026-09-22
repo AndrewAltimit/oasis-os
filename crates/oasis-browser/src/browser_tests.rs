@@ -3412,6 +3412,144 @@ fn static_page_stops_wanting_frames() {
     assert!(!browser.wants_frame());
 }
 
+/// `@import` inside a `vfs://` linked sheet is followed too (the VFS
+/// sheets load on `tick`, not on the I/O thread).
+#[test]
+fn vfs_linked_stylesheet_imports_are_followed() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/imp").unwrap();
+    vfs.write(
+        "/sites/imp/index.html",
+        b"<html><head><link rel=\"stylesheet\" href=\"main.css\"></head>\
+          <body><p class=\"a\">HiddenByImport</p><p>Visible</p></body></html>",
+    )
+    .unwrap();
+    vfs.write("/sites/imp/main.css", b"@import 'a.css'; p { color: red; }")
+        .unwrap();
+    vfs.write("/sites/imp/a.css", b".a { display: none; }")
+        .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/imp/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+    let mut frame = MockBackend::new();
+    browser.full_repaint_needed = true;
+    browser.paint(&mut frame).unwrap();
+    let texts: Vec<String> = frame
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            crate::test_utils::DrawCall::DrawText { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("Visible")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.contains("HiddenByImport")),
+        "{texts:?}"
+    );
+}
+
+/// With `smooth_scroll` on, scroll input only sets a velocity that
+/// `ScrollState::tick` turns into movement; the widget never ticked it,
+/// so smooth-scrolling configs could not scroll at all.
+#[test]
+fn smooth_scroll_moves_and_settles() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/long").unwrap();
+    let body: String = (0..200).map(|i| format!("<p>Line {i}</p>")).collect();
+    vfs.write(
+        "/sites/long/index.html",
+        format!("<html><body>{body}</body></html>").as_bytes(),
+    )
+    .unwrap();
+    let mut config = BrowserConfig::default();
+    config.smooth_scroll = true;
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/long/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.handle_input(&InputEvent::MouseWheel { delta: 2 }, &vfs);
+    assert!(
+        browser.wants_frame(),
+        "a smooth scroll in motion wants frames"
+    );
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn > 1, "the scroll animates over several frames");
+    assert!(
+        browser.scroll().scroll_y > 0,
+        "smooth scroll moved the page"
+    );
+    assert!(!browser.wants_frame(), "and settles");
+}
+
+/// Going back to a page that fell out of the resource cache refetches
+/// it; that load used to push a fresh history entry, wiping the forward
+/// stack (Forward did nothing after such a Back).
+#[test]
+fn back_after_cache_eviction_keeps_forward_history() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.cache.clear();
+    browser.go_back(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/index.html"));
+    assert!(browser.navigation().can_go_forward(), "forward entry kept");
+    browser.go_forward(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+}
+
+/// Reload keeps the history entry (no duplicate) and the scroll offset.
+#[test]
+fn reload_keeps_history_and_scroll() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.reload(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+    browser.go_back(&vfs);
+    assert_eq!(
+        browser.current_url(),
+        Some("vfs://sites/home/index.html"),
+        "reload added no history entry"
+    );
+    assert!(!browser.navigation().can_go_back());
+}
+
+/// A page whose display list records nothing (empty body, zero-size
+/// content) used to keep `wants_frame` true forever: an empty display
+/// list was taken to mean "not recorded yet", so the host never elided a
+/// frame while such a page was open.
+#[test]
+fn page_that_draws_nothing_stops_wanting_frames() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/blank").unwrap();
+    vfs.write(
+        "/sites/blank/index.html",
+        b"<html><head><title>Blank</title></head><body></body></html>",
+    )
+    .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/blank/index.html", &vfs);
+    assert!(browser.wants_frame(), "a fresh page must be painted");
+    let mut backend = MockBackend::new();
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn >= 1, "the fresh page must be painted once");
+    for _ in 0..10 {
+        browser.tick(&vfs);
+        assert!(!browser.wants_frame(), "blank page must elide frames");
+    }
+}
+
 #[test]
 fn window_moves_and_resizes_want_a_frame() {
     let vfs = test_vfs();

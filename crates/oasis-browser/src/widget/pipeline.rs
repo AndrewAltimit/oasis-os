@@ -29,6 +29,7 @@ impl BrowserWidget {
     /// `Content-Type: application/x-www-form-urlencoded`.
     pub fn navigate_post(&mut self, url: &str, body: Vec<u8>, vfs: &dyn Vfs) {
         self.reset_for_navigation();
+        self.skip_nav_push = false;
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -110,8 +111,26 @@ impl BrowserWidget {
             }
         }
 
-        // Cache miss or non-HTML content — fetch from network.
-        self.navigate_vfs(url, vfs);
+        // Cache miss or non-HTML content — fetch from network. The
+        // history entry already moved (back/forward), so the load must
+        // not push a new one: that would clear the forward stack.
+        self.navigate_vfs_inner(url, vfs, false);
+    }
+
+    /// Reload the current page from its source (VFS or network),
+    /// keeping the history entry and the scroll position.
+    pub fn reload(&mut self, vfs: &dyn Vfs) {
+        let Some(url) = self.nav.current_url().map(str::to_string) else {
+            return;
+        };
+        let scroll_y = self.scroll.scroll_y;
+        self.nav.update_scroll(scroll_y);
+        self.navigate_vfs_inner(&url, vfs, false);
+        // Synchronous (VFS) reloads are laid out already; restore the
+        // offset. Network reloads land at the top like a fresh load.
+        if self.document.is_some() {
+            self.scroll.scroll_to(scroll_y);
+        }
     }
 
     /// Reset browser state in preparation for a new navigation.
@@ -150,6 +169,12 @@ impl BrowserWidget {
 
     /// Navigate to a URL using the VFS as the resource source.
     pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+        self.navigate_vfs_inner(url, vfs, true);
+    }
+
+    /// [`Self::navigate_vfs`]; `push_history` is false for loads of the
+    /// current history entry (reload, back/forward cache misses).
+    fn navigate_vfs_inner(&mut self, url: &str, vfs: &dyn Vfs, push_history: bool) {
         // iframe-overlay mode (WASM): an external browser iframe paints
         // http(s) pages. The OASIS engine only needs to track the URL
         // for the chrome bar and history, so skip the sync fetch, DOM
@@ -175,14 +200,22 @@ impl BrowserWidget {
         }
 
         self.reset_for_navigation();
+        // Consumed by `load_html` when this load (sync or from the I/O
+        // thread) finishes; a later navigation overrides it.
+        self.skip_nav_push = !push_history;
 
         // Internal pages: serve directly without hitting the VFS or
         // network. Only `vfs://bookmarks` is wired up for now — the
         // bookmarks button in the chrome navigates here. History is
         // available through `nav.history_page_html()` if we ever wire
         // a second button for it.
-        if url == "vfs://bookmarks" || url == "oasis://bookmarks" {
-            let body = self.nav.bookmarks_page_html().into_bytes();
+        let internal = match url {
+            "vfs://bookmarks" | "oasis://bookmarks" => Some(self.nav.bookmarks_page_html()),
+            "vfs://history" | "oasis://history" => Some(self.nav.history_page_html()),
+            _ => None,
+        };
+        if let Some(html) = internal {
+            let body = html.into_bytes();
             let response = crate::loader::ResourceResponse {
                 url: url.to_string(),
                 content_type: crate::loader::ContentType::Html,
@@ -331,13 +364,16 @@ impl BrowserWidget {
     /// [`BrowserWidget::set_tls_provider`] replaces `self.tls` meanwhile.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pub(crate) fn ensure_io_thread(&mut self) -> bool {
-        if self.io_thread.is_some() {
+        if let Some(io) = self.io_thread.as_mut() {
+            // Every submit comes through here: keep the limit current.
+            io.set_max_redirects(self.config.max_redirects);
             return true;
         }
         let tls = self.tls.clone();
         let cookie_jar = self.cookie_jar.clone();
         match IoThread::spawn(tls, cookie_jar) {
-            Ok(io) => {
+            Ok(mut io) => {
+                io.set_max_redirects(self.config.max_redirects);
                 self.io_thread = Some(io);
                 true
             },
@@ -524,17 +560,20 @@ impl BrowserWidget {
         // submitted, then flags `pending_external_css_apply` so the next
         // tick re-cascades and relays out with the now-fuller style set.
         const MAX_STYLESHEET_BYTES: usize = 512 * 1024;
+        // `(slot, sheet url, css)` of arrived sheets, for `@import`s.
+        let mut arrived: Vec<(usize, String, String)> = Vec::new();
         for result in stylesheet_results {
             let Some(idx) = self.pending_io_stylesheets.remove(&result.id) else {
                 continue;
             };
             let sheet = match result.result {
                 Ok(loaded) => {
+                    let sheet_url = loaded.response.url;
                     let body = loaded.response.body;
                     if body.len() > MAX_STYLESHEET_BYTES {
                         log::warn!(
                             "external stylesheet {} too large ({} bytes), skipping",
-                            loaded.response.url,
+                            sheet_url,
                             body.len()
                         );
                         // Slot stays `None` but still flag a cascade pass so
@@ -554,7 +593,7 @@ impl BrowserWidget {
                         pointer: "fine",
                     };
                     let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
-                    (sheet, css_text)
+                    (sheet, css_text, sheet_url)
                 },
                 Err(e) => {
                     log::debug!("external stylesheet fetch failed: {e}");
@@ -563,12 +602,14 @@ impl BrowserWidget {
                 },
             };
             if idx < self.external_stylesheets.len() {
-                let (sheet, css_text) = sheet;
+                let (sheet, css_text, sheet_url) = sheet;
                 self.external_stylesheets[idx] = Some(sheet);
+                arrived.push((idx, sheet_url, css_text.clone()));
                 self.record_external_source(idx, css_text);
                 self.pending_external_css_apply = true;
             }
         }
+        self.queue_stylesheet_imports(arrived);
     }
 
     /// Process a loaded resource response.
@@ -834,6 +875,7 @@ impl BrowserWidget {
         {
             self.pending_io_stylesheets.clear();
             self.pending_vfs_stylesheets.clear();
+            self.imported_stylesheet_urls.clear();
         }
         self.pending_external_css_apply = false;
         if !linked_urls.is_empty() {
@@ -1014,6 +1056,7 @@ impl BrowserWidget {
         self.last_layout_w = self.window_w;
         // Invalidate the cached display list so it gets rebuilt on next paint.
         self.display_list.clear();
+        self.display_list_stale = true;
 
         // 8. Update navigation (skip if restoring from history).
         if !self.skip_nav_push {
@@ -1608,6 +1651,7 @@ impl BrowserWidget {
         };
         let drained: Vec<(usize, ResourceRequest)> =
             std::mem::take(&mut self.pending_vfs_stylesheets);
+        let mut arrived: Vec<(usize, String, String)> = Vec::new();
         for (idx, request) in drained {
             match loader::vfs::load_from_vfs(vfs, &request) {
                 Ok(resp) => {
@@ -1615,6 +1659,7 @@ impl BrowserWidget {
                     let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
                     if idx < self.external_stylesheets.len() {
                         self.external_stylesheets[idx] = Some(sheet);
+                        arrived.push((idx, request.url.clone(), css_text.clone()));
                         self.record_external_source(idx, css_text);
                         self.pending_external_css_apply = true;
                     }
@@ -1622,6 +1667,74 @@ impl BrowserWidget {
                 Err(e) => {
                     log::debug!("vfs stylesheet fetch failed: {e}");
                 },
+            }
+        }
+        self.queue_stylesheet_imports(arrived);
+    }
+
+    /// Follow the `@import` rules of freshly arrived linked sheets
+    /// (`(slot, sheet url, css)`): each import gets its own slot right
+    /// before its importer (imports cascade before the importing sheet's
+    /// own rules) and is fetched like a `<link>`ed sheet — including its
+    /// own imports once it arrives. At most [`MAX_STYLESHEET_IMPORTS`]
+    /// distinct URLs per page, which also ends import cycles.
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    fn queue_stylesheet_imports(&mut self, mut arrived: Vec<(usize, String, String)>) {
+        // Highest slot first: inserting slots shifts only the slots at
+        // or after the insertion point, never a lower one still to do.
+        arrived.sort_by_key(|(idx, _, _)| std::cmp::Reverse(*idx));
+        let source = if self.config.features.sandbox_only {
+            ResourceSource::Vfs
+        } else {
+            ResourceSource::VfsThenNetwork
+        };
+        for (idx, sheet_url, css_text) in arrived {
+            let urls: Vec<String> = css_import_urls(&css_text, &sheet_url)
+                .into_iter()
+                .filter(|u| {
+                    self.imported_stylesheet_urls.len() < MAX_STYLESHEET_IMPORTS
+                        && self.imported_stylesheet_urls.insert(u.clone())
+                })
+                .collect();
+            if urls.is_empty() || idx >= self.external_stylesheets.len() {
+                continue;
+            }
+            let n = urls.len();
+            let pos = self.external_stylesheet_positions[idx];
+            for k in 0..n {
+                self.external_stylesheets.insert(idx + k, None);
+                self.external_stylesheet_positions.insert(idx + k, pos);
+                self.external_stylesheet_sources.insert(idx + k, None);
+            }
+            for slot in self.pending_io_stylesheets.values_mut() {
+                if *slot >= idx {
+                    *slot += n;
+                }
+            }
+            for (slot, _) in &mut self.pending_vfs_stylesheets {
+                if *slot >= idx {
+                    *slot += n;
+                }
+            }
+            let referrer = loader::strip_referrer(&sheet_url);
+            for (k, url) in urls.into_iter().enumerate() {
+                let request = ResourceRequest {
+                    url: url.clone(),
+                    base_url: Some(sheet_url.clone()),
+                    source,
+                    method: crate::loader::HttpMethod::Get,
+                    body: None,
+                    referrer: referrer.clone(),
+                };
+                if url.starts_with("vfs://") {
+                    self.pending_vfs_stylesheets.push((idx + k, request));
+                } else if self.ensure_io_thread()
+                    && let Some(io) = self.io_thread.as_mut()
+                {
+                    let validators = self.cache.peek_validators(&request.url);
+                    let id = io.send(IoRequestKind::Stylesheet, request, validators, None);
+                    self.pending_io_stylesheets.insert(id, idx + k);
+                }
             }
         }
     }
@@ -1745,13 +1858,9 @@ impl BrowserWidget {
     /// sufficient for the visual delta that matters for real-world
     /// sites (old.reddit, MediaWiki) whose external CSS is declarative.
     ///
-    /// Known limitation: `@import url(...)` rules inside fetched
-    /// external CSS are *not* followed. The parser captures them but
-    /// this pass does not chase the transitive closure, so pages whose
-    /// top-level stylesheet is a thin `@import` shim render with only
-    /// the shim's own rules applied. Acceptable for old.reddit /
-    /// MediaWiki (top-level sheets carry the rules directly); revisit
-    /// if another real-world target relies on `@import` chains.
+    /// `@import`s inside linked sheets get their own slots (see
+    /// `queue_stylesheet_imports`) and land here like any linked sheet.
+    /// `@import` inside inline `<style>` blocks is not followed.
     pub(crate) fn apply_external_stylesheets_if_pending(&mut self) {
         if !self.pending_external_css_apply {
             return;
@@ -1795,6 +1904,7 @@ impl BrowserWidget {
         self.layout_dirty = true;
         self.full_repaint_needed = true;
         self.display_list.clear();
+        self.display_list_stale = true;
     }
 
     /// Walk the DOM to collect inline `style=""` attributes and parse
@@ -2038,6 +2148,98 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
 
     html.push_str("</body></html>");
     html
+}
+
+/// Most `@import`ed stylesheets followed per page.
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+const MAX_STYLESHEET_IMPORTS: usize = 16;
+
+/// URLs of the `@import` rules at the head of `css` (imports must come
+/// before any other rule but `@charset` / `@layer` statements), resolved
+/// against `sheet_url`. Print-only imports and schemes the loader can't
+/// fetch are skipped; other media / `layer()` / `supports()` conditions
+/// are not evaluated (the sheet is imported unconditionally).
+#[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+pub(crate) fn css_import_urls(css: &str, sheet_url: &str) -> Vec<String> {
+    let base = loader::Url::parse(sheet_url);
+    let mut urls = Vec::new();
+    let mut rest = css;
+    loop {
+        // Skip whitespace and comments.
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, r)| r);
+            continue;
+        }
+        let lower: String = rest
+            .chars()
+            .take(8)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let is_import = lower.starts_with("@import");
+        if !(is_import || lower.starts_with("@charset") || lower.starts_with("@layer")) {
+            break;
+        }
+        // The statement runs to the first `;` outside quotes / parens; a
+        // `{` first means a block (`@layer x { ... }`): imports are over.
+        let (mut quote, mut depth, mut end) = (None::<char>, 0i32, None);
+        for (i, c) in rest.char_indices() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {},
+                (None, '"' | '\'') => quote = Some(c),
+                (None, '(') => depth += 1,
+                (None, ')') => depth -= 1,
+                (None, '{') if depth == 0 => break,
+                (None, ';') if depth == 0 => {
+                    end = Some(i);
+                    break;
+                },
+                _ => {},
+            }
+        }
+        let Some(end) = end else { break };
+        let statement = &rest[..end];
+        rest = &rest[end + 1..];
+        if !is_import {
+            continue;
+        }
+        let prelude = statement["@import".len()..].trim_start();
+        let (target, media) = if let Some(inner) = prelude
+            .get(..4)
+            .filter(|p| p.eq_ignore_ascii_case("url("))
+            .and_then(|_| prelude[4..].split_once(')'))
+        {
+            (inner.0.trim().trim_matches(['"', '\'']), inner.1)
+        } else if let Some(q) = prelude.chars().next().filter(|c| *c == '"' || *c == '\'') {
+            match prelude[1..].split_once(q) {
+                Some((target, media)) => (target, media),
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        let media = media.trim().to_ascii_lowercase();
+        if !media.is_empty()
+            && media
+                .split(',')
+                .all(BrowserWidget::is_print_only_media_query)
+        {
+            continue;
+        }
+        let resolved = match &base {
+            Some(b) => b.resolve(target).map(|u| u.to_string()),
+            None => Some(target.to_string()),
+        };
+        let Some(resolved) = resolved else { continue };
+        let scheme = loader::Url::parse(&resolved)
+            .map(|u| u.scheme.clone())
+            .unwrap_or_default();
+        if matches!(scheme.as_str(), "http" | "https" | "vfs") && !urls.contains(&resolved) {
+            urls.push(resolved);
+        }
+    }
+    urls
 }
 
 /// Whether a stylesheet's source contains media-dependent rules.

@@ -65,6 +65,37 @@ fn five_redirects_are_followed_and_loops_are_capped() {
     assert_eq!(s.url(), server.url("/loop"));
 }
 
+/// `BrowserConfig::max_redirects` used to be ignored (the HTTP client
+/// always allowed five).
+#[test]
+fn max_redirects_config_limits_page_loads() {
+    let server = TestServer::start(|req| {
+        match req
+            .path()
+            .strip_prefix("/r")
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            Some(0) => page("ChainDone"),
+            Some(n) => Reply::redirect(302, &format!("/r{}", n - 1)),
+            None => Reply::not_found(),
+        }
+    });
+    let mut s = Session::new();
+    s.browser.config.max_redirects = 2;
+    s.open(&server.url("/r3"));
+    assert_eq!(s.browser.loading_state(), LoadingState::Error);
+    assert!(
+        s.browser
+            .error_message()
+            .is_some_and(|m| m.contains("redirect")),
+        "{:?}",
+        s.browser.error_message()
+    );
+    assert!(server.requests_to("/r0").is_empty(), "stopped after 2 hops");
+    s.open(&server.url("/r2"));
+    s.assert_shows("ChainDone");
+}
+
 #[test]
 fn post_then_303_redirect_becomes_get() {
     let server = TestServer::start(|req| match (req.method.as_str(), req.path()) {

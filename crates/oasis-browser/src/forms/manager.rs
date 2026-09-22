@@ -76,9 +76,32 @@ impl FormManager {
                     *v = value.to_string();
                     return;
                 },
+                FormElement::HiddenInput { name: n, value: v } if n == name => {
+                    *v = value.to_string();
+                    return;
+                },
                 _ => {},
             }
         }
+    }
+
+    /// Adopt a text value written outside the form manager (a script
+    /// setting `input.value`). Returns `true` when it differed; when the
+    /// element has focus its caret moves to the end of the new value.
+    pub fn adopt_value(&mut self, form_id: usize, name: &str, value: &str) -> bool {
+        if self.get_value(form_id, name).is_none_or(|v| v == value) {
+            return false;
+        }
+        self.set_value(form_id, name, value);
+        let focused =
+            self.focused_form == Some(form_id) && self.focused_element.as_deref() == Some(name);
+        let len = self
+            .get_value(form_id, name)
+            .map_or(0, |v| v.chars().count());
+        if focused && let Some(form) = self.forms.get_mut(form_id) {
+            form.cursor = len;
+        }
+        true
     }
 
     /// Get the value of a named text element.

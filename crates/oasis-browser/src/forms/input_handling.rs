@@ -56,8 +56,15 @@ impl FormManager {
         };
 
         let (fi, ref name) = flat[next_pos];
+        let name = name.clone();
+        self.focus_element(fi, &name);
+    }
+
+    /// Give `name` in form `fi` keyboard focus, with the caret at the
+    /// end of a text field's value (so typing appends, as in browsers).
+    pub fn focus_element(&mut self, fi: usize, name: &str) {
         self.focused_form = Some(fi);
-        self.focused_element = Some(name.clone());
+        self.focused_element = Some(name.to_string());
 
         // Reset cursor to end of text for newly focused text fields.
         if let Some(form) = self.forms.get_mut(fi)

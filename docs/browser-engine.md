@@ -22,6 +22,12 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   initial GET.
 - **Cookies, gzip, CSP.** Scripts/styles/connect-src enforced;
   img-src relaxed for practicality.
+- **Redirects** — page loads follow up to `BrowserConfig::max_redirects`
+  (default 5) redirects; script `fetch()` keeps the default.
+- **Background I/O thread** — network loads never block the UI thread.
+  Dropping the widget mid-load returns immediately: queued requests are
+  abandoned and a request still in flight finishes on the detached
+  worker, which then exits.
 
 ## HTML parser
 
@@ -32,6 +38,12 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Vendored-subset `html5lib-tests` harness for conformance.
 
 ## CSS cascade & selectors
+
+- Linked stylesheets (`<link rel=stylesheet>`, network or `vfs://`)
+  follow their `@import` rules (nested, resolved against the sheet URL,
+  cascading before the importing sheet; print-only imports skipped; at
+  most 16 imported URLs per page). `@import` in inline `<style>` is not
+  followed.
 
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
@@ -172,7 +184,14 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `Button::Confirm` route to the focused form element through
   `dispatch_form_key`, and in-flight values sync back to the DOM
   `value` attribute on each keystroke so the next relayout paints
-  the typed text.
+  the typed text. Clicking a field puts the caret at the end of its
+  value.
+- One form state with scripts: typed values are mirrored into the
+  script-side DOM too (so `input.value` reads them and a later script
+  DOM mutation doesn't wipe them), `input` events fire after the edit,
+  and values scripts write (`input.value = ...`, hidden inputs
+  included) are adopted by the `FormManager`, so they are edited and
+  submitted.
 - Form GET / POST submission; Enter on any text field submits the
   owning form.
 - Forms are rebuilt from the DOM on every page load via
@@ -249,7 +268,19 @@ to page scripts include:
   via a "B" button that navigates to `vfs://bookmarks` (served inline
   from `nav::bookmarks_page_html()`).
 - Back / Forward / Home / Bookmark buttons, 28 px tall chrome, 14 px
-  labels vertically centered.
+  labels vertically centered. There is no Reload button; reload is a
+  key (below) or `browse reload`.
+- `vfs://history` serves the history page like `vfs://bookmarks`
+  (titles and URLs HTML-escaped).
+- Keyboard (`BrowserWidget::handle_key`, delivered by the shell before
+  the key's gamepad twin): F5 / Ctrl+R reload (no new history entry),
+  Alt+Left / Alt+Right back / forward, Ctrl+L / F6 focus the URL bar,
+  Page Up / Page Down and Home / End scroll while nothing is being
+  typed. Escape (Cancel) discards a URL-bar edit or leaves a focused
+  text field; otherwise the shell closes the browser window.
+- The shell titles the window `<page title> - Browser` (following
+  `document.title`) and re-themes the chrome of an open browser on a
+  skin swap (`apply_chrome_theme`).
 - Reader mode, link navigation.
 
 ## Related docs

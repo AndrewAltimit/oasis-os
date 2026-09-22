@@ -94,6 +94,17 @@ pub fn launch_app_window(
     LaunchResult::Desktop
 }
 
+/// Title of the browser window: the page's `<title>` (or a
+/// `document.title` set by script) followed by the app name, or just the
+/// app name while no page title exists (the navigation controller
+/// falls back to the URL for untitled pages).
+pub fn browser_window_title(bw: &BrowserWidget) -> String {
+    match bw.title().map(str::trim) {
+        Some(t) if !t.is_empty() && Some(t) != bw.current_url() => format!("{t} - Browser"),
+        _ => "Browser".to_string(),
+    }
+}
+
 /// Launch an app as a floating window with `file_path` pre-loaded in its
 /// viewer. Used when File Manager hands off to Photo Viewer / Music Player
 /// / Text Editor on Confirm of a typed file.

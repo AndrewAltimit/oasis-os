@@ -29,8 +29,9 @@ const MAX_BODY_SIZE: usize = 8 * 1024 * 1024;
 /// unbounded header block before the `\r\n\r\n` terminator.
 const MAX_HEADER_SIZE: usize = 16_384;
 
-/// Maximum number of redirects to follow.
-const MAX_REDIRECTS: u8 = 5;
+/// Default maximum number of redirects to follow
+/// (`BrowserConfig::max_redirects` overrides it for page loads).
+pub const MAX_REDIRECTS: u8 = 5;
 
 /// TCP connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -206,7 +207,20 @@ pub fn http_request_full(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
-    http_request_inner(method, url, body, extra_headers, tls, None)
+    http_request_inner(method, url, body, extra_headers, tls, None, MAX_REDIRECTS)
+}
+
+/// Like [`http_request_full`] but follows at most `max_redirects`
+/// redirects (0 = none) before failing with "too many redirects".
+pub fn http_request_full_limited(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    max_redirects: u8,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(method, url, body, extra_headers, tls, None, max_redirects)
 }
 
 /// Policy hooks for [`http_request_guarded`].
@@ -234,7 +248,15 @@ pub fn http_request_guarded(
     tls: Option<&dyn TlsProvider>,
     guard: &RequestGuard<'_>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
-    http_request_inner(method, url, body, extra_headers, tls, Some(guard))
+    http_request_inner(
+        method,
+        url,
+        body,
+        extra_headers,
+        tls,
+        Some(guard),
+        MAX_REDIRECTS,
+    )
 }
 
 fn http_request_inner(
@@ -244,6 +266,7 @@ fn http_request_inner(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
     guard: Option<&RequestGuard<'_>>,
+    max_redirects: u8,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme == "https" && tls.is_none() {
         return Ok((https_error_page(url, url), Vec::new()));
@@ -260,8 +283,8 @@ fn http_request_inner(
     let mut current_method = method.to_string();
     let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
 
-    // The initial request plus up to MAX_REDIRECTS followed redirects.
-    for _ in 0..=MAX_REDIRECTS {
+    // The initial request plus up to `max_redirects` followed redirects.
+    for _ in 0..=max_redirects {
         let resp = do_request_with_method(
             &current_method,
             &current_url,

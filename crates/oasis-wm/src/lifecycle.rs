@@ -11,6 +11,27 @@ use super::manager::{CASCADE_OFFSET, WindowManager};
 use super::window::{Geometry, Window, WindowConfig, WindowId, WindowState};
 
 impl WindowManager {
+    /// Change a window's title (titlebar text and taskbar label).
+    /// Returns `false` if there is no such window; setting the current
+    /// title again is a no-op.
+    pub fn set_window_title(&mut self, id: &str, title: &str, sdi: &mut SdiRegistry) -> bool {
+        let Some(window) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return false;
+        };
+        if window.title != title {
+            window.title = title.to_string();
+            // A running open/minimize animation lays the window out from
+            // a copy every tick (which carries the new title); don't cut
+            // it short.
+            if !self.anim.is_animating(id)
+                && let Some(window) = self.windows.iter().find(|w| w.id == id)
+            {
+                self.layout_window_sdi(window, sdi);
+            }
+        }
+        true
+    }
+
     /// Create a new window and register its SDI objects.
     pub fn create_window(
         &mut self,

@@ -453,6 +453,11 @@ pub struct BrowserWidget {
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
 
+    /// `@import`ed stylesheet URLs already requested for the current
+    /// page (dedupes imports and bounds import chains and cycles).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    imported_stylesheet_urls: HashSet<String>,
+
     /// Set once any external stylesheet has arrived that was not yet
     /// applied to the cascade. A later `tick` call re-runs cascade +
     /// layout so the new styles land on-screen.
@@ -584,6 +589,13 @@ pub struct BrowserWidget {
     /// Rebuilt only when layout changes; replayed on each frame.
     display_list: paint::display_list::DisplayList,
 
+    /// Set when the display list was invalidated (navigation, restyle)
+    /// and not yet re-recorded by `paint`. Tracked separately from
+    /// `display_list.is_empty()`: a page that records no items at all
+    /// (an empty `<body>`, a page of blank space) has an empty list
+    /// after recording too, and must not keep requesting frames.
+    display_list_stale: bool,
+
     /// Scroll Y position at which the display list was last recorded.
     /// When scroll changes, we replay with adjusted offsets instead of
     /// rebuilding. A full rebuild is forced when layout changes.
@@ -710,6 +722,8 @@ impl BrowserWidget {
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_vfs_stylesheets: Vec::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            imported_stylesheet_urls: HashSet::new(),
             pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
             cached_selector_index: None,
@@ -752,6 +766,7 @@ impl BrowserWidget {
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),
             display_list: paint::display_list::DisplayList::new(),
+            display_list_stale: false,
             display_list_scroll_y: 0,
             display_list_scroll_x: 0,
             link_map_scroll_y: 0,
@@ -823,6 +838,25 @@ impl BrowserWidget {
         self.scroll.set_viewport_width(w as i32);
     }
 
+    /// Adopt the chrome colors of `themed` (a config built for a new
+    /// skin theme, [`BrowserConfig::from_skin_theme`]) while keeping this
+    /// session's features, zoom and limits. Hosts call it on a skin swap
+    /// so an open browser doesn't keep the previous skin's chrome.
+    pub fn apply_chrome_theme(&mut self, themed: &BrowserConfig) {
+        let c = &mut self.config;
+        c.chrome_bg = themed.chrome_bg;
+        c.chrome_text = themed.chrome_text;
+        c.chrome_button_bg = themed.chrome_button_bg;
+        c.chrome_button_hover = themed.chrome_button_hover;
+        c.url_bar_bg = themed.url_bar_bg;
+        c.url_bar_text = themed.url_bar_text;
+        c.status_bar_bg = themed.status_bar_bg;
+        c.status_bar_text = themed.status_bar_text;
+        c.default_link_color = themed.default_link_color;
+        c.use_themed_chrome = themed.use_themed_chrome;
+        self.full_repaint_needed = true;
+    }
+
     /// Returns whether the layout tree needs rebuilding.
     pub fn is_layout_dirty(&self) -> bool {
         self.layout_dirty
@@ -839,16 +873,15 @@ impl BrowserWidget {
     /// don't: `tick` keeps running them on elided frames, and one that
     /// fires marks the layout dirty.
     ///
-    /// An empty display list over a laid-out page is how a fresh
-    /// navigation shows up (`paint` re-records it); a page that records
-    /// no display items at all therefore keeps wanting frames — harmless
-    /// for correctness, just not elided.
+    /// A fresh navigation or restyle invalidates the display list;
+    /// the frame that re-records it is wanted, later ones are not (even
+    /// when the page records no display items at all).
     pub fn wants_frame(&self) -> bool {
         let repaint_pending = self.layout_dirty
             || self.full_repaint_needed
             || !self.dirty_rects.is_empty()
             || self.image_info_dirty
-            || (self.layout_root.is_some() && self.display_list.is_empty())
+            || (self.layout_root.is_some() && self.display_list_stale)
             // Scroll not yet painted (`paint` syncs the link-map offset
             // on every scroll replay or re-record).
             || self.link_map_scroll_y != self.scroll.scroll_y
@@ -863,7 +896,9 @@ impl BrowserWidget {
             || self.image_decode_in_flight > 0
             || !self.pending_io_stylesheets.is_empty()
             || !self.pending_vfs_stylesheets.is_empty();
-        let animating = self.animation_engine.has_active() || self.transition_engine.has_active();
+        let animating = self.animation_engine.has_active()
+            || self.transition_engine.has_active()
+            || self.scroll.is_animating();
         #[cfg(feature = "javascript")]
         let animating = animating || !self.deferred_scripts.is_empty();
         repaint_pending || loading || animating

@@ -677,11 +677,21 @@ impl Harness {
             .collect()
     }
 
-    /// The open window titled `title` (case-insensitive).
+    /// The open window titled `title` (case-insensitive), else the one
+    /// whose id is `title`.
     pub fn find_window(&self, title: &str) -> Option<WindowInfo> {
-        self.windows()
-            .into_iter()
-            .find(|w| w.title.eq_ignore_ascii_case(title))
+        // Windows whose title follows their content (the browser shows
+        // the page title) are still found by their id.
+        let windows = self.windows();
+        let by_title = windows
+            .iter()
+            .position(|w| w.title.eq_ignore_ascii_case(title));
+        let idx = by_title.or_else(|| {
+            windows
+                .iter()
+                .position(|w| w.id.eq_ignore_ascii_case(title))
+        });
+        idx.map(|i| windows[i].clone())
     }
 
     /// Click the close button of the window titled `title`. Returns

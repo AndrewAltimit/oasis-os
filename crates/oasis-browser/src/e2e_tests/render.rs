@@ -230,3 +230,70 @@ fn wheel_over_nested_scroll_container_scrolls_it_then_the_page() {
         "wheel bubbles to the page at the limit"
     );
 }
+
+/// `@import` inside a linked stylesheet used to be skipped entirely, so
+/// pages whose `<link>`ed sheet is an import shim rendered unstyled.
+#[test]
+fn linked_stylesheet_imports_are_followed_in_cascade_order() {
+    let css = |body: &'static str| {
+        Reply::with(
+            200,
+            &[("Content-Type", "text/css")],
+            body.as_bytes().to_vec(),
+        )
+    };
+    let server = TestServer::start(move |req| match req.path() {
+        "/" => Reply::html(
+            "<html><head><link rel=\"stylesheet\" href=\"/css/main.css\"></head><body>\
+             <p class=\"a\">HiddenByA</p><p class=\"c\">HiddenByNestedC</p>\
+             <p class=\"p\">NotHiddenByPrintImport</p>\
+             <p class=\"order\">MainOverridesImport</p></body></html>",
+        ),
+        "/css/main.css" => css(
+            "@charset \"utf-8\";\n/* shim */\n@import url(\"/css/a.css\");\n\
+             @import 'b.css' screen, projection;\n@import url(p.css) print;\n\
+             .order { display: block; }",
+        ),
+        "/css/a.css" => css(".a { display: none; } .order { display: none; }"),
+        "/css/b.css" => css("@import url(c.css);\n@import url(main.css);"),
+        "/css/c.css" => css(".c { display: none; }"),
+        "/css/p.css" => css(".p { display: none; }"),
+        _ => Reply::not_found(),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    assert!(!s.shows("HiddenByA"), "direct import applied");
+    assert!(
+        !s.shows("HiddenByNestedC"),
+        "nested import (resolved against b.css) applied"
+    );
+    s.assert_shows("NotHiddenByPrintImport");
+    s.assert_shows("MainOverridesImport");
+    assert!(
+        server.requests_to("/css/p.css").is_empty(),
+        "print-only import skipped"
+    );
+    // The cycle back to main.css is fetched at most once more.
+    assert!(server.requests_to("/css/main.css").len() <= 2);
+}
+
+#[test]
+fn css_import_url_scanner() {
+    use crate::widget::pipeline::css_import_urls;
+    let base = "http://h.test/css/main.css";
+    assert_eq!(
+        css_import_urls(
+            "@charset 'x';@import url( 'a.css' );@import \"/b.css\" screen;\
+             @import url(p.css) print; @import url(c.css); .r{} @import url(late.css);",
+            base
+        ),
+        vec![
+            "http://h.test/css/a.css".to_string(),
+            "http://h.test/b.css".to_string(),
+            "http://h.test/css/c.css".to_string(),
+        ]
+    );
+    assert!(css_import_urls("p { color: red }", base).is_empty());
+    assert!(css_import_urls("@import url(data:text/css,p{});", base).is_empty());
+    assert!(css_import_urls("@layer a { p {} } @import url(x.css);", base).is_empty());
+}

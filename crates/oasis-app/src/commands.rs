@@ -268,6 +268,9 @@ pub fn apply_skin_object(
         .with_features(&swapped.features);
     prefs.apply_font_scale(&mut state.active_theme);
     state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+    if let Some(ref mut bw) = state.content.browser {
+        bw.apply_chrome_theme(&state.browser_config);
+    }
     state.wm.set_theme(swapped.theme.build_wm_theme());
 
     // Component SDI objects (dashboard icons, status/bottom bar,
@@ -666,6 +669,9 @@ pub fn apply_resolution_change(
                 .with_features(&swapped.features);
             prefs.apply_font_scale(&mut state.active_theme);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+            if let Some(ref mut bw) = state.content.browser {
+                bw.apply_chrome_theme(&state.browser_config);
+            }
             state.wm.set_theme(swapped.theme.build_wm_theme());
             state.skin = swapped;
         },

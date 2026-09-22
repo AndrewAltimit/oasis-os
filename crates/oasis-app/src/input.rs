@@ -322,6 +322,14 @@ pub fn handle_desktop_input(
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
+            // Hover (links, status-bar URL, JS mouseover) and wheel
+            // routing to nested scroll containers need the pointer.
+            if !state.wm.is_dragging()
+                && state.wm.window_at(*x, *y) == Some("browser")
+                && let Some(ref mut bw) = state.content.browser
+            {
+                bw.handle_input(&InputEvent::CursorMove { x: *x, y: *y }, vfs);
+            }
         },
         InputEvent::PointerRelease { x, y } => {
             if icon_drag::active(state) {
@@ -364,6 +372,16 @@ pub fn handle_desktop_input(
                 {
                     let action = runner.handle_input(&Button::Cancel, vfs);
                     apply_window_action(action, active_id, state, sdi, vfs);
+                    return InputResult::Continue;
+                }
+                // While the user is typing in the browser (URL bar or a
+                // page text field), Cancel ends the typing instead of
+                // closing the window.
+                if active_id == "browser"
+                    && let Some(ref mut bw) = state.content.browser
+                    && bw.accepts_text()
+                {
+                    bw.handle_input(&InputEvent::ButtonPress(Button::Cancel), vfs);
                     return InputResult::Continue;
                 }
                 state.ui_sounds.push(UiSound::Close);
@@ -697,6 +715,16 @@ fn route_key(
             true
         },
         Mode::Desktop => {
+            // The browser takes its own keyboard shortcuts (reload,
+            // history, URL bar, paging); everything else reaches it as
+            // the legacy twin events.
+            if state.wm.active_window() == Some("browser") {
+                return state
+                    .content
+                    .browser
+                    .as_mut()
+                    .is_some_and(|bw| bw.handle_key(*key, mods, vfs));
+            }
             // The browser and terminal windows are not `App`s; they keep
             // using the legacy events.
             let Some(active_id) = state

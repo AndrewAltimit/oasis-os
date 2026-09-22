@@ -60,7 +60,7 @@ use crate::audio_out::ShellAudio;
 use crate::shell_backend::ShellBackend;
 use crate::{
     commands, frame_stats, icon_drag, input, launch, media_controller, radio_controller, render,
-    sysinfo, terminal_input, tv_controller, ui_sfx, user_prefs, vfs_setup, video_player,
+    sysinfo, terminal_input, tv_controller, ui_ipc, ui_sfx, user_prefs, vfs_setup, video_player,
 };
 
 /// After an input event, keep redrawing unconditionally for this long —
@@ -260,6 +260,8 @@ pub struct Shell<B: ShellBackend> {
     last_app_tick_at: Instant,
     tv_timeout_secs: Option<u64>,
     tv_timeout_start: Option<Instant>,
+    /// VFS path the next presented frame is saved to (`screenshot`).
+    pending_screenshot: Option<String>,
     #[cfg(feature = "skin-dev")]
     skin_watcher: crate::hot_reload::SkinWatcher,
 }
@@ -790,6 +792,7 @@ impl<B: ShellBackend> Shell<B> {
             last_app_tick_at: now,
             tv_timeout_secs,
             tv_timeout_start: None,
+            pending_screenshot: None,
             #[cfg(feature = "skin-dev")]
             skin_watcher: crate::hot_reload::SkinWatcher::new(),
         })
@@ -868,6 +871,11 @@ impl<B: ShellBackend> Shell<B> {
 
         // `wm` terminal command IPC (window list + close/focus/... requests).
         commands::poll_wm_ipc(state, sdi, vfs);
+
+        // `notify` / `screenshot` / `theme` / `browse` request files.
+        if let Some(path) = ui_ipc::poll(state, sdi, vfs) {
+            self.pending_screenshot = Some(path);
+        }
 
         // Run the next queued background terminal job (`cmd &`), if any.
         terminal_input::poll_jobs(state, sdi, vfs);
@@ -1014,9 +1022,12 @@ impl<B: ShellBackend> Shell<B> {
             transition::apply_assemble(sdi, &state.active_theme, trans);
         }
 
-        // Drive browser image streaming (progressive loading).
+        // Drive browser image streaming (progressive loading), and keep
+        // the window title in step with the page title.
         if let Some(ref mut bw) = state.content.browser {
             bw.tick(vfs);
+            let title = launch::browser_window_title(bw);
+            state.wm.set_window_title("browser", &title, sdi);
         }
 
         let (redraw, scene_changed) = self.needs_redraw(now);
@@ -1107,6 +1118,7 @@ impl<B: ShellBackend> Shell<B> {
             || shader_wants_frame
             || content_active
             || agent_active
+            || self.pending_screenshot.is_some()
             // Input drives derived UI (hover, drag, key repeat) for a few
             // frames past the event; window resize/expose arrive as events
             // too, so they land in the same grace window.
@@ -1263,6 +1275,13 @@ impl<B: ShellBackend> Shell<B> {
         // Assistant-activity overlay (agent connected/acting).
         #[cfg(feature = "mcp")]
         crate::mcp_tools::draw_agent_overlay(backend, &state.agent_activity, &state.active_theme)?;
+
+        // `screenshot`: capture the finished frame before presenting it.
+        if let Some(path) = self.pending_screenshot.take() {
+            let (w, h) = (state.active_theme.screen_w, state.active_theme.screen_h);
+            let pixels = backend.read_pixels(0, 0, w, h);
+            ui_ipc::save_screenshot(state, &mut self.vfs, &path, pixels, w, h);
+        }
 
         backend.swap_buffers()?;
         self.last_present_at = now;

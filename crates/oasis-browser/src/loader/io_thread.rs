@@ -12,6 +12,7 @@
 #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 mod inner {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
 
     use oasis_net::tls::TlsProvider;
@@ -53,6 +54,8 @@ mod inner {
         pub cache_validators: Option<(Option<String>, Option<String>)>,
         /// The resolved image URL key (only for `Image` kind).
         pub image_key: Option<String>,
+        /// Redirects to follow before failing.
+        pub max_redirects: u8,
     }
 
     /// A completed response from the I/O thread.
@@ -72,24 +75,34 @@ mod inner {
     /// The thread processes requests sequentially (not in parallel) to
     /// keep resource usage predictable.
     ///
-    /// On drop, the sender channel is closed and the worker thread is
-    /// joined. The worker owns an `Arc` clone of the `TlsProvider`, so the
-    /// provider can never be freed while the thread may still use it.
+    /// On drop, queued requests are abandoned and the sender channel is
+    /// closed. An idle worker is joined; a worker blocked in a request
+    /// (a slow or stalled server) is detached instead of stalling the
+    /// caller's thread — it exits as soon as that request returns. The
+    /// worker owns an `Arc` clone of the `TlsProvider`, so the provider
+    /// can never be freed while the thread may still use it.
     pub struct IoThread {
         tx: mpsc::Sender<IoWork>,
         rx: mpsc::Receiver<IoResult>,
         handle: Option<std::thread::JoinHandle<()>>,
         next_id: IoRequestId,
         in_flight: usize,
+        /// Set on drop: the worker stops before starting another request.
+        cancelled: Arc<AtomicBool>,
+        /// Redirect limit stamped on each request sent from now on.
+        max_redirects: u8,
     }
 
     impl Drop for IoThread {
         fn drop(&mut self) {
+            self.cancelled.store(true, Ordering::SeqCst);
             // Close the sender so the worker's `recv()` returns `Err`.
             // (Happens automatically when `tx` is dropped, but we drop
             // it explicitly here before joining for clarity.)
             drop(std::mem::replace(&mut self.tx, mpsc::channel().0));
-            if let Some(handle) = self.handle.take() {
+            if let Some(handle) = self.handle.take()
+                && (self.in_flight == 0 || handle.is_finished())
+            {
                 let _ = handle.join();
             }
         }
@@ -109,11 +122,13 @@ mod inner {
         ) -> std::io::Result<Self> {
             let (work_tx, work_rx) = mpsc::channel::<IoWork>();
             let (result_tx, result_rx) = mpsc::channel::<IoResult>();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = Arc::clone(&cancelled);
 
             let handle = std::thread::Builder::new()
                 .name("browser-io".into())
                 .spawn(move || {
-                    Self::worker_loop(work_rx, result_tx, tls, cookie_jar);
+                    Self::worker_loop(work_rx, result_tx, tls, cookie_jar, &worker_cancelled);
                 })?;
 
             Ok(IoThread {
@@ -122,7 +137,14 @@ mod inner {
                 handle: Some(handle),
                 next_id: 1,
                 in_flight: 0,
+                cancelled,
+                max_redirects: loader::http::MAX_REDIRECTS,
             })
+        }
+
+        /// Follow at most `n` redirects for requests sent from now on.
+        pub fn set_max_redirects(&mut self, n: u8) {
+            self.max_redirects = n;
         }
 
         /// Submit a request to the I/O thread. Returns the request ID.
@@ -141,6 +163,7 @@ mod inner {
                 request,
                 cache_validators,
                 image_key,
+                max_redirects: self.max_redirects,
             };
             // If the channel is disconnected the thread has panicked.
             // In that case we just drop the request (the caller will
@@ -180,8 +203,14 @@ mod inner {
             result_tx: mpsc::Sender<IoResult>,
             tls: Option<Arc<dyn TlsProvider>>,
             mut cookie_jar: CookieJar,
+            cancelled: &AtomicBool,
         ) {
             while let Ok(work) = work_rx.recv() {
+                // The owner is gone: drop the backlog (e.g. a closed
+                // browser's queued image fetches) instead of fetching it.
+                if cancelled.load(Ordering::SeqCst) {
+                    break;
+                }
                 let (loaded, cookie_updates) =
                     Self::execute_request(&work, tls.as_deref(), &mut cookie_jar);
 
@@ -256,12 +285,13 @@ mod inner {
 
             match url.scheme.as_str() {
                 "http" | "https" => {
-                    match loader::http::http_request_full(
+                    match loader::http::http_request_full_limited(
                         method,
                         &url,
                         request.body.as_deref(),
                         &extra_refs,
                         tls,
+                        work.max_redirects,
                     ) {
                         Ok((resp, headers)) => {
                             // Collect cookie updates to replay on main thread.
@@ -369,5 +399,72 @@ mod tests {
         // Joining the worker releases the last strong reference.
         drop(io);
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    /// Dropping the thread while a request is blocked on a stalled server
+    /// must not block the dropping (UI) thread until the request returns,
+    /// and the worker must exit once it does, skipping queued work.
+    #[test]
+    fn drop_with_request_in_flight_does_not_block() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        use super::IoRequestKind;
+        use crate::loader::{HttpMethod, ResourceRequest, ResourceSource};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut conns = Vec::new();
+            // Accept the first request, stall it, then answer it.
+            if let Ok((mut c, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = c.read(&mut buf);
+                let _ = accepted_tx.send(());
+                std::thread::sleep(Duration::from_millis(600));
+                use std::io::Write;
+                let _ = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                conns.push(c);
+            }
+            // Any further request would be the abandoned backlog.
+            listener.set_nonblocking(true).expect("nonblocking");
+            let deadline = Instant::now() + Duration::from_millis(800);
+            let mut extra = 0;
+            while Instant::now() < deadline {
+                if listener.accept().is_ok() {
+                    extra += 1;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            extra
+        });
+
+        let mut io = IoThread::spawn(None, CookieJar::new()).expect("spawn");
+        let req = |path: &str| ResourceRequest {
+            url: format!("http://127.0.0.1:{port}{path}"),
+            base_url: None,
+            source: ResourceSource::Network,
+            method: HttpMethod::Get,
+            body: None,
+            referrer: None,
+        };
+        io.send(IoRequestKind::PageLoad, req("/slow"), None, None);
+        for i in 0..5 {
+            io.send(IoRequestKind::Image, req(&format!("/img{i}")), None, None);
+        }
+        accepted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server saw the first request");
+        let start = Instant::now();
+        drop(io);
+        assert!(
+            start.elapsed() < Duration::from_millis(300),
+            "drop blocked for {:?}",
+            start.elapsed()
+        );
+        let extra = server.join().expect("server thread");
+        assert_eq!(extra, 0, "queued requests must be abandoned after drop");
     }
 }
