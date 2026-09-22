@@ -668,6 +668,8 @@ fn main() -> Result<()> {
     let mut last_scene_sig: Option<u64> = None;
     let mut last_input_at = std::time::Instant::now();
     let mut last_present_at = std::time::Instant::now();
+    // Wall clock for `App::tick` deltas (independent of drawn frames).
+    let mut last_app_tick_at = std::time::Instant::now();
     // Drops the gamepad-style twin of a key press already consumed as a
     // shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
     let mut key_filter = oasis_core::input::KeyTwinFilter::default();
@@ -755,6 +757,22 @@ fn main() -> Result<()> {
         }
         for (_, runner) in &mut state.content.open_runners {
             runner.apply_vfs_ops(&mut vfs);
+        }
+
+        // Advance time-driven app state (game loops, slideshows) by wall
+        // time, every iteration — elided frames included — so it runs at
+        // a fixed rate independent of FPS and input.
+        {
+            let now = std::time::Instant::now();
+            let dt_ms =
+                u32::try_from(now.duration_since(last_app_tick_at).as_millis()).unwrap_or(u32::MAX);
+            last_app_tick_at = now;
+            if let Some(ref mut runner) = state.content.app_runner {
+                runner.tick(dt_ms, &vfs);
+            }
+            for (_, runner) in &mut state.content.open_runners {
+                runner.tick(dt_ms, &vfs);
+            }
         }
 
         // Dispatch any Settings-app IPC requests (skin swap, resolution

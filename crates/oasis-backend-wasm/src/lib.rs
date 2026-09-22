@@ -408,7 +408,7 @@ impl OasisWasm {
     ///
     /// Call this from `requestAnimationFrame`. Processes input events,
     /// updates the scene graph, and renders to the canvas.
-    pub fn tick(&mut self, _delta_seconds: f32) {
+    pub fn tick(&mut self, delta_seconds: f32) {
         self.frame_counter += 1;
 
         // Update system info every ~60 frames (~1s at 60fps).
@@ -467,6 +467,17 @@ impl OasisWasm {
             }
             for (_, runner) in &mut self.open_runners {
                 runner.apply_vfs_ops(&mut self.vfs);
+            }
+
+            // Advance time-driven app state (game loops, slideshows) by
+            // the frame's wall time so it runs at a fixed rate
+            // independent of the display's refresh rate.
+            let dt_ms = (delta_seconds.max(0.0) * 1000.0).min(u32::MAX as f32) as u32;
+            if let Some(ref mut runner) = self.app_runner {
+                runner.tick(dt_ms, &self.vfs);
+            }
+            for (_, runner) in &mut self.open_runners {
+                runner.tick(dt_ms, &self.vfs);
             }
 
             // Drive the YouTube search fetcher and let the embed app

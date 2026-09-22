@@ -125,6 +125,33 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
+    /// Advance time-driven state by `dt_ms` milliseconds of wall time.
+    ///
+    /// Hosts call this once per frame for every open app (windowed or
+    /// fullscreen, focused or not), *including frames whose redraw is
+    /// elided*, so game loops, slideshows and timers run at a fixed
+    /// wall-clock rate independent of the frame rate and of input.
+    /// Apps should accumulate `dt_ms` rather than count calls.
+    ///
+    /// Return `true` when the tick changed anything this app draws; the
+    /// host then schedules a redraw of the app's window. Default is a
+    /// no-op returning `false`.
+    fn tick(&mut self, _dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+        false
+    }
+
+    /// Whether this app needs every frame drawn (continuous animation,
+    /// video, embedded content that repaints outside the app's control).
+    ///
+    /// Hosts with idle-frame elision skip redraws while nothing visible
+    /// changed; state changes caused by input, [`Self::tick`] returning
+    /// `true` or VFS operations are tracked by the host, so only content
+    /// that changes on its own every frame needs to return `true` here.
+    /// Default is `false`.
+    fn wants_frame(&self) -> bool {
+        false
+    }
+
     /// Content lines for the app (used by generic scroll/render logic).
     fn lines(&self) -> &[String];
 
