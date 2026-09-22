@@ -20,9 +20,13 @@ use super::streaming_buffer::StreamingInner;
 #[cfg(feature = "_video")]
 const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Maximum number of reconnect attempts on a stalled Range download.
+/// Maximum number of consecutive reconnect attempts on a Range download.
 #[cfg(feature = "_video")]
 const MAX_RECONNECTS: u32 = 5;
+
+/// Body bytes a connection must deliver before the reconnect budget resets.
+#[cfg(feature = "_video")]
+const RECONNECT_BUDGET_RESET_BYTES: u64 = 1024 * 1024;
 
 /// Download from a specific byte offset using HTTP Range request.
 /// Pushes data into the buffer starting at `start_offset`.
@@ -83,6 +87,7 @@ pub(crate) fn stream_download_range(
         }
 
         // Stream body with stall detection.
+        let connection_start = current_offset;
         log::info!(
             "TV: range body loop starting at {:.1}MB (reconnect {reconnects})",
             current_offset as f64 / (1024.0 * 1024.0),
@@ -102,23 +107,15 @@ pub(crate) fn stream_download_range(
                 return Ok(());
             }
             if buffer.should_throttle() {
-                // Don't reset stall timer during throttle -- if the decoder
-                // is truly stuck (not just slow), we need to detect the stall
-                // and reconnect rather than sleeping forever.
-                if last_data_time.elapsed() > STALL_TIMEOUT * 3 {
-                    log::warn!(
-                        "TV: stalled while throttling ({:.0}s no decoder progress), \
-                         forcing reconnect",
-                        last_data_time.elapsed().as_secs_f64(),
-                    );
-                    if reconnects >= MAX_RECONNECTS {
-                        buffer.set_error("stall during throttle, max reconnects exhausted".into());
-                        return Ok(());
-                    }
-                    reconnects += 1;
-                    drop(stream);
-                    continue 'outer;
-                }
+                // Throttled: the decoder is behind, which is normal -- 16 MB
+                // of lookahead is minutes of video.  Reconnecting can't help
+                // a slow (or stuck) decoder, and doing so after 9 s of
+                // throttle used to burn the whole reconnect budget within a
+                // few throttle cycles and then end the session with an
+                // error.  Just wait; cancellation is checked above, and if
+                // the server drops the idle connection the read below
+                // resumes from the frontier.
+                //
                 // Use condvar wait so the decoder can wake us immediately
                 // when it catches up, instead of fixed 100ms sleep.
                 let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -136,6 +133,27 @@ pub(crate) fn stream_download_range(
                 was_throttled = false;
             }
             match stream.read(&mut buf) {
+                Ok(0) if current_offset < total_size => {
+                    // Closed early (e.g. an idle connection dropped by the
+                    // server during a long throttle): resume, don't treat
+                    // the short body as the end of the file.
+                    if reconnects >= MAX_RECONNECTS {
+                        log::warn!(
+                            "TV: range body closed early at {:.1}MB, max reconnects exhausted",
+                            current_offset as f64 / (1024.0 * 1024.0),
+                        );
+                        break 'outer; // partial success
+                    }
+                    reconnects += 1;
+                    log::info!(
+                        "TV: range body closed early at {:.1}MB of {:.1}MB, \
+                         reconnect {reconnects}/{MAX_RECONNECTS}",
+                        current_offset as f64 / (1024.0 * 1024.0),
+                        total_size as f64 / (1024.0 * 1024.0),
+                    );
+                    drop(stream);
+                    continue 'outer;
+                },
                 Ok(0) => {
                     log::info!(
                         "TV: range body EOF at {:.1}MB (received {:.1}MB from {:.1}MB)",
@@ -158,6 +176,12 @@ pub(crate) fn stream_download_range(
                     buffer.push(&buf[..n]);
                     last_data_time = std::time::Instant::now();
                     wb_backoff_ms = 1; // reset backoff on data
+                    // A connection that delivered real data has recovered:
+                    // the reconnect budget is for consecutive failures, not
+                    // for the lifetime of a long episode.
+                    if current_offset - connection_start > RECONNECT_BUDGET_RESET_BYTES {
+                        reconnects = 0;
+                    }
                 },
                 Err(e) => {
                     if is_would_block(&e) {
