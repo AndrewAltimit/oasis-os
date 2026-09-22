@@ -23,3 +23,8 @@ env_logger = { workspace = true }
 
 [lints]
 workspace = true
+
+# Repo-level example (lives in /examples so all examples sit together).
+[[example]]
+name = "minimal_sdl"
+path = "../../examples/minimal_sdl.rs"

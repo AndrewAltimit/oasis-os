@@ -1,5 +1,16 @@
 # PSP Media Engine: Direct Programming Plan
 
+> **Archived -- superseded.** Programming the Media Engine directly (bypassing
+> `avcodec.prx`) turned out to be unnecessary: hardware H.264 decode works
+> through `sceMpeg` once `mpeg_vsh370.prx` is loaded and `sceMpegCreate` is
+> given the mode + DDR-top workspace (see
+> [psp-me-decode-next-steps.md](psp-me-decode-next-steps.md) and
+> [psp-architecture.md](../psp-architecture.md)). The Phase 1 firmware findings
+> remain useful; the ME reference docs
+> ([psp-me-driver-map.md](../psp-me-driver-map.md),
+> [psp-me-firmware-analysis.md](../psp-me-firmware-analysis.md),
+> [psp-me-rpc-api.md](../psp-me-rpc-api.md)) are still current.
+
 ## Context
 
 H.264 video decode via `sceVideocodec` and `sceMpeg` APIs is blocked on

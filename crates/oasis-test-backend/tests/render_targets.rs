@@ -1,7 +1,7 @@
 //! Ordering tests for `SdiRenderTarget` on `RecordingBackend`.
 //!
 //! PR2 of the compositor overhaul (see
-//! `docs/compositor-overhaul-plan.md`). The browser compositor emits a
+//! `docs/archive/compositor-overhaul-plan.md`). The browser compositor emits a
 //! canonical sequence of render-target commands per compositing layer.
 //! These tests lock that sequence down so regressions in the trait
 //! surface or in the recording backend are caught immediately.

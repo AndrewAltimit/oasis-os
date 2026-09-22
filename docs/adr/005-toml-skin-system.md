@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2025-02-12
-**Last reviewed:** 2026-05-03 — decision still current; skin counts in Context and Consequences updated below to match current `crates/oasis-skin/src/builtin/` and `skins/`.
+**Last reviewed:** 2026-09-22 — decision still current; skin counts in Context and Consequences updated below to match current `crates/oasis-skin/src/builtin/mod.rs` (`builtin_names()`) and `skins/`.
 
 ## Context
 
@@ -13,7 +13,7 @@ Requirements:
 - Hot-swappable at runtime (no recompilation)
 - Human-editable by non-programmers
 - Embeddable in the binary for built-in skins
-- Expressive enough for 15 distinct visual styles (the current built-in count)
+- Expressive enough for 17 distinct visual styles (the current built-in count)
 
 ## Decision
 
@@ -55,13 +55,16 @@ TOML at compile time.
 ## Consequences
 
 - `oasis-skin` crate owns parsing, resolution, and theme derivation.
-- 15 built-in skins ship today: `classic`, `corrupted`, `desktop`, `modern`,
+- 17 built-in skins ship today: `classic`, `corrupted`, `desktop`, `modern`,
   `xp`, `macos`, `gnome`, `retro-cga`, `balatro`, `paper`, `win95`,
-  `solarized`, `vaporwave`, `highcontrast`, `altimit`. Twelve of them
-  (`altimit`, `balatro`, `classic`, `gnome`, `highcontrast`, `macos`,
-  `paper`, `retro-cga`, `solarized`, `vaporwave`, `win95`, `xp`) also ship
-  as external TOML directories under `skins/` and demonstrate the
-  filesystem-loading path; the other three (`corrupted`, `desktop`,
-  `modern`) are built-in only via Rust constructors.
+  `solarized`, `vaporwave`, `highcontrast`, `altimit`, `psix-tribute`,
+  `psix-hifi`. Fourteen of them (every directory under `skins/`: `altimit`,
+  `balatro`, `classic`, `gnome`, `highcontrast`, `macos`, `paper`,
+  `psix-hifi`, `psix-tribute`, `retro-cga`, `solarized`, `vaporwave`,
+  `win95`, `xp`) also ship as external TOML directories and demonstrate the
+  filesystem-loading path; `oasis-skin`'s build script embeds them with
+  `include_str!` / `include_bytes!`. The other three (`corrupted`, `desktop`,
+  `modern`) are built-in only via Rust constructors. `psix-tribute` and
+  `psix-hifi` use manifest inheritance (`inherits = "classic"`).
 - The `ActiveTheme` struct provides runtime-mutable access to all derived colors.
 - Adding a new skin requires only TOML files -- no Rust code changes.

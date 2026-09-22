@@ -1,5 +1,12 @@
 # PSP H.264 Video Decode: sceMpeg + PSMF Implementation
 
+> **Archived -- superseded.** This plan (wrapping streams in PSMF / MPEG-PS
+> and feeding `sceMpegRingbufferPut`) was abandoned. PSP H.264 decode shipped
+> via the `sceMpeg` NAL-direct path with `mpeg_vsh370.prx`; see
+> [psp-architecture.md](../psp-architecture.md) and
+> [psp-me-decode-next-steps.md](psp-me-decode-next-steps.md). Kept as a
+> research record.
+
 ## Status
 
 **Phase 1 (complete):** Audio streaming works great. sceMpeg API fully initializes

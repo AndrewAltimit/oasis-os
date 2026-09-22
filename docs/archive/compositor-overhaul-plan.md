@@ -1,8 +1,17 @@
 # Compositor Overhaul — Design & Implementation Plan
 
+> **Archived -- shipped.** This design plan was implemented by the
+> `feat/browser-compositor-overhaul` epic: `mix-blend-mode`, `backdrop-filter`,
+> `filter`, `isolation`, `will-change` and `mask-*` now route through
+> `PushCompositingLayer` / `PopCompositingLayer` backed by `SdiRenderTarget`
+> (see the shipped-epics and follow-ups sections of
+> [browser-backlog.md](../browser-backlog.md)). Kept for design rationale; the
+> "Status: Draft" line below is historical. Current feature list:
+> [browser-engine.md](../browser-engine.md).
+
 **Status:** Draft (design doc, pre-implementation)
 **Tracking branch:** `feat/compositor-overhaul-plan`
-**Backlog item:** [`docs/browser-backlog.md` → "Epic: Compositor overhaul"](browser-backlog.md)
+**Backlog item:** [`docs/browser-backlog.md` → "Epic: Compositor overhaul"](../browser-backlog.md)
 **Effort estimate:** 2–3 weeks of focused work, split across ~6 PRs.
 
 ---

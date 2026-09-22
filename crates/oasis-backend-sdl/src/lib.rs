@@ -659,7 +659,7 @@ impl SdiBatch for SdlBackend {
 /// `ADD`, `MOD`, `MUL`. Anything CSS-specific (`Overlay`, `ColorDodge`,
 /// the non-separable HSL modes, …) falls back to plain alpha blending
 /// for the moment — documented as accepted degradation in
-/// `docs/compositor-overhaul-plan.md` §3.4 step 4. A CPU compositor
+/// `docs/archive/compositor-overhaul-plan.md` §3.4 step 4. A CPU compositor
 /// extension is queued for a follow-up PR.
 fn sdl_blend_for(mode: BlendMode) -> sdl3::render::BlendMode {
     use sdl3::render::BlendMode as Sdl;
