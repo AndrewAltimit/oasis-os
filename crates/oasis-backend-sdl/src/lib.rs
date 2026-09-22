@@ -9,7 +9,6 @@
 
 mod blitting;
 mod core_impl;
-mod font;
 mod glyph_cache;
 mod gradients;
 mod input;
