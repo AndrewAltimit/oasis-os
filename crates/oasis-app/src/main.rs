@@ -829,11 +829,12 @@ fn main() -> Result<()> {
 
         // -- Idle frame elision --
         // Skip clear/draw/present entirely when nothing on screen can
-        // have changed. The SDI dirty flag is over-approximate (per-frame
-        // update_sdi paths rewrite objects with identical values), so a
-        // tripped flag is confirmed against a full scene content
-        // signature before it costs a redraw. Everything that paints
-        // OUTSIDE the SDI scene graph gets an explicit condition below.
+        // have changed. The SDI dirty check re-hashes only objects touched
+        // this frame (identical rewrites don't count); a dirty frame is
+        // then confirmed against a full scene content signature, which
+        // also catches changes that cancel out against the last drawn
+        // frame. Everything that paints OUTSIDE the SDI scene graph gets
+        // an explicit condition below.
         // Bias: when in doubt, redraw — a wasted frame is cheap, a stale
         // frame is a bug.
         let scene_changed = if sdi.take_scene_dirty() {

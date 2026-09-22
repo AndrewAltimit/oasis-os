@@ -118,5 +118,52 @@ fn bench_dashboard_frame(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_dashboard_frame);
+/// The full per-frame Dashboard-mode SDI work the desktop main loop does:
+/// the hide passes for terminal/app objects (which run every frame while
+/// those modes are inactive), the dashboard sync, and the idle-frame
+/// elision dirty check. On an idle dashboard this should end with a clean
+/// scene and no signature hash.
+fn bench_dashboard_frame_full(c: &mut Criterion) {
+    use oasis_app_core::ContentState;
+    use oasis_core::apps::AppRunner;
+    use oasis_core::terminal_sdi;
+
+    let features = SkinFeatures::default();
+    let at = ActiveTheme::from_skin(&SkinTheme::default()).with_screen_size(800, 600);
+    let config = DashboardConfig::from_features(&features, &at);
+    let mut dash = DashboardState::new(config, make_apps(45));
+    let mut sdi = SdiRegistry::new();
+    let mut backend = NullBackend;
+
+    // Populate the terminal and app object pools the hide passes walk.
+    let lines: Vec<String> = (0..200).map(|i| format!("line {i}")).collect();
+    terminal_sdi::setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+    let mut content = ContentState::new("Files", "/apps/files");
+    content.lines = lines.clone();
+    oasis_app_core::render::render_content_sdi(&content, &mut sdi, &at);
+
+    let mut last_sig = None;
+    c.bench_function("dashboard_frame/steady_state_full", |b| {
+        b.iter(|| {
+            terminal_sdi::set_terminal_visible(&mut sdi, false);
+            AppRunner::hide_sdi(&mut sdi);
+            dash.tick_animation();
+            dash.update_sdi(&mut sdi, &at);
+            let changed = if sdi.take_scene_dirty() {
+                let sig = sdi.scene_signature();
+                let changed = last_sig != Some(sig);
+                last_sig = Some(sig);
+                changed
+            } else {
+                false
+            };
+            if changed {
+                sdi.draw_base_layer(&mut backend).unwrap();
+                sdi.draw_overlay_layer(&mut backend).unwrap();
+            }
+        });
+    });
+}
+
+criterion_group!(benches, bench_dashboard_frame, bench_dashboard_frame_full);
 criterion_main!(benches);

@@ -5,6 +5,7 @@
 //! objects in z-order and dispatches to the rendering backend.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::Deserialize;
 
@@ -13,6 +14,121 @@ use oasis_types::error::{OasisError, Result};
 use oasis_types::shadow::Shadow;
 
 use crate::object::SdiObject;
+
+/// FNV-1a hasher for the name index.
+///
+/// Object names are short ASCII keys (`term_line_12`, `dash_icon_3_label`)
+/// looked up many times per frame; SipHash's per-call setup and
+/// finalization dominate at that size. The index is not exposed to
+/// untrusted keys, so HashDoS resistance buys nothing here.
+#[derive(Debug, Clone, Copy)]
+pub struct FnvHasher(u64);
+
+impl Default for FnvHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for FnvHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = h;
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type NameIndex = HashMap<String, usize, BuildHasherDefault<FnvHasher>>;
+
+/// Word-at-a-time multiply/rotate hasher for per-object change detection.
+///
+/// Every step `h = (rotl(h, 5) ^ word) * K` (odd `K`) is a bijection of
+/// `h` for a fixed input word, so two object states that differ in exactly
+/// one hashed word — the common per-frame case (a moved x, a new text, a
+/// toggled flag) — are *guaranteed* to hash differently. It only compares
+/// an object against its own previous state (never used as a table key),
+/// so the weak low-bit distribution of this construction is irrelevant,
+/// and it is several times cheaper than SipHash on the ~30 small fields
+/// an object feeds it.
+#[derive(Debug, Clone, Copy, Default)]
+struct RenderHasher(u64);
+
+impl RenderHasher {
+    const K: u64 = 0xf135_7aea_2e62_a9c5;
+
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl Hasher for RenderHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, rest) = bytes.as_chunks::<8>();
+        for &w in words {
+            self.add(u64::from_le_bytes(w));
+        }
+        if !rest.is_empty() {
+            let mut w = [0u8; 8];
+            w[..rest.len()].copy_from_slice(rest);
+            // Tag the tail length so "ab" + "" and "a" + "b" differ.
+            self.add(u64::from_le_bytes(w) ^ ((rest.len() as u64) << 59));
+        }
+    }
+
+    fn write_u8(&mut self, i: u8) {
+        self.add(u64::from(i));
+    }
+
+    fn write_u16(&mut self, i: u16) {
+        self.add(u64::from(i));
+    }
+
+    fn write_u32(&mut self, i: u32) {
+        self.add(u64::from(i));
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Render-state hash of a single object (see [`SdiObject::hash_render_state`]).
+fn object_hash(obj: &SdiObject) -> u64 {
+    let mut h = RenderHasher::default();
+    hash_object_into(obj, &mut h);
+    h.finish()
+}
+
+/// Hash an object's render state into `h`.
+///
+/// Hidden objects contribute only their name and visibility: nothing else
+/// about them reaches the screen, so rewriting properties of a hidden
+/// object (the per-frame "hide pass" idiom) never registers as a change.
+fn hash_object_into<H: Hasher>(obj: &SdiObject, h: &mut H) {
+    use std::hash::Hash;
+    if obj.visible {
+        obj.hash_render_state(h);
+    } else {
+        obj.name.hash(h);
+        false.hash(h);
+    }
+}
 
 /// The SDI scene graph: a flat, named registry of blittable objects.
 ///
@@ -24,8 +140,8 @@ pub struct SdiRegistry {
     /// Dense object storage. A slot's handle is stable until an object is
     /// destroyed (`destroy` swap-removes and repairs the moved entry's index).
     objects: Vec<SdiObject>,
-    /// Object name -> slab handle.
-    index: HashMap<String, usize>,
+    /// Object name -> slab handle (FNV-hashed; see [`FnvHasher`]).
+    index: NameIndex,
     /// Monotonically increasing counter for assigning z-order to new objects.
     next_z: i32,
     /// Pre-sorted handles of non-overlay objects in z-order (ascending).
@@ -35,15 +151,20 @@ pub struct SdiRegistry {
     z_sorted_overlay: Vec<usize>,
     /// Whether the z-sorted lists need rebuilding before next draw.
     z_dirty: bool,
-    /// Whether the scene *may* have changed since the flag was last
-    /// cleared. Set by every mutating operation — including `get_mut`
-    /// and `create`, which hand out `&mut SdiObject` without knowing
-    /// whether the caller actually writes anything. That makes the flag
-    /// deliberately over-approximate ("possibly dirty"); callers that
-    /// want an exact answer combine it with [`Self::scene_signature`].
-    /// Cleared only by [`Self::take_scene_dirty`] /
-    /// [`Self::clear_scene_dirty`].
-    scene_dirty: bool,
+    /// Structural change (create/destroy/z renormalize) since the last
+    /// settle: the scene is definitely dirty and every per-object hash
+    /// must be recomputed.
+    structural_dirty: bool,
+    /// Explicit invalidation that no object property reflects (e.g. a
+    /// texture's pixels updated in place). Dirty without a rehash.
+    forced_dirty: bool,
+    /// Per-slot render-state hash as of the last settle
+    /// ([`Self::take_scene_dirty`] / [`Self::clear_scene_dirty`]).
+    settled_hash: Vec<u64>,
+    /// Per-slot "handed out through `get_mut` since the last settle".
+    touched_flag: Vec<bool>,
+    /// Slots with `touched_flag` set, so a settle rehashes only those.
+    touched: Vec<usize>,
 }
 
 impl SdiRegistry {
@@ -51,60 +172,111 @@ impl SdiRegistry {
     pub fn new() -> Self {
         Self {
             objects: Vec::new(),
-            index: HashMap::new(),
+            index: NameIndex::default(),
             next_z: 0,
             z_sorted_base: Vec::new(),
             z_sorted_overlay: Vec::new(),
             z_dirty: false,
             // Start dirty so a freshly built scene always draws once.
-            scene_dirty: true,
+            structural_dirty: true,
+            forced_dirty: false,
+            settled_hash: Vec::new(),
+            touched_flag: Vec::new(),
+            touched: Vec::new(),
         }
     }
 
-    /// Explicitly mark the scene as (possibly) changed.
+    /// Explicitly mark the scene as changed.
     ///
     /// Useful when something outside the registry invalidates rendered
     /// output (e.g. a texture's pixels were updated in place).
     pub fn mark_scene_dirty(&mut self) {
-        self.scene_dirty = true;
+        self.forced_dirty = true;
     }
 
-    /// Whether any mutating operation ran since the flag was last cleared.
+    /// Record that the object in `handle` may have been written.
+    fn touch(&mut self, handle: usize) {
+        // Slots past `touched_flag` were created since the last settle,
+        // which set `structural_dirty` (full rehash) — nothing to track.
+        if let Some(flag) = self.touched_flag.get_mut(handle)
+            && !*flag
+        {
+            *flag = true;
+            self.touched.push(handle);
+        }
+    }
+
+    /// Whether the scene changed since the last settle
+    /// ([`Self::take_scene_dirty`] / [`Self::clear_scene_dirty`]).
     ///
-    /// Over-approximate: `get_mut`/`create` set it even if the caller
-    /// ends up writing identical values. `false` however is a hard
-    /// guarantee that no object was touched through any accessor path.
+    /// Exact up to 64-bit hash collisions: objects handed out through
+    /// [`Self::get_mut`] are re-hashed and compared against their state
+    /// at the last settle, so per-frame update paths that rewrite
+    /// identical values (or edit hidden objects) do not count as a
+    /// change. Structural edits (create/destroy/z renormalization) and
+    /// [`Self::mark_scene_dirty`] always count.
     pub fn is_scene_dirty(&self) -> bool {
-        self.scene_dirty
+        self.structural_dirty
+            || self.forced_dirty
+            || self
+                .touched
+                .iter()
+                .any(|&h| object_hash(&self.objects[h]) != self.settled_hash[h])
     }
 
-    /// Return the dirty flag and clear it (call once per frame, after all
-    /// scene mutation for the frame is done).
+    /// Return whether the scene changed (see [`Self::is_scene_dirty`]) and
+    /// settle it (call once per frame, after all scene mutation for the
+    /// frame is done).
     pub fn take_scene_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.scene_dirty)
+        self.settle()
     }
 
-    /// Clear the dirty flag without reading it.
+    /// Settle the scene without reading the dirty state.
     pub fn clear_scene_dirty(&mut self) {
-        self.scene_dirty = false;
+        self.settle();
+    }
+
+    /// Re-baseline per-object hashes; returns whether anything changed.
+    ///
+    /// Cost is proportional to the number of objects touched since the
+    /// last settle (or the whole scene after a structural change).
+    fn settle(&mut self) -> bool {
+        let mut dirty = std::mem::take(&mut self.forced_dirty);
+        if std::mem::take(&mut self.structural_dirty) {
+            self.settled_hash.clear();
+            self.settled_hash
+                .extend(self.objects.iter().map(object_hash));
+            self.touched_flag.clear();
+            self.touched_flag.resize(self.objects.len(), false);
+            self.touched.clear();
+            return true;
+        }
+        for h in self.touched.drain(..) {
+            self.touched_flag[h] = false;
+            let new = object_hash(&self.objects[h]);
+            if new != self.settled_hash[h] {
+                self.settled_hash[h] = new;
+                dirty = true;
+            }
+        }
+        dirty
     }
 
     /// Hash of every render-relevant property of every object.
     ///
     /// Two calls return the same value iff the scene would rasterize
     /// identically (modulo the astronomically unlikely 64-bit hash
-    /// collision). Used to confirm an over-approximate
-    /// [`Self::is_scene_dirty`] before spending a redraw: per-frame UI
-    /// update paths rewrite objects with unchanged values, which trips
-    /// the flag but not the signature.
+    /// collision). Hidden objects contribute only name + visibility.
+    /// [`Self::is_scene_dirty`] is already exact for property rewrites;
+    /// the signature additionally catches frames whose changes cancel
+    /// out against an older frame (e.g. a popup shown and hidden again).
     pub fn scene_signature(&self) -> u64 {
-        use std::hash::Hasher;
         let mut h = std::hash::DefaultHasher::new();
         // Slab order is deterministic between mutations; it only changes
         // through create/destroy, which legitimately change the hash
         // anyway (object count / names differ).
         for obj in &self.objects {
-            obj.hash_render_state(&mut h);
+            hash_object_into(obj, &mut h);
         }
         h.finish()
     }
@@ -123,7 +295,7 @@ impl SdiRegistry {
         obj.z = self.next_z;
         self.next_z += 1;
         self.z_dirty = true;
-        self.scene_dirty = true;
+        self.structural_dirty = true;
 
         let handle = match self.index.get(&name) {
             Some(&h) => {
@@ -150,18 +322,71 @@ impl SdiRegistry {
 
     /// Get a mutable reference to an object by name.
     ///
-    /// Conservatively marks the scene dirty: the returned `&mut` lets the
-    /// caller change any render property, so the registry must assume it
-    /// did. Callers that only *read* through this path cost a signature
-    /// check, never a stale frame.
+    /// Records the object as *touched*: the next dirty check re-hashes it
+    /// and compares against its last settled state, so writing identical
+    /// values costs one hash, never a redraw. For single-field updates
+    /// prefer the change-detecting setters ([`Self::set_visible`],
+    /// [`Self::set_text`], [`Self::set_position`]), which skip even that.
     pub fn get_mut(&mut self, name: &str) -> Result<&mut SdiObject> {
         match self.index.get(name) {
             Some(&h) => {
-                self.scene_dirty = true;
+                self.touch(h);
                 Ok(&mut self.objects[h])
             },
             None => Err(OasisError::Sdi(format!("object not found: {name}").into())),
         }
+    }
+
+    /// Set an object's visibility, touching it only on a real change.
+    ///
+    /// Returns `true` if the object exists and its visibility changed.
+    /// Missing objects are ignored (`false`), matching the
+    /// `if let Ok(obj) = sdi.get_mut(..)` idiom this replaces.
+    pub fn set_visible(&mut self, name: &str, visible: bool) -> bool {
+        let Some(&h) = self.index.get(name) else {
+            return false;
+        };
+        if self.objects[h].visible == visible {
+            return false;
+        }
+        self.touch(h);
+        self.objects[h].visible = visible;
+        true
+    }
+
+    /// Set an object's text, touching it (and allocating) only on a real
+    /// change. Returns `true` if the object exists and its text changed.
+    pub fn set_text(&mut self, name: &str, text: Option<&str>) -> bool {
+        let Some(&h) = self.index.get(name) else {
+            return false;
+        };
+        if self.objects[h].text.as_deref() == text {
+            return false;
+        }
+        self.touch(h);
+        let obj = &mut self.objects[h];
+        match text {
+            Some(t) => obj.set_text(t),
+            None => obj.text = None,
+        }
+        true
+    }
+
+    /// Set an object's position, touching it only on a real change.
+    /// Returns `true` if the object exists and moved.
+    pub fn set_position(&mut self, name: &str, x: i32, y: i32) -> bool {
+        let Some(&h) = self.index.get(name) else {
+            return false;
+        };
+        let obj = &self.objects[h];
+        if obj.x == x && obj.y == y {
+            return false;
+        }
+        self.touch(h);
+        let obj = &mut self.objects[h];
+        obj.x = x;
+        obj.y = y;
+        true
     }
 
     /// Remove an object from the registry.
@@ -177,7 +402,7 @@ impl SdiRegistry {
             self.index.insert(moved.name.clone(), handle);
         }
         self.z_dirty = true;
-        self.scene_dirty = true;
+        self.structural_dirty = true;
         Ok(())
     }
 
@@ -310,7 +535,7 @@ impl SdiRegistry {
         }
         self.next_z = handles.len() as i32;
         self.z_dirty = true;
-        self.scene_dirty = true;
+        self.structural_dirty = true;
     }
 
     /// Sort key for an object handle: z first, then name for a stable tiebreak.
@@ -913,14 +1138,132 @@ font_size = 16
     }
 
     #[test]
-    fn get_mut_sets_dirty_conservatively() {
+    fn get_mut_without_change_is_not_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj").set_text("hi");
+        reg.clear_scene_dirty();
+        // get_mut hands out &mut, but the dirty check re-hashes touched
+        // objects: rewriting identical values is not a change.
+        let obj = reg.get_mut("obj").unwrap();
+        obj.x = 0;
+        obj.set_text("hi");
+        assert!(!reg.is_scene_dirty());
+        assert!(!reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn get_mut_with_change_is_dirty() {
         let mut reg = SdiRegistry::new();
         reg.create("obj");
         reg.clear_scene_dirty();
-        // Even a read through get_mut marks dirty — the registry cannot
-        // know whether the caller writes through the returned &mut.
-        let _ = reg.get_mut("obj").unwrap();
+        reg.get_mut("obj").unwrap().x = 5;
         assert!(reg.is_scene_dirty());
+        assert!(reg.take_scene_dirty());
+        // Settled: the new state is the baseline now.
+        assert!(!reg.is_scene_dirty());
+        reg.get_mut("obj").unwrap().x = 5;
+        assert!(!reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn change_reverted_before_check_is_not_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        reg.get_mut("obj").unwrap().x = 9;
+        reg.get_mut("obj").unwrap().x = 0;
+        assert!(!reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn hidden_object_edits_are_not_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj").visible = false;
+        reg.clear_scene_dirty();
+        let obj = reg.get_mut("obj").unwrap();
+        obj.x = 40;
+        obj.set_text("invisible");
+        assert!(!reg.take_scene_dirty(), "hidden objects never reach pixels");
+        // Showing it is a change, and reflects the edited properties.
+        reg.get_mut("obj").unwrap().visible = true;
+        assert!(reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn mark_scene_dirty_forces_dirty() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        reg.mark_scene_dirty();
+        assert!(reg.is_scene_dirty());
+        assert!(reg.take_scene_dirty());
+        assert!(!reg.is_scene_dirty());
+    }
+
+    #[test]
+    fn touched_objects_survive_destroy_of_others() {
+        let mut reg = SdiRegistry::new();
+        reg.create("a");
+        reg.create("b");
+        reg.create("c");
+        reg.clear_scene_dirty();
+        // Touch the last slot, then destroy an earlier one: the swap
+        // moves "c" into a new slot. The structural change forces a full
+        // re-baseline, after which tracking continues correctly.
+        reg.get_mut("c").unwrap().x = 1;
+        reg.destroy("a").unwrap();
+        assert!(reg.take_scene_dirty());
+        assert!(!reg.is_scene_dirty());
+        reg.get_mut("c").unwrap().x = 2;
+        assert!(reg.take_scene_dirty());
+        reg.get_mut("b").unwrap().x = 0;
+        assert!(!reg.take_scene_dirty());
+    }
+
+    #[test]
+    fn set_visible_only_dirties_on_change() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj");
+        reg.clear_scene_dirty();
+        assert!(!reg.set_visible("obj", true), "already visible");
+        assert!(!reg.is_scene_dirty());
+        assert!(reg.set_visible("obj", false));
+        assert!(!reg.get("obj").unwrap().visible);
+        assert!(reg.take_scene_dirty());
+        assert!(!reg.set_visible("obj", false));
+        assert!(!reg.take_scene_dirty());
+        assert!(!reg.set_visible("missing", false));
+    }
+
+    #[test]
+    fn set_text_and_position_only_dirty_on_change() {
+        let mut reg = SdiRegistry::new();
+        reg.create("obj").set_text("a");
+        reg.clear_scene_dirty();
+        assert!(!reg.set_text("obj", Some("a")));
+        assert!(!reg.set_position("obj", 0, 0));
+        assert!(!reg.is_scene_dirty());
+        assert!(reg.set_text("obj", Some("b")));
+        assert!(reg.set_position("obj", 3, 4));
+        let obj = reg.get("obj").unwrap();
+        assert_eq!(obj.text.as_deref(), Some("b"));
+        assert_eq!((obj.x, obj.y), (3, 4));
+        assert!(reg.take_scene_dirty());
+        assert!(reg.set_text("obj", None));
+        assert!(reg.get("obj").unwrap().text.is_none());
+        assert!(!reg.set_text("missing", Some("x")));
+    }
+
+    #[test]
+    fn fnv_index_lookups_after_many_inserts() {
+        let mut reg = SdiRegistry::new();
+        for i in 0..500 {
+            reg.create(format!("term_line_{i}"));
+        }
+        for i in 0..500 {
+            assert!(reg.contains(&format!("term_line_{i}")));
+        }
+        assert!(!reg.contains("term_line_500"));
     }
 
     #[test]
@@ -990,16 +1333,17 @@ font_size = 16
     #[test]
     fn scene_signature_stable_for_identical_rewrites() {
         // The per-frame UI update pattern: get_mut + write the same
-        // values. The flag trips but the signature must not change.
+        // values. Neither the dirty check nor the signature changes.
         let mut reg = SdiRegistry::new();
         let obj = reg.create("bar");
         obj.x = 3;
         obj.text = Some("12:00".into());
         let sig1 = reg.scene_signature();
+        assert!(reg.take_scene_dirty(), "creation is a change");
         let obj = reg.get_mut("bar").unwrap();
         obj.x = 3;
         obj.set_text("12:00");
-        assert!(reg.take_scene_dirty());
+        assert!(!reg.take_scene_dirty());
         assert_eq!(reg.scene_signature(), sig1);
     }
 
@@ -1013,6 +1357,12 @@ font_size = 16
         let sig2 = reg.scene_signature();
         reg.get_mut("bar").unwrap().visible = false;
         assert_ne!(reg.scene_signature(), sig2, "visibility must re-hash");
+        // Hidden objects hash as name + visibility only: edits to them
+        // are invisible until they are shown again.
+        let hidden = reg.scene_signature();
+        reg.get_mut("bar").unwrap().x += 1;
+        assert_eq!(reg.scene_signature(), hidden, "hidden edits never paint");
+        reg.get_mut("bar").unwrap().visible = true;
         let sig3 = reg.scene_signature();
         reg.get_mut("bar").unwrap().x += 1;
         assert_ne!(reg.scene_signature(), sig3, "position must re-hash");

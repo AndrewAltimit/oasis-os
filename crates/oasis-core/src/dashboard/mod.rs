@@ -659,6 +659,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn idle_dashboard_frames_leave_scene_clean() {
+        // The Dashboard-mode per-frame SDI pass: hide inactive-mode pools,
+        // then sync the dashboard. Once the first frame has built the
+        // scene, an idle frame must not report a change (idle-frame
+        // elision depends on it).
+        let at = ActiveTheme::default();
+        let mut dash = DashboardState::new(test_config(), test_apps(6));
+        let mut sdi = SdiRegistry::new();
+        let lines: Vec<String> = (0..30).map(|i| format!("line {i}")).collect();
+        crate::terminal_sdi::setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+        let frame = |dash: &mut DashboardState, sdi: &mut SdiRegistry| {
+            crate::terminal_sdi::set_terminal_visible(sdi, false);
+            crate::apps::AppRunner::hide_sdi(sdi);
+            dash.tick_animation();
+            dash.update_sdi(sdi, &at);
+        };
+        frame(&mut dash, &mut sdi);
+        assert!(sdi.take_scene_dirty(), "first frame builds the scene");
+        frame(&mut dash, &mut sdi);
+        assert!(!sdi.take_scene_dirty(), "idle frame 2 must be clean");
+        frame(&mut dash, &mut sdi);
+        assert!(!sdi.is_scene_dirty(), "idle frame 3 must be clean");
+        // A real change still registers.
+        dash.next_page();
+        frame(&mut dash, &mut sdi);
+        assert!(sdi.is_scene_dirty(), "page change must redraw");
+    }
+
+    #[test]
     fn page_count_single() {
         let dash = DashboardState::new(test_config(), test_apps(3));
         assert_eq!(dash.page_count(), 1);
