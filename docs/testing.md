@@ -137,7 +137,10 @@ Observation
   checks the guide's `volume` *and* the samples that reached
   `RecordingAudio`; the splash test checks pixels.
 - **Keep scenarios hermetic.** No network, no files outside a temp dir,
-  no environment variables (tests run in parallel threads).
+  no environment variables (tests run in parallel threads). The one
+  exception is loopback: `tests/e2e_remote.rs` starts the remote terminal,
+  FTP and MCP servers from the shell terminal and drives them with real
+  `127.0.0.1` clients, stepping the harness between non-blocking reads.
 - **Per-skin loops** (`builtin_names()`) catch skin-specific layout and
   feature-flag breakage cheaply: a boot is ~0.1 s, a settled frame a few ms
   (debug build).
