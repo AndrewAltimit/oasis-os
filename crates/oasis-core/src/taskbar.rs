@@ -265,9 +265,11 @@ impl Taskbar {
                 obj.overlay = true;
             }
 
-            // Button text (truncated to fit).
+            // Button text: built-in app titles in the active locale,
+            // truncated to fit.
             let max_text_w = btn_w - BUTTON_PAD * 2;
-            let label = truncate_title(&win.title, font, max_text_w);
+            let title = oasis_i18n::translate_app_title(&win.title);
+            let label = truncate_title(title, font, max_text_w);
             ensure_text(
                 sdi,
                 &names.text,

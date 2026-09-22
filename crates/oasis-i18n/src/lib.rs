@@ -281,6 +281,41 @@ pub fn translate_with(key: &str, args: &[(&str, &str)]) -> String {
     translate_with_for(key, args, get_locale())
 }
 
+/// Translation key for a built-in app's (English) display title, if known.
+#[must_use]
+pub fn app_title_key(title: &str) -> Option<&'static str> {
+    Some(match title {
+        "Dashboard" => "app.dashboard",
+        "Browser" => "app.browser",
+        "Terminal" => "app.terminal",
+        "Settings" => "app.settings",
+        "Games" => "app.games",
+        "Music Player" => "app.music_player",
+        "Photo Viewer" => "app.photo_viewer",
+        "Text Editor" => "app.text_editor",
+        "Calculator" => "app.calculator",
+        "Paint" => "app.paint",
+        "Clock" => "app.clock",
+        "TV Guide" => "app.tv_guide",
+        "Radio" | "Internet Radio" => "app.radio",
+        "File Manager" => "app.file_manager",
+        "Network" => "app.network",
+        "System Monitor" => "app.system_monitor",
+        "Package Manager" => "app.package_manager",
+        _ => return None,
+    })
+}
+
+/// Localized display title for a built-in app in the current locale;
+/// unknown titles (plugins, documents) are returned unchanged.
+#[must_use]
+pub fn translate_app_title(title: &str) -> &str {
+    match app_title_key(title) {
+        Some(key) => translate(key),
+        None => title,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Font coverage / UI locale selection
 // ---------------------------------------------------------------------------
@@ -612,6 +647,102 @@ mod tests {
 
         let ko = translate_with_for("greeting.hello", &[("name", "세계")], Locale::Korean);
         assert_eq!(ko, "안녕하세요, 세계!");
+    }
+
+    #[test]
+    fn test_no_locale_has_keys_missing_from_english() {
+        let catalog = &*CATALOG;
+        let en_map = catalog.locales.get(&Locale::English).expect("en catalog");
+        for locale in Locale::all() {
+            let map = catalog.locales.get(locale).expect("catalog");
+            for key in map.keys() {
+                assert!(
+                    en_map.contains_key(key),
+                    "locale {} has key {key} that en.toml lacks",
+                    locale.code()
+                );
+            }
+        }
+    }
+
+    /// `{placeholder}` names in a template, sorted.
+    fn placeholders(s: &str) -> Vec<&str> {
+        let mut out: Vec<&str> = s
+            .split('{')
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn test_translations_keep_placeholders() {
+        let catalog = &*CATALOG;
+        let en_map = catalog.locales.get(&Locale::English).expect("en catalog");
+        for locale in Locale::all() {
+            let map = catalog.locales.get(locale).expect("catalog");
+            for (key, en_value) in en_map {
+                if let Some(value) = map.get(key) {
+                    assert_eq!(
+                        placeholders(value),
+                        placeholders(en_value),
+                        "locale {} key {key}: placeholders differ",
+                        locale.code()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bitmap_font_coverage() {
+        // Latin-script locales must be fully drawable by the built-in
+        // bitmap font (Latin-1 table) -- a missing glyph here means a
+        // translation used a character outside it (e.g. U+0153 'oe').
+        for locale in [
+            Locale::English,
+            Locale::Spanish,
+            Locale::German,
+            Locale::French,
+        ] {
+            let missing = missing_glyphs(locale, oasis_types::bitmap_font::has_glyph);
+            assert!(
+                missing.is_empty(),
+                "{} not drawable by the bitmap font: {missing:?}",
+                locale.code()
+            );
+            assert!(bitmap_font_supports(locale));
+            assert_eq!(ui_locale_for(locale), locale);
+        }
+        // CJK scripts are not in the 8x8 font: the UI falls back to English.
+        for locale in [Locale::Japanese, Locale::Chinese, Locale::Korean] {
+            assert!(!bitmap_font_supports(locale));
+            assert_eq!(ui_locale_for(locale), Locale::English);
+        }
+    }
+
+    #[test]
+    fn test_app_title_translation() {
+        assert_eq!(app_title_key("File Manager"), Some("app.file_manager"));
+        assert_eq!(app_title_key("Internet Radio"), Some("app.radio"));
+        assert_eq!(app_title_key("My Plugin"), None);
+        assert_eq!(
+            translate_for("app.file_manager", Locale::German),
+            "Dateimanager"
+        );
+    }
+
+    #[test]
+    fn test_shell_and_date_keys() {
+        assert_eq!(translate_for("shell.tab_audio", Locale::English), "AUDIO");
+        assert_eq!(translate_for("date.month_3", Locale::German), "März");
+        let fr = translate_with_for(
+            "date.format",
+            &[("month", "mai"), ("day", "4"), ("year", "2026")],
+            Locale::French,
+        );
+        assert_eq!(fr, "4 mai 2026");
     }
 
     #[test]

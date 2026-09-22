@@ -16,20 +16,20 @@ use crate::sdi::helpers::{
 };
 use crate::theme;
 
-/// Month names for date display (matches statusbar formatting).
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+/// Translation keys of the month names for date display (`date.month_N`).
+const MONTH_KEYS: [&str; 12] = [
+    "date.month_1",
+    "date.month_2",
+    "date.month_3",
+    "date.month_4",
+    "date.month_5",
+    "date.month_6",
+    "date.month_7",
+    "date.month_8",
+    "date.month_9",
+    "date.month_10",
+    "date.month_11",
+    "date.month_12",
 ];
 
 /// Pre-built SDI object names (D7: avoids per-frame `format!` allocations).
@@ -140,14 +140,14 @@ impl MediaTab {
         }
     }
 
-    /// Display label for the tab.
+    /// Display label for the tab, in the active locale.
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "",
-            Self::Audio => "AUDIO",
-            Self::Video => "VIDEO",
-            Self::Image => "IMAGE",
-            Self::File => "FILE",
+            Self::Audio => oasis_i18n::tr!("shell.tab_audio"),
+            Self::Video => oasis_i18n::tr!("shell.tab_video"),
+            Self::Image => oasis_i18n::tr!("shell.tab_image"),
+            Self::File => oasis_i18n::tr!("shell.tab_file"),
         }
     }
 
@@ -205,11 +205,17 @@ impl BottomBar {
         if let Some(t) = time {
             self.clock_text = format!("{:02}:{:02}", t.hour, t.minute);
             let month_name = if t.month >= 1 && t.month <= 12 {
-                MONTHS[(t.month - 1) as usize]
+                oasis_i18n::tr!(MONTH_KEYS[(t.month - 1) as usize])
             } else {
                 "???"
             };
-            self.date_text = format!("{month_name} {}, {}", t.day, t.year);
+            // Locale-specific order, e.g. "May 4, 2026" / "4. Mai 2026".
+            self.date_text = oasis_i18n::tr!(
+                "date.format",
+                month = month_name,
+                day = t.day,
+                year = t.year,
+            );
             self.clock_display = format!("{} {}", self.date_text, self.clock_text);
         }
     }

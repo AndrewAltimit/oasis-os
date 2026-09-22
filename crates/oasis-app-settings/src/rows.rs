@@ -75,7 +75,8 @@ impl Row {
                 )
             },
             Row::Toggle { label, on, .. } => {
-                let state = if *on { "ON" } else { "OFF" };
+                let key = if *on { "ui.on" } else { "ui.off" };
+                let state = oasis_i18n::tr!(key).to_uppercase();
                 format!("   {label}: [{state}]")
             },
         }

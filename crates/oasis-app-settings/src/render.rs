@@ -5,6 +5,7 @@
 //! agree; colors come from [`SettingsColors`] (theme + `[app_themes.settings]`
 //! overrides) and widget styling from the active theme's `ui_theme`.
 
+use oasis_i18n::tr;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_ui::slider::Slider;
@@ -97,14 +98,11 @@ impl SettingsApp {
         }
 
         // Scroll indicator + footer hint.
+        let keys = tr!("settings.footer_hint");
         let hint = if rows.len() > visible {
-            format!(
-                "[{}/{}]  L/R=Category  U/D=Select  Enter=Apply  Esc=Back",
-                scroll + 1,
-                rows.len() - visible + 1
-            )
+            format!("[{}/{}]  {keys}", scroll + 1, rows.len() - visible + 1)
         } else {
-            "L/R=Category  U/D=Select  Enter=Apply  Esc=Back".to_string()
+            keys.to_string()
         };
         let hint = fit(backend, &hint, at.font_hint, l.footer.w);
         backend.draw_text(

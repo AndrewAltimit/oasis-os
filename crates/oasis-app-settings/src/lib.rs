@@ -11,7 +11,7 @@ use std::cell::Cell;
 
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
-use oasis_i18n::Locale;
+use oasis_i18n::{Locale, tr};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
@@ -140,14 +140,14 @@ impl Category {
 
     fn label(self) -> &'static str {
         match self {
-            Category::Display => "Display",
-            Category::Appearance => "Appearance",
-            Category::Resolution => "Resolution",
-            Category::Audio => "Audio",
-            Category::Language => "Language",
-            Category::Accessibility => "Accessibility",
-            Category::System => "System",
-            Category::About => "About",
+            Category::Display => tr!("settings.cat_display"),
+            Category::Appearance => tr!("settings.cat_appearance"),
+            Category::Resolution => tr!("settings.cat_resolution"),
+            Category::Audio => tr!("settings.cat_audio"),
+            Category::Language => tr!("settings.cat_language"),
+            Category::Accessibility => tr!("settings.cat_accessibility"),
+            Category::System => tr!("settings.cat_system"),
+            Category::About => tr!("settings.cat_about"),
         }
     }
 
@@ -449,14 +449,14 @@ impl SettingsApp {
         lines.extend(self.rows().iter().map(Row::to_line));
         lines.push(sep);
         lines.push(String::new());
-        lines.push("  [L/R]=Category  [U/D]=Navigate".to_string());
-        lines.push("  [Confirm]=Apply  [Cancel]=Exit".to_string());
+        lines.push(format!("  {}", tr!("settings.nav_hint")));
+        lines.push(format!("  {}", tr!("settings.confirm_hint")));
         lines
     }
 
     /// Rows for the Display category.
     fn display_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Skin Selection".to_string()));
+        rows.push(Row::Heading(tr!("settings.skin_selection").to_string()));
         rows.push(Row::Blank);
         for (i, name) in builtin_names().iter().enumerate() {
             rows.push(Row::Item {
@@ -466,9 +466,10 @@ impl SettingsApp {
             });
         }
         rows.push(Row::Blank);
-        rows.push(Row::Text(format!(
-            "Resolution: {} x {}",
-            self.width, self.height
+        rows.push(Row::Text(tr!(
+            "settings.resolution_value",
+            width = self.width,
+            height = self.height,
         )));
     }
 
@@ -477,7 +478,7 @@ impl SettingsApp {
     /// Items are the 9 base colors followed by the action rows (Apply /
     /// Save / variants), with no gaps so `item_cursor` maps 1:1 to rows.
     fn appearance_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Appearance - Base Colors".to_string()));
+        rows.push(Row::Heading(tr!("settings.appearance_title").to_string()));
         rows.push(Row::Blank);
 
         for (i, label) in BASE_COLOR_LABELS.iter().enumerate() {
@@ -511,13 +512,16 @@ impl SettingsApp {
 
         let n = BASE_COLOR_LABELS.len();
         let mut actions = vec![
-            "[ Apply (preview) ]".to_string(),
-            format!("[ Save as '{}' ]", self.custom_skin_name()),
+            format!("[ {} ]", tr!("settings.apply_preview")),
+            format!(
+                "[ {} ]",
+                tr!("settings.save_as", name = self.custom_skin_name())
+            ),
         ];
         actions.extend(
             SkinVariant::ALL
                 .iter()
-                .map(|v| format!("[ Variant: {} ]", v.label())),
+                .map(|v| format!("[ {} ]", tr!("settings.variant", name = v.label()))),
         );
         for (i, label) in actions.into_iter().enumerate() {
             rows.push(Row::Item {
@@ -529,13 +533,11 @@ impl SettingsApp {
 
         rows.push(Row::Blank);
         if self.appearance.editing_channel.is_some() {
-            rows.push(Row::Text("[U/D]=Value  [L/R]=Channel".to_string()));
-            rows.push(Row::Text("[Confirm]=Done  [Cancel]=Revert".to_string()));
+            rows.push(Row::Text(tr!("settings.edit_hint_value").to_string()));
+            rows.push(Row::Text(tr!("settings.edit_hint_done").to_string()));
         } else {
-            rows.push(Row::Text("[Confirm]=Edit color / activate".to_string()));
-            rows.push(Row::Text(
-                "AA = passes WCAG contrast, low = below".to_string(),
-            ));
+            rows.push(Row::Text(tr!("settings.edit_hint").to_string()));
+            rows.push(Row::Text(tr!("settings.contrast_hint").to_string()));
         }
     }
 
@@ -674,7 +676,7 @@ impl SettingsApp {
 
     /// Rows for the Resolution category.
     fn resolution_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Virtual Resolution".to_string()));
+        rows.push(Row::Heading(tr!("settings.virtual_resolution").to_string()));
         rows.push(Row::Blank);
         for (i, (w, h)) in RESOLUTION_PRESETS.iter().enumerate() {
             rows.push(Row::Item {
@@ -684,32 +686,32 @@ impl SettingsApp {
             });
         }
         rows.push(Row::Blank);
-        rows.push(Row::Text("Window + layout resize live.".to_string()));
+        rows.push(Row::Text(tr!("settings.resolution_live").to_string()));
     }
 
     /// Rows for the Audio category.
     fn audio_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Audio Settings".to_string()));
+        rows.push(Row::Heading(tr!("settings.audio_title").to_string()));
         rows.push(Row::Blank);
         rows.push(Row::Slider {
             item: 0,
-            label: "Volume".to_string(),
+            label: tr!("system.volume").to_string(),
             value: self.volume as f32,
             min: 0.0,
             max: 100.0,
             value_text: format!("{}%", self.volume),
         });
         rows.push(Row::Blank);
-        rows.push(Row::Text("[U/D] or +/- = Adjust volume".to_string()));
+        rows.push(Row::Text(tr!("settings.volume_hint").to_string()));
         rows.push(Row::Blank);
-        rows.push(Row::Text("Audio Output:  Default".to_string()));
-        rows.push(Row::Text("Sample Rate:   44100 Hz".to_string()));
-        rows.push(Row::Text("Channels:      Stereo".to_string()));
+        rows.push(Row::Text(tr!("settings.audio_output").to_string()));
+        rows.push(Row::Text(tr!("settings.sample_rate").to_string()));
+        rows.push(Row::Text(tr!("settings.channels").to_string()));
     }
 
     /// Rows for the Language category.
     fn language_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Interface Language".to_string()));
+        rows.push(Row::Heading(tr!("settings.language_title").to_string()));
         rows.push(Row::Blank);
         for (i, locale) in Locale::all().iter().enumerate() {
             rows.push(Row::Item {
@@ -720,20 +722,20 @@ impl SettingsApp {
         }
         rows.push(Row::Blank);
         if !oasis_i18n::bitmap_font_supports(self.locale) {
-            rows.push(Row::Text(
-                "Font lacks these glyphs: UI stays English.".to_string(),
-            ));
+            rows.push(Row::Text(tr!("settings.language_fallback").to_string()));
         }
     }
 
     /// Rows for the Accessibility category.
     fn accessibility_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("Accessibility".to_string()));
+        rows.push(Row::Heading(
+            tr!("settings.accessibility_title").to_string(),
+        ));
         rows.push(Row::Blank);
         let (min, max) = font_scale_range();
         rows.push(Row::Slider {
             item: A11Y_FONT_SCALE,
-            label: "Font Scale".to_string(),
+            label: tr!("settings.font_scale").to_string(),
             value: self.font_scale,
             min,
             max,
@@ -741,23 +743,21 @@ impl SettingsApp {
         });
         rows.push(Row::Toggle {
             item: A11Y_HIGH_CONTRAST,
-            label: "High Contrast".to_string(),
+            label: tr!("settings.high_contrast").to_string(),
             on: self.high_contrast(),
         });
         rows.push(Row::Toggle {
             item: A11Y_REDUCED_MOTION,
-            label: "Reduced Motion".to_string(),
+            label: tr!("settings.reduced_motion").to_string(),
             on: self.reduced_motion,
         });
         rows.push(Row::Blank);
-        rows.push(Row::Text(
-            "[Confirm]=Change  [Square]/-=Smaller".to_string(),
-        ));
+        rows.push(Row::Text(tr!("settings.a11y_hint").to_string()));
     }
 
     /// Rows for the System category.
     fn system_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("System Information".to_string()));
+        rows.push(Row::Heading(tr!("settings.system_title").to_string()));
         rows.push(Row::Blank);
         rows.push(Row::Text(format!("Backend:       {}", self.backend_name)));
         rows.push(Row::Text(format!(
@@ -777,7 +777,7 @@ impl SettingsApp {
 
     /// Rows for the About category.
     fn about_rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Heading("About OASIS_OS".to_string()));
+        rows.push(Row::Heading(tr!("settings.about_title").to_string()));
         rows.push(Row::Blank);
         rows.push(Row::Text(format!(
             "Version:    {}",
@@ -1724,6 +1724,29 @@ mod tests {
         let lines = app.lines();
         assert!(lines.iter().any(|l| l.contains("MIT")));
         assert!(lines.iter().any(|l| l.contains("PSP")));
+    }
+
+    #[test]
+    fn ui_strings_resolve_through_catalog() {
+        // A missing key would render as the raw key ("settings.cat_...").
+        for c in Category::ALL {
+            assert!(!c.label().starts_with("settings."), "{c:?}");
+        }
+        let vfs = make_vfs();
+        for c in Category::ALL {
+            let app = app_in(c, &vfs);
+            for line in app.lines() {
+                assert!(
+                    !line.contains("settings.") && !line.contains("system."),
+                    "untranslated key in {c:?}: {line}"
+                );
+            }
+        }
+        // German strings exist for the categories (Latin-1, drawable).
+        assert_eq!(
+            oasis_i18n::translate_for("settings.cat_language", Locale::German),
+            "Sprache"
+        );
     }
 
     #[test]
