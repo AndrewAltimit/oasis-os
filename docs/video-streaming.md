@@ -55,6 +55,25 @@ symphonia decodes from the same buffer via `Read + Seek`.
   dry and a frame then arrives >300 ms late, the player resumes its clock
   from that frame rather than skipping video ahead of the (also stalled)
   audio.
+- **Resume** — if the linear download's connection closes, errors or
+  stalls (`STALL_TIMEOUT`) before `Content-Length`, it resumes from the
+  buffer frontier via `stream_download_range`, which also resumes a
+  Range body that closes early. Throttle pauses are never treated as
+  stalls (16 MB of lookahead is minutes of video), and the reconnect
+  budget resets once a connection delivers 1 MB. A server that answers
+  Range with `200` is handled by skipping the already-received prefix.
+- **Probe edge cases** — probe-mode reads within 64 KB past the download
+  frontier wait (≤10 s) for the real bytes once moov is retained, so the
+  atom headers right after moov are never read as zeros; reads inside a
+  top-level atom that claims to extend past a truncated file's end
+  return zeros during the probe so truncated files still open.
+- **End-to-end tests** — `tv_controller/e2e_tests.rs` serves fixtures from
+  an in-process HTTP server with scriptable misbehaviour (throttle, drop,
+  stall, ignored Range, redirect, 404, truncation) and drives the real
+  download, `StreamingBuffer` and `VideoPlayer` (virtual clock via
+  `VideoPlayer::tick_at`). Decoder-level e2e tests live in
+  `crates/oasis-video/tests/decode_e2e.rs`; fixtures in
+  `tests/fixtures/streaming/`.
 - **Dev builds** — the workspace optimizes the codec crates (openh264,
   symphonia) even in the `dev` profile; unoptimized, 720p decode ran at
   ~9 fps under `cargo run`.
