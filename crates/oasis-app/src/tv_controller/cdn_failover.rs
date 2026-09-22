@@ -381,11 +381,27 @@ fn open_range_connection_inner(
         206 => {
             // Partial Content -- server honoured the Range request.
         },
+        200 if range_start == 0 => {
+            // The whole body from byte 0 is exactly what was asked for.
+        },
         200 => {
-            // Server ignored Range header and is sending the full file
-            // from byte 0.  Pushing this data at `range_start` would
-            // corrupt the stream with misaligned data.
-            return Err("HTTP 200 (server ignored Range header) -- cannot resume".into());
+            // Server ignored the Range header and is sending the full file
+            // from byte 0.  Pushing that at `range_start` would misalign
+            // the stream, so read past the first `range_start` bytes first.
+            // (Failing instead made every resume or seek restart against
+            // such a server end the session.)
+            log::warn!(
+                "TV: server ignored Range, skipping {:.1}MB to resume",
+                range_start as f64 / (1024.0 * 1024.0),
+            );
+            let leftover = &header_buf[leftover_start..];
+            let skip = usize::try_from(range_start).unwrap_or(usize::MAX);
+            if leftover.len() > skip {
+                return Ok((stream, leftover[skip..].to_vec()));
+            }
+            let remaining = range_start - leftover.len() as u64;
+            let leftover = skip_body_bytes(stream.as_mut(), remaining)?;
+            return Ok((stream, leftover));
         },
         416 => {
             return Err("HTTP 416 Range Not Satisfiable".into());
@@ -401,6 +417,38 @@ fn open_range_connection_inner(
 
     let leftover = header_buf[leftover_start..].to_vec();
     Ok((stream, leftover))
+}
+
+/// Read and discard `count` body bytes from `stream`.  Returns any bytes
+/// read past them.  Fails if the body ends first or no data arrives for
+/// 30 s.
+#[cfg(feature = "_video")]
+fn skip_body_bytes(
+    stream: &mut dyn oasis_core::backend::NetworkStream,
+    mut count: u64,
+) -> Result<Vec<u8>, String> {
+    let mut buf = [0u8; 65536];
+    let mut last_data = std::time::Instant::now();
+    while count > 0 {
+        if last_data.elapsed() > std::time::Duration::from_secs(30) {
+            return Err("timeout skipping body for Range fallback".into());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => return Err("body ended before the Range start".into()),
+            Ok(n) => {
+                last_data = std::time::Instant::now();
+                if (n as u64) > count {
+                    return Ok(buf[count as usize..n].to_vec());
+                }
+                count -= n as u64;
+            },
+            Err(e) if is_would_block(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            },
+            Err(e) => return Err(format!("read while skipping: {e}")),
+        }
+    }
+    Ok(Vec::new())
 }
 
 /// Parse a redirect URL into scheme + host + port + path.  Pure helper
