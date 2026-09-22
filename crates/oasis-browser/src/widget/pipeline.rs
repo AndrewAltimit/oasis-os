@@ -138,6 +138,7 @@ impl BrowserWidget {
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
             self.pending_page_load = None;
+            self.pending_page_url = None;
             self.pending_io_images.clear();
         }
     }
@@ -351,8 +352,10 @@ impl BrowserWidget {
         let validators = self.cache.peek_validators(&request.url);
 
         if let Some(ref mut io) = self.io_thread {
+            let url = request.url.clone();
             let id = io.send(IoRequestKind::PageLoad, request, validators, None);
             self.pending_page_load = Some(id);
+            self.pending_page_url = Some(url);
         }
     }
 
@@ -413,6 +416,7 @@ impl BrowserWidget {
         for result in page_results {
             if self.pending_page_load == Some(result.id) {
                 self.pending_page_load = None;
+                let requested_url = self.pending_page_url.take();
                 match result.result {
                     Ok(loaded) => {
                         let url_str = loaded.response.url.clone();
@@ -424,7 +428,10 @@ impl BrowserWidget {
                     },
                     Err(e) => {
                         let err_msg = e.to_string();
-                        let url = "about:error";
+                        // Render the error page under the URL that
+                        // failed so it stays in the URL bar / history
+                        // and can be retried with a reload.
+                        let url = requested_url.as_deref().unwrap_or("about:error");
                         let err_resp = loader::vfs::error_page(url, &err_msg);
                         self.process_response(err_resp);
                         self.state = LoadingState::Error;

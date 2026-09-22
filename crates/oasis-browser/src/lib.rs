@@ -353,6 +353,12 @@ pub struct BrowserWidget {
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_page_load: Option<loader::io_thread::IoRequestId>,
 
+    /// URL of the in-flight [`Self::pending_page_load`], so a failed
+    /// async load can render its error page under the URL the user
+    /// actually asked for (keeping it in the URL bar and history).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_page_url: Option<String>,
+
     /// In-flight image requests on the I/O thread, keyed by request ID
     /// mapped to the resolved image URL.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -657,6 +663,8 @@ impl BrowserWidget {
             tls: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_page_load: None,
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_page_url: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
