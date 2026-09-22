@@ -12,9 +12,7 @@ use oasis_core::vfs::{MemoryVfs, Vfs};
 
 /// Truncate output lines to `MAX_OUTPUT_LINES`.
 pub(crate) fn trim_output(output_lines: &mut Vec<String>) {
-    while output_lines.len() > terminal_sdi::MAX_OUTPUT_LINES {
-        output_lines.remove(0);
-    }
+    terminal_sdi::trim_scrollback(output_lines);
 }
 
 // ---------------------------------------------------------------------------

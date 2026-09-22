@@ -7,6 +7,16 @@ use crate::sdi::SdiRegistry;
 /// Maximum lines retained in the scrollback buffer.
 pub const MAX_OUTPUT_LINES: usize = 2000;
 
+/// Trim a scrollback buffer to [`MAX_OUTPUT_LINES`], dropping the oldest
+/// lines with a single `drain` (one O(n) shift; a `remove(0)` loop was
+/// O(n*k) when a command printed k lines into a full buffer).
+pub fn trim_scrollback(output_lines: &mut Vec<String>) {
+    let excess = output_lines.len().saturating_sub(MAX_OUTPUT_LINES);
+    if excess > 0 {
+        output_lines.drain(..excess);
+    }
+}
+
 /// Resolved terminal colors, honoring `[app_themes.terminal]` skin overrides.
 ///
 /// Each slot falls back to the exact theme-derived color the terminal used
@@ -419,6 +429,20 @@ mod tests {
         assert_eq!(VISIBLE_OUTPUT_LINES, 12);
         assert_eq!(MAX_OUTPUT_LINES, 2000);
         assert!(VISIBLE_OUTPUT_LINES < MAX_OUTPUT_LINES);
+    }
+
+    #[test]
+    fn trim_scrollback_5000_into_full_buffer() {
+        let mut lines: Vec<String> = (0..MAX_OUTPUT_LINES).map(|i| format!("old {i}")).collect();
+        lines.extend((0..5000).map(|i| format!("new {i}")));
+        trim_scrollback(&mut lines);
+        assert_eq!(lines.len(), MAX_OUTPUT_LINES);
+        assert_eq!(lines[0], format!("new {}", 5000 - MAX_OUTPUT_LINES));
+        assert_eq!(lines[MAX_OUTPUT_LINES - 1], "new 4999");
+        // Under the cap: untouched.
+        let mut short = vec!["a".to_string()];
+        trim_scrollback(&mut short);
+        assert_eq!(short, ["a"]);
     }
 
     #[test]
