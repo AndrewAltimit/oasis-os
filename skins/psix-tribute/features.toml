@@ -9,7 +9,7 @@ icons_per_page = 15
 grid_cols = 5
 grid_rows = 3
 start_menu = true
-show_tabs = true
+show_tabs = false
 clock_in_bottombar = true
 
 # Desktop icon layout: PSIX column auto-flow with drag & drop.
