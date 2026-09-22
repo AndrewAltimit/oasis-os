@@ -32,6 +32,11 @@ pub const FREE_ICON_DRAG_Z: i32 = 60;
 /// left-aligned column hugs the grid's left margin.
 pub(crate) const COLUMN_LEFT_PAD: i32 = 6;
 
+/// Minimum free/column-layout cell width (px). Wide enough that every
+/// word of every built-in app title fits a label line (widest: 66px,
+/// "Calculator" at the 8px bitmap font) plus the label gutters.
+pub(crate) const FREE_CELL_MIN_W: u32 = 70;
+
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
 pub struct DashboardConfig {
@@ -107,8 +112,10 @@ impl DashboardConfig {
 
         // Free-mode cells are a fixed size derived from the theme's icon
         // dimensions (2x leaves room for a two-line label) instead of
-        // stretching to fill the grid area like grid cells do.
-        let free_cell_w = (at.icon_width * 2).max(48);
+        // stretching to fill the grid area like grid cells do. The width
+        // floor keeps neighbouring labels apart: labels are clipped to
+        // their cell, so a cell narrower than a title word ellipsizes it.
+        let free_cell_w = (at.icon_width * 2).max(FREE_CELL_MIN_W);
         let free_cell_h = if is_column {
             // Taller pitch so the column reads sparse: icon + two label
             // lines + a comfortable gap. Scales with the theme's icon size

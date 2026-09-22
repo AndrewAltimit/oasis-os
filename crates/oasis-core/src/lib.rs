@@ -67,6 +67,7 @@ pub mod statusbar;
 pub mod taskbar;
 pub mod terminal;
 pub mod terminal_sdi;
+pub mod text_fit;
 pub mod toast;
 pub mod transfer;
 pub mod transition;
