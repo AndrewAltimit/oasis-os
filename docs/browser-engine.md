@@ -22,6 +22,12 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   initial GET.
 - **Cookies, gzip, CSP.** Scripts/styles/connect-src enforced;
   img-src relaxed for practicality.
+- **Redirects** — page loads follow up to `BrowserConfig::max_redirects`
+  (default 5) redirects; script `fetch()` keeps the default.
+- **Background I/O thread** — network loads never block the UI thread.
+  Dropping the widget mid-load returns immediately: queued requests are
+  abandoned and a request still in flight finishes on the detached
+  worker, which then exits.
 
 ## HTML parser
 
@@ -32,6 +38,12 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Vendored-subset `html5lib-tests` harness for conformance.
 
 ## CSS cascade & selectors
+
+- Linked stylesheets (`<link rel=stylesheet>`, network or `vfs://`)
+  follow their `@import` rules (nested, resolved against the sheet URL,
+  cascading before the importing sheet; print-only imports skipped; at
+  most 16 imported URLs per page). `@import` in inline `<style>` is not
+  followed.
 
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
