@@ -112,6 +112,11 @@ pub struct AudioLog {
 }
 
 impl AudioLog {
+    /// Number of audio tracks opened and not yet unloaded.
+    pub fn live_tracks(&self) -> usize {
+        self.live.len()
+    }
+
     /// All f32 samples fed so far, concatenated.
     pub fn pcm_f32(&self) -> Vec<f32> {
         self.pcm_chunks
@@ -867,5 +872,76 @@ impl Harness {
         enc.write_header()?
             .write_image_data(self.shell.backend.pixels())?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resource accounting and window chrome (leak checks, WM scenarios)
+// ---------------------------------------------------------------------------
+
+/// Counts of long-lived shell resources, for leak checks: open/close
+/// cycles must bring every count back to its baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceCounts {
+    /// Backend textures loaded and not destroyed.
+    pub textures: usize,
+    /// Backend offscreen render targets alive.
+    pub render_targets: usize,
+    /// Objects in the SDI scene registry.
+    pub sdi_objects: usize,
+    /// Windows managed by the window manager.
+    pub windows: usize,
+    /// Windowed app runners.
+    pub runners: usize,
+    /// Audio tracks opened and not unloaded.
+    pub audio_tracks: usize,
+}
+
+/// Screen rects of a window's titlebar and buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowChrome {
+    pub titlebar: Option<(i32, i32, u32, u32)>,
+    pub close: Option<(i32, i32, u32, u32)>,
+    pub maximize: Option<(i32, i32, u32, u32)>,
+    pub minimize: Option<(i32, i32, u32, u32)>,
+}
+
+/// Center of a rect.
+pub fn rect_center((x, y, w, h): (i32, i32, u32, u32)) -> (i32, i32) {
+    (x + w as i32 / 2, y + h as i32 / 2)
+}
+
+impl Harness {
+    /// Current [`ResourceCounts`].
+    pub fn resource_counts(&self) -> ResourceCounts {
+        let st = &self.shell.state;
+        ResourceCounts {
+            textures: self.shell.backend.live_textures(),
+            render_targets: self.shell.backend.live_render_targets(),
+            sdi_objects: self.shell.sdi.len(),
+            windows: st.wm.window_count(),
+            runners: st.content.open_runners.len() + usize::from(st.content.app_runner.is_some()),
+            audio_tracks: self.audio.borrow().live_tracks(),
+        }
+    }
+
+    /// Titlebar and button rects of the window titled `title`.
+    pub fn window_chrome(&self, title: &str) -> Option<WindowChrome> {
+        let wm = &self.shell.state.wm;
+        let theme = wm.theme();
+        wm.windows()
+            .iter()
+            .find(|w| w.title.eq_ignore_ascii_case(title))
+            .map(|w| WindowChrome {
+                titlebar: w.titlebar_rect(theme),
+                close: w.close_btn_rect(theme),
+                maximize: w.maximize_btn_rect(theme),
+                minimize: w.minimize_btn_rect(theme),
+            })
+    }
+
+    /// Id of the focused window, if any.
+    pub fn active_window(&self) -> Option<String> {
+        self.shell.state.wm.active_window().map(str::to_string)
     }
 }

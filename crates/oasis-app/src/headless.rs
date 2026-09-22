@@ -52,6 +52,8 @@ pub struct HeadlessBackend {
     /// Copy of every live texture (id -> w, h, rgba) so a resize can
     /// rebuild the framebuffer without invalidating texture ids.
     textures: BTreeMap<u64, (u32, u32, Vec<u8>)>,
+    /// Offscreen render targets created and not yet destroyed.
+    live_render_targets: usize,
 }
 
 impl HeadlessBackend {
@@ -64,6 +66,7 @@ impl HeadlessBackend {
             frames_presented: 0,
             input: VecDeque::new(),
             textures: BTreeMap::new(),
+            live_render_targets: 0,
         }
     }
 
@@ -85,6 +88,17 @@ impl HeadlessBackend {
     /// Number of `swap_buffers` calls so far.
     pub fn frames_presented(&self) -> u64 {
         self.frames_presented
+    }
+
+    /// Number of live textures (loaded and not yet destroyed). Leak
+    /// checks compare this against a baseline.
+    pub fn live_textures(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Number of live offscreen render targets.
+    pub fn live_render_targets(&self) -> usize {
+        self.live_render_targets
     }
 
     /// Queue an input event for the next `poll_events`.
@@ -414,7 +428,9 @@ impl SdiBatch for HeadlessBackend {
 
 impl SdiRenderTarget for HeadlessBackend {
     fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
-        self.inner.create_render_target(w, h)
+        let id = self.inner.create_render_target(w, h)?;
+        self.live_render_targets += 1;
+        Ok(id)
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
@@ -445,7 +461,9 @@ impl SdiRenderTarget for HeadlessBackend {
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        self.inner.destroy_render_target(id)
+        self.inner.destroy_render_target(id)?;
+        self.live_render_targets = self.live_render_targets.saturating_sub(1);
+        Ok(())
     }
 
     fn supports_render_targets(&self) -> bool {
