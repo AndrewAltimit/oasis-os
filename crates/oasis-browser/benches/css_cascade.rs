@@ -74,5 +74,50 @@ fn bench_cascade(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_stylesheet_parse, bench_cascade);
+/// Like [`generate_css`], but every value goes through custom properties
+/// (the pattern design-token CSS such as Wikipedia's Codex uses).
+fn generate_css_with_vars(n: usize) -> String {
+    let mut css = String::from(
+        ":root { --fg: #202122; --pad: 4px; --gap: 2px; --size: 14px; --bg: #f8f9fa; }\n",
+    );
+    for i in 0..n {
+        css.push_str(&format!(
+            ".class-{i} {{ color: var(--fg); padding: calc(var(--pad) + {}px); \
+             margin: var(--gap) var(--gap); font-size: var(--size, 12px); \
+             background: var(--bg); }}\n",
+            i % 20,
+        ));
+    }
+    css
+}
+
+fn bench_cascade_vars(c: &mut Criterion) {
+    let mut group = c.benchmark_group("css_cascade_vars");
+
+    for (n_rules, n_elements) in [(100, 500)] {
+        let css = generate_css_with_vars(n_rules);
+        let html = generate_html_with_classes(n_elements);
+        let label = format!("{n_rules}r_{n_elements}e");
+
+        let stylesheet = Stylesheet::parse(&css);
+        let doc = TreeBuilder::build(Tokenizer::new(&html).tokenize());
+
+        group.bench_with_input(
+            BenchmarkId::new("style_tree", &label),
+            &(&doc, &stylesheet),
+            |b, (doc, stylesheet)| {
+                b.iter(|| style_tree(doc, &[stylesheet], &[], &CascadeContext::default()));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_stylesheet_parse,
+    bench_cascade,
+    bench_cascade_vars
+);
 criterion_main!(benches);

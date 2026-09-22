@@ -7,10 +7,11 @@ use super::super::helpers::{
     is_color_property, named_color, parse_font_weight, parse_hex_color, parse_unit,
     tokens_to_css_text, try_parse_color, try_parse_light_dark,
 };
+use super::super::shorthand::expand_shorthands;
 use super::super::shorthand::{
     parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient,
 };
-use super::super::tokenizer::CssToken;
+use super::super::tokenizer::{CssToken, CssTokenizer};
 use super::CssParser;
 use super::types::PropertyId;
 use super::types::{CssValue, Declaration};
@@ -72,22 +73,33 @@ impl CssParser {
         } else {
             raw_values
         };
-        // Custom properties (--*) store value as raw CSS text.
-        let value = if property.starts_with("--") {
+        // Custom properties (--*) store value as raw CSS text, and their
+        // names are case-sensitive (`--Foo` and `--foo` are distinct).
+        let is_custom = property.starts_with("--");
+        let value = if is_custom {
             CssValue::String(tokens_to_css_text(&values))
+        } else if contains_var(&values) {
+            // Substituted and re-parsed at computed-value time.
+            CssValue::Unresolved(tokens_to_css_text(&values))
         } else {
-            self.parse_value(&property, &values)
+            parse_property_value(&property, &values)
         };
         // Consume trailing semicolon if present.
         self.skip_whitespace();
         if self.peek() == &CssToken::Semicolon {
             self.advance();
         }
+        let property = if is_custom {
+            property
+        } else {
+            property.to_ascii_lowercase()
+        };
+        let property_id = PropertyId::from_name(&property);
         Some(Declaration {
-            property: property.to_ascii_lowercase(),
+            property,
             value,
             important,
-            property_id: PropertyId::from_name(&property.to_ascii_lowercase()),
+            property_id,
         })
     }
 
@@ -158,58 +170,76 @@ impl CssParser {
         }
         out
     }
-
-    fn parse_value(&self, property: &str, tokens: &[CssToken]) -> CssValue {
-        let prop_lower = property.to_ascii_lowercase();
-
-        // Deferred light-dark() — store both colours for computed-value
-        // time resolution against color-scheme.
-        if is_color_property(&prop_lower)
-            && let Some((light, dark)) = try_parse_light_dark(tokens)
-        {
-            return CssValue::LightDark(light, dark);
-        }
-
-        // Try colour-valued properties first.
-        if is_color_property(&prop_lower)
-            && let Some(color) = try_parse_color(tokens)
-        {
-            return CssValue::Color(color);
-        }
-
-        // font-weight keyword normalisation.
-        if prop_lower == "font-weight" {
-            return parse_font_weight(tokens);
-        }
-
-        // Grid track lists and placements need `repeat()` / `minmax()`
-        // nesting and the `/` separator, which the generic value-list
-        // parser drops. Keep them as raw text for the grid parsers.
-        if is_raw_text_grid_property(&prop_lower)
-            && !tokens
-                .iter()
-                .any(|t| matches!(t, CssToken::Function(f) if f.eq_ignore_ascii_case("var")))
-        {
-            return CssValue::Keyword(tokens_to_css_text(tokens));
-        }
-
-        // Collect individual parsed values (skip whitespace separators).
-        let values = parse_value_list(tokens);
-
-        match values.len() {
-            0 => CssValue::Keyword(String::new()),
-            1 => match values.into_iter().next() {
-                Some(v) => v,
-                None => CssValue::Keyword(String::new()),
-            },
-            _ => CssValue::Multiple(values),
-        }
-    }
 }
 
 // -------------------------------------------------------------------
 // Value parsing helpers
 // -------------------------------------------------------------------
+
+/// True if the token list references `var()` anywhere, including inside
+/// other functions (`calc(var(--x) * 2)`, `rgb(var(--r), 0, 0)`).
+fn contains_var(tokens: &[CssToken]) -> bool {
+    tokens
+        .iter()
+        .any(|t| matches!(t, CssToken::Function(f) if f.eq_ignore_ascii_case("var")))
+}
+
+/// Parse a (var-free) declaration value for `property`.
+fn parse_property_value(property: &str, tokens: &[CssToken]) -> CssValue {
+    let prop_lower = property.to_ascii_lowercase();
+
+    // Deferred light-dark() — store both colours for computed-value
+    // time resolution against color-scheme.
+    if is_color_property(&prop_lower)
+        && let Some((light, dark)) = try_parse_light_dark(tokens)
+    {
+        return CssValue::LightDark(light, dark);
+    }
+
+    // Try colour-valued properties first.
+    if is_color_property(&prop_lower)
+        && let Some(color) = try_parse_color(tokens)
+    {
+        return CssValue::Color(color);
+    }
+
+    // font-weight keyword normalisation.
+    if prop_lower == "font-weight" {
+        return parse_font_weight(tokens);
+    }
+
+    // Grid track lists and placements need `repeat()` / `minmax()`
+    // nesting and the `/` separator, which the generic value-list
+    // parser drops. Keep them as raw text for the grid parsers.
+    if is_raw_text_grid_property(&prop_lower) {
+        return CssValue::Keyword(tokens_to_css_text(tokens));
+    }
+
+    // Collect individual parsed values (skip whitespace separators).
+    let values = parse_value_list(tokens);
+
+    match values.len() {
+        0 => CssValue::Keyword(String::new()),
+        1 => match values.into_iter().next() {
+            Some(v) => v,
+            None => CssValue::Keyword(String::new()),
+        },
+        _ => CssValue::Multiple(values),
+    }
+}
+
+/// Re-parse a declaration whose `var()` references have been substituted
+/// (see [`CssValue::Unresolved`]) and expand it exactly as the stylesheet
+/// parser would, shorthands and logical properties included.
+pub(crate) fn parse_substituted_declaration(property: &str, css_text: &str) -> Vec<Declaration> {
+    let tokens = CssTokenizer::new(css_text).tokenize();
+    let tokens: Vec<CssToken> = tokens
+        .into_iter()
+        .filter(|t| !matches!(t, CssToken::Eof))
+        .collect();
+    let value = parse_property_value(property, &tokens);
+    expand_shorthands(vec![Declaration::new(property.to_string(), value, false)])
+}
 
 /// Grid properties whose values are stored as raw CSS text (see
 /// `css::values::grid`).
@@ -292,7 +322,7 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                     for (j, tok) in args.iter().enumerate() {
                         match tok {
                             CssToken::Ident(id) if prop_name.is_none() && id.starts_with("--") => {
-                                prop_name = Some(id.to_ascii_lowercase());
+                                prop_name = Some(id.clone());
                             },
                             CssToken::Comma if prop_name.is_some() && comma_pos.is_none() => {
                                 comma_pos = Some(j);

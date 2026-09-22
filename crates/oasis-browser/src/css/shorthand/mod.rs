@@ -27,6 +27,13 @@ use super::parser::{CssValue, Declaration, PropertyId};
 pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
     let mut out = Vec::new();
     for decl in decls {
+        // Values containing `var()` can't be split into longhands until
+        // the variables are substituted; the cascade re-runs this
+        // expansion on the substituted value.
+        if matches!(decl.value, CssValue::Unresolved(_)) {
+            out.push(decl);
+            continue;
+        }
         // Expand CSS logical property shorthands and rewrite
         // direction-independent logical properties (block-axis, size)
         // to physical equivalents. Inline-axis logical longhands are
