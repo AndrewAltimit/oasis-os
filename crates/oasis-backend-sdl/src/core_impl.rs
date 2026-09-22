@@ -144,7 +144,20 @@ impl SdiCore for SdlBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let rect = Rect::new(x, y, w, h);
+        // Always `w * h * 4` bytes, like every other backend: callers index
+        // the result as a `w`-wide image. SDL clips the read rect to the
+        // render target and returns only the intersection, so read that
+        // and place it at its offset; pixels outside the target stay 0.
+        let mut pixels = vec![0u8; w as usize * h as usize * 4];
+        let (tw, th) = self.canvas.output_size().backend_err()?;
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x as i64 + w as i64).min(tw as i64) as i32;
+        let y1 = (y as i64 + h as i64).min(th as i64) as i32;
+        if x0 >= x1 || y0 >= y1 {
+            return Ok(pixels);
+        }
+        let rect = Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
         // SDL returns the renderer's native format (commonly ARGB8888, i.e.
         // B,G,R,A bytes in memory); normalize to RGBA byte order, which is
         // what every caller (screenshots, MCP, tests) expects.
@@ -155,21 +168,21 @@ impl SdiCore for SdlBackend {
             .convert_format(PixelFormat::RGBA32)
             .backend_err()?;
         let pitch = surface.pitch() as usize;
-        let height = surface.height() as usize;
-        let width = surface.width() as usize;
-        let bpp = 4usize; // RGBA
+        let sh = surface.height() as usize;
+        let row_bytes = surface.width() as usize * 4;
         // SAFETY: The surface was just created by read_pixels and is not
         // shared; we only read the pixel data before it goes out of scope.
         let data = unsafe { surface.without_lock() }.ok_or_else(|| {
             oasis_core::error::OasisError::Backend("cannot lock surface pixels".into())
         })?;
-        // Copy pixel data row by row (pitch may differ from width * bpp).
-        let mut pixels = Vec::with_capacity(width * height * bpp);
-        for row in 0..height {
-            let start = row * pitch;
-            let end = start + width * bpp;
-            if end <= data.len() {
-                pixels.extend_from_slice(&data[start..end]);
+        // Copy row by row (the surface pitch may differ from width * 4).
+        let dst_stride = w as usize * 4;
+        let dst_x = (x0 - x) as usize * 4;
+        for row in 0..sh {
+            let src = row * pitch;
+            let dst = (row + (y0 - y) as usize) * dst_stride + dst_x;
+            if src + row_bytes <= data.len() && dst + row_bytes <= pixels.len() {
+                pixels[dst..dst + row_bytes].copy_from_slice(&data[src..src + row_bytes]);
             }
         }
         Ok(pixels)

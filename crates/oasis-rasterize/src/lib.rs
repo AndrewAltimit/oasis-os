@@ -12,13 +12,17 @@
 //! [`TextureDedup`] provides content-addressed texture deduplication with LRU
 //! eviction and reference counting, shared by SDL and WASM backends.
 
+mod glyph;
+mod rows;
 mod texture_dedup;
+pub use glyph::{bitmap_ascent, bitmap_line_height, glyph_cell, glyph_mask, mask_runs};
+pub use rows::{polygon_rows, stroke_circle_rows, stroke_rounded_rect_rows, thick_line_rows};
 pub use texture_dedup::TextureDedup;
 
 #[cfg(feature = "ttf")]
 pub mod ttf;
 
-use oasis_types::backend::{Color, GradientStyle};
+use oasis_types::backend::{BlendMode, Color, GradientStyle};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::{self, PixelSink};
@@ -90,6 +94,8 @@ pub struct SoftwareBuffer {
     clip: Option<ClipRect>,
     /// Reused per-blit source column map (avoids a per-call allocation).
     col_map: Vec<usize>,
+    /// Reused glyph coverage mask for [`Self::draw_text`].
+    glyph_scratch: Vec<bool>,
 }
 
 impl SoftwareBuffer {
@@ -103,6 +109,7 @@ impl SoftwareBuffer {
             buffer: vec![0; size],
             clip: None,
             col_map: Vec::new(),
+            glyph_scratch: Vec::new(),
         }
     }
 
@@ -225,10 +232,13 @@ impl SoftwareBuffer {
                 color.b as u16 * sa,
             );
             for dst in row.as_chunks_mut::<4>().0 {
+                if dst[3] != 255 {
+                    blend_over_translucent(dst, color);
+                    continue;
+                }
                 dst[0] = ((r + dst[0] as u16 * da + 127) / 255) as u8;
                 dst[1] = ((g + dst[1] as u16 * da + 127) / 255) as u8;
                 dst[2] = ((bl + dst[2] as u16 * da + 127) / 255) as u8;
-                dst[3] = 255;
             }
         }
     }
@@ -261,14 +271,13 @@ impl SoftwareBuffer {
         }
     }
 
-    /// Composite `src_pixels` (a `src_w * src_h * 4` RGBA8 buffer) over
-    /// the destination rect at `(dst_x, dst_y, dst_w, dst_h)`,
-    /// stretching 1:1 (no scaling) and applying per-pixel src-over
-    /// alpha blending multiplied by `opacity`.
+    /// Composite `src_pixels` (a `src_w * src_h * 4` straight-alpha RGBA8
+    /// buffer) 1:1 (no scaling) at `(dst_x, dst_y)` with source-over
+    /// blending, the source alpha multiplied by `opacity` (clamped to
+    /// `[0.0, 1.0]`). Honors the clip rect.
     ///
-    /// This is the fallback compositor path for backends without
-    /// hardware blend (UE5, PSP, and SDL non-native blend modes).
-    /// `opacity` is clamped to `[0.0, 1.0]`.
+    /// This is the compositor path for backends without hardware blend
+    /// (UE5, PSP).
     pub fn composite_rgba(
         &mut self,
         dst_x: i32,
@@ -278,47 +287,73 @@ impl SoftwareBuffer {
         src_pixels: &[u8],
         opacity: f32,
     ) {
+        self.composite_rgba_blend(
+            dst_x,
+            dst_y,
+            src_w,
+            src_h,
+            src_pixels,
+            opacity,
+            BlendMode::Normal,
+        );
+    }
+
+    /// [`composite_rgba`](Self::composite_rgba) with a CSS blend mode.
+    ///
+    /// `Normal` and `Multiply` are implemented (the modes the SDL backend
+    /// executes natively); every other mode composites as `Normal`, the
+    /// same degradation SDL applies, so the backends stay alike. Multiply
+    /// follows the CSS compositing spec: the source color is replaced by
+    /// `(1 - backdrop_alpha) * src + backdrop_alpha * src * backdrop`
+    /// before the usual source-over, so transparent layer pixels leave
+    /// the backdrop untouched.
+    pub fn composite_rgba_blend(
+        &mut self,
+        dst_x: i32,
+        dst_y: i32,
+        src_w: u32,
+        src_h: u32,
+        src_pixels: &[u8],
+        opacity: f32,
+        mode: BlendMode,
+    ) {
         if src_w == 0 || src_h == 0 || src_pixels.len() < (src_w * src_h * 4) as usize {
             return;
         }
         let opacity = opacity.clamp(0.0, 1.0);
-        let op_u16 = (opacity * 256.0).round() as u16;
-        if op_u16 == 0 {
+        let op = (opacity * 255.0).round() as u16;
+        if op == 0 {
             return;
         }
-        let dst_stride = (self.width * 4) as usize;
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(dst_x, dst_y, src_w, src_h) else {
+            return;
+        };
+        let multiply = mode == BlendMode::Multiply;
         let src_stride = (src_w * 4) as usize;
-        for row in 0..src_h as i32 {
-            let dy = dst_y + row;
-            if dy < 0 || dy as u32 >= self.height {
-                continue;
-            }
-            for col in 0..src_w as i32 {
-                let dx = dst_x + col;
-                if dx < 0 || dx as u32 >= self.width {
-                    continue;
-                }
-                let src_off = (row as usize) * src_stride + (col as usize) * 4;
-                let dst_off = (dy as usize) * dst_stride + (dx as usize) * 4;
-                let sr = src_pixels[src_off];
-                let sg = src_pixels[src_off + 1];
-                let sb = src_pixels[src_off + 2];
-                let sa = src_pixels[src_off + 3];
-                // Apply layer opacity to source alpha (256-scale).
-                let a = ((sa as u16 * op_u16) >> 8) as u8;
+        for py in ys..ye {
+            let row = (py - dst_y) as usize * src_stride;
+            let src = &src_pixels[row + (xs - dst_x) as usize * 4..row + (xe - dst_x) as usize * 4];
+            let dst = self.row_mut(py, xs, xe);
+            for (d, s) in dst
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<4>().0)
+            {
+                let a = ((s[3] as u16 * op + 127) / 255) as u8;
                 if a == 0 {
                     continue;
                 }
-                let inv = 255 - a as u16;
-                let dr = self.buffer[dst_off];
-                let dg = self.buffer[dst_off + 1];
-                let db = self.buffer[dst_off + 2];
-                let da = self.buffer[dst_off + 3];
-                // Standard src-over.
-                self.buffer[dst_off] = ((sr as u16 * a as u16 + dr as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 1] = ((sg as u16 * a as u16 + dg as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 2] = ((sb as u16 * a as u16 + db as u16 * inv) / 255) as u8;
-                self.buffer[dst_off + 3] = (a as u16 + ((da as u16 * inv) / 255)) as u8;
+                let mut c = Color::rgba(s[0], s[1], s[2], a);
+                if multiply {
+                    let ab = d[3] as u32;
+                    let mix = |cs: u8, cb: u8| {
+                        let prod = cs as u32 * cb as u32 / 255;
+                        ((cs as u32 * (255 - ab) + prod * ab + 127) / 255) as u8
+                    };
+                    c = Color::rgba(mix(s[0], d[0]), mix(s[1], d[1]), mix(s[2], d[2]), a);
+                }
+                blend_px(d, c);
             }
         }
     }
@@ -405,12 +440,19 @@ impl SoftwareBuffer {
         );
     }
 
-    /// Draw a line using Bresenham's algorithm.
+    /// Draw a line using Bresenham's algorithm. Widths above 1 stamp a
+    /// square brush at every step ([`thick_line_rows`]); every covered
+    /// pixel is blended exactly once.
     pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, width: u16, color: Color) {
         if color.a == 0 {
             return;
         }
-        let w = width as i32;
+        if width > 1 {
+            thick_line_rows(x1, y1, x2, y2, width, |y, xs, xe| {
+                self.fill_span(y, xs, xe, color);
+            });
+            return;
+        }
         let dx = (x2 - x1).abs();
         let dy = -(y2 - y1).abs();
         let sx = if x1 < x2 { 1 } else { -1 };
@@ -420,17 +462,7 @@ impl SoftwareBuffer {
         let mut cy = y1;
 
         loop {
-            if w <= 1 {
-                self.set_pixel(cx, cy, color);
-            } else {
-                let half = w / 2;
-                for wy in -half..=(w - half - 1) {
-                    for wx in -half..=(w - half - 1) {
-                        self.set_pixel(cx + wx, cy + wy, color);
-                    }
-                }
-            }
-
+            self.set_pixel(cx, cy, color);
             if cx == x2 && cy == y2 {
                 break;
             }
@@ -461,7 +493,7 @@ impl SoftwareBuffer {
         });
     }
 
-    /// Stroke a circle outline.
+    /// Stroke a circle outline ([`stroke_circle_rows`]).
     pub fn stroke_circle(
         &mut self,
         cx: i32,
@@ -470,31 +502,48 @@ impl SoftwareBuffer {
         stroke_width: u16,
         color: Color,
     ) {
-        if color.a == 0 || radius == 0 {
+        if color.a == 0 {
             return;
         }
-        let r_outer = radius as i32;
-        let r_inner = (radius as i32 - stroke_width as i32).max(0);
+        stroke_circle_rows(radius, stroke_width, |dy, x0, x1| {
+            self.fill_span(cy + dy, cx + x0, cx + x1, color);
+        });
+    }
 
-        for dy in -r_outer..=r_outer {
-            let y = cy + dy;
-            let outer_sq = r_outer * r_outer - dy * dy;
-            if outer_sq < 0 {
-                continue;
-            }
-            let outer_x = rasterize::isqrt(outer_sq as u32) as i32;
-
-            if r_inner > 0 {
-                let inner_sq = r_inner * r_inner - dy * dy;
-                if inner_sq > 0 {
-                    let inner_x = rasterize::isqrt(inner_sq as u32) as i32;
-                    self.hline(cx - outer_x, cx - inner_x, y, color);
-                    self.hline(cx + inner_x, cx + outer_x, y, color);
-                    continue;
-                }
-            }
-            self.hline(cx - outer_x, cx + outer_x, y, color);
+    /// Stroke a rounded-rect outline ([`stroke_rounded_rect_rows`]). A zero
+    /// radius strokes a plain rect.
+    pub fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) {
+        if w == 0 || h == 0 || color.a == 0 {
+            return;
         }
+        if radius == 0 {
+            self.stroke_rect(x, y, w, h, stroke_width, color);
+            return;
+        }
+        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        stroke_rounded_rect_rows(w as i32, h as i32, r, stroke_width, |dy, x0, x1| {
+            self.fill_span(y + dy, x + x0, x + x1, color);
+        });
+    }
+
+    /// Fill a polygon with the even-odd rule ([`polygon_rows`]).
+    pub fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) {
+        if color.a == 0 {
+            return;
+        }
+        let mut xs = Vec::new();
+        polygon_rows(points, &mut xs, |y, x0, x1| {
+            self.fill_span(y, x0, x1, color)
+        });
     }
 
     /// Fill a triangle using the shared scanline rasterizer.
@@ -635,65 +684,88 @@ impl SoftwareBuffer {
         }
     }
 
+    /// Fill a rounded rect with a gradient. Covers exactly the pixels of
+    /// [`fill_rounded_rect`](Self::fill_rounded_rect) with the same radius;
+    /// each pixel gets the color [`fill_rect_gradient`](Self::fill_rect_gradient)
+    /// would give it. A zero radius fills a plain gradient rect.
+    pub fn fill_rounded_rect_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        gradient: &GradientStyle,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        if radius == 0 {
+            self.fill_rect_gradient(x, y, w, h, gradient);
+            return;
+        }
+        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
+        let h_max = h.saturating_sub(1).max(1);
+        let w_max = w.saturating_sub(1).max(1);
+        rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                let c = lerp_color_ratio(top, bottom, dy as u32, h_max);
+                self.fill_span(y + dy, x + x0, x + x1, c);
+            },
+            GradientStyle::Horizontal { left, right } => {
+                for dx in x0..x1 {
+                    let c = lerp_color_ratio(left, right, dx as u32, w_max);
+                    self.set_pixel(x + dx, y + dy, c);
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                let l = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
+                let rt = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
+                for dx in x0..x1 {
+                    let c = lerp_color_ratio(l, rt, dx as u32, w_max);
+                    self.set_pixel(x + dx, y + dy, c);
+                }
+            },
+        });
+    }
+
     // -----------------------------------------------------------------------
     // Text rendering
     // -----------------------------------------------------------------------
 
-    /// Render bitmap font text into the buffer.
-    ///
-    /// Uses the shared `oasis_types::bitmap_font` glyph data. The `glyph_fn`
-    /// and `metrics_fn` parameters allow callers to provide their own glyph
-    /// lookup (typically `font::glyph` and `font::glyph_metrics`).
+    /// Render text in the built-in bitmap font, scaled to `font_size`
+    /// pixels, optionally faux-bold / faux-italic ([`glyph_mask`]). Glyphs
+    /// advance by `glyph_advance_scaled`, so the drawn width equals
+    /// `bitmap_measure_text`. Every ink pixel is blended once.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_bitmap_text<F, M>(
+    pub fn draw_text(
         &mut self,
         text: &str,
         x: i32,
         y: i32,
         font_size: u16,
         color: Color,
-        glyph_fn: F,
-        metrics_fn: M,
-    ) where
-        F: Fn(char) -> &'static [u8; 8],
-        M: Fn(char) -> (u8, u8),
-    {
+        bold: bool,
+        italic: bool,
+    ) {
         if text.is_empty() || color.a == 0 || font_size == 0 {
             return;
         }
-        let scale = if font_size >= 8 {
-            (font_size / 8) as i32
-        } else {
-            1
-        };
-
+        let mut mask = std::mem::take(&mut self.glyph_scratch);
         let mut cx = x;
         for ch in text.chars() {
-            let glyph_data: &[u8; 8] = glyph_fn(ch);
-            let (left_pad, advance) = metrics_fn(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph_data[row as usize];
-                // Emit each run of set bits as one scaled span per sub-row.
-                let mut col = 0i32;
-                while col < 8 {
-                    if bits & (0x80 >> col) == 0 {
-                        col += 1;
-                        continue;
-                    }
-                    let start = col;
-                    while col < 8 && bits & (0x80 >> col) != 0 {
-                        col += 1;
-                    }
-                    let xs = cx + (start - left_pad) * scale;
-                    let xe = cx + (col - left_pad) * scale;
-                    for sy in 0..scale {
-                        self.fill_span(y + row * scale + sy, xs, xe, color);
-                    }
-                }
-            }
-            cx += advance as i32 * scale;
+            let (gw, _) = glyph_mask(ch, font_size, bold, italic, &mut mask);
+            mask_runs(&mask, gw, |gy, x0, x1| {
+                self.fill_span(y + gy, cx + x0, cx + x1, color);
+            });
+            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         }
+        self.glyph_scratch = mask;
     }
 
     // -----------------------------------------------------------------------
@@ -980,20 +1052,51 @@ fn blend_pixel(buffer: &mut [u8], offset: usize, color: Color) {
     }
 }
 
-/// Source-over blend `color` into one RGBA pixel. The destination alpha is
-/// always forced to 255 (the buffers are treated as opaque surfaces).
+/// Source-over blend `color` into one straight-alpha RGBA pixel.
+///
+/// Opaque destinations (the framebuffer) take the fast path; translucent
+/// ones (render-target layers, which start fully transparent) go through
+/// [`blend_over_translucent`] so a layer keeps the coverage and color of
+/// what was painted into it.
 #[inline]
 fn blend_px(px: &mut [u8; 4], color: Color) {
     if color.a == 255 {
         *px = [color.r, color.g, color.b, 255];
     } else if color.a > 0 {
+        if px[3] != 255 {
+            blend_over_translucent(px, color);
+            return;
+        }
         let sa = color.a as u16;
         let da = 255 - sa;
         px[0] = ((color.r as u16 * sa + px[0] as u16 * da + 127) / 255) as u8;
         px[1] = ((color.g as u16 * sa + px[1] as u16 * da + 127) / 255) as u8;
         px[2] = ((color.b as u16 * sa + px[2] as u16 * da + 127) / 255) as u8;
-        px[3] = 255;
     }
+}
+
+/// Porter-Duff source-over of a translucent `color` onto a destination
+/// pixel whose alpha is below 255, in straight (non-premultiplied) alpha:
+/// `a = sa + da * (1 - sa)`, `c = (cs * sa + cd * da * (1 - sa)) / a`.
+///
+/// Over a fully transparent pixel the result is exactly `color`; over an
+/// opaque one it equals the fast path of [`blend_px`].
+#[cold]
+fn blend_over_translucent(px: &mut [u8; 4], color: Color) {
+    let sa = color.a as u32;
+    // Destination weight and output alpha, both scaled by 255.
+    let dw = px[3] as u32 * (255 - sa);
+    let out = sa * 255 + dw;
+    if out == 0 {
+        return;
+    }
+    let mix = |s: u8, d: u8| ((s as u32 * sa * 255 + d as u32 * dw + out / 2) / out) as u8;
+    *px = [
+        mix(color.r, px[0]),
+        mix(color.g, px[1]),
+        mix(color.b, px[2]),
+        ((out + 127) / 255) as u8,
+    ];
 }
 
 /// Blend an RGBA source row over an equally long destination row.
@@ -1521,31 +1624,31 @@ mod tests {
             }
         }
 
-        pub fn text(buf: &mut SoftwareBuffer, text: &str, x: i32, y: i32, fs: u16, c: Color) {
-            let scale = if fs >= 8 { (fs / 8) as i32 } else { 1 };
+        /// Per-pixel reference for `draw_text`: every ink pixel of every
+        /// glyph mask set individually.
+        #[allow(clippy::too_many_arguments)]
+        pub fn text(
+            buf: &mut SoftwareBuffer,
+            text: &str,
+            x: i32,
+            y: i32,
+            fs: u16,
+            c: Color,
+            bold: bool,
+            italic: bool,
+        ) {
             let mut cx = x;
+            let mut mask = Vec::new();
             for ch in text.chars() {
-                let glyph_data = oasis_types::bitmap_font::glyph(ch);
-                let (left_pad, advance) = oasis_types::bitmap_font::glyph_metrics(ch);
-                let left_pad = left_pad as i32;
-                for row in 0..8i32 {
-                    let bits = glyph_data[row as usize];
-                    for col in 0..8i32 {
-                        if bits & (0x80 >> col) != 0 {
-                            for sy in 0..scale {
-                                for sx in 0..scale {
-                                    set_pixel(
-                                        buf,
-                                        cx + (col - left_pad) * scale + sx,
-                                        y + row * scale + sy,
-                                        c,
-                                    );
-                                }
-                            }
+                let (gw, gh) = glyph_mask(ch, fs, bold, italic, &mut mask);
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        if mask[(gy * gw + gx) as usize] {
+                            set_pixel(buf, cx + gx as i32, y + gy as i32, c);
                         }
                     }
                 }
-                cx += advance as i32 * scale;
+                cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, fs) as i32;
             }
         }
 
@@ -1773,18 +1876,11 @@ mod tests {
                 },
                 _ => {
                     let fs = rng.range(0, 33) as u16;
-                    let text = "Hi! gjpq {Oasis} 0123 _|~";
-                    fast.draw_bitmap_text(
-                        text,
-                        x,
-                        y,
-                        fs,
-                        c[0],
-                        oasis_types::bitmap_font::glyph,
-                        oasis_types::bitmap_font::glyph_metrics,
-                    );
+                    let (bold, italic) = (rng.one_in(3), rng.one_in(3));
+                    let text = "Hi! gjpq {Oasis} 0123 _|~ \u{25B2}";
+                    fast.draw_text(text, x, y, fs, c[0], bold, italic);
                     if fs != 0 {
-                        reference::text(&mut slow, text, x, y, fs, c[0]);
+                        reference::text(&mut slow, text, x, y, fs, c[0], bold, italic);
                     }
                 },
             }
@@ -1901,6 +1997,70 @@ mod tests {
             buf.fill_circle(25, 25, r, fill);
             assert_uniform_single_blend(&buf, bg, fill);
         }
+    }
+
+    #[test]
+    fn translucent_thick_line_and_ring_blend_each_pixel_once() {
+        let bg = Color::rgb(0, 0, 0);
+        let fill = Color::rgba(255, 255, 255, 100);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.draw_line(3, 5, 40, 30, 4, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.stroke_circle(25, 25, 20, 5, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+        let mut buf = SoftwareBuffer::new(50, 50);
+        buf.clear(bg);
+        buf.stroke_rounded_rect(2, 2, 44, 30, 9, 3, fill);
+        assert_uniform_single_blend(&buf, bg, fill);
+    }
+
+    /// Regression: blending assumed an opaque destination and forced its
+    /// alpha to 255, so translucent paint inside a render-target layer
+    /// (cleared to transparent) came out blended with black and opaque --
+    /// a 50% red fill in an opacity layer composited as dark, solid red.
+    #[test]
+    fn translucent_paint_in_transparent_layer_composites_like_direct_paint() {
+        let paint = Color::rgba(230, 40, 30, 128);
+        let mut layer = SoftwareBuffer::new(4, 1);
+        layer.fill_rect(0, 0, 4, 1, paint);
+        assert_eq!(
+            &layer.data()[..4],
+            &[230, 40, 30, 128],
+            "straight alpha kept"
+        );
+        // A second translucent coat accumulates coverage.
+        layer.fill_rect(2, 0, 2, 1, Color::rgba(40, 90, 240, 160));
+        assert!(layer.data()[3 * 4 + 3] > 200);
+
+        let mut direct = SoftwareBuffer::new(4, 1);
+        direct.clear(Color::WHITE);
+        direct.fill_rect(0, 0, 4, 1, paint);
+        direct.fill_rect(2, 0, 2, 1, Color::rgba(40, 90, 240, 160));
+        let mut composed = SoftwareBuffer::new(4, 1);
+        composed.clear(Color::WHITE);
+        composed.composite_rgba(0, 0, 4, 1, layer.data(), 1.0);
+        for (a, b) in composed.data().iter().zip(direct.data()) {
+            assert!(
+                a.abs_diff(*b) <= 2,
+                "{:?} vs {:?}",
+                composed.data(),
+                direct.data()
+            );
+        }
+    }
+
+    #[test]
+    fn composite_multiply_keeps_transparent_pixels() {
+        let mut layer = SoftwareBuffer::new(2, 1);
+        layer.fill_rect(1, 0, 1, 1, Color::rgb(255, 128, 0));
+        let mut fb = SoftwareBuffer::new(2, 1);
+        fb.clear(Color::rgb(200, 200, 200));
+        fb.composite_rgba_blend(0, 0, 2, 1, layer.data(), 1.0, BlendMode::Multiply);
+        assert_eq!(&fb.data()[..4], &[200, 200, 200, 255], "transparent pixel");
+        assert_eq!(&fb.data()[4..], &[200, 100, 0, 255], "backdrop * source");
     }
 
     #[test]

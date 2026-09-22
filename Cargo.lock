@@ -1194,10 +1194,13 @@ dependencies = [
  "env_logger",
  "log",
  "oasis-audio",
+ "oasis-backend-ue5",
  "oasis-core",
  "oasis-rasterize",
  "oasis-shader",
+ "oasis-test-backend",
  "oasis-types",
+ "png",
  "rmp3",
  "sdl3",
 ]

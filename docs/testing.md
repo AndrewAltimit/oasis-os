@@ -7,6 +7,7 @@ OASIS_OS has three layers of automated tests:
 | Unit tests | `#[cfg(test)] mod tests` in every crate | Logic of one module in isolation |
 | Integration suites | `crates/*/tests/` | A crate's public API end to end |
 | **Shell end-to-end** | `crates/oasis-app/tests/e2e_*.rs` | Full user flows through the real desktop shell |
+| **Backend parity** | `crates/oasis-backend-sdl/tests/backend_parity.rs`, `crates/oasis-app/tests/sdl_parity.rs` | SDL rendering differently from the software rasterizer the harness uses |
 
 Unit tests alone miss *wiring* bugs: a Settings slider that updates app
 state but never reaches the audio path, a key the host swallows before the
@@ -165,10 +166,58 @@ Observation
 ### Limits
 
 - Rendering is the software rasterizer, not SDL/GPU. Backend-specific
-  bugs (e.g. SDL texture pitch handling) need backend tests; the harness
-  catches everything above the `SdiBackend` boundary.
+  bugs (e.g. SDL texture pitch handling) are covered by the backend
+  parity suites below; the harness catches everything above the
+  `SdiBackend` boundary.
 - The animated boot splash is not played during `Harness` boots (the
   `BootObserver` hook receives its progress instead); render splash frames
   directly with `BootSplash::render_at`.
 - The ffmpeg decode path and real network streaming are out of scope;
   `oasis-video` and `tv_controller` have their own tests for those.
+
+## Backend parity
+
+The SDL3 backend, the UE5 software framebuffer (`oasis-rasterize`, what
+the harness and the FFI render with) and the WASM canvas backend must put
+the same pixels on screen for the same `SdiBackend` calls. Shapes, glyphs
+and line metrics come from shared definitions in `oasis-rasterize`
+(`glyph_mask`, `bitmap_line_height` / `bitmap_ascent`, and the span
+generators `thick_line_rows`, `stroke_circle_rows`,
+`stroke_rounded_rect_rows`, `polygon_rows`, `rounded_rect_rows`); the
+parity suites check the backends actually agree.
+
+```bash
+# ~60 primitive scenarios, SDL vs software, plus SDL-only texture
+# streaming (update_texture at odd widths, the shader wallpaper bridge):
+cargo test -p oasis-backend-sdl --test backend_parity
+# The real boot splash and settled dashboards through Shell<SdlBackend>
+# vs the harness backend:
+cargo test -p oasis-app --test sdl_parity
+```
+
+- **Scenarios** live in `oasis_test_backend::conformance::SCENARIOS`:
+  a draw function over `&mut dyn SdiBackend`, optional absolute checks
+  (exact rect bounds, clip containment, unsheared odd-width textures, the
+  mathematically expected blend of a translucent layer) and a
+  cross-backend `Tolerance`. Any tolerance above exact must carry a note
+  saying why; today they are alpha-blend rounding (SDL truncates, the
+  rasterizer rounds: 1-3 levels) and SDL's linear filtering of *scaled*
+  textures (the rasterizer samples nearest). Add a scenario whenever a
+  backend grows a new primitive or a rendering bug is fixed.
+- **Headless SDL**: `SdlBackend::new_headless` forces the `offscreen`
+  video driver and the `software` renderer through in-process SDL hints,
+  so the suites need no display and run in the CI container. SDL may only
+  be initialized from one thread at a time, so each suite serializes its
+  SDL tests behind a lock.
+- **Hardware renderers**: the software renderer packs texture rows
+  tightly, so it can never exercise a padded texture pitch (the D3D11
+  "diagonal stripes" bug). Run the same suites against a GPU renderer
+  locally with `OASIS_PARITY_RENDER_DRIVER=direct3d11` (or `opengl`,
+  `vulkan`, `metal`).
+- **Failure dumps**: mismatching frames are written as PNGs (`-sdl`,
+  `-ue5`/`-soft`, `-diff`) under `target/tmp/backend-parity/` and
+  `target/tmp/sdl-parity/`; `OASIS_PARITY_DUMP=1` dumps every shell frame.
+- **Not covered**: skin TrueType fonts (`SdiText::set_font`) are
+  rendered by SDL only; the UE5 backend keeps the bitmap font. The WASM
+  backend's canvas calls cannot run natively; only its shared pure-Rust
+  pieces (glyph masks, metrics) are exercised.

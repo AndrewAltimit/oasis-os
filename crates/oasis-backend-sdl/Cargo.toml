@@ -20,6 +20,11 @@ log = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }
+# Backend conformance suite (tests/backend_parity.rs): the shared scenarios
+# and the software framebuffer SDL output is compared against.
+oasis-test-backend = { workspace = true }
+oasis-backend-ue5 = { workspace = true }
+png = { workspace = true }
 
 [lints]
 workspace = true
