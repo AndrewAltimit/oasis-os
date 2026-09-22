@@ -1101,6 +1101,8 @@ impl BrowserWidget {
                             "checkbox" => {
                                 let checked = elem.get_attribute("checked").is_some();
                                 let label = String::new();
+                                // A checkbox without `value` submits "on".
+                                let value = elem.get_attribute("value").unwrap_or("on").to_string();
                                 form_manager.add_element(
                                     form_id,
                                     FormElement::Checkbox {
@@ -1113,6 +1115,7 @@ impl BrowserWidget {
                             },
                             "radio" => {
                                 let checked = elem.get_attribute("checked").is_some();
+                                let value = elem.get_attribute("value").unwrap_or("on").to_string();
                                 form_manager.add_element(
                                     form_id,
                                     FormElement::RadioButton {
