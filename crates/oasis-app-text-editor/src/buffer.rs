@@ -5,6 +5,11 @@
 //! character boundaries (every mutator clamps with
 //! `str::floor_char_boundary`), so multi-byte input never panics.
 
+use std::cell::RefCell;
+
+use crate::cache::HighlightCache;
+use crate::highlight::{ColorSpan, FileType};
+
 /// A `(line, byte column)` position inside the buffer.
 pub type Pos = (usize, usize);
 
@@ -76,8 +81,13 @@ pub fn end_pos(start: Pos, text: &str) -> Pos {
 #[derive(Debug, Clone)]
 pub struct EditorBuffer {
     pub(crate) lines: Vec<String>,
-    /// Bumped on every mutation.
+    /// Bumped on every mutation; keys the visible-span cache.
     generation: u64,
+    /// Syntax-highlight cache (per-line block-comment state + spans of the
+    /// last drawn window). Interior-mutable because rendering takes
+    /// `&self`; every `&mut self` mutator invalidates it from the edited
+    /// line down.
+    highlight: RefCell<HighlightCache>,
 }
 
 impl Default for EditorBuffer {
@@ -96,6 +106,7 @@ impl EditorBuffer {
         Self {
             lines,
             generation: 0,
+            highlight: RefCell::new(HighlightCache::default()),
         }
     }
 
@@ -114,9 +125,11 @@ impl EditorBuffer {
         self.generation
     }
 
-    /// Record a mutation at `line`.
-    fn touch(&mut self, _line: usize) {
+    /// Record a mutation at `line`: bump the generation and drop cached
+    /// highlight state for `line` and everything below it.
+    fn touch(&mut self, line: usize) {
         self.generation = self.generation.wrapping_add(1);
+        self.highlight.get_mut().invalidate_from(line);
     }
 
     /// Number of lines in the buffer.
@@ -307,6 +320,26 @@ impl EditorBuffer {
     /// Serialize the entire buffer to a single string.
     pub fn text(&self) -> String {
         self.lines.join("\n")
+    }
+
+    /// Run `f` over the highlighted spans of lines `first..first + count`
+    /// (clamped to the buffer). Spans are recomputed only when the buffer
+    /// generation, file type or window changed since the last call.
+    pub(crate) fn with_visible_spans<R>(
+        &self,
+        file_type: FileType,
+        first: usize,
+        count: usize,
+        f: impl FnOnce(&[Vec<ColorSpan>]) -> R,
+    ) -> R {
+        let mut cache = self.highlight.borrow_mut();
+        f(cache.visible(&self.lines, file_type, self.generation, first, count))
+    }
+
+    /// Number of `highlight_line` calls the syntax cache has made so far
+    /// (diagnostics: a steady frame must not increase it).
+    pub fn highlight_calls(&self) -> u64 {
+        self.highlight.borrow().calls()
     }
 }
 

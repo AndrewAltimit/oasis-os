@@ -20,6 +20,7 @@ use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
 use oasis_vfs::Vfs;
 
 pub mod buffer;
+mod cache;
 pub mod colors;
 mod editor;
 pub mod highlight;
