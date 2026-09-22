@@ -226,10 +226,10 @@ impl WindowManager {
             self.layout_window_sdi(window, sdi);
             let minimized = window.state == super::window::WindowState::Minimized;
             for suffix in window.sdi_suffixes() {
-                if minimized || (window.fullscreen_kiosk && *suffix != "content") {
-                    if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
-                        obj.visible = false;
-                    }
+                if (minimized || (window.fullscreen_kiosk && *suffix != "content"))
+                    && let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix))
+                {
+                    obj.visible = false;
                 }
             }
         }
