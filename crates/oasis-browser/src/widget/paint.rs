@@ -170,7 +170,7 @@ impl BrowserWidget {
 
         // Execute deferred scripts after first paint.
         #[cfg(feature = "javascript")]
-        if !self.deferred_scripts.is_empty() && !self.display_list.is_empty() {
+        if !self.deferred_scripts.is_empty() && !self.display_list_stale {
             self.execute_deferred_scripts();
         }
 
@@ -245,8 +245,10 @@ impl BrowserWidget {
         if let Some(layout) = &self.layout_root {
             // Rebuild display list when layout changed or on first paint.
             // The display list is also cleared by load_html on navigation.
-            let needs_rebuild =
-                layout_changed || self.display_list.is_empty() || self.full_repaint_needed;
+            let needs_rebuild = layout_changed
+                || self.display_list_stale
+                || self.display_list.is_empty()
+                || self.full_repaint_needed;
 
             // Capture dirty rects before clearing them.
             let has_dirty_rects = !self.dirty_rects.is_empty();
@@ -483,6 +485,12 @@ impl BrowserWidget {
                     )?;
                 }
             }
+        }
+
+        // Whatever path ran above, the display list now matches the
+        // current layout.
+        if self.layout_root.is_some() {
+            self.display_list_stale = false;
         }
 
         // Paint SVG/Canvas elements that can't be represented in the display list.

@@ -3412,6 +3412,33 @@ fn static_page_stops_wanting_frames() {
     assert!(!browser.wants_frame());
 }
 
+/// A page whose display list records nothing (empty body, zero-size
+/// content) used to keep `wants_frame` true forever: an empty display
+/// list was taken to mean "not recorded yet", so the host never elided a
+/// frame while such a page was open.
+#[test]
+fn page_that_draws_nothing_stops_wanting_frames() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/blank").unwrap();
+    vfs.write(
+        "/sites/blank/index.html",
+        b"<html><head><title>Blank</title></head><body></body></html>",
+    )
+    .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/blank/index.html", &vfs);
+    assert!(browser.wants_frame(), "a fresh page must be painted");
+    let mut backend = MockBackend::new();
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn >= 1, "the fresh page must be painted once");
+    for _ in 0..10 {
+        browser.tick(&vfs);
+        assert!(!browser.wants_frame(), "blank page must elide frames");
+    }
+}
+
 #[test]
 fn window_moves_and_resizes_want_a_frame() {
     let vfs = test_vfs();

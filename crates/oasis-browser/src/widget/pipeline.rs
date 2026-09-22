@@ -1014,6 +1014,7 @@ impl BrowserWidget {
         self.last_layout_w = self.window_w;
         // Invalidate the cached display list so it gets rebuilt on next paint.
         self.display_list.clear();
+        self.display_list_stale = true;
 
         // 8. Update navigation (skip if restoring from history).
         if !self.skip_nav_push {
@@ -1795,6 +1796,7 @@ impl BrowserWidget {
         self.layout_dirty = true;
         self.full_repaint_needed = true;
         self.display_list.clear();
+        self.display_list_stale = true;
     }
 
     /// Walk the DOM to collect inline `style=""` attributes and parse

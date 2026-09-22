@@ -584,6 +584,13 @@ pub struct BrowserWidget {
     /// Rebuilt only when layout changes; replayed on each frame.
     display_list: paint::display_list::DisplayList,
 
+    /// Set when the display list was invalidated (navigation, restyle)
+    /// and not yet re-recorded by `paint`. Tracked separately from
+    /// `display_list.is_empty()`: a page that records no items at all
+    /// (an empty `<body>`, a page of blank space) has an empty list
+    /// after recording too, and must not keep requesting frames.
+    display_list_stale: bool,
+
     /// Scroll Y position at which the display list was last recorded.
     /// When scroll changes, we replay with adjusted offsets instead of
     /// rebuilding. A full rebuild is forced when layout changes.
@@ -752,6 +759,7 @@ impl BrowserWidget {
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),
             display_list: paint::display_list::DisplayList::new(),
+            display_list_stale: false,
             display_list_scroll_y: 0,
             display_list_scroll_x: 0,
             link_map_scroll_y: 0,
@@ -839,16 +847,15 @@ impl BrowserWidget {
     /// don't: `tick` keeps running them on elided frames, and one that
     /// fires marks the layout dirty.
     ///
-    /// An empty display list over a laid-out page is how a fresh
-    /// navigation shows up (`paint` re-records it); a page that records
-    /// no display items at all therefore keeps wanting frames — harmless
-    /// for correctness, just not elided.
+    /// A fresh navigation or restyle invalidates the display list;
+    /// the frame that re-records it is wanted, later ones are not (even
+    /// when the page records no display items at all).
     pub fn wants_frame(&self) -> bool {
         let repaint_pending = self.layout_dirty
             || self.full_repaint_needed
             || !self.dirty_rects.is_empty()
             || self.image_info_dirty
-            || (self.layout_root.is_some() && self.display_list.is_empty())
+            || (self.layout_root.is_some() && self.display_list_stale)
             // Scroll not yet painted (`paint` syncs the link-map offset
             // on every scroll replay or re-record).
             || self.link_map_scroll_y != self.scroll.scroll_y
