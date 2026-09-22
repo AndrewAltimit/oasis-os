@@ -1014,9 +1014,12 @@ impl<B: ShellBackend> Shell<B> {
             transition::apply_assemble(sdi, &state.active_theme, trans);
         }
 
-        // Drive browser image streaming (progressive loading).
+        // Drive browser image streaming (progressive loading), and keep
+        // the window title in step with the page title.
         if let Some(ref mut bw) = state.content.browser {
             bw.tick(vfs);
+            let title = launch::browser_window_title(bw);
+            state.wm.set_window_title("browser", &title, sdi);
         }
 
         let (redraw, scene_changed) = self.needs_redraw(now);
