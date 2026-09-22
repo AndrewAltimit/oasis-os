@@ -546,7 +546,6 @@ fn photo_viewer_at_and_all_themes() {
 /// `data[25]` after checking only `len >= 24` (PNG) and `data[6..10]`
 /// after `len >= 6` (GIF), so a 24-byte PNG or a bare `GIF89a` panics.
 #[test]
-#[ignore = "panics in oasis-app-core file_viewer::view_image_file (reported, not in this crate)"]
 fn photo_viewer_survives_minimal_headers() {
     let mut vfs = MemoryVfs::new();
     mkdirs(&mut vfs, PHOTOS);
