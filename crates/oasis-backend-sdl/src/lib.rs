@@ -665,10 +665,12 @@ fn sdl_blend_for(mode: BlendMode) -> sdl3::render::BlendMode {
     use sdl3::render::BlendMode as Sdl;
     match mode {
         BlendMode::Normal => Sdl::Blend,
-        // SDL3 `MOD` is `dst * src`, matching CSS `multiply` closely enough
-        // for alpha-1 src. Non-unit alpha will drift but is still closer
-        // than plain alpha over.
-        BlendMode::Multiply => Sdl::Mod,
+        // SDL3 `MUL` is `dst * src + dst * (1 - srcA)`. Layer contents are
+        // alpha-blended into a transparent target, so its colors are
+        // premultiplied and this is exactly CSS `multiply`, including the
+        // layer's transparent pixels, which leave the backdrop untouched.
+        // (`MOD`, plain `dst * src`, ignored alpha and blackened them.)
+        BlendMode::Multiply => Sdl::Mul,
         // Everything else: software path is TODO, degrade to standard
         // alpha blending so the page still renders.
         _ => Sdl::Blend,
@@ -700,6 +702,39 @@ impl SdiRenderTarget for SdlBackend {
         if raw_tex.is_null() {
             return Err(OasisError::Backend(
                 format!("SDL_CreateTexture (target {w}x{h}) failed").into(),
+            ));
+        }
+        // SDL leaves a new target texture's contents undefined, and the
+        // Direct3D 11 driver hands back recycled VRAM: a layer that draws
+        // nothing (or only part of its bounds) would composite whatever a
+        // previously destroyed same-size target held, e.g. last frame's
+        // `mask-image` layer showing up under a `filter: blur` element.
+        // Callers expect a fresh target to be fully transparent, so clear
+        // it once here, then restore whichever target was bound.
+        let restore: *mut sdl3::sys::render::SDL_Texture = self
+            .current_render_target
+            .and_then(|id| self.render_targets.get(&id))
+            .map_or(std::ptr::null_mut(), sdl_texture_raw);
+        // SAFETY: raw_renderer is the canvas's valid renderer; raw_tex was
+        // just created on it with TARGET access, and `restore` is either
+        // null (the window) or a live target texture owned by this backend.
+        // SDL_RenderClear ignores the blend mode and writes the draw color
+        // (transparent black) straight into the target.
+        let cleared = unsafe {
+            use sdl3::sys::render::{SDL_RenderClear, SDL_SetRenderDrawColor, SDL_SetRenderTarget};
+            let ok = SDL_SetRenderTarget(raw_renderer, raw_tex)
+                && SDL_SetRenderDrawColor(raw_renderer, 0, 0, 0, 0)
+                && SDL_RenderClear(raw_renderer);
+            SDL_SetRenderTarget(raw_renderer, restore) && ok
+        };
+        // The raw draw-color change bypassed the cached color.
+        self.last_draw_color = None;
+        if !cleared {
+            // SAFETY: raw_tex is the valid texture created above and is
+            // not referenced anywhere else yet.
+            unsafe { sdl3::sys::render::SDL_DestroyTexture(raw_tex) };
+            return Err(OasisError::Backend(
+                format!("clearing new render target ({w}x{h}) failed").into(),
             ));
         }
         // SAFETY: raw_tex is a valid SDL_Texture; wrap in Rust handle.
@@ -1368,6 +1403,99 @@ mod tests {
         backend.clear(Color::BLACK).unwrap();
         backend.blit(tex, 0, 0, w, h).unwrap();
         assert_eq!(backend.read_pixels(0, 0, w, h).unwrap(), flipped);
+    }
+
+    #[test]
+    #[ignore]
+    fn render_target_composites_under_active_clip() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        // A browser window's content clip, away from the origin.
+        backend.set_clip_rect(20, 20, 40, 40).unwrap();
+        let rt = backend.create_render_target(13, 7).unwrap();
+        backend.bind_render_target(rt).unwrap();
+        backend
+            .fill_rect(0, 0, 13, 7, Color::rgb(0, 200, 0))
+            .unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 30, 30, 13, 7, BlendMode::Normal, 1.0)
+            .unwrap();
+        backend.reset_clip_rect().unwrap();
+        let px = backend.read_pixels(30, 30, 13, 7).unwrap();
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            assert_eq!(p, &[0, 200, 0, 255], "pixel {i} of the composited layer");
+        }
+    }
+
+    /// `mix-blend-mode: multiply` layers are bigger than their painted
+    /// content; the transparent remainder must not darken the backdrop.
+    #[test]
+    #[ignore]
+    fn render_target_multiply_keeps_transparent_pixels() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::rgb(200, 200, 200)).unwrap();
+        let rt = backend.create_render_target(12, 12).unwrap();
+        backend.bind_render_target(rt).unwrap();
+        backend
+            .fill_rect(4, 4, 4, 4, Color::rgb(255, 128, 0))
+            .unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 10, 10, 12, 12, BlendMode::Multiply, 1.0)
+            .unwrap();
+        // Transparent corner: backdrop unchanged.
+        assert_eq!(
+            &backend.read_pixels(10, 10, 1, 1).unwrap()[..],
+            &[200, 200, 200, 255]
+        );
+        // Painted center: backdrop * source.
+        let c = backend.read_pixels(15, 15, 1, 1).unwrap();
+        assert!(
+            c[0] >= 198 && (99..=101).contains(&c[1]) && c[2] == 0,
+            "{c:?}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn render_target_starts_transparent() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Churn some textures so a recycled allocation would carry junk.
+        for _ in 0..4 {
+            let rt = backend.create_render_target(13, 7).unwrap();
+            backend.bind_render_target(rt).unwrap();
+            backend
+                .fill_rect(0, 0, 13, 7, Color::rgb(255, 128, 0))
+                .unwrap();
+            backend.unbind_render_target().unwrap();
+            backend
+                .composite_render_target(rt, 0, 0, 13, 7, BlendMode::Normal, 1.0)
+                .unwrap();
+            backend.destroy_render_target(rt).unwrap();
+            backend.swap_buffers().unwrap();
+        }
+        backend.clear(Color::rgb(0, 0, 90)).unwrap();
+        let rt = backend.create_render_target(13, 7).unwrap();
+        // Draw nothing into it: compositing must leave the frame as-is.
+        backend.bind_render_target(rt).unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 10, 10, 13, 7, BlendMode::Normal, 1.0)
+            .unwrap();
+        let px = backend.read_pixels(10, 10, 13, 7).unwrap();
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            assert_eq!(p, &[0, 0, 90, 255], "pixel {i} under an empty layer");
+        }
     }
 
     #[test]
