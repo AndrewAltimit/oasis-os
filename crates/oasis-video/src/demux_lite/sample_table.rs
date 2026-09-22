@@ -336,6 +336,50 @@ pub(super) fn sample_pts(table: &SampleTable, sample_idx: usize) -> u64 {
     (dts as i64 + cts_offset).max(0) as u64
 }
 
+/// Decode timestamp (stts only, no ctts) and duration of a sample, in
+/// timescale units.  Decode order is what demuxers iterate and seek in, so
+/// unlike [`sample_pts`] this is monotonic in `sample_idx`.
+pub(super) fn sample_dts_delta(table: &SampleTable, sample_idx: usize) -> (u64, u32) {
+    let mut dts = 0u64;
+    let mut sample = 0usize;
+    let mut last_delta = 0u32;
+    for entry in &table.stts {
+        let count = entry.sample_count as usize;
+        if sample + count > sample_idx {
+            let dts = dts.saturating_add(
+                ((sample_idx - sample) as u64).saturating_mul(entry.sample_delta as u64),
+            );
+            return (dts, entry.sample_delta);
+        }
+        dts = dts.saturating_add((count as u64).saturating_mul(entry.sample_delta as u64));
+        sample += count;
+        last_delta = entry.sample_delta;
+    }
+    // Beyond the stts range: extrapolate with the last delta.
+    let extra = (sample_idx.saturating_sub(sample) as u64).saturating_mul(last_delta as u64);
+    (dts.saturating_add(extra), last_delta)
+}
+
+/// Index of the sample whose decode interval contains `target_dts` (the
+/// last sample starting at or before it).  Mirrors how symphonia's isomp4
+/// demuxer resolves a seek timestamp to a sample.
+pub(super) fn sample_containing_dts(table: &SampleTable, target_dts: u64) -> usize {
+    let mut dts = 0u64;
+    let mut sample = 0usize;
+    for entry in &table.stts {
+        let count = entry.sample_count as u64;
+        let delta = entry.sample_delta as u64;
+        let span = count.saturating_mul(delta);
+        if delta > 0 && target_dts < dts.saturating_add(span) {
+            let within = (target_dts.saturating_sub(dts) / delta) as usize;
+            return sample + within;
+        }
+        dts = dts.saturating_add(span);
+        sample += count as usize;
+    }
+    sample.saturating_sub(1)
+}
+
 /// Check if a sample is a keyframe.
 pub(super) fn is_keyframe(table: &SampleTable, sample_idx: usize) -> bool {
     if table.stss.is_empty() {

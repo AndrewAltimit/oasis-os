@@ -108,7 +108,9 @@ pub(super) fn parse_boxes<R: Read + Seek>(
 
         let bt = header.box_type;
 
-        if CONTAINER_BOXES.contains(&bt) {
+        if bt == *b"trak" {
+            parse_trak(r, header.content_offset, box_end, video, audio)?;
+        } else if CONTAINER_BOXES.contains(&bt) {
             parse_boxes(r, header.content_offset, box_end, video, audio)?;
         } else if bt == *b"stsd" {
             // Skip 8-byte fullbox header (version + flags + entry_count).
@@ -127,14 +129,74 @@ pub(super) fn parse_boxes<R: Read + Seek>(
             parse_co64(r, header.content_offset, header.content_size, video, audio)?;
         } else if bt == *b"stss" {
             parse_stss(r, header.content_offset, header.content_size, video, audio)?;
-        } else if bt == *b"mdhd" {
-            parse_mdhd(r, header.content_offset, header.content_size, video, audio)?;
         }
+        // `mdhd` is handled per-track by `parse_trak`: it precedes `stsd`
+        // (which creates the track), so it cannot be routed through
+        // `current_track_mut` like the sample-table boxes.
 
         pos = box_end;
     }
 
     Ok(())
+}
+
+/// Parse one `trak` box in isolation.
+///
+/// Each track is parsed into fresh slots so its boxes can only land on the
+/// track it creates: `mdhd` (which precedes `stsd`) gets its timescale
+/// applied to the right track, and the sample tables of tracks this demuxer
+/// does not keep (a second video track, text/timecode tracks) are dropped
+/// instead of being merged into an already-parsed track.
+fn parse_trak<R: Read + Seek>(
+    r: &mut R,
+    start: u64,
+    end: u64,
+    video: &mut Option<TrackInfo>,
+    audio: &mut Option<TrackInfo>,
+) -> Result<(), LiteError> {
+    let mut trak_video = None;
+    let mut trak_audio = None;
+    parse_boxes(r, start, end, &mut trak_video, &mut trak_audio)?;
+    let timescale = find_mdhd_timescale(r, start, end)?;
+
+    for (slot, parsed) in [(video, trak_video), (audio, trak_audio)] {
+        if let Some(mut track) = parsed
+            && slot.is_none()
+        {
+            if let Some(ts) = timescale {
+                track.table.timescale = ts;
+            }
+            *slot = Some(track);
+        }
+    }
+    Ok(())
+}
+
+/// Find `trak/mdia/mdhd` within `[start, end)` and return its timescale.
+fn find_mdhd_timescale<R: Read + Seek>(
+    r: &mut R,
+    start: u64,
+    end: u64,
+) -> Result<Option<u32>, LiteError> {
+    let mut pos = start;
+    while pos < end {
+        r.seek(SeekFrom::Start(pos))?;
+        let Some(header) = read_box_header(r)? else {
+            break;
+        };
+        let box_end = header.content_offset + header.content_size;
+        if box_end > end {
+            break;
+        }
+        if header.box_type == *b"mdia" {
+            return find_mdhd_timescale(r, header.content_offset, box_end);
+        }
+        if header.box_type == *b"mdhd" {
+            return read_mdhd_timescale(r, header.content_offset).map(Some);
+        }
+        pos = box_end;
+    }
+    Ok(None)
 }
 
 /// Get a mutable reference to the "current" (last-added) track being built.
@@ -416,34 +478,15 @@ pub(super) fn read_desc_len(data: &[u8]) -> (usize, usize) {
     (len, consumed)
 }
 
-/// Parse mdhd box for timescale.
-fn parse_mdhd<R: Read + Seek>(
-    r: &mut R,
-    offset: u64,
-    _size: u64,
-    video: &mut Option<TrackInfo>,
-    audio: &mut Option<TrackInfo>,
-) -> Result<(), LiteError> {
+/// Read the timescale from an mdhd box whose content starts at `offset`.
+fn read_mdhd_timescale<R: Read + Seek>(r: &mut R, offset: u64) -> Result<u32, LiteError> {
     r.seek(SeekFrom::Start(offset))?;
     let version_flags = read_u32_be(r)?;
     let version = version_flags >> 24;
-
-    let timescale = if version == 0 {
-        // Skip creation_time(4) + modification_time(4).
-        let mut skip = [0u8; 8];
-        r.read_exact(&mut skip)?;
-        read_u32_be(r)?
-    } else {
-        // v1: skip creation_time(8) + modification_time(8).
-        let mut skip = [0u8; 16];
-        r.read_exact(&mut skip)?;
-        read_u32_be(r)?
-    };
-
-    if let Some(track) = current_track_mut(video, audio) {
-        track.table.timescale = timescale;
-    }
-    Ok(())
+    // Skip creation_time + modification_time (4 bytes each in v0, 8 in v1).
+    let skip = if version == 0 { 8 } else { 16 };
+    r.seek(SeekFrom::Current(skip))?;
+    read_u32_be(r)
 }
 
 // ---------------------------------------------------------------------------
