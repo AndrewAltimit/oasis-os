@@ -200,59 +200,47 @@ fn expand_one_glob(pattern: &str, vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
 pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    glob_match_inner(&p, &t, 0, 0, 0)
-}
 
-/// Maximum recursion depth for glob matching to prevent stack overflow.
-const GLOB_MAX_DEPTH: usize = 256;
-
-fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize, depth: usize) -> bool {
-    if depth >= GLOB_MAX_DEPTH {
-        return false;
-    }
-    if pi == p.len() && ti == t.len() {
-        return true;
-    }
-    if pi == p.len() {
-        return false;
-    }
-    if p[pi] == '*' {
-        // Try matching zero or more chars.
-        for skip in 0..=(t.len() - ti) {
-            if glob_match_inner(p, t, pi + 1, ti + skip, depth + 1) {
-                return true;
-            }
-        }
-        false
-    } else if p[pi] == '[' {
-        // Character class: [abc], [a-z], [!abc], [^abc].
-        if ti >= t.len() {
-            return false;
-        }
-        match parse_char_class(p, pi) {
-            Some((negate, chars, end_pi)) => {
-                let found = chars.contains(&t[ti]);
-                let matched = if negate { !found } else { found };
-                if matched {
-                    glob_match_inner(p, t, end_pi, ti + 1, depth + 1)
-                } else {
-                    false
-                }
+    // Iterative wildcard matching with single-star backtracking: O(p * t)
+    // worst case, no recursion (so no depth limit on long names and no
+    // exponential blow-up on patterns like `*a*a*a*b`).
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // Position after the most recent `*` and the text index it resumes at.
+    let mut star: Option<(usize, usize)> = None;
+    while ti < t.len() {
+        let step = match p.get(pi) {
+            Some('*') => {
+                star = Some((pi + 1, ti));
+                pi += 1;
+                continue;
             },
-            None => {
-                // Malformed bracket: treat '[' as literal.
-                if ti < t.len() && p[pi] == t[ti] {
-                    glob_match_inner(p, t, pi + 1, ti + 1, depth + 1)
-                } else {
-                    false
-                }
+            Some('?') => Some(pi + 1),
+            Some('[') => match parse_char_class(&p, pi) {
+                Some((negate, chars, end_pi)) => {
+                    (chars.contains(&t[ti]) != negate).then_some(end_pi)
+                },
+                // Malformed bracket: treat '[' as a literal.
+                None => (t[ti] == '[').then_some(pi + 1),
             },
+            Some(&c) => (c == t[ti]).then_some(pi + 1),
+            None => None,
+        };
+        match (step, star) {
+            (Some(next), _) => {
+                pi = next;
+                ti += 1;
+            },
+            (None, Some((star_pi, star_ti))) => {
+                // Let the last `*` absorb one more character and retry.
+                pi = star_pi;
+                ti = star_ti + 1;
+                star = Some((star_pi, star_ti + 1));
+            },
+            (None, None) => return false,
         }
-    } else if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-        glob_match_inner(p, t, pi + 1, ti + 1, depth + 1)
-    } else {
-        false
     }
+    // Only trailing stars may remain.
+    p[pi..].iter().all(|&c| c == '*')
 }
 
 /// Parse a character class starting at `p[pi]` which is `[`.
@@ -313,7 +301,8 @@ fn parse_char_class(p: &[char], pi: usize) -> Option<(bool, Vec<char>, usize)> {
 
 /// Match a case pattern against a value.
 ///
-/// Supports `*` (wildcard), `|` (alternation), and literal matching.
+/// Supports glob wildcards (`*`, `?`, `[...]`), `|` (alternation), and
+/// literal matching.
 pub(crate) fn case_pattern_matches(value: &str, pattern: &str) -> bool {
     for alt in pattern.split('|') {
         let alt = alt.trim();
@@ -323,28 +312,20 @@ pub(crate) fn case_pattern_matches(value: &str, pattern: &str) -> bool {
         if alt == value {
             return true;
         }
-        if alt.contains('*') && glob_match_simple(value, alt) {
+        if glob_match_simple(value, alt) {
             return true;
         }
     }
     false
 }
 
-/// Simple glob matching supporting `*` as wildcard.
+/// Glob matching with the operands in `(value, pattern)` order.
+///
+/// Formerly a prefix/suffix special case that mishandled patterns with more
+/// than one `*` (e.g. `*alpha*` never matched); now full [`glob_match`]
+/// semantics (`*`, `?`, `[...]`).
 pub(crate) fn glob_match_simple(value: &str, pattern: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return value.starts_with(prefix);
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return value.ends_with(suffix);
-    }
-    if let Some((prefix, suffix)) = pattern.split_once('*') {
-        return value.starts_with(prefix) && value.ends_with(suffix);
-    }
-    value == pattern
+    glob_match(pattern, value)
 }
 
 // ---------------------------------------------------------------------------
