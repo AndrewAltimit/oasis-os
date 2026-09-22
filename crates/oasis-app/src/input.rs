@@ -5,7 +5,6 @@ use oasis_core::input::{Button, InputEvent, Key, KeyTwinFilter, Modifiers, Trigg
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
-use oasis_core::terminal::Environment;
 use oasis_core::transition;
 use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
@@ -14,7 +13,7 @@ use oasis_core::wm::manager::WmEvent;
 use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
-use crate::{commands, icon_drag, launch};
+use crate::{commands, icon_drag, launch, terminal_input};
 
 /// Launch the dashboard app at page index `idx` as a floating window.
 ///
@@ -357,15 +356,21 @@ pub fn handle_desktop_input(
         InputEvent::ButtonPress(Button::Start) if !state.skin.features.window_manager => {
             state.mode = Mode::Terminal;
         },
+        // Windowed terminal: line editing (text, Backspace, Tab, d-pad,
+        // Confirm, Square) goes to the shell session.
+        InputEvent::TextInput(_)
+        | InputEvent::Backspace
+        | InputEvent::Tab
+        | InputEvent::ButtonPress(_)
+            if state.wm.active_window() == Some("terminal")
+                && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::TextInput(ch) => match state.wm.active_window() {
             Some("browser") => {
                 if let Some(ref mut bw) = state.content.browser {
                     bw.handle_input(&InputEvent::TextInput(*ch), vfs);
                 }
             },
-            Some("terminal") => {
-                state.terminal.input_buf.push(*ch);
-            },
+            Some("terminal") => {},
             Some(active_id) => {
                 if let Some((_, runner)) = state
                     .content
@@ -384,9 +389,7 @@ pub fn handle_desktop_input(
                     bw.handle_input(&InputEvent::Backspace, vfs);
                 }
             },
-            Some("terminal") => {
-                state.terminal.input_buf.pop();
-            },
+            Some("terminal") => {},
             Some(active_id) => {
                 if let Some((_, runner)) = state
                     .content
@@ -432,39 +435,6 @@ pub fn handle_desktop_input(
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::ButtonPress(*btn), vfs);
                     }
-                } else if active_id == "terminal" && *btn == Button::Confirm {
-                    // Execute command in windowed terminal.
-                    let line = state.terminal.input_buf.clone();
-                    state.terminal.input_buf.clear();
-                    state.terminal.scroll_offset = 0;
-                    if !line.is_empty() {
-                        state.terminal.output_lines.push(format!("> {line}"));
-                        let pending_skin_swap;
-                        {
-                            let mut env = Environment {
-                                cwd: state.terminal.cwd.clone(),
-                                vfs,
-                                power: Some(&state.platform),
-                                time: Some(&state.platform),
-                                usb: Some(&state.platform),
-                                network: None,
-                                tls: Some(&state.net.tls_provider),
-                                stdin: None,
-                                stderr: String::new(),
-                            };
-                            let result = state
-                                .terminal
-                                .cmd_reg
-                                .execute(&line, &mut env)
-                                .map(|out| terminal_sdi::resolve_sdi_inspect(out, sdi));
-                            state.terminal.cwd = env.cwd;
-                            pending_skin_swap = commands::process_command_output(result, state);
-                        }
-                        if let Some(name) = pending_skin_swap {
-                            commands::apply_skin_swap(&name, state, sdi, vfs);
-                        }
-                    }
-                    commands::trim_output(&mut state.terminal.output_lines);
                 } else if let Some((_, runner)) = state
                     .content
                     .open_runners
@@ -788,6 +758,14 @@ pub fn handle_event(
             key_filter.suppress_twin(*key, *mods);
             return InputResult::Continue;
         }
+        // Terminal line-editing shortcuts (Home/End/Delete, Ctrl+A/E/K/...,
+        // Ctrl+R search). Their twins (e.g. Ctrl+E's R-trigger) are dropped.
+        if terminal_input::focused(state)
+            && terminal_input::handle_key(*key, *mods, state, sdi, vfs)
+        {
+            key_filter.suppress_twin(*key, *mods);
+            return InputResult::Continue;
+        }
         let typing = key.produces_text(*mods) && text_focus(state);
         let consumed = route_key(key, *mods, state, sdi, vfs);
         if consumed || typing {
@@ -980,49 +958,14 @@ pub fn handle_default_input(
             _ => {},
         },
 
-        // Terminal input.
-        InputEvent::TextInput(ch) if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.push(*ch);
-        },
-        InputEvent::Backspace if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.pop();
-        },
-        InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Terminal => {
-            let line = state.terminal.input_buf.clone();
-            state.terminal.input_buf.clear();
-            state.terminal.scroll_offset = 0;
-            if !line.is_empty() {
-                state.terminal.output_lines.push(format!("> {line}"));
-                let pending_skin_swap;
-                {
-                    let mut env = Environment {
-                        cwd: state.terminal.cwd.clone(),
-                        vfs,
-                        power: Some(&state.platform),
-                        time: Some(&state.platform),
-                        usb: Some(&state.platform),
-                        network: None,
-                        tls: Some(&state.net.tls_provider),
-                        stdin: None,
-                        stderr: String::new(),
-                    };
-                    let result = state
-                        .terminal
-                        .cmd_reg
-                        .execute(&line, &mut env)
-                        .map(|out| terminal_sdi::resolve_sdi_inspect(out, sdi));
-                    state.terminal.cwd = env.cwd;
-                    pending_skin_swap = commands::process_command_output(result, state);
-                }
-                if let Some(name) = pending_skin_swap {
-                    commands::apply_skin_swap(&name, state, sdi, vfs);
-                }
-            }
-            commands::trim_output(&mut state.terminal.output_lines);
-        },
-        InputEvent::ButtonPress(Button::Square) if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.pop();
-        },
+        // Terminal input: line editing (text, Backspace, Tab, d-pad,
+        // Confirm, Square) goes to the shell session.
+        InputEvent::TextInput(_)
+        | InputEvent::Backspace
+        | InputEvent::Tab
+        | InputEvent::ButtonPress(_)
+            if state.mode == Mode::Terminal
+                && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.mode = Mode::Dashboard;
@@ -1182,7 +1125,7 @@ mod tests {
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),
                 cwd: "/".to_string(),
-                input_buf: String::new(),
+                session: oasis_core::terminal::ShellSession::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,
@@ -1323,23 +1266,23 @@ mod tests {
         state.mode = Mode::Terminal;
         handle_default_input(&InputEvent::TextInput('h'), &mut state, &mut sdi, &mut vfs);
         handle_default_input(&InputEvent::TextInput('i'), &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.terminal.input_buf, "hi");
+        assert_eq!(state.terminal.session.buffer(), "hi");
     }
 
     #[test]
     fn terminal_backspace() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "abc".to_string();
+        state.terminal.session.set_line("abc");
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.terminal.input_buf, "ab");
+        assert_eq!(state.terminal.session.buffer(), "ab");
     }
 
     #[test]
     fn terminal_confirm_executes_command() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "echo hello".to_string();
+        state.terminal.session.set_line("echo hello");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -1347,7 +1290,7 @@ mod tests {
             &mut vfs,
         );
         // Input buffer should be cleared.
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
         // The command prompt should be in output.
         assert!(
             state
@@ -1362,7 +1305,7 @@ mod tests {
     fn terminal_confirm_empty_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -1400,14 +1343,14 @@ mod tests {
     fn terminal_square_deletes_char() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "xyz".to_string();
+        state.terminal.session.set_line("xyz");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert_eq!(state.terminal.input_buf, "xy");
+        assert_eq!(state.terminal.session.buffer(), "xy");
     }
 
     // -- handle_osk_input --
@@ -1650,30 +1593,30 @@ mod tests {
         for ch in "hello world".chars() {
             handle_default_input(&InputEvent::TextInput(ch), &mut state, &mut sdi, &mut vfs);
         }
-        assert_eq!(state.terminal.input_buf, "hello world");
+        assert_eq!(state.terminal.session.buffer(), "hello world");
     }
 
     #[test]
     fn terminal_backspace_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
     }
 
     #[test]
     fn terminal_square_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
     }
 
     #[test]
@@ -2099,6 +2042,211 @@ mod tests {
             &mut vfs,
         );
         assert_eq!(state.ui.desktops.active_desktop(), 1);
+    }
+
+    /// Events a keyboard backend emits for one key press: `Key`, its
+    /// gamepad-style twin (if any), then `TextInput` for typing keys.
+    fn sdl_key(key: Key, mods: Modifiers) -> Vec<InputEvent> {
+        let mut events = vec![InputEvent::Key { key, mods }];
+        events.extend(key.legacy_press(mods));
+        if key.produces_text(mods) {
+            match key {
+                Key::Char(c) => events.push(InputEvent::TextInput(c)),
+                Key::Space => events.push(InputEvent::TextInput(' ')),
+                _ => {},
+            }
+        }
+        events
+    }
+
+    fn feed(
+        events: &[InputEvent],
+        filter: &mut KeyTwinFilter,
+        state: &mut AppState,
+        sdi: &mut SdiRegistry,
+        vfs: &mut MemoryVfs,
+    ) {
+        for ev in events {
+            handle_event(ev, filter, state, sdi, vfs);
+        }
+    }
+
+    #[test]
+    fn terminal_keyboard_line_editing_history_and_completion() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        let mut f = KeyTwinFilter::default();
+        for ch in "echo wrld".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        // Arrow keys arrive as Key + d-pad twin; the twin moves the cursor.
+        for _ in 0..3 {
+            feed(
+                &sdl_key(Key::Left, Modifiers::NONE),
+                &mut f,
+                &mut state,
+                &mut sdi,
+                &mut vfs,
+            );
+        }
+        feed(&sdl_typing('o'), &mut f, &mut state, &mut sdi, &mut vfs);
+        assert_eq!(state.terminal.session.buffer(), "echo world");
+        assert_eq!(state.terminal.session.cursor_col(), 7);
+        feed(
+            &sdl_key(Key::Home, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 0);
+        feed(
+            &sdl_key(Key::Char('e'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 10);
+
+        // Enter runs it and records it in the persisted history file.
+        feed(
+            &sdl_key(Key::Enter, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.output_lines.iter().any(|l| l == "world"));
+        let saved = oasis_core::vfs::Vfs::read(&vfs, "/home/user/.oasis_history")
+            .expect("history file written");
+        assert_eq!(saved, b"echo world\n");
+
+        // Up recalls it.
+        feed(
+            &sdl_key(Key::Up, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.buffer(), "echo world");
+
+        // Ctrl+U clears; Tab completes a command name.
+        feed(
+            &sdl_key(Key::Char('u'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        for ch in "hist".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        feed(
+            &sdl_key(Key::Tab, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.buffer(), "history ");
+
+        // Ctrl+C abandons the line with a ^C echo.
+        feed(
+            &sdl_key(Key::Char('c'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.session.buffer().is_empty());
+        assert_eq!(
+            state.terminal.output_lines.last().map(String::as_str),
+            Some("> history ^C")
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn windowed_terminal_ctrl_e_does_not_switch_desktop() {
+        let (mut state, mut sdi, mut vfs) = open_window("Terminal");
+        assert_eq!(state.wm.active_window(), Some("terminal"));
+        let mut f = KeyTwinFilter::default();
+        for ch in "ls".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        feed(
+            &sdl_key(Key::Char('a'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 0);
+        // Ctrl+E's twin is the R-trigger (next desktop); it must be dropped.
+        feed(
+            &sdl_key(Key::Char('e'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 2);
+        assert_eq!(state.ui.desktops.active_desktop(), 0);
+        // Gamepad d-pad still edits: Left moves the cursor.
+        handle_event(
+            &InputEvent::ButtonPress(Button::Left),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 1);
+        // Confirm runs the line in the windowed terminal.
+        handle_event(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.output_lines.iter().any(|l| l == "> ls"));
+    }
+
+    #[test]
+    fn terminal_background_job_runs_on_poll() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        crate::terminal_input::run_line("echo later &", &mut state, &mut sdi, &mut vfs);
+        assert!(!state.terminal.output_lines.iter().any(|l| l == "later"));
+        crate::terminal_input::poll_jobs(&mut state, &mut sdi, &mut vfs);
+        assert!(state.terminal.output_lines.iter().any(|l| l == "later"));
+        assert!(
+            state
+                .terminal
+                .output_lines
+                .iter()
+                .any(|l| l.contains("Done") && l.contains("echo later"))
+        );
+    }
+
+    #[test]
+    fn terminal_sdi_get_prints_fields() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        sdi.create("probe").x = 42;
+        crate::terminal_input::run_line("sdi get probe", &mut state, &mut sdi, &mut vfs);
+        assert!(state.terminal.output_lines.iter().any(|l| l == "probe:"));
+        assert!(
+            state
+                .terminal
+                .output_lines
+                .iter()
+                .any(|l| l.contains("pos") && l.contains("42"))
+        );
     }
 
     #[test]

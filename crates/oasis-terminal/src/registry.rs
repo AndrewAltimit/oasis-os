@@ -270,7 +270,7 @@ impl CommandRegistry {
 
     /// Replace the command history (e.g. with entries loaded from disk).
     ///
-    /// Blank entries are dropped and at most the newest [`MAX_HISTORY`]
+    /// Blank entries are dropped and at most the newest 500 (`MAX_HISTORY`)
     /// entries are kept.
     pub fn set_history(&self, entries: Vec<String>) {
         let mut entries: Vec<String> = entries

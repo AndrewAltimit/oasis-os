@@ -136,6 +136,14 @@ impl AppRunner {
         self.sync_from_delegate();
     }
 
+    /// Set a Terminal runner's text cursor column (characters) within the
+    /// trailing prompt line; `None` hides it. No-op for other runners.
+    pub fn set_terminal_cursor(&mut self, col: Option<usize>) {
+        if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>() {
+            simple.set_prompt_cursor(col);
+        }
+    }
+
     /// Sync terminal scrollback plus a trailing prompt line into a
     /// Terminal runner, incrementally (see
     /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)).

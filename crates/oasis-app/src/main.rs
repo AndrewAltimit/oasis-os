@@ -25,6 +25,7 @@ mod radio_controller;
 mod radio_soak;
 mod render;
 mod sysinfo;
+mod terminal_input;
 mod tv_controller;
 mod ui_sfx;
 mod video_player;
@@ -53,8 +54,8 @@ use oasis_core::skin::resolve_skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
-    CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
-    register_tv_commands,
+    CommandRegistry, ShellSession, register_agent_commands, register_builtins,
+    register_plugin_commands, register_tv_commands,
 };
 use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
@@ -410,7 +411,7 @@ fn main() -> Result<()> {
         terminal: TerminalLayer {
             cmd_reg,
             cwd: "/".to_string(),
-            input_buf: String::new(),
+            session: ShellSession::new(),
             output_lines: vec![
                 "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
                 "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
@@ -671,6 +672,11 @@ fn main() -> Result<()> {
     // Drops the gamepad-style twin of a key press already consumed as a
     // shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
     let mut key_filter = oasis_core::input::KeyTwinFilter::default();
+    // Restore the terminal history persisted in the VFS (Up / Ctrl+R).
+    state
+        .terminal
+        .session
+        .load_history(&state.terminal.cmd_reg, &vfs);
 
     'running: loop {
         let iter_start = std::time::Instant::now();
@@ -719,6 +725,9 @@ fn main() -> Result<()> {
 
         // Poll remote client for received data.
         commands::poll_remote_client(&mut state);
+
+        // Run the next queued background terminal job (`cmd &`), if any.
+        terminal_input::poll_jobs(&mut state, &mut sdi, &mut vfs);
 
         // Process pending VFS requests from app runners (e.g. radio tune).
         // Skip TV Guide tune requests — they're handled by the dedicated video

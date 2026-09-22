@@ -75,6 +75,9 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             // other modes are covered by the `sdi_signature = None` reset
             // below; edits made *in* the terminal echo into the
             // scrollback and change the hash themselves.
+            // Input line as shown after the prompt (reverse-search aware) and
+            // the cursor column within it.
+            let (input_text, cursor_col) = state.terminal.session.display();
             let sig = {
                 use std::hash::{Hash, Hasher};
                 let at = &state.active_theme;
@@ -87,7 +90,8 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     line.hash(&mut h);
                 }
                 term.cwd.hash(&mut h);
-                term.input_buf.hash(&mut h);
+                input_text.hash(&mut h);
+                cursor_col.hash(&mut h);
                 term.scroll_offset.hash(&mut h);
                 cursor_visible.hash(&mut h);
                 (
@@ -109,11 +113,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 h.finish()
             };
             if state.terminal.sdi_signature != Some(sig) {
-                terminal_sdi::setup_terminal_objects(
+                terminal_sdi::setup_terminal_objects_with_cursor(
                     sdi,
                     &state.terminal.output_lines,
                     &state.terminal.cwd,
-                    &state.terminal.input_buf,
+                    &input_text,
+                    cursor_col,
                     state.terminal.scroll_offset,
                     &state.active_theme,
                     cursor_visible,
@@ -151,11 +156,13 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             // frames where the terminal actually changed — a mouse drag over
             // the desktop must not deep-copy 2000 lines per frame.
             if state.terminal.dirty {
+                let (input_text, cursor_col) = state.terminal.session.display();
+                let focused = state.wm.active_window() == Some("terminal");
                 let term = &state.terminal;
                 let changed = term.sync_signature.as_ref().is_none_or(|sig| {
                     sig.0 != term.output_lines.len()
                         || sig.1 != term.scroll_offset
-                        || sig.2 != term.input_buf
+                        || sig.2 != input_text
                         || Some(sig.3.as_str()) != term.output_lines.first().map(String::as_str)
                         || Some(sig.4.as_str()) != term.output_lines.last().map(String::as_str)
                 });
@@ -164,37 +171,32 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
+                {
+                    // Cursor column within the prompt line ("> " + input),
+                    // drawn only while the terminal window has focus.
+                    runner.set_terminal_cursor(focused.then_some(2 + cursor_col));
                     // A freshly (re)opened runner has not received this
                     // content yet even if the signature matches — its line
                     // count (scrollback + prompt) gives that away.
-                    && (changed || runner.lines.len() != state.terminal.output_lines.len() + 1)
-                {
-                    // Incremental sync: only lines not already in the
-                    // runner are cloned (was a full scrollback clone here
-                    // plus another inside the runner).
-                    let prompt = format!("> {}", state.terminal.input_buf);
-                    runner.sync_terminal_lines(
-                        &state.terminal.output_lines,
-                        &prompt,
-                        state.terminal.scroll_offset,
-                    );
-                    state.terminal.sync_signature = Some((
-                        state.terminal.output_lines.len(),
-                        state.terminal.scroll_offset,
-                        state.terminal.input_buf.clone(),
-                        state
-                            .terminal
-                            .output_lines
-                            .first()
-                            .cloned()
-                            .unwrap_or_default(),
-                        state
-                            .terminal
-                            .output_lines
-                            .last()
-                            .cloned()
-                            .unwrap_or_default(),
-                    ));
+                    if changed || runner.lines.len() != state.terminal.output_lines.len() + 1 {
+                        // Incremental sync: only lines not already in the
+                        // runner are cloned (was a full scrollback clone
+                        // here plus another inside the runner).
+                        let prompt = format!("> {input_text}");
+                        runner.sync_terminal_lines(
+                            &state.terminal.output_lines,
+                            &prompt,
+                            state.terminal.scroll_offset,
+                        );
+                        let term = &state.terminal;
+                        state.terminal.sync_signature = Some((
+                            term.output_lines.len(),
+                            term.scroll_offset,
+                            input_text,
+                            term.output_lines.first().cloned().unwrap_or_default(),
+                            term.output_lines.last().cloned().unwrap_or_default(),
+                        ));
+                    }
                 }
                 state.terminal.dirty = false;
             }

@@ -1273,7 +1273,7 @@ mod tests {
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),
                 cwd: "/".to_string(),
-                input_buf: String::new(),
+                session: oasis_core::terminal::ShellSession::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,

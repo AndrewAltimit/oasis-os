@@ -20,7 +20,7 @@ use oasis_core::plugin::PluginManager;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::CommandRegistry;
+use oasis_core::terminal::{CommandRegistry, ShellSession};
 use oasis_core::toast::ToastManager;
 use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
@@ -65,10 +65,11 @@ pub struct UiLayer {
 pub struct TerminalLayer {
     pub cmd_reg: CommandRegistry,
     pub cwd: String,
-    pub input_buf: String,
+    /// Input line editor, tab completion and persistent history.
+    pub session: ShellSession,
     pub output_lines: Vec<String>,
     pub scroll_offset: usize,
-    /// Set when output_lines or input_buf changes; cleared after sync.
+    /// Set when output_lines or the input line changes; cleared after sync.
     pub dirty: bool,
     /// Signature of the content last synced to the windowed terminal
     /// runner: (lines len, scroll offset, input buffer, first line, last
@@ -303,7 +304,7 @@ mod tests {
         let _terminal = TerminalLayer {
             cmd_reg: CommandRegistry::new(),
             cwd: "/".to_string(),
-            input_buf: String::new(),
+            session: ShellSession::new(),
             output_lines: Vec::new(),
             scroll_offset: 0,
             dirty: true,
