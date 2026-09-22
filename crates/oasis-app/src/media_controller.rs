@@ -5,10 +5,13 @@
 //! at [`MEDIA_REQUEST_PATH`]. The app writes `play_file <path>` when the
 //! user opens a track and `stop` when they back out of the view.
 //!
+//! While a track plays the controller also reports the real playback
+//! position to [`MEDIA_POSITION_PATH`] for the app's progress bar.
+//!
 //! Format is deliberately line-based and human readable — mirrors the
 //! radio_controller pattern.
 
-use oasis_app_media::MEDIA_REQUEST_PATH;
+use oasis_app_media::{MEDIA_POSITION_PATH, MEDIA_REQUEST_PATH};
 use oasis_core::backend::AudioBackend;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
@@ -23,6 +26,7 @@ use crate::app_state::AppState;
 /// payload). This prevents the "rapidly click two tracks in one tick
 /// and one of them gets silently dropped" race.
 pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
+    publish_position(state, vfs);
     let Ok(data) = vfs.read(MEDIA_REQUEST_PATH) else {
         return;
     };
@@ -59,9 +63,46 @@ pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
     for req in to_process {
         if let Some(path) = req.strip_prefix("play_file ") {
             play_file(state, vfs, path);
+            if state.media_track.is_some() {
+                write_position(state, vfs, path);
+            }
         } else if req == "stop" {
             stop_track(state);
+            let _ = vfs.write(MEDIA_POSITION_PATH, b"");
         }
+    }
+}
+
+/// Position-report granularity: the Music Player's readout is m:ss and
+/// its bar a few hundred pixels wide, so 250 ms steps are plenty and
+/// avoid rewriting the IPC file every frame.
+const POSITION_STEP_MS: u64 = 250;
+
+/// Write `<position_ms> <duration_ms> <path>` to [`MEDIA_POSITION_PATH`]
+/// so the Music Player can draw a real progress bar.
+fn write_position(state: &AppState, vfs: &mut MemoryVfs, path: &str) {
+    let pos = state.audio_backend.position_ms() / POSITION_STEP_MS * POSITION_STEP_MS;
+    let line = format!("{pos} {} {path}", state.audio_backend.duration_ms());
+    let unchanged = vfs
+        .read(MEDIA_POSITION_PATH)
+        .is_ok_and(|prev| prev == line.as_bytes());
+    if !unchanged {
+        let _ = vfs.write(MEDIA_POSITION_PATH, line.as_bytes());
+    }
+}
+
+/// Refresh the position report for the track that is playing (its path
+/// is carried in the report written by `play_file`).
+fn publish_position(state: &AppState, vfs: &mut MemoryVfs) {
+    if state.media_track.is_none() {
+        return;
+    }
+    let Ok(prev) = vfs.read(MEDIA_POSITION_PATH) else {
+        return;
+    };
+    let prev = String::from_utf8_lossy(&prev).into_owned();
+    if let Some(path) = prev.trim().splitn(3, ' ').nth(2) {
+        write_position(state, vfs, path);
     }
 }
 

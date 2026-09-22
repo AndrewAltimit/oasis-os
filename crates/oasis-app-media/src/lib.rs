@@ -20,6 +20,7 @@ use oasis_vfs::Vfs;
 
 pub mod image;
 mod music_ui;
+pub mod palette;
 mod photo_ui;
 
 /// File-browsing app implementing the `App` trait.
@@ -74,6 +75,11 @@ pub struct BrowsingApp {
     track_title: Option<String>,
     track_duration_str: Option<String>,
     track_size_bytes: Option<usize>,
+    /// Host-reported `(position_ms, duration_ms)` of the current track,
+    /// read from [`MEDIA_POSITION_PATH`] in `tick`. `None` until the
+    /// host reports a position for *this* file (the progress bar is
+    /// hidden meanwhile).
+    playback: Option<(u64, u64)>,
 }
 
 /// How files should be viewed when opened.
@@ -124,7 +130,45 @@ impl BrowsingApp {
             track_title: None,
             track_duration_str: None,
             track_size_bytes: None,
+            playback: None,
         }
+    }
+
+    /// Host-reported `(position_ms, duration_ms)` for the open track, or
+    /// `None` when no real position is known.
+    pub fn playback(&self) -> Option<(u64, u64)> {
+        self.playback
+    }
+
+    /// Record the host's playback position for the open track.
+    ///
+    /// A zero duration means "unknown" and clears the position. Hosts
+    /// that hold the app directly can call this instead of the
+    /// [`MEDIA_POSITION_PATH`] IPC file.
+    pub fn set_playback(&mut self, position_ms: u64, duration_ms: u64) {
+        self.playback = (duration_ms > 0).then_some((position_ms.min(duration_ms), duration_ms));
+    }
+
+    /// Poll [`MEDIA_POSITION_PATH`] (`<position_ms> <duration_ms> <path>`)
+    /// and adopt it when it refers to the open track. A missing report
+    /// leaves the position untouched (a host may use
+    /// [`set_playback`](Self::set_playback) instead); a report for a
+    /// different file clears it. Returns `true` when the displayed
+    /// position changed.
+    fn poll_playback(&mut self, vfs: &dyn Vfs) -> bool {
+        let before = self.playback;
+        let Some(viewing) = self.content.viewing_file.as_deref() else {
+            self.playback = None;
+            return self.playback != before;
+        };
+        let Ok(data) = vfs.read(MEDIA_POSITION_PATH) else {
+            return false;
+        };
+        match parse_position_report(&String::from_utf8_lossy(&data), viewing) {
+            Some((pos, dur)) => self.set_playback(pos, dur),
+            None => self.playback = None,
+        }
+        self.playback != before
     }
 
     /// Decoded image for the currently viewed photo, if any.
@@ -409,6 +453,7 @@ impl BrowsingApp {
         self.track_title = None;
         self.track_duration_str = None;
         self.track_size_bytes = None;
+        self.playback = None;
 
         let data = match vfs.read(path) {
             Ok(d) => d,
@@ -576,6 +621,23 @@ fn format_duration(secs: u32) -> String {
 /// `play_file <path>` / `stop` requests from the same path.
 pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
 
+/// VFS path where the audio host reports the Music Player track's real
+/// playback position, as `<position_ms> <duration_ms> <path>` (the
+/// values of `AudioBackend::position_ms` / `duration_ms`). The path
+/// field lets the app ignore a stale report for a previous track.
+pub const MEDIA_POSITION_PATH: &str = "/var/audio/position";
+
+/// Parse a [`MEDIA_POSITION_PATH`] report, returning
+/// `(position_ms, duration_ms)` when it refers to `viewing` and the
+/// duration is known (non-zero).
+fn parse_position_report(report: &str, viewing: &str) -> Option<(u64, u64)> {
+    let mut parts = report.trim().splitn(3, ' ');
+    let pos = parts.next()?.parse::<u64>().ok()?;
+    let dur = parts.next()?.parse::<u64>().ok()?;
+    let path = parts.next()?;
+    (path == viewing && dur > 0).then_some((pos, dur))
+}
+
 /// How long each photo stays on screen in slideshow mode.
 pub const SLIDESHOW_INTERVAL_MS: u32 = 5_000;
 
@@ -739,6 +801,10 @@ impl App for BrowsingApp {
     fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
         // Mix frame timing into the shuffle sequence.
         self.rng.next_u32();
+
+        if matches!(self.viewer_mode, ViewerMode::Audio) {
+            return self.poll_playback(vfs);
+        }
 
         if !self.slideshow
             || !matches!(self.viewer_mode, ViewerMode::Image)
@@ -1190,5 +1256,189 @@ mod tests {
         assert_eq!(app.rotation(), 0);
         assert_eq!(app.zoom_level(), 1);
         assert!(!app.slideshow_active());
+    }
+
+    // -- Theming + playback progress --
+
+    use oasis_skin::ActiveTheme;
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::Color;
+
+    const W: u32 = 400;
+    const H: u32 = 240;
+
+    fn skin_theme(name: &str) -> ActiveTheme {
+        let skin = oasis_skin::builtin::load_builtin(name).expect("skin");
+        ActiveTheme::from_skin(&skin.theme)
+    }
+
+    fn draw_cmds(app: &BrowsingApp, at: &ActiveTheme) -> Vec<DrawCommand> {
+        let mut backend = RecordingBackend::new(W, H);
+        app.draw_windowed(0, 0, W, H, &mut backend, at)
+            .expect("draw");
+        backend.commands().to_vec()
+    }
+
+    /// Color of the first full-window fill (the app background).
+    fn background(cmds: &[DrawCommand]) -> Color {
+        cmds.iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h, color, .. } if *w == W && *h == H => Some(*color),
+                _ => None,
+            })
+            .expect("background fill")
+    }
+
+    fn open_music() -> (MemoryVfs, BrowsingApp) {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        (vfs, app)
+    }
+
+    #[test]
+    fn music_background_follows_skin() {
+        let (_vfs, app) = open_music();
+        let light = skin_theme("paper");
+        let dark = skin_theme("classic");
+        let (bl, bd) = (
+            background(&draw_cmds(&app, &light)),
+            background(&draw_cmds(&app, &dark)),
+        );
+        assert_ne!(
+            bl, bd,
+            "light and dark skins must paint different backgrounds"
+        );
+        assert_eq!(bl, light.app.bg);
+        assert_eq!(bd, dark.app.bg);
+    }
+
+    #[test]
+    fn photo_background_follows_skin() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        let light = skin_theme("paper");
+        let dark = skin_theme("classic");
+        assert_ne!(
+            background(&draw_cmds(&app, &light)),
+            background(&draw_cmds(&app, &dark))
+        );
+        // The undecodable placeholder message is centered using the
+        // measured width.
+        let cmds = draw_cmds(&app, &dark);
+        let (x, text) = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::DrawText { text, x, .. } if text.contains("preview") => {
+                    Some((*x, text.clone()))
+                },
+                _ => None,
+            })
+            .expect("placeholder text");
+        let w = oasis_types::backend::bitmap_measure_text(&text, dark.font_body) as i32;
+        assert!((x - (W as i32 - w) / 2).abs() <= 1, "x={x} w={w}");
+    }
+
+    #[test]
+    fn music_progress_hidden_until_position_known() {
+        let (_vfs, mut app) = open_music();
+        let at = skin_theme("classic");
+        let colors = palette::MusicColors::from_theme(&at);
+        let rest = draw_cmds(&app, &at);
+        assert!(
+            !rest
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { h: 4, .. })),
+            "no fake progress bar"
+        );
+
+        app.set_playback(30_000, 120_000);
+        let cmds = draw_cmds(&app, &at);
+        let track_w = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h: 4, color, .. } if *color == colors.progress_track => {
+                    Some(*w)
+                },
+                _ => None,
+            })
+            .expect("progress track drawn");
+        let fill_w = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h: 4, color, .. } if *color == colors.progress_fill => {
+                    Some(*w)
+                },
+                _ => None,
+            })
+            .expect("progress fill drawn");
+        assert_eq!(fill_w, music_ui::progress_width(30_000, 120_000, track_w));
+        assert!((fill_w as i32 - track_w as i32 / 4).abs() <= 1);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "0:30 / 2:00"))
+        );
+    }
+
+    #[test]
+    fn position_report_parsing() {
+        let p = "/home/user/music/a.mp3";
+        assert_eq!(
+            parse_position_report("1500 90000 /home/user/music/a.mp3", p),
+            Some((1500, 90000))
+        );
+        assert_eq!(
+            parse_position_report("1500 90000 /other.mp3", p),
+            None,
+            "stale track"
+        );
+        assert_eq!(
+            parse_position_report("1500 0 /home/user/music/a.mp3", p),
+            None,
+            "unknown dur"
+        );
+        assert_eq!(parse_position_report("garbage", p), None);
+        assert_eq!(parse_position_report("", p), None);
+    }
+
+    #[test]
+    fn tick_polls_host_position() {
+        let (mut vfs, mut app) = open_music();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/var").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/var/audio").unwrap();
+        // No report yet: nothing changes, bar stays hidden.
+        assert!(!app.tick(16, &vfs));
+        assert_eq!(app.playback(), None);
+
+        let report = "5000 10000 /home/user/music/ambient_dawn.mp3";
+        oasis_vfs::Vfs::write(&mut vfs, MEDIA_POSITION_PATH, report.as_bytes()).unwrap();
+        assert!(app.tick(16, &vfs), "new position requests a redraw");
+        assert_eq!(app.playback(), Some((5000, 10000)));
+        assert!(!app.tick(16, &vfs), "unchanged position");
+
+        // Opening another track discards the old position; the stale
+        // report (for the previous file) is ignored.
+        app.open_file(&vfs, "/home/user/music/nightfall_theme.mp3");
+        assert_eq!(app.playback(), None);
+        app.tick(16, &vfs);
+        assert_eq!(app.playback(), None);
+    }
+
+    #[test]
+    fn music_ui_uses_theme_fonts() {
+        let (_vfs, app) = open_music();
+        let at = skin_theme("classic");
+        let cmds = draw_cmds(&app, &at);
+        let size_of = |needle: &str| {
+            cmds.iter().find_map(|c| match c {
+                DrawCommand::DrawText {
+                    text, font_size, ..
+                } if text.starts_with(needle) => Some(*font_size),
+                _ => None,
+            })
+        };
+        assert_eq!(size_of("Now Playing"), Some(at.font_hint));
+        assert_eq!(size_of("ambient_dawn"), Some(at.font_body));
     }
 }

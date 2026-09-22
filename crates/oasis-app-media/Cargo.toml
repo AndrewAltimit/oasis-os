@@ -17,5 +17,8 @@ png = { workspace = true }
 jpeg-decoder = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

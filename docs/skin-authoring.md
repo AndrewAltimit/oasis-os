@@ -854,6 +854,14 @@ Recognized slots per app:
 - **`settings`** — `bg`, `title_bar_bg`, `title_bar_text`, `text`,
   `selected_text`, `selected_bg`, `selection_accent`, `dim_text`,
   `divider`
+- **`music_player`** — `bg`, `header_rule`, `art_frame`, `art_ring`,
+  `art_fill`, `art_glyph`, `label`, `title`, `meta`, `shuffle_on`,
+  `transport_bg`, `transport_rule`, `button_bg`, `button_text`,
+  `button_primary_bg`, `button_primary_text`, `progress_track`,
+  `progress_fill`, `progress_text` (defaults come from the app-screen
+  colors and the derived widget theme — accent, surface, slider)
+- **`photo_viewer`** — `bg`, `placeholder_bg`, `placeholder_text`,
+  `footer_bg`, `footer_text`, `hint_text`
 - **`tv_guide`** — `bg`, `grid_line`, `header_bg`, `selected_bg`,
   `live_badge`, and the rest of the grid palette (see
   `TvGuideColors` in `oasis-app-tv-guide`)
