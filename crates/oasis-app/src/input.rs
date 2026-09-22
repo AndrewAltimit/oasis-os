@@ -478,6 +478,30 @@ pub fn handle_app_input(
     InputResult::Continue
 }
 
+/// Close every open app that asked to close itself outside an input
+/// handler ([`AppRunner::take_close_request`], e.g. the Text Editor after
+/// "Save & close" is written). Call once per frame after the runners'
+/// `apply_vfs_ops` and `tick`.
+pub fn apply_app_close_requests(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
+    if state
+        .content
+        .app_runner
+        .as_mut()
+        .is_some_and(AppRunner::take_close_request)
+    {
+        apply_fullscreen_action(AppAction::Exit, state, sdi, vfs);
+    }
+    let closing: Vec<String> = state
+        .content
+        .open_runners
+        .iter_mut()
+        .filter_map(|(id, runner)| runner.take_close_request().then(|| id.clone()))
+        .collect();
+    for id in closing {
+        apply_window_action(AppAction::Exit, id, state, sdi, vfs);
+    }
+}
+
 /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
 fn apply_fullscreen_action(
     action: AppAction,

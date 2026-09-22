@@ -155,6 +155,16 @@ impl AppRunner {
         }
     }
 
+    /// Take the app's pending self-close request (see
+    /// [`crate::apps::App::take_close_request`]). Hosts poll this once per
+    /// frame after [`Self::apply_vfs_ops`] and [`Self::tick`] and, when it
+    /// returns `true`, close the runner as for `AppAction::Exit`.
+    pub fn take_close_request(&mut self) -> bool {
+        self.delegate
+            .as_mut()
+            .is_some_and(|app| app.take_close_request())
+    }
+
     /// Whether the app's window needs to be redrawn: its content changed
     /// since the last [`Self::mark_drawn`], or the app animates
     /// continuously ([`crate::apps::App::wants_frame`]).
@@ -542,6 +552,72 @@ mod tests {
             ticks += 1;
             assert!(ticks < 20, "snake must step within ~100 ms");
         }
+    }
+
+    /// Minimal app that asks to close itself from `tick`.
+    #[derive(Debug)]
+    struct SelfClosingApp {
+        lines: Vec<String>,
+        close: bool,
+    }
+
+    impl App for SelfClosingApp {
+        fn title(&self) -> &str {
+            "Self Closing"
+        }
+        fn path(&self) -> &str {
+            "/apps/Self Closing"
+        }
+        fn handle_input(&mut self, _button: &Button, _vfs: &dyn Vfs) -> AppAction {
+            AppAction::None
+        }
+        fn update_sdi(&mut self, _sdi: &mut SdiRegistry, _at: &ActiveTheme) {}
+        fn draw_windowed(
+            &self,
+            _cx: i32,
+            _cy: i32,
+            _cw: u32,
+            _ch: u32,
+            _backend: &mut dyn SdiBackend,
+            _at: &ActiveTheme,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
+        fn tick(&mut self, _dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+            self.close = true;
+            false
+        }
+        fn take_close_request(&mut self) -> bool {
+            std::mem::take(&mut self.close)
+        }
+        fn lines(&self) -> &[String] {
+            &self.lines
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn take_close_request_forwards_to_delegate() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::from_delegate(Box::new(SelfClosingApp {
+            lines: Vec::new(),
+            close: false,
+        }));
+        assert!(!runner.take_close_request());
+        runner.tick(16, &vfs);
+        assert!(runner.take_close_request());
+        assert!(!runner.take_close_request(), "request is consumed");
+
+        // Apps that never self-close keep the default.
+        let mut terminal = AppRunner::launch(&make_app("Terminal"), &vfs);
+        terminal.tick(16, &vfs);
+        assert!(!terminal.take_close_request());
     }
 
     #[test]

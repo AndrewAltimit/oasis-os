@@ -140,6 +140,18 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
+    /// Take a pending request to close this app.
+    ///
+    /// For closes decided *outside* an input handler -- e.g. "Save &
+    /// close", whose write only happens later in [`Self::apply_vfs_ops`].
+    /// Hosts poll this once per frame for every open app, after
+    /// `apply_vfs_ops` and [`Self::tick`], and close the app exactly as
+    /// if an input hook had returned [`AppAction::Exit`]. Returning `true`
+    /// consumes the request. Default is `false` (never self-closes).
+    fn take_close_request(&mut self) -> bool {
+        false
+    }
+
     /// Whether this app needs every frame drawn (continuous animation,
     /// video, embedded content that repaints outside the app's control).
     ///

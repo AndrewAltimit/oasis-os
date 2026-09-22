@@ -489,6 +489,9 @@ impl OasisWasm {
             for (_, runner) in &mut self.open_runners {
                 runner.tick(dt_ms, &self.vfs);
             }
+            // Apps that decided to close outside an input handler (Text
+            // Editor "Save & close" once the save above is written).
+            self.apply_app_close_requests();
 
             // Drive the YouTube search fetcher and let the embed app
             // pick up freshly-published results from VFS.

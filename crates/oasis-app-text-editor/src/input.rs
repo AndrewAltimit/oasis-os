@@ -829,9 +829,14 @@ mod tests {
         assert_eq!(key(&mut app, Key::Char('s'), NONE), Some(AppAction::None));
         app.handle_text_input('s'); // the swallowed TextInput twin
         assert!(!app.close_requested());
+        assert!(!app.take_close_request(), "no close before the write");
         assert!(app.apply_vfs_ops(&mut vfs));
         assert_eq!(vfs.read("/docs/a.txt").expect("saved"), b"yx");
         assert!(app.close_requested());
+        // The host's per-frame poll sees the close right after the write,
+        // without waiting for another input event; the request is consumed.
+        assert!(app.take_close_request());
+        assert!(!app.take_close_request());
         assert_eq!(app.handle_input(&Button::Up, &vfs), AppAction::Exit);
     }
 

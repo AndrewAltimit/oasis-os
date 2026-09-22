@@ -472,6 +472,27 @@ impl OasisWasm {
         }
     }
 
+    /// Close every open app that asked to close itself outside an input
+    /// handler (`AppRunner::take_close_request`). Called once per frame
+    /// after the runners' `apply_vfs_ops` and `tick`.
+    pub(crate) fn apply_app_close_requests(&mut self) {
+        if self
+            .app_runner
+            .as_mut()
+            .is_some_and(AppRunner::take_close_request)
+        {
+            self.apply_fullscreen_action(AppAction::Exit);
+        }
+        let closing: Vec<String> = self
+            .open_runners
+            .iter_mut()
+            .filter_map(|(id, runner)| runner.take_close_request().then(|| id.clone()))
+            .collect();
+        for id in closing {
+            self.apply_window_action(AppAction::Exit, id);
+        }
+    }
+
     /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
     fn apply_fullscreen_action(&mut self, action: AppAction) {
         match action {
