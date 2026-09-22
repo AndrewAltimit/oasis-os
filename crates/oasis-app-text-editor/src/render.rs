@@ -23,22 +23,109 @@ impl TextEditorApp {
             .collect()
     }
 
-    /// Clamp cursor column to the current line length.
-    pub(crate) fn clamp_cursor_col(&mut self) {
-        let len = self.buffer.line_len(self.cursor_line);
-        if self.cursor_col > len {
-            self.cursor_col = len;
+    /// Text rows visible in the editor viewport: the last rendered
+    /// viewport, or the fullscreen layout estimate before the first draw
+    /// (minus the status line).
+    pub(crate) fn page_lines(&self) -> usize {
+        match self.viewport_lines.get() {
+            0 => self.content.cached_max_visible.max(2) - 1,
+            n => n,
         }
     }
 
     /// Ensure the cursor line is within the visible scroll window.
     pub(crate) fn ensure_cursor_visible(&mut self) {
-        let max_vis = self.content.cached_max_visible.max(1).saturating_sub(1); // reserve 1 line for status
+        let page = self.page_lines().max(1);
         if self.cursor_line < self.content.scroll {
             self.content.scroll = self.cursor_line;
-        } else if self.cursor_line >= self.content.scroll + max_vis {
-            self.content.scroll = self.cursor_line.saturating_sub(max_vis - 1);
+        } else if self.cursor_line >= self.content.scroll + page {
+            self.content.scroll = self.cursor_line + 1 - page;
         }
+    }
+
+    /// Short mode label for the status bar.
+    fn mode_label(&self) -> &'static str {
+        match self.mode {
+            EditorMode::Normal => "Normal",
+            EditorMode::Insert => "Insert",
+            EditorMode::Find => "Find",
+            EditorMode::Replace => "Replace",
+            EditorMode::GoToLine => "Go to",
+            EditorMode::SaveAs => "Save as",
+            EditorMode::Saving => "Save?",
+            EditorMode::ConfirmDiscard => "Unsaved",
+        }
+    }
+
+    /// Left status-bar text: the active prompt, a status message, or the
+    /// file summary.
+    pub(crate) fn status_left(&self, file_summary: bool) -> String {
+        let mode = self.mode_label();
+        match self.mode {
+            EditorMode::Find => return format!("{mode}  |  Find: {}_", self.find_query),
+            EditorMode::Replace => {
+                let (f, r) = if self.replace_focus {
+                    ("", "_")
+                } else {
+                    ("_", "")
+                };
+                return format!(
+                    "{mode}  |  Find: {}{f}  Replace: {}{r}  (Enter / Ctrl+Enter all)",
+                    self.find_query, self.replace_text
+                );
+            },
+            EditorMode::GoToLine => return format!("Go to line: {}_", self.prompt_input),
+            EditorMode::SaveAs => return format!("Save as: {}_", self.prompt_input),
+            EditorMode::ConfirmDiscard => {
+                return "Unsaved changes: [S]ave / [D]iscard / [Esc] Cancel".to_string();
+            },
+            _ => {},
+        }
+        if let Some(ref msg) = self.status_message {
+            return format!("{mode}  |  {msg}");
+        }
+        let lines = self.buffer.line_count();
+        if file_summary {
+            let file_label = match &self.file_path {
+                Some(fp) => fp.rsplit('/').next().unwrap_or(fp),
+                None => "(untitled)",
+            };
+            let mod_marker = if self.modified { "*" } else { "" };
+            format!("{mode}  |  {file_label}{mod_marker}  |  {lines} lines")
+        } else {
+            format!("{mode}  |  {lines} lines")
+        }
+    }
+
+    /// Right status-bar text: 1-based line and character column.
+    pub(crate) fn status_position(&self) -> String {
+        let line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        let col = line[..line.floor_char_boundary(self.cursor_col)]
+            .chars()
+            .count();
+        match self.selection() {
+            Some((s, e)) => {
+                let n = self.buffer.text_range(s, e).chars().count();
+                format!(
+                    "Ln {}, Col {}  ({n} selected)",
+                    self.cursor_line + 1,
+                    col + 1
+                )
+            },
+            None => format!("Ln {}, Col {}", self.cursor_line + 1, col + 1),
+        }
+    }
+
+    /// Byte range of `line_idx` covered by the selection, if any. The end
+    /// is `None` when the selection continues past the end of the line.
+    pub(crate) fn selection_on_line(&self, line_idx: usize) -> Option<(usize, Option<usize>)> {
+        let (s, e) = self.selection()?;
+        if line_idx < s.0 || line_idx > e.0 {
+            return None;
+        }
+        let from = if line_idx == s.0 { s.1 } else { 0 };
+        let to = if line_idx == e.0 { Some(e.1) } else { None };
+        Some((from, to))
     }
 
     /// Rebuild the display lines from the buffer and update
@@ -47,12 +134,7 @@ impl TextEditorApp {
         let mut lines = self.format_display_lines();
 
         // Status bar line at the end.
-        let mode_str = match self.mode {
-            EditorMode::Normal => "NORMAL",
-            EditorMode::Insert => "INSERT",
-            EditorMode::Find => "FIND",
-            EditorMode::Saving => "SAVING",
-        };
+        let mode_str = self.mode_label().to_uppercase();
         let mod_str = if self.modified { " [Modified]" } else { "" };
         let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
         let status = if let Some(ref msg) = self.status_message {
@@ -105,6 +187,7 @@ impl TextEditorApp {
         let status_bg = Color::rgb(224, 224, 230);
         let status_fg = Color::rgb(32, 32, 32);
         let selection_bg = Color::rgb(173, 214, 255);
+        let current_line_bg = Color::rgb(232, 242, 254);
 
         // Menu bar at the very top: real widget with live drop-downs.
         let menu_h: u32 = 18;
@@ -143,6 +226,8 @@ impl TextEditorApp {
         }
 
         let max_lines = ((area_h as i32 - pad_top) / line_h).max(0) as usize;
+        self.viewport_lines.set(max_lines.max(1));
+        self.viewport_line_h.set(line_h);
         let visible = self
             .buffer
             .line_count()
@@ -153,14 +238,37 @@ impl TextEditorApp {
             let line_idx = self.content.scroll + i;
             let y = area_y + pad_top + i as i32 * line_h;
 
-            // Selection/current-line highlight on the active line.
+            // Current-line highlight on the active line.
             if line_idx == self.cursor_line {
-                backend.fill_rect(cx, y - 1, cw, line_h as u32, selection_bg)?;
+                backend.fill_rect(cx, y - 1, cw, line_h as u32, current_line_bg)?;
             }
 
             let Some(line_text) = self.buffer.get_line(line_idx) else {
                 continue;
             };
+
+            // Selection band behind the text.
+            if let Some((from, to)) = self.selection_on_line(line_idx) {
+                let from = line_text.floor_char_boundary(from);
+                let x0 = backend.measure_text(&line_text[..from], font_size) as i32;
+                let x1 = match to {
+                    Some(to) => {
+                        let to = line_text.floor_char_boundary(to);
+                        backend.measure_text(&line_text[..to], font_size) as i32
+                    },
+                    // Selected newline: extend a little past the text.
+                    None => backend.measure_text(line_text, font_size) as i32 + 6,
+                };
+                if x1 > x0 {
+                    backend.fill_rect(
+                        cx + pad_left + x0,
+                        y - 1,
+                        (x1 - x0) as u32,
+                        line_h as u32,
+                        selection_bg,
+                    )?;
+                }
+            }
 
             if self.file_type == FileType::Plain {
                 backend.draw_text(line_text, cx + pad_left, y, font_size, body_fg)?;
@@ -185,8 +293,9 @@ impl TextEditorApp {
             // avoid burning frame time on a redraw just for the
             // caret.
             if line_idx == self.cursor_line {
-                let prefix: String = line_text.chars().take(self.cursor_col).collect();
-                let caret_x = cx + pad_left + backend.measure_text(&prefix, font_size) as i32;
+                // Byte columns: the prefix is a zero-copy slice.
+                let prefix = &line_text[..line_text.floor_char_boundary(self.cursor_col)];
+                let caret_x = cx + pad_left + backend.measure_text(prefix, font_size) as i32;
                 let (caret_color, caret_w) = if self.mode == EditorMode::Insert {
                     (Color::rgb(0, 100, 220), 2u32)
                 } else {
@@ -201,27 +310,9 @@ impl TextEditorApp {
         backend.fill_rect(cx, status_y, cw, status_h, status_bg)?;
         backend.fill_rect(cx, status_y, cw, 1, chrome_border)?;
 
-        let mode_str = match self.mode {
-            EditorMode::Normal => "Normal",
-            EditorMode::Insert => "Insert",
-            EditorMode::Find => "Find",
-            EditorMode::Saving => "Save?",
-        };
-        let position = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
-        let lines_total = format!("{} lines", self.buffer.line_count());
         // The file name lives here now that there's no inner title bar.
-        let file_label = match &self.file_path {
-            Some(fp) => fp.rsplit('/').next().unwrap_or(fp),
-            None => "(untitled)",
-        };
-        let mod_marker = if self.modified { "*" } else { "" };
-        let status_left = if let Some(ref msg) = self.status_message {
-            format!("{mode_str}  |  {msg}")
-        } else if self.mode == EditorMode::Find {
-            format!("{mode_str}  |  Find: {}_", self.find_query)
-        } else {
-            format!("{mode_str}  |  {file_label}{mod_marker}  |  {lines_total}")
-        };
+        let position = self.status_position();
+        let status_left = self.status_left(true);
         backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
 
         let pos_w = backend.measure_text(&position, 11);
@@ -405,6 +496,7 @@ impl TextEditorApp {
         let status_bg = Color::rgb(224, 224, 230);
         let status_fg = Color::rgb(32, 32, 32);
         let selection_bg = Color::rgb(173, 214, 255);
+        let current_line_bg = Color::rgb(232, 242, 254);
 
         let sw = at.screen_w;
         let sh = at.screen_h;
@@ -502,6 +594,8 @@ impl TextEditorApp {
         let pad_left = 8i32;
         let max_lines = ((area_h as i32 - pad_top) / line_h as i32).max(0) as usize;
         let max_lines = max_lines.min(NP_MAX_VISIBLE_LINES);
+        self.viewport_lines.set(max_lines.max(1));
+        self.viewport_line_h.set(line_h as i32);
         let visible = self
             .buffer
             .line_count()
@@ -519,7 +613,7 @@ impl TextEditorApp {
             sel_y,
             sw,
             line_h,
-            selection_bg,
+            current_line_bg,
             104,
             sel_visible,
         );
@@ -539,16 +633,47 @@ impl TextEditorApp {
         // Visible text lines.
         for i in 0..NP_MAX_VISIBLE_LINES {
             let name = format!("np_line_{i}");
+            let sel_name = format!("np_selrange_{i}");
             if i >= visible {
                 hide(sdi, &name);
+                hide(sdi, &sel_name);
                 continue;
             }
             let line_idx = self.content.scroll + i;
             let y = area_y + pad_top + i as i32 * line_h as i32;
             let Some(line_text) = self.buffer.get_line(line_idx) else {
                 hide(sdi, &name);
+                hide(sdi, &sel_name);
                 continue;
             };
+
+            // Selection band (7px per char, like the SDI caret).
+            match self.selection_on_line(line_idx) {
+                Some((from, to)) => {
+                    let chars_to = |col: usize| {
+                        line_text[..line_text.floor_char_boundary(col)]
+                            .chars()
+                            .count() as i32
+                    };
+                    let x0 = chars_to(from) * 7;
+                    let x1 = match to {
+                        Some(to) => chars_to(to) * 7,
+                        None => line_text.chars().count() as i32 * 7 + 6,
+                    };
+                    rect_visible(
+                        sdi,
+                        &sel_name,
+                        pad_left + x0,
+                        y - 1,
+                        (x1 - x0).max(0) as u32,
+                        line_h,
+                        selection_bg,
+                        104,
+                        x1 > x0,
+                    );
+                },
+                None => hide(sdi, &sel_name),
+            }
 
             // Single-color display for plain files or simple fallback.
             // Syntax highlighting in SDI mode would need one object per
@@ -590,7 +715,9 @@ impl TextEditorApp {
         // windowed path uses `measure_text` but we don't have a backend
         // here. 7px/char at size 12 is close enough for the SDI path
         // and matches the bitmap font used by the backends at this size.
-        let prefix_chars = caret_line.chars().take(self.cursor_col).count() as i32;
+        let prefix_chars = caret_line[..caret_line.floor_char_boundary(self.cursor_col)]
+            .chars()
+            .count() as i32;
         let caret_x = pad_left + prefix_chars * 7;
         let caret_y = area_y + pad_top + rel_line as i32 * line_h as i32 - 1;
         rect_visible(
@@ -627,19 +754,7 @@ impl TextEditorApp {
             104,
         );
 
-        let mode_str = match self.mode {
-            EditorMode::Normal => "Normal",
-            EditorMode::Insert => "Insert",
-            EditorMode::Find => "Find",
-            EditorMode::Saving => "Save?",
-        };
-        let status_left = if let Some(ref msg) = self.status_message {
-            format!("{mode_str}  |  {msg}")
-        } else if self.mode == EditorMode::Find {
-            format!("{mode_str}  |  Find: {}_", self.find_query)
-        } else {
-            format!("{mode_str}  |  {} lines", self.buffer.line_count())
-        };
+        let status_left = self.status_left(false);
         text(
             sdi,
             "np_status_left",
@@ -651,7 +766,7 @@ impl TextEditorApp {
             105,
         );
 
-        let position = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
+        let position = self.status_position();
         let right_x = (sw as i32) - (position.chars().count() as i32 * 6) - 8;
         text(
             sdi,
@@ -853,8 +968,10 @@ pub fn hide_notepad_sdi_objects(sdi: &mut SdiRegistry) {
         if !sdi.contains(&name) {
             break;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.visible = false;
+        for name in [name, format!("np_selrange_{i}")] {
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
         }
     }
 }

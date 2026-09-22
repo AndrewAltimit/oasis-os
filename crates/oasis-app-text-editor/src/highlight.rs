@@ -1,7 +1,7 @@
 //! Syntax highlighting for the text editor.
 //!
 //! Provides minimal keyword-based highlighting for common file types:
-//! Rust, TOML, HTML, CSS, JavaScript, Markdown, and shell scripts.
+//! Rust, C/C++, TOML, HTML, CSS, JavaScript, Markdown, and shell scripts.
 //! Each line is tokenized into colored spans for rendering.
 
 use oasis_types::backend::Color;
@@ -56,6 +56,8 @@ pub enum SyntaxKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Rust,
+    /// C and C++ (sources and headers).
+    C,
     Toml,
     Html,
     Css,
@@ -71,6 +73,7 @@ pub fn detect_file_type(path: &str) -> FileType {
     let ext = path.rsplit('.').next().unwrap_or("");
     match ext.to_ascii_lowercase().as_str() {
         "rs" => FileType::Rust,
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => FileType::C,
         "toml" => FileType::Toml,
         "html" | "htm" => FileType::Html,
         "css" => FileType::Css,
@@ -160,6 +163,79 @@ const RUST_TYPES: &[&str] = &[
     "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "str", "u8", "u16",
     "u32", "u64", "u128", "usize", "String", "Vec", "Option", "Result", "Box", "Rc", "Arc",
     "HashMap", "HashSet", "BTreeMap", "BTreeSet",
+];
+
+// -----------------------------------------------------------------------
+// C / C++ keywords and types
+// -----------------------------------------------------------------------
+
+const C_KEYWORDS: &[&str] = &[
+    "auto",
+    "break",
+    "case",
+    "class",
+    "const",
+    "constexpr",
+    "continue",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "namespace",
+    "new",
+    "nullptr",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "return",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "true",
+    "typedef",
+    "typename",
+    "union",
+    "using",
+    "virtual",
+    "volatile",
+    "while",
+    "NULL",
+];
+
+const C_TYPES: &[&str] = &[
+    "bool",
+    "char",
+    "double",
+    "float",
+    "int",
+    "long",
+    "short",
+    "signed",
+    "unsigned",
+    "void",
+    "size_t",
+    "ssize_t",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
+    "uintptr_t",
+    "FILE",
 ];
 
 // -----------------------------------------------------------------------
@@ -255,6 +331,7 @@ pub fn highlight_line(
 ) -> (Vec<ColorSpan>, bool) {
     match file_type {
         FileType::Rust => highlight_c_family(line, RUST_KEYWORDS, RUST_TYPES, in_block_comment),
+        FileType::C => highlight_c(line, in_block_comment),
         FileType::JavaScript => highlight_c_family(line, JS_KEYWORDS, &[], in_block_comment),
         FileType::Css => highlight_css(line, in_block_comment),
         FileType::Toml => (highlight_toml(line), false),
@@ -581,6 +658,20 @@ fn highlight_c_family(
     }
 
     (spans, in_block_comment)
+}
+
+/// C / C++: preprocessor lines (`#include`, `#define`, ...) are one
+/// attribute span; everything else uses the C-family scanner.
+fn highlight_c(line: &str, in_block_comment: bool) -> (Vec<ColorSpan>, bool) {
+    if !in_block_comment && line.trim_start().starts_with('#') {
+        let span = ColorSpan {
+            start: 0,
+            end: line.len(),
+            kind: SyntaxKind::Attribute,
+        };
+        return (vec![span], false);
+    }
+    highlight_c_family(line, C_KEYWORDS, C_TYPES, in_block_comment)
 }
 
 // -----------------------------------------------------------------------
@@ -1246,6 +1337,8 @@ mod tests {
     #[test]
     fn detect_rust() {
         assert_eq!(detect_file_type("/foo/bar.rs"), FileType::Rust);
+        assert_eq!(detect_file_type("main.c"), FileType::C);
+        assert_eq!(detect_file_type("util.hpp"), FileType::C);
     }
 
     #[test]
@@ -1531,5 +1624,20 @@ mod tests {
             expected_start = span.end;
         }
         assert_eq!(expected_start, expected_len, "spans don't cover full line");
+    }
+
+    #[test]
+    fn c_preprocessor_keywords_and_block_comments() {
+        let (spans, _) = highlight_line("#include <stdio.h>", FileType::C, false);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].kind, SyntaxKind::Attribute);
+        let (spans, _) = highlight_line("int main(void) {", FileType::C, false);
+        assert_eq!(spans[0].kind, SyntaxKind::Type);
+        let (_, open) = highlight_line("/* multi", FileType::C, false);
+        assert!(open);
+        // A '#' inside a block comment is not a directive.
+        let (spans, open) = highlight_line("# still */ return", FileType::C, true);
+        assert!(!open);
+        assert_eq!(spans[0].kind, SyntaxKind::Comment);
     }
 }
