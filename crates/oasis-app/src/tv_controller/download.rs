@@ -401,6 +401,8 @@ fn stream_download_inner(
 
     // Stream remaining body into the shared buffer.
     let mut wb_backoff_ms = 1u64;
+    let mut last_data_time = std::time::Instant::now();
+    let mut was_throttled = false;
     loop {
         if buffer.is_cancelled() {
             log::info!("TV: download cancelled");
@@ -554,7 +556,18 @@ fn stream_download_inner(
                 .condvar
                 .wait_timeout(s, std::time::Duration::from_millis(50))
                 .unwrap_or_else(|e| e.into_inner());
+            was_throttled = true;
             continue;
+        }
+        // A throttle pause is the decoder being behind, not the network:
+        // restart the stall timer and the read deadline.  (Without this a
+        // pause longer than the deadline -- 16 MB of lookahead is minutes
+        // of low-bitrate video -- ended the session with "timeout
+        // downloading video" the moment the throttle lifted.)
+        if was_throttled {
+            was_throttled = false;
+            last_data_time = std::time::Instant::now();
+            deadline = last_data_time + std::time::Duration::from_secs(120);
         }
 
         if std::time::Instant::now() > deadline {
@@ -569,21 +582,51 @@ fn stream_download_inner(
                 // Reset deadline on successful data receipt so long
                 // videos (and intentional throttle pauses) don't hit the
                 // timeout.
-                deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+                last_data_time = std::time::Instant::now();
+                deadline = last_data_time + std::time::Duration::from_secs(120);
             },
             Err(e) => {
                 if is_would_block(&e) {
+                    // No data for a while: the connection has stalled.
+                    // Resume from the last byte with a fresh Range request
+                    // (below) instead of waiting out the deadline.
+                    if content_length > 0 && last_data_time.elapsed() > STALL_TIMEOUT {
+                        log::warn!(
+                            "TV: linear download stalled ({:.0}s no data)",
+                            last_data_time.elapsed().as_secs_f64(),
+                        );
+                        break;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(wb_backoff_ms));
                     wb_backoff_ms = (wb_backoff_ms * 2).min(MAX_WOULD_BLOCK_BACKOFF_MS);
                     continue;
                 }
                 if buffer.bytes_received() > 0 {
+                    log::warn!("TV: linear download read error: {e}");
                     break;
                 }
                 buffer.finish();
                 return Err(format!("read: {e}"));
             },
         }
+    }
+
+    // The connection ended (closed, errored or stalled) before the whole
+    // body arrived: resume from the first missing byte with a Range
+    // request.  Previously this was treated as the end of the file, so a
+    // dropped connection cut the episode short.
+    let frontier = {
+        let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.base_offset + s.buf.len() as u64
+    };
+    if content_length > 0 && frontier < content_length && !buffer.is_cancelled() {
+        log::warn!(
+            "TV: linear download ended at {:.1}MB of {:.1}MB, resuming via Range",
+            frontier as f64 / (1024.0 * 1024.0),
+            content_length as f64 / (1024.0 * 1024.0),
+        );
+        drop(stream);
+        return stream_download_range(original_url, tls, buffer, frontier, content_length);
     }
 
     let received = buffer.bytes_received();
