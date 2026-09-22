@@ -310,10 +310,17 @@ impl WindowManager {
             w.state = WindowState::Normal;
             w.snap_zone = None;
             w.pre_snap_geometry = None;
-            w.x = area.x + tile.geometry.x;
-            w.y = area.y + tile.geometry.y;
-            w.outer_w = tile.geometry.w;
-            w.outer_h = tile.geometry.h;
+            // With more windows than fit, the tiler's minimum tile size
+            // pushes the last tiles past the work area (even fully off
+            // screen, out of the user's reach). Pull such tiles back inside;
+            // they overlap their neighbours, which beats being unreachable.
+            let g = tile.geometry;
+            let max_x = area.x + area.w.saturating_sub(g.w) as i32;
+            let max_y = area.y + area.h.saturating_sub(g.h) as i32;
+            w.x = (area.x + g.x).min(max_x).max(area.x);
+            w.y = (area.y + g.y).min(max_y).max(area.y);
+            w.outer_w = g.w.min(area.w);
+            w.outer_h = g.h.min(area.h);
             self.update_sdi_positions(&tile.window_id, sdi);
         }
         // Keep the active window on top (monocle stacks all tiles).

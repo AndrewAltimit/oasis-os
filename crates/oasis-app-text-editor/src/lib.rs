@@ -208,6 +208,7 @@ impl TextEditorApp {
             Err(e) => {
                 let mut editor = Self::new("/apps/editor");
                 editor.status_message = Some(format!("Could not read {path}: {e}"));
+                editor.rebuild_display_lines();
                 editor
             },
         }
@@ -804,6 +805,14 @@ mod tests {
         let text = "line1\nline2\nline3";
         let buf = EditorBuffer::from_text(text);
         assert_eq!(buf.text(), text);
+    }
+
+    #[test]
+    fn buffer_keeps_trailing_newlines() {
+        for text in ["a\n", "a\n\n", "\n", "x\ny\n"] {
+            assert_eq!(EditorBuffer::from_text(text).text(), text);
+        }
+        assert_eq!(EditorBuffer::from_text("a\r\nb\r\n").text(), "a\nb\n");
     }
 
     #[test]

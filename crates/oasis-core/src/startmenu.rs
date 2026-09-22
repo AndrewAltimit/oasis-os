@@ -115,7 +115,7 @@ impl StartMenuState {
         let pad = at.menu.pad_inner;
         let menu_h =
             header_h + (pad + rows as i32 * at.menu.item_row_height + pad) as u32 + footer_h;
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = at.screen_h.saturating_sub(at.bottombar_height) as i32;
         let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {

@@ -1019,6 +1019,7 @@ version = "1.4.0"
 dependencies = [
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -1031,6 +1032,7 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -1505,6 +1507,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-sdi",
+ "oasis-test-backend",
  "oasis-types",
  "web-time",
 ]

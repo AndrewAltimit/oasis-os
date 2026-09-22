@@ -33,6 +33,8 @@ pub type AudioEventCallback = extern "C" fn(event: u32, track_id: u64, value: u3
 pub struct Ue5AudioBackend {
     inner: oasis_audio::NullAudioBackend,
     callback: Option<AudioEventCallback>,
+    /// A track was paused mid-playback and can be resumed.
+    paused: bool,
 }
 
 impl Ue5AudioBackend {
@@ -40,6 +42,7 @@ impl Ue5AudioBackend {
         Self {
             inner: oasis_audio::NullAudioBackend::new(),
             callback: None,
+            paused: false,
         }
     }
 
@@ -83,31 +86,50 @@ impl AudioBackend for Ue5AudioBackend {
 
     fn play(&mut self, track: AudioTrackId) -> Result<()> {
         self.inner.play(track)?;
+        self.paused = false;
         self.fire(AudioEvent::Play, track.0, 0);
         Ok(())
     }
 
     fn pause(&mut self) -> Result<()> {
+        let was_playing = self.inner.is_playing();
         self.inner.pause()?;
+        self.paused |= was_playing;
         self.fire(AudioEvent::Pause, 0, 0);
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        // Only a paused track can resume. Without this, resume after stop
+        // (or before anything was played) reported "playing" and told the
+        // host to start output with no track.
+        if !self.paused {
+            return Err(oasis_types::error::OasisError::Backend(
+                "resume: no paused track".into(),
+            ));
+        }
         self.inner.resume()?;
+        self.paused = false;
         self.fire(AudioEvent::Resume, 0, 0);
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
         self.inner.stop()?;
+        self.paused = false;
         self.fire(AudioEvent::Stop, 0, 0);
         Ok(())
     }
 
     fn set_volume(&mut self, volume: u8) -> Result<()> {
         self.inner.set_volume(volume)?;
-        self.fire(AudioEvent::VolumeChange, 0, volume as u32);
+        // Report the volume actually applied (clamped to 0-100), so a host
+        // mirroring it never sees an out-of-range level.
+        self.fire(
+            AudioEvent::VolumeChange,
+            0,
+            u32::from(self.inner.get_volume()),
+        );
         Ok(())
     }
 
@@ -134,6 +156,7 @@ impl AudioBackend for Ue5AudioBackend {
     }
 
     fn shutdown(&mut self) -> Result<()> {
+        self.paused = false;
         self.fire(AudioEvent::Shutdown, 0, 0);
         self.inner.shutdown()
     }
@@ -292,6 +315,34 @@ mod tests {
         b.set_volume(50).unwrap();
         b.unload_track(track).unwrap();
         b.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resume_requires_a_paused_track() {
+        let (_guard, mut b) = init_backend();
+        reset_globals();
+        assert!(b.resume().is_err(), "resume with nothing loaded");
+        assert!(!b.is_playing());
+        assert_eq!(LAST_EVENT.load(Ordering::SeqCst), u32::MAX);
+        let t = b.load_track(b"x").unwrap();
+        b.play(t).unwrap();
+        b.stop().unwrap();
+        assert!(b.resume().is_err(), "resume after stop");
+        assert!(!b.is_playing());
+        b.play(t).unwrap();
+        b.pause().unwrap();
+        b.pause().unwrap();
+        b.resume().unwrap();
+        assert!(b.is_playing());
+        assert!(b.resume().is_err(), "second resume without pause");
+    }
+
+    #[test]
+    fn volume_callback_reports_clamped_value() {
+        let (_guard, mut b) = init_backend();
+        b.set_volume(250).unwrap();
+        assert_eq!(b.get_volume(), 100);
+        assert_eq!(LAST_VALUE.load(Ordering::SeqCst), 100);
     }
 
     #[test]

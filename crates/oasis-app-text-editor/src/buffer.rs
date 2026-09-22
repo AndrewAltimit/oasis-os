@@ -111,13 +111,17 @@ impl EditorBuffer {
     }
 
     /// Build a buffer from a multi-line text string.
+    ///
+    /// Inverse of [`Self::text`]: a trailing newline becomes a final empty
+    /// line, so `from_text(s).text() == s` for LF text and saving a file
+    /// never strips its final newline. CRLF line endings are normalized to
+    /// LF.
     pub fn from_text(text: &str) -> Self {
-        let lines: Vec<String> = text.lines().map(String::from).collect();
-        if lines.is_empty() {
-            Self::new()
-        } else {
-            Self::from_lines(lines)
-        }
+        let lines: Vec<String> = text
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+            .collect();
+        Self::from_lines(lines)
     }
 
     /// Mutation counter: changes whenever the buffer content changes.

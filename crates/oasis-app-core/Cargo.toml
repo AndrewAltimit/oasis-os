@@ -13,6 +13,11 @@ oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-ui = { workspace = true }
+oasis-test-backend = { workspace = true, optional = true }
+
+[features]
+# End-to-end app test harness (`oasis_app_core::testing`), for dev-deps.
+testing = ["dep:oasis-test-backend"]
 
 [lints]
 workspace = true

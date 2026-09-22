@@ -182,13 +182,17 @@ impl WindowManager {
             ));
         }
 
-        // Save geometry for restore.
-        window.saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
+        // Save geometry for restore -- unless already maximized, where the
+        // current geometry *is* the maximized one and `saved_geometry`
+        // already holds the geometry to restore to.
+        if window.state != WindowState::Maximized || window.saved_geometry.is_none() {
+            window.saved_geometry = Some(Geometry {
+                x: window.x,
+                y: window.y,
+                w: window.outer_w,
+                h: window.outer_h,
+            });
+        }
 
         window.x = 0;
         window.y = self.theme.maximize_top_inset as i32;

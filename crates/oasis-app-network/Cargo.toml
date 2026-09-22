@@ -16,3 +16,6 @@ oasis-vfs = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+oasis-app-core = { workspace = true, features = ["testing"] }

@@ -64,6 +64,14 @@ impl FileManagerApp {
         }
         let name = trimmed.split("  (").next().unwrap_or(trimmed);
         let file_path = join_path(&p.browse_dir, name);
+        // Typed files open in their app, exactly like Confirm does; only
+        // unknown types fall back to the built-in viewer.
+        if let Some(app_title) = app_for_file(&file_path) {
+            return AppAction::LaunchAppWithFile {
+                app_title: app_title.to_string(),
+                file_path,
+            };
+        }
         self.pending_navigation = Some(NavTarget::File(file_path));
         AppAction::None
     }
@@ -450,8 +458,11 @@ impl FileManagerApp {
                 Key::Escape => self.cancel_dialog(),
                 Key::Char('y' | 'Y') if is_confirm => self.commit_dialog(),
                 Key::Char('n' | 'N') if is_confirm => self.cancel_dialog(),
-                // Plain typing reaches the name field via handle_text_input.
+                // Plain typing reaches the name field via handle_text_input,
+                // and Backspace via its handle_backspace twin -- swallowing
+                // it here made the field impossible to edit from a keyboard.
                 Key::Char(_) | Key::Space if !is_confirm && !mods.has_command() => return None,
+                Key::Backspace if !is_confirm => return None,
                 _ => {},
             }
             // Swallow everything else so the gamepad twin (e.g. an arrow's

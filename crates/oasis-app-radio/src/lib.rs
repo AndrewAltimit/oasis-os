@@ -163,18 +163,23 @@ pub struct StationRow {
     pub favorite: bool,
 }
 
-/// Load the station list from [`STATIONS_PATH`] (or the defaults).
-fn load_stations(vfs: &dyn Vfs) -> Vec<StationRow> {
-    let registry = if vfs.exists(STATIONS_PATH) {
+/// Load the station registry from [`STATIONS_PATH`] (or the defaults).
+fn load_registry(vfs: &dyn Vfs) -> StationRegistry {
+    if vfs.exists(STATIONS_PATH) {
         let data = vfs.read(STATIONS_PATH).unwrap_or_default();
         let text = String::from_utf8_lossy(&data);
         StationRegistry::from_toml(&text).unwrap_or_else(|_| StationRegistry::defaults())
     } else {
         StationRegistry::defaults()
-    };
+    }
+}
+
+/// Station list rows for a registry.
+fn station_rows(registry: &StationRegistry) -> Vec<StationRow> {
     registry
         .stations
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|s| {
             let info = if s.source_type == "icecast" {
                 if s.bitrate > 0 {
@@ -205,6 +210,11 @@ pub struct RadioApp {
     status: RadioStatus,
     /// Station list.
     stations: Vec<StationRow>,
+    /// The station registry the list was built from (written back to
+    /// [`STATIONS_PATH`] when a favorite changes).
+    registry: StationRegistry,
+    /// A favorite changed and the registry must be saved.
+    save_pending: bool,
     /// Selected station index.
     selected: usize,
     /// First station row shown in the windowed list.
@@ -223,12 +233,15 @@ impl RadioApp {
         let mut app = Self {
             content: ContentState::new(RADIO_APP_TITLE, path),
             status: RadioStatus::load(vfs),
-            stations: load_stations(vfs),
+            stations: Vec::new(),
+            registry: load_registry(vfs),
+            save_pending: false,
             selected: 0,
             list_scroll: 0,
             visible_rows: Cell::new(8),
             volume_override: None,
         };
+        app.stations = station_rows(&app.registry);
         app.rebuild_lines();
         app
     }
@@ -287,6 +300,11 @@ impl RadioApp {
         if let Some(s) = self.stations.get_mut(self.selected) {
             s.favorite = !s.favorite;
             let idx = self.selected;
+            // The radio subsystem only toggles its in-memory registry;
+            // persist the flag so it survives reopening the app (and a
+            // restart, where the subsystem reloads the same file).
+            self.registry.toggle_favorite(idx);
+            self.save_pending = true;
             self.request(format!("fav {idx}"));
             self.rebuild_lines();
         }
@@ -451,6 +469,27 @@ impl App for RadioApp {
 
     fn refresh(&mut self, vfs: &dyn Vfs) {
         self.reload_status(vfs);
+    }
+
+    fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
+        if !std::mem::take(&mut self.save_pending) {
+            return false;
+        }
+        let Ok(toml) = self.registry.to_toml() else {
+            return false;
+        };
+        let dir = STATIONS_PATH.rsplit_once('/').map_or("/", |(d, _)| d);
+        let mut prefix = String::new();
+        for part in dir.split('/').filter(|p| !p.is_empty()) {
+            prefix.push('/');
+            prefix.push_str(part);
+            if !vfs.exists(&prefix) {
+                let _ = vfs.mkdir(&prefix);
+            }
+        }
+        // A failed save only costs persistence; the in-app flag and the
+        // subsystem's registry are already toggled.
+        vfs.write(STATIONS_PATH, toml.as_bytes()).is_ok()
     }
 
     fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
