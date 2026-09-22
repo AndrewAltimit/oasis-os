@@ -873,9 +873,10 @@ impl Drop for FfmpegDecoder {
 /// Convert an ffmpeg error code to a human-readable string.
 fn ffmpeg_error_string(errnum: i32) -> String {
     let mut buf = [0u8; 256];
-    // SAFETY: av_strerror writes into our buffer.
+    // SAFETY: av_strerror writes at most `buf.len()` bytes (NUL-terminated) into our
+    // buffer. `cast()` bridges `c_char` signedness, which differs across targets.
     unsafe {
-        ffi::av_strerror(errnum, buf.as_mut_ptr(), buf.len());
+        ffi::av_strerror(errnum, buf.as_mut_ptr().cast(), buf.len());
     }
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     String::from_utf8_lossy(&buf[..end]).to_string()
