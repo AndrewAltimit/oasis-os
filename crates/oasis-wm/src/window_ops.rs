@@ -395,6 +395,23 @@ mod tests {
         (w.x, w.y, w.outer_w, w.outer_h)
     }
 
+    #[test]
+    fn set_window_title_updates_the_titlebar_text() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        while wm.is_animating() {
+            wm.tick_animations(&mut sdi);
+        }
+        let name = wm.get_window("a").expect("window").sdi_name("title_text");
+        assert_eq!(sdi.get(&name).expect("title").text.as_deref(), Some("a"));
+        assert!(wm.set_window_title("a", "Page - Browser", &mut sdi));
+        assert_eq!(wm.get_window("a").expect("window").title, "Page - Browser");
+        assert_eq!(
+            sdi.get(&name).expect("title").text.as_deref(),
+            Some("Page - Browser")
+        );
+        assert!(!wm.set_window_title("missing", "x", &mut sdi));
+    }
+
     /// Press on the titlebar, move to `(x, y)`, release there.
     fn drag_to(wm: &mut WindowManager, sdi: &mut SdiRegistry, id: &str, x: i32, y: i32) -> WmEvent {
         let (tx, ty, _, th) = wm
