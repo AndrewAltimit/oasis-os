@@ -159,8 +159,16 @@ impl FormManager {
             },
             ElementKind::SubmitButton => match key {
                 FormKey::Space | FormKey::Enter => {
+                    let mut fields = form.collect();
+                    // The activated button is the submitter: its own
+                    // name=value pair joins the data set.
+                    if let FormElement::SubmitButton { name, value, .. } = &form.elements[elem_idx]
+                        && !name.is_empty()
+                    {
+                        fields.push((name.clone(), value.clone()));
+                    }
                     let data = FormData {
-                        fields: form.collect(),
+                        fields,
                         method: form.method,
                         action: form.action.clone(),
                     };

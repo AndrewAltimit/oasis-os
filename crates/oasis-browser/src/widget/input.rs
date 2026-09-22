@@ -183,7 +183,7 @@ impl BrowserWidget {
     /// keys from also firing their gamepad-style shortcuts (Space ->
     /// reader mode, Q/E -> page scroll) while the user is typing.
     pub fn accepts_text(&self) -> bool {
-        self.focus == Focus::UrlBar || self.form_manager.focused_element.is_some()
+        self.focus == Focus::UrlBar || self.form_manager.focused_accepts_text()
     }
 
     /// Handle an input event. Returns `true` if the event was
@@ -287,10 +287,19 @@ impl BrowserWidget {
 
         match event {
             InputEvent::ButtonPress(Button::Up) => {
+                // A focused <select> takes the arrows to change option.
+                if self.form_manager.focused_is_select() {
+                    self.dispatch_form_key(crate::forms::FormKey::Up, vfs);
+                    return true;
+                }
                 self.scroll.scroll_up();
                 true
             },
             InputEvent::ButtonPress(Button::Down) => {
+                if self.form_manager.focused_is_select() {
+                    self.dispatch_form_key(crate::forms::FormKey::Down, vfs);
+                    return true;
+                }
                 self.scroll.scroll_down();
                 true
             },
@@ -379,7 +388,7 @@ impl BrowserWidget {
                 // Without this branch Backspace is silently dropped in
                 // Content focus — forms that rely on physical keyboard
                 // editing (e.g. the Google search box) appear broken.
-                if self.form_manager.focused_element.is_some() {
+                if self.form_manager.focused_accepts_text() {
                     self.dispatch_form_key(crate::forms::FormKey::Backspace, vfs);
                     self.layout_dirty = true;
                     return true;
@@ -404,7 +413,7 @@ impl BrowserWidget {
                 // to the form manager instead of treating it as a page
                 // shortcut — typing in Google's search box shouldn't
                 // trigger zoom because the user pressed `+`.
-                if self.form_manager.focused_element.is_some() {
+                if self.form_manager.focused_accepts_text() {
                     self.dispatch_form_key(crate::forms::FormKey::Char(*ch), vfs);
                     self.layout_dirty = true;
                     return true;
@@ -688,8 +697,12 @@ impl BrowserWidget {
         // Handle <summary> click: toggle the parent <details> open state.
         self.handle_details_toggle(x, y);
 
-        // Handle <label for="..."> click: focus the associated form element.
-        self.handle_label_for_click(x, y);
+        // Handle <label> clicks: focus / activate the labeled control.
+        // A click that lands on the control itself is handled below
+        // instead, so a checkbox inside its own label toggles once.
+        if self.handle_label_for_click(x, y, vfs) {
+            return;
+        }
 
         // Handle direct clicks on <input> elements: focus text inputs,
         // fire the form submission for submit buttons, toggle
@@ -729,23 +742,23 @@ impl BrowserWidget {
         // down by the URL bar height and offsets by the current scroll
         // position. hit_test expects layout-space coords.
         let (lx, ly) = self.screen_to_layout(x, y);
-        let Some(nid) = self
+        let hit = self
             .layout_root
             .as_ref()
-            .and_then(|root| root.hit_test(lx, ly))
-        else {
-            return;
-        };
+            .and_then(|root| root.hit_test(lx, ly));
         let Some(doc) = &self.document else { return };
 
-        // Walk up to the nearest <input> / <button> ancestor — the
-        // click may land on a `<span>` wrapper like Google's
+        // Walk up to the nearest form-control ancestor — the click may
+        // land on a `<span>` wrapper like Google's
         // `<span class="lsbb"><input ...>`.
         let mut form_elem_nid = None;
-        let mut cur = Some(nid);
+        let mut cur = hit;
         while let Some(id) = cur {
             if let NodeKind::Element(ref e) = doc.nodes[id].kind
-                && matches!(e.tag, TagName::Input | TagName::Button | TagName::Textarea)
+                && matches!(
+                    e.tag,
+                    TagName::Input | TagName::Button | TagName::Textarea | TagName::Select
+                )
             {
                 form_elem_nid = Some(id);
                 break;
@@ -753,19 +766,37 @@ impl BrowserWidget {
             cur = doc.nodes[id].parent;
         }
         let Some(target_nid) = form_elem_nid else {
+            // Clicking anywhere else blurs the focused control, so typed
+            // keys and Enter go back to page shortcuts / links.
+            if self.form_manager.focused_element.is_some() {
+                self.form_manager.focused_element = None;
+                self.form_manager.focused_form = None;
+                self.layout_dirty = true;
+            }
             return;
         };
+        self.activate_form_control(target_nid, vfs);
+    }
 
-        let (tag, input_type, value, name_or_id) = match &doc.nodes[target_nid].kind {
+    /// Activate the form control `target_nid` as if the user clicked it:
+    /// focus it, toggle checkboxes, select radios, and submit / reset the
+    /// owning form for buttons.
+    fn activate_form_control(&mut self, target_nid: NodeId, vfs: &dyn Vfs) {
+        use crate::html::dom::{NodeKind, TagName};
+
+        let Some(doc) = &self.document else { return };
+
+        let (tag, input_type, value, name_or_id, name_attr) = match &doc.nodes[target_nid].kind {
             NodeKind::Element(elem) => (
                 elem.tag.clone(),
                 elem.get_attribute("type")
                     .unwrap_or("text")
                     .to_ascii_lowercase(),
-                elem.get_attribute("value").unwrap_or("").to_string(),
+                elem.get_attribute("value").map(str::to_string),
                 elem.get_attribute("name")
                     .or_else(|| elem.get_attribute("id"))
                     .map(|s| s.to_string()),
+                elem.get_attribute("name").unwrap_or("").to_string(),
             ),
             _ => return,
         };
@@ -823,19 +854,28 @@ impl BrowserWidget {
         let is_reset = input_type == "reset";
 
         match input_type.as_str() {
-            "checkbox" => {
-                let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
-                self.layout_dirty = true;
-            },
-            "radio" => {
+            "checkbox" if tag == TagName::Input => {
                 if let (Some(fi), Some(n)) = (fi_owning, name.as_deref()) {
-                    self.form_manager.select_radio(fi, n, &value);
-                    self.layout_dirty = true;
+                    // Match on name *and* value: checkbox groups share a
+                    // name (`tags=a`, `tags=b`).
+                    let v = value.as_deref().unwrap_or("on");
+                    self.form_manager.toggle_checkbox_value(fi, n, v);
+                    self.sync_form_values_to_dom();
+                }
+            },
+            "radio" if tag == TagName::Input => {
+                if let (Some(fi), Some(n)) = (fi_owning, name.as_deref()) {
+                    let v = value.as_deref().unwrap_or("on");
+                    self.form_manager.select_radio(fi, n, v);
+                    self.sync_form_values_to_dom();
                 }
             },
             _ if is_submit => {
+                let submitter_value = value.unwrap_or_default();
                 if let Some(fi) = fi_owning
-                    && let Some(data) = self.form_manager.submit(fi)
+                    && let Some(data) = self
+                        .form_manager
+                        .submit_with_submitter(fi, Some((&name_attr, &submitter_value)))
                 {
                     self.handle_form_submit(&data, vfs);
                 }
@@ -843,7 +883,7 @@ impl BrowserWidget {
             _ if is_reset => {
                 if let Some(fi) = fi_owning {
                     self.form_manager.reset(fi);
-                    self.layout_dirty = true;
+                    self.sync_form_values_to_dom();
                 }
             },
             _ => {
@@ -855,10 +895,22 @@ impl BrowserWidget {
         }
     }
 
-    /// If the click hits a `<label>` element with a `for` attribute,
-    /// focus the form element whose `id` matches.
-    fn handle_label_for_click(&mut self, x: i32, y: i32) {
+    /// If the click hits a `<label>`, activate its labeled control: the
+    /// element named by `for`, or else the first form control inside
+    /// the label. Returns `true` when the click was consumed.
+    ///
+    /// Clicks that land on a form control nested inside the label are
+    /// left to [`Self::handle_form_element_click`] (returning `false`),
+    /// so the control is activated exactly once.
+    fn handle_label_for_click(&mut self, x: i32, y: i32, vfs: &dyn Vfs) -> bool {
         use crate::html::dom::{NodeKind, TagName};
+
+        let is_control = |tag: &TagName| {
+            matches!(
+                tag,
+                TagName::Input | TagName::Button | TagName::Select | TagName::Textarea
+            )
+        };
 
         let (lx, ly) = self.screen_to_layout(x, y);
         let node_id = self
@@ -866,81 +918,59 @@ impl BrowserWidget {
             .as_ref()
             .and_then(|root| root.hit_test(lx, ly));
 
-        let Some(nid) = node_id else { return };
+        let Some(nid) = node_id else { return false };
         let Some(doc) = &self.document else {
-            return;
+            return false;
         };
 
-        // Walk up from the hit node to find a <label> ancestor.
-        let mut label_for = None;
+        // Walk up from the hit node to find a <label> ancestor, bailing
+        // out if the click is on a control of its own.
+        let mut label = None;
         let mut cur = Some(nid);
         while let Some(id) = cur {
-            if let NodeKind::Element(ref elem) = doc.nodes[id].kind
-                && elem.tag == TagName::Label
-            {
-                if let Some(for_val) = elem.get_attribute("for") {
-                    label_for = Some(for_val.to_string());
+            if let NodeKind::Element(ref elem) = doc.nodes[id].kind {
+                if is_control(&elem.tag) {
+                    return false;
                 }
-                break;
+                if elem.tag == TagName::Label {
+                    label = Some(id);
+                    break;
+                }
             }
             cur = doc.nodes[id].parent;
         }
+        let Some(label_nid) = label else { return false };
 
-        let Some(for_id) = label_for else { return };
-
-        // Find the target element by id.
-        let Some(target_nid) = doc.get_element_by_id(&for_id) else {
-            return;
-        };
-
-        // Get the target element's name attribute to match against
-        // form elements.
-        let target_name = match &doc.nodes[target_nid].kind {
-            NodeKind::Element(elem) => elem
-                .get_attribute("name")
-                .or_else(|| elem.get_attribute("id"))
-                .map(|s| s.to_string()),
-            _ => None,
-        };
-
-        let Some(name) = target_name else { return };
-
-        // Update focused_node so :focus CSS and JS keyboard events work.
-        self.focused_node = Some(target_nid);
-
-        // Determine the input type and value so we can toggle
-        // checkbox/radio state.
-        let (input_type, target_value) = match &doc.nodes[target_nid].kind {
-            NodeKind::Element(elem) => (
-                elem.get_attribute("type").unwrap_or("text"),
-                elem.get_attribute("value").unwrap_or("").to_string(),
-            ),
-            _ => ("text", String::new()),
-        };
-
-        // Search form_manager for a form containing this element name
-        // and focus it.
-        for (fi, form) in self.form_manager.forms.iter().enumerate() {
-            if form.has_element(&name) {
-                self.form_manager.focused_form = Some(fi);
-                self.form_manager.focused_element = Some(name.clone());
-
-                // Toggle checkbox/radio on label click (standard HTML
-                // behavior).
-                if input_type == "checkbox" {
-                    let _ = self.form_manager.handle_input(crate::forms::FormKey::Space);
-                    self.layout_dirty = true;
-                } else if input_type == "radio" {
-                    // For radio buttons, select_radio uses the value to
-                    // pick the correct option in the group, avoiding the
-                    // index_of(name) ambiguity where all radios share
-                    // the same name.
-                    self.form_manager.select_radio(fi, &name, &target_value);
-                    self.layout_dirty = true;
+        let target = match doc.element(label_nid).and_then(|e| e.get_attribute("for")) {
+            Some(for_id) => doc.get_element_by_id(for_id),
+            None => {
+                // Implicit association: first labelable descendant.
+                let mut stack: Vec<usize> = doc.nodes[label_nid].children.iter().rev().copied().collect();
+                let mut found = None;
+                while let Some(id) = stack.pop() {
+                    if let NodeKind::Element(ref e) = doc.nodes[id].kind
+                        && is_control(&e.tag)
+                        && e.get_attribute("type") != Some("hidden")
+                    {
+                        found = Some(id);
+                        break;
+                    }
+                    stack.extend(doc.nodes[id].children.iter().rev().copied());
                 }
-                return;
-            }
+                found
+            },
+        };
+        let Some(target_nid) = target else {
+            return false;
+        };
+        let is_labelable = doc
+            .element(target_nid)
+            .is_some_and(|e| is_control(&e.tag));
+        if !is_labelable {
+            return false;
         }
+        self.activate_form_control(target_nid, vfs);
+        true
     }
 
     /// If the click hits a `<summary>` element, toggle the `open`
@@ -1623,21 +1653,87 @@ impl BrowserWidget {
                 }
             }
             for elem in form.elements() {
-                let (name, value) = match elem {
+                match elem {
                     FormElement::TextInput { name, value, .. }
-                    | FormElement::TextArea { name, value, .. } => (name, value.clone()),
-                    _ => continue,
-                };
-                if name.is_empty() {
-                    continue;
-                }
-                for &nid in &descendants {
-                    if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind
-                        && matches!(e.tag, TagName::Input | TagName::Textarea)
-                        && e.get_attribute("name") == Some(name.as_str())
+                    | FormElement::TextArea { name, value, .. }
+                        if !name.is_empty() =>
                     {
-                        e.set_attribute("value", &value);
+                        for &nid in &descendants {
+                            if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind
+                                && matches!(e.tag, TagName::Input | TagName::Textarea)
+                                && e.get_attribute("name") == Some(name.as_str())
+                            {
+                                e.set_attribute("value", value);
+                            }
+                        }
+                    },
+                    // Checked state lives in the `checked` attribute,
+                    // which layout reads to draw the control.
+                    FormElement::Checkbox {
+                        name,
+                        value,
+                        checked,
+                        ..
                     }
+                    | FormElement::RadioButton {
+                        name,
+                        value,
+                        checked,
+                        ..
+                    } if !name.is_empty() => {
+                        for &nid in &descendants {
+                            if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind
+                                && e.tag == TagName::Input
+                                && e.get_attribute("name") == Some(name.as_str())
+                                && e.get_attribute("value").unwrap_or("on") == value
+                                && matches!(e.get_attribute("type"), Some("checkbox" | "radio"))
+                            {
+                                if *checked {
+                                    e.set_attribute("checked", "");
+                                } else {
+                                    e.remove_attribute("checked");
+                                }
+                            }
+                        }
+                    },
+                    // The selected option is the one carrying `selected`.
+                    FormElement::SelectBox {
+                        name,
+                        selected_index,
+                        ..
+                    } if !name.is_empty() => {
+                        let Some(select_nid) = descendants.iter().copied().find(|&nid| {
+                            matches!(&doc.nodes[nid].kind, NodeKind::Element(e)
+                                if e.tag == TagName::Select
+                                    && e.get_attribute("name") == Some(name.as_str()))
+                        }) else {
+                            continue;
+                        };
+                        // <option>s in document order (possibly inside
+                        // <optgroup>s), matching `populate_forms_from_dom`.
+                        let mut options = Vec::new();
+                        let mut stack: Vec<usize> =
+                            doc.nodes[select_nid].children.iter().rev().copied().collect();
+                        while let Some(nid) = stack.pop() {
+                            if let NodeKind::Element(e) = &doc.nodes[nid].kind {
+                                if e.tag == TagName::Option {
+                                    options.push(nid);
+                                    continue;
+                                }
+                                stack.extend(doc.nodes[nid].children.iter().rev().copied());
+                            }
+                        }
+                        for (i, nid) in options.into_iter().enumerate() {
+                            if let NodeKind::Element(ref mut e) = doc.nodes[nid].kind {
+                                if Some(i) == *selected_index {
+                                    e.set_attribute("selected", "");
+                                } else {
+                                    e.remove_attribute("selected");
+                                }
+                            }
+                        }
+                    },
+                    _ => {},
                 }
             }
         }
