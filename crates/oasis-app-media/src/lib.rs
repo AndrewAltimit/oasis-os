@@ -402,11 +402,13 @@ impl BrowsingApp {
         };
         let files = list_directory(vfs, &dir);
         let image_exts = [".png", ".jpg", ".jpeg", ".bmp", ".gif"];
+        // Listing rows are `name  (size)`: match the extension on the name
+        // alone, so `notes.png.txt` or `.jpgs/` are not treated as images.
         let images: Vec<String> = files
             .iter()
             .filter(|f| {
-                let lower = f.to_lowercase();
-                image_exts.iter().any(|ext| lower.contains(ext)) && !f.ends_with('/')
+                let name = f.split("  (").next().unwrap_or(f).to_lowercase();
+                image_exts.iter().any(|ext| name.ends_with(ext))
             })
             .cloned()
             .collect();
