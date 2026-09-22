@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -49,6 +50,10 @@ pub struct Slider {
     pub thumb_size: u16,
     /// Whether the slider has keyboard focus (rings the thumb).
     pub focused: bool,
+    /// Whether the pointer is over the slider.
+    pub hovered: bool,
+    /// Whether the thumb is being pressed / dragged.
+    pub pressed: bool,
 }
 
 impl Slider {
@@ -68,7 +73,14 @@ impl Slider {
             show_value_label: false,
             thumb_size: 12,
             focused: false,
+            hovered: false,
+            pressed: false,
         }
+    }
+
+    /// Resolved interaction state (Disabled > Pressed > Hover > Normal).
+    pub fn state(&self) -> WidgetState {
+        WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
     }
 
     /// Set the current value in display-value space (clamped to `min..=max`).
@@ -204,11 +216,9 @@ impl Widget for Slider {
         } else {
             ctx.theme.slider_track
         };
-        let thumb_fill = if self.disabled {
-            dim_color(ctx.theme.slider_thumb)
-        } else {
-            ctx.theme.slider_thumb
-        };
+        // Thumb reflects hover / press / disabled; the disabled mapping
+        // (half alpha) is the historical `dim_color` dimming.
+        let thumb_fill = WidgetStateColors::tinted(ctx.theme, ctx.theme.slider_thumb, self.state());
         let thumb_border = ctx.theme.interactive_border(self.disabled, true);
 
         let ts = self.thumb_size as u32;
@@ -749,6 +759,29 @@ mod tests {
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();
         }
         assert!(backend.fill_rect_count() >= 1);
+    }
+
+    #[test]
+    fn each_state_has_distinct_fill() {
+        test_utils::assert_states_distinct(|st, ctx| {
+            let mut s = Slider::new(0.0, 10.0);
+            s.set_value(5.0);
+            s.hovered = st == WidgetState::Hover;
+            s.pressed = st == WidgetState::Pressed;
+            s.disabled = st == WidgetState::Disabled;
+            s.draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+    }
+
+    #[test]
+    fn resting_thumb_fill_unchanged() {
+        let theme = Theme::dark();
+        let fills = test_utils::fill_colors_of(|ctx| {
+            let mut s = Slider::new(0.0, 10.0);
+            s.set_value(5.0);
+            s.draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+        assert!(fills.contains(&theme.slider_thumb));
     }
 
     #[test]

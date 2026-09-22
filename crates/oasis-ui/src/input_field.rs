@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -21,6 +22,10 @@ pub struct InputField {
     pub password_mode: bool,
     /// Whether the field is disabled (non-interactive).
     pub disabled: bool,
+    /// Whether the pointer is over the field.
+    pub hovered: bool,
+    /// Whether the field is being pressed (pointer down on it).
+    pub pressed: bool,
 }
 
 impl InputField {
@@ -34,7 +39,14 @@ impl InputField {
             focused: false,
             password_mode: false,
             disabled: false,
+            hovered: false,
+            pressed: false,
         }
+    }
+
+    /// Resolved interaction state (Disabled > Pressed > Hover > Normal).
+    pub fn state(&self) -> WidgetState {
+        WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
     }
 
     /// Display text (masked if password mode).
@@ -354,6 +366,26 @@ mod tests {
         assert_eq!(f.text, "Hi", "text should be unchanged");
         assert_eq!(f.cursor_pos, 0, "cursor should remain at 0");
     }
+
+    #[test]
+    fn each_state_has_distinct_fill() {
+        crate::test_utils::assert_states_distinct(|st, ctx| {
+            let mut f = InputField::new();
+            f.hovered = st == WidgetState::Hover;
+            f.pressed = st == WidgetState::Pressed;
+            f.disabled = st == WidgetState::Disabled;
+            f.draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+    }
+
+    #[test]
+    fn resting_fill_is_input_bg() {
+        let theme = Theme::dark();
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            InputField::new().draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+        assert_eq!(fills.first(), Some(&theme.input_bg));
+    }
 }
 
 impl Default for InputField {
@@ -372,11 +404,20 @@ impl Widget for InputField {
         let radius = ctx.theme.border_radius_md;
 
         // Background.
-        ctx.backend
-            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.input_bg)?;
+        let state = self.state();
+        ctx.backend.fill_rounded_rect(
+            x,
+            y,
+            w,
+            h,
+            radius,
+            WidgetStateColors::input_bg(ctx.theme, state),
+        )?;
 
         // Border.
-        let bc = if self.focused {
+        let bc = if state.is_disabled() {
+            WidgetStateColors::border(ctx.theme, state)
+        } else if self.focused {
             ctx.theme.input_border_focus
         } else {
             ctx.theme.input_border
@@ -406,8 +447,9 @@ impl Widget for InputField {
             )?;
         } else {
             let display = self.display_text();
+            let fg = WidgetStateColors::content_text(ctx.theme, state);
             ctx.backend
-                .draw_text_ellipsis(&display, tx, ty, fs, ctx.theme.text_primary, max_w)?;
+                .draw_text_ellipsis(&display, tx, ty, fs, fg, max_w)?;
 
             // Cursor.
             if self.focused {

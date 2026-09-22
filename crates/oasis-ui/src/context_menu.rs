@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::WidgetStateColors;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -89,6 +90,9 @@ pub struct ContextMenu {
     pub selected_index: Option<usize>,
     /// Index of the currently open submenu, if any.
     pub open_submenu: Option<usize>,
+    /// Index of the item under the pointer, if any (pointer hover,
+    /// distinct from the keyboard `selected_index`).
+    pub hovered_index: Option<usize>,
 }
 
 impl ContextMenu {
@@ -101,7 +105,45 @@ impl ContextMenu {
             visible: false,
             selected_index: None,
             open_submenu: None,
+            hovered_index: None,
         }
+    }
+
+    /// Index of the selectable item at screen point `(mx, my)`, if any.
+    ///
+    /// Separators, disabled actions and points outside the menu return
+    /// `None`. Uses the menu's stored `x` / `y` origin.
+    pub fn item_at(&self, ctx: &DrawContext<'_>, mx: i32, my: i32) -> Option<usize> {
+        if !self.visible {
+            return None;
+        }
+        let (w, _) = self.compute_size(ctx);
+        if mx < self.x || mx >= self.x + w as i32 {
+            return None;
+        }
+        let row_h = self.row_height(ctx) as i32;
+        let mut cy = self.y + PAD_V;
+        for (i, item) in self.items.iter().enumerate() {
+            let ih = match item {
+                MenuItem::Separator => SEPARATOR_HEIGHT as i32,
+                _ => row_h,
+            };
+            if my >= cy && my < cy + ih {
+                return item.is_selectable().then_some(i);
+            }
+            cy += ih;
+        }
+        None
+    }
+
+    /// Update [`hovered_index`](Self::hovered_index) from a pointer
+    /// position. Returns `true` when the hovered item changed (the caller
+    /// should redraw).
+    pub fn hover_at(&mut self, ctx: &DrawContext<'_>, mx: i32, my: i32) -> bool {
+        let next = self.item_at(ctx, mx, my);
+        let changed = next != self.hovered_index;
+        self.hovered_index = next;
+        changed
     }
 
     /// Show the menu at the given screen position.
@@ -111,6 +153,7 @@ impl ContextMenu {
         self.visible = true;
         self.selected_index = None;
         self.open_submenu = None;
+        self.hovered_index = None;
     }
 
     /// Hide the menu and reset selection state.
@@ -118,6 +161,7 @@ impl ContextMenu {
         self.visible = false;
         self.selected_index = None;
         self.open_submenu = None;
+        self.hovered_index = None;
     }
 
     /// Whether the menu is currently visible.
@@ -246,6 +290,26 @@ impl ContextMenu {
         (w.max(40), h)
     }
 
+    /// Fill the highlight behind row `i` if it is selected or hovered.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row_bg(
+        &self,
+        ctx: &mut DrawContext<'_>,
+        x: i32,
+        cy: i32,
+        w: u32,
+        row_h: u32,
+        i: usize,
+        hovered: bool,
+    ) -> Result<()> {
+        let selected = self.selected_index == Some(i);
+        if let Some(fill) = WidgetStateColors::row_bg(ctx.theme, selected, hovered) {
+            ctx.backend
+                .fill_rect(x + 1, cy, w.saturating_sub(2), row_h, fill)?;
+        }
+        Ok(())
+    }
+
     /// Height of a single non-separator row.
     fn row_height(&self, ctx: &DrawContext<'_>) -> u32 {
         ctx.backend.measure_text_height(ctx.theme.font_size_md) + 6
@@ -311,16 +375,10 @@ impl Widget for ContextMenu {
         for (i, item) in self.items.iter().enumerate() {
             match item {
                 MenuItem::Action { label, enabled } => {
-                    // Highlight selected row.
-                    if self.selected_index == Some(i) {
-                        ctx.backend.fill_rect(
-                            x + 1,
-                            cy,
-                            w.saturating_sub(2),
-                            row_h,
-                            ctx.theme.accent_subtle,
-                        )?;
-                    }
+                    // Highlight selected / hovered row (disabled actions
+                    // never show pointer hover).
+                    let hovered = *enabled && self.hovered_index == Some(i);
+                    self.draw_row_bg(ctx, x, cy, w, row_h, i, hovered)?;
 
                     let color = if *enabled {
                         ctx.theme.text_primary
@@ -351,16 +409,9 @@ impl Widget for ContextMenu {
                     cy += SEPARATOR_HEIGHT as i32;
                 },
                 MenuItem::Submenu { label, .. } => {
-                    // Highlight selected row.
-                    if self.selected_index == Some(i) {
-                        ctx.backend.fill_rect(
-                            x + 1,
-                            cy,
-                            w.saturating_sub(2),
-                            row_h,
-                            ctx.theme.accent_subtle,
-                        )?;
-                    }
+                    // Highlight selected / hovered row.
+                    let hovered = self.hovered_index == Some(i);
+                    self.draw_row_bg(ctx, x, cy, w, row_h, i, hovered)?;
 
                     ctx.backend.draw_text_ellipsis(
                         label,
@@ -718,5 +769,59 @@ mod tests {
         menu.selected_index = Some(1);
         let item = menu.selected_item().unwrap();
         assert!(matches!(item, MenuItem::Action { label, .. } if label == "Copy"));
+    }
+
+    // -- Pointer hover --
+
+    #[test]
+    fn item_at_and_hover_at() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let mut menu = ContextMenu::new(sample_items());
+        assert_eq!(menu.item_at(&ctx, 10, 10), None, "hidden");
+        menu.show(100, 50);
+        let row_h = menu.row_height(&ctx) as i32;
+        let first_y = 50 + PAD_V;
+        assert_eq!(menu.item_at(&ctx, 105, first_y), Some(0));
+        assert_eq!(menu.item_at(&ctx, 105, first_y + row_h), Some(1));
+        // Disabled action is not hoverable.
+        assert_eq!(menu.item_at(&ctx, 105, first_y + row_h * 2), None);
+        // Separator is not hoverable.
+        assert_eq!(menu.item_at(&ctx, 105, first_y + row_h * 3 + 1), None);
+        // Submenu after the separator.
+        let sub_y = first_y + row_h * 3 + SEPARATOR_HEIGHT as i32;
+        assert_eq!(menu.item_at(&ctx, 105, sub_y), Some(4));
+        assert_eq!(menu.item_at(&ctx, 99, first_y), None, "left of menu");
+
+        assert!(menu.hover_at(&ctx, 105, first_y));
+        assert_eq!(menu.hovered_index, Some(0));
+        assert!(!menu.hover_at(&ctx, 106, first_y), "unchanged");
+        menu.hide();
+        assert_eq!(menu.hovered_index, None);
+    }
+
+    #[test]
+    fn hovered_row_gets_distinct_highlight() {
+        let theme = Theme::dark();
+        let draw = |hover: Option<usize>, sel: Option<usize>| {
+            test_utils::fill_colors_of(|ctx| {
+                let mut menu = ContextMenu::new(sample_items());
+                menu.show(0, 0);
+                menu.hovered_index = hover;
+                menu.selected_index = sel;
+                let (w, h) = menu.measure(ctx, 200, 200);
+                menu.draw(ctx, 0, 0, w, h).unwrap();
+            })
+        };
+        let hover_fill = WidgetStateColors::row_bg(&theme, false, true).unwrap();
+        assert!(!draw(None, None).contains(&hover_fill));
+        assert!(draw(Some(1), None).contains(&hover_fill));
+        assert!(draw(Some(4), None).contains(&hover_fill), "submenu row");
+        // Selected row still uses accent_subtle; hovered+selected differs.
+        assert!(draw(None, Some(1)).contains(&theme.accent_subtle));
+        assert!(!draw(Some(1), Some(1)).contains(&theme.accent_subtle));
+        // Disabled action never shows hover.
+        assert!(!draw(Some(2), None).contains(&hover_fill));
     }
 }

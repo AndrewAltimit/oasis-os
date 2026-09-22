@@ -55,7 +55,7 @@ statusbar_bg = "#F5F5F780"
 bar_bg = "#2C2C2E"
 battery_color = "#1D1D1F"
 version_color = "#86868B"
-clock_color = "#1D1D1F"
+clock_color = "#F5F5F7"
 separator_color = "#D1D1D6"
 text_shadow = false
 # Dock-style bottom bar uses dark translucent appearance

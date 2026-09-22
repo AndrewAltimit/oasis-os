@@ -8,10 +8,11 @@
 //! here on the first render of the new image.
 
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::{Color, SdiBackend};
+use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
 use crate::BrowsingApp;
+use crate::palette::PhotoColors;
 
 pub fn draw(
     app: &BrowsingApp,
@@ -22,11 +23,12 @@ pub fn draw(
     backend: &mut dyn SdiBackend,
     at: &ActiveTheme,
 ) -> Result<()> {
-    // Dark background — black-matte like most photo viewers.
-    backend.fill_rect(cx, cy, cw, ch, Color::rgb(8, 8, 12))?;
+    let colors = PhotoColors::from_theme(at);
+    backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
 
-    // Reserve a footer strip for filename/dimensions.
-    let footer_h: u32 = 18;
+    // Reserve a footer strip for filename/dimensions, sized to the
+    // theme's hint font.
+    let footer_h: u32 = backend.measure_text_height(at.font_hint) + 8;
     let img_h = ch.saturating_sub(footer_h);
 
     // Destroy any textures left over from previous images. `open_file`
@@ -76,16 +78,17 @@ pub fn draw(
             cy + img_h as i32 / 4,
             cw / 2,
             img_h / 2,
-            Color::rgb(30, 30, 40),
+            colors.placeholder_bg,
         )?;
         let msg = "(preview not available)";
-        let x = cx + (cw as i32 / 2) - (msg.len() as i32 * 3);
+        let msg_w = backend.measure_text(msg, at.font_body) as i32;
+        let msg_h = backend.measure_text_height(at.font_body) as i32;
         backend.draw_text(
             msg,
-            x,
-            cy + img_h as i32 / 2,
+            cx + (cw as i32 - msg_w) / 2,
+            cy + (img_h as i32 - msg_h) / 2,
             at.font_body,
-            Color::rgb(200, 200, 200),
+            colors.placeholder_text,
         )?;
     }
 
@@ -104,8 +107,10 @@ fn draw_footer(
     backend: &mut dyn SdiBackend,
     at: &ActiveTheme,
 ) -> Result<()> {
+    let colors = PhotoColors::from_theme(at);
     let fy = cy + ch as i32 - footer_h as i32;
-    backend.fill_rect(cx, fy, cw, footer_h, Color::rgba(0, 0, 0, 180))?;
+    backend.fill_rect(cx, fy, cw, footer_h, colors.footer_bg)?;
+    let text_y = fy + (footer_h as i32 - backend.measure_text_height(at.font_hint) as i32) / 2;
 
     let path = app.content.viewing_file.as_deref().unwrap_or("");
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -121,23 +126,29 @@ fn draw_footer(
     };
     let line = format!("{name}{dim_text}{zoom_text}");
 
-    backend.draw_text(
+    // Right-aligned key hint (measured), dropped when it would collide
+    // with the filename on narrow windows.
+    let hint = "\u{25b3} zoom  \u{25a1} rotate  Cancel back";
+    let hint_w = backend.measure_text(hint, at.font_hint) as i32;
+    let hint_x = cx + cw as i32 - hint_w - 8;
+    let line_w = backend.measure_text(&line, at.font_hint) as i32;
+    let show_hint = hint_x > cx + 6 + line_w + 8;
+    let line_max_w = if show_hint {
+        (hint_x - cx - 14).max(0) as u32
+    } else {
+        cw.saturating_sub(12)
+    };
+
+    backend.draw_text_ellipsis(
         &line,
         cx + 6,
-        fy + 4,
+        text_y,
         at.font_hint,
-        Color::rgb(220, 220, 220),
+        colors.footer_text,
+        line_max_w,
     )?;
-
-    // Right-aligned key hint.
-    let hint = "\u{25b3} zoom  \u{25a1} rotate  Cancel back";
-    let hint_x = cx + cw as i32 - (hint.len() as i32 * 5) - 8;
-    backend.draw_text(
-        hint,
-        hint_x,
-        fy + 4,
-        at.font_hint,
-        Color::rgb(160, 160, 180),
-    )?;
+    if show_hint {
+        backend.draw_text(hint, hint_x, text_y, at.font_hint, colors.hint_text)?;
+    }
     Ok(())
 }

@@ -6,6 +6,7 @@ use oasis_core::browser::BrowserWidget;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::toast::ToastManager;
+use oasis_core::vfs::Vfs;
 use oasis_core::wm::DesktopManager;
 use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{Window, WindowState, WmTheme};
@@ -18,7 +19,7 @@ use oasis_core::terminal_sdi;
 /// This controls which UI elements are visible and positioned correctly
 /// each frame. The actual rendering (`backend.clear`, `sdi.draw`, etc.)
 /// remains in main.rs since it requires `&mut backend`.
-pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
+pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     // Advance animations each frame.
     state.ui.dashboard.tick_animation();
     state.ui.start_menu.tick_animation();
@@ -42,7 +43,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 terminal_sdi::hide_media_page(sdi);
             } else {
                 state.ui.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page(sdi, &state.ui.bottom_bar, &state.active_theme);
+                terminal_sdi::update_media_page_with_vfs(
+                    sdi,
+                    &state.ui.bottom_bar,
+                    &state.active_theme,
+                    vfs,
+                );
             }
 
             state

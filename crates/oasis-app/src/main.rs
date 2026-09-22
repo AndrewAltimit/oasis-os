@@ -857,7 +857,7 @@ fn main() -> Result<()> {
         }
 
         // Update SDI scene graph for the active mode.
-        render::update_sdi(&mut state, &mut sdi);
+        render::update_sdi(&mut state, &mut sdi, &vfs);
 
         // Window open/close/minimize/restore animations; skins that ask
         // for reduced motion get instant transitions.

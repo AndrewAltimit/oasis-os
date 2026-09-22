@@ -854,6 +854,14 @@ Recognized slots per app:
 - **`settings`** — `bg`, `title_bar_bg`, `title_bar_text`, `text`,
   `selected_text`, `selected_bg`, `selection_accent`, `dim_text`,
   `divider`
+- **`music_player`** — `bg`, `header_rule`, `art_frame`, `art_ring`,
+  `art_fill`, `art_glyph`, `label`, `title`, `meta`, `shuffle_on`,
+  `transport_bg`, `transport_rule`, `button_bg`, `button_text`,
+  `button_primary_bg`, `button_primary_text`, `progress_track`,
+  `progress_fill`, `progress_text` (defaults come from the app-screen
+  colors and the derived widget theme — accent, surface, slider)
+- **`photo_viewer`** — `bg`, `placeholder_bg`, `placeholder_text`,
+  `footer_bg`, `footer_text`, `hint_text`
 - **`tv_guide`** — `bg`, `grid_line`, `header_bg`, `selected_bg`,
   `live_badge`, and the rest of the grid palette (see
   `TvGuideColors` in `oasis-app-tv-guide`)
@@ -966,10 +974,18 @@ silently do nothing:
   actually render text: `text`/`dim_text`/`output`/`prompt`/`error` on
   the background, button text on the button background, selected text
   on the selection highlight, and status/bottom bar text on their bar
-  backgrounds. Body text is held to 4.5:1, secondary/large text to
+  backgrounds. The clock is checked against the bar it is actually
+  drawn on — the bottom bar when `clock_in_bottombar` is set (the
+  default), otherwise the status bar — and bars with a
+  `gradient_top`/`gradient_bottom` are measured at the gradient
+  midpoint. Body text is held to 4.5:1, secondary/large text to
   3:1; translucent colors are composited over their backdrop first.
   These are advisory — deliberately stylized palettes (`corrupted`,
   `win95`) fail some of them by design and still load normally.
+- Built-in skins must additionally clear a hard **2:1 floor** on every
+  one of those pairs (CI test `all_builtin_skins_meet_minimum_contrast`)
+  — below that, text is effectively invisible. A dark bottom bar with a
+  dark `clock_color` is the classic way to trip it.
 
 Lint your skin whenever a field appears to have no effect — a
 misspelled key is the most common cause. All shipped skins are kept

@@ -412,4 +412,56 @@ mod tests {
     fn generated_skin_dispatch_unknown_returns_none() {
         assert!(super::generated::load_generated_skin("nonexistent").is_none());
     }
+
+    /// Hard floor for every built-in skin: no checked text/background
+    /// pair may drop below 2:1 (effectively invisible). The WCAG AA
+    /// 4.5 / 3.0 thresholds stay advisory (`validate_contrast`).
+    #[test]
+    fn all_builtin_skins_meet_minimum_contrast() {
+        const FLOOR: f64 = 2.0;
+        assert_eq!(builtin_names().len(), 17);
+        let mut failures = Vec::new();
+        for name in builtin_names() {
+            let skin = load_builtin(name).expect("built-in skin loads");
+            let placed = skin.features.clock_in_bottombar;
+            for c in skin.theme.contrast_report(placed) {
+                if c.ratio < FLOOR {
+                    failures.push(format!("{name}: {} = {:.2}:1", c.pair, c.ratio));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "text/background pairs below {FLOOR}:1:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn contrast_checks_clock_on_its_actual_bar() {
+        // macOS draws the clock in its dark dock-style bottom bar.
+        let skin = macos_skin().expect("macos loads");
+        assert!(skin.features.clock_in_bottombar);
+        let report = skin.theme.contrast_report(true);
+        assert!(report.iter().any(|c| c.pair == "clock on bottom bar"));
+        let top = skin.theme.contrast_report(false);
+        assert!(top.iter().all(|c| c.pair != "clock on bottom bar"));
+    }
+
+    #[test]
+    fn highcontrast_icon_colors_are_high_contrast() {
+        let skin = highcontrast_skin().expect("highcontrast loads");
+        let at = crate::active_theme::ActiveTheme::from_skin(&skin.theme);
+        let bg = skin.theme.background_color();
+        assert!(!at.icon.fallback_colors.is_empty());
+        for c in &at.icon.fallback_colors {
+            let ratio = oasis_types::color::contrast_ratio(*c, bg);
+            assert!(
+                ratio >= 7.0,
+                "icon color {c:?} is only {ratio:.2}:1 on {bg:?}"
+            );
+        }
+        // The grey Win2K "pixel" chrome is not a high-contrast surface.
+        assert_ne!(at.icon.vector_preset, "pixel");
+    }
 }

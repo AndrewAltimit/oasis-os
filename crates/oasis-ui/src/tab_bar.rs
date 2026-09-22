@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -28,6 +29,10 @@ pub struct TabBar {
     pub disabled: bool,
     /// Whether the tab bar has keyboard focus (rings the active tab).
     pub focused: bool,
+    /// Index of the tab under the pointer, if any.
+    pub hovered: Option<usize>,
+    /// Whether the hovered tab is being pressed.
+    pub pressed: bool,
 }
 
 impl TabBar {
@@ -39,7 +44,34 @@ impl TabBar {
             style: TabStyle::Underline,
             disabled: false,
             focused: false,
+            hovered: None,
+            pressed: false,
         }
+    }
+
+    /// Resolved interaction state of tab `index`.
+    pub fn tab_state(&self, index: usize) -> WidgetState {
+        let hover = self.hovered == Some(index);
+        WidgetState::from_flags(hover, hover && self.pressed, self.disabled)
+    }
+
+    /// Index of the tab containing local offset `dx` (pixels from the
+    /// bar's left edge) for a bar drawn `w` pixels wide.
+    pub fn tab_at(&self, dx: i32, w: u32) -> Option<usize> {
+        if self.tabs.is_empty() || dx < 0 || dx >= w as i32 {
+            return None;
+        }
+        let n = self.tabs.len() as u32;
+        let (tab_w, remainder) = (w / n, w % n);
+        // Mirror `draw`: the first `remainder` tabs are 1px wider.
+        let wide = remainder * (tab_w + 1);
+        let dx = dx as u32;
+        let i = if dx < wide {
+            dx / (tab_w + 1)
+        } else {
+            remainder + (dx - wide).checked_div(tab_w)?
+        };
+        ((i as usize) < self.tabs.len()).then_some(i as usize)
     }
 
     /// Select a tab by index (respects disabled state).
@@ -204,6 +236,52 @@ mod tests {
         assert!(backend.has_text("Settings"));
         assert!(backend.has_text("About"));
     }
+
+    fn tabs() -> Vec<String> {
+        vec!["A".into(), "B".into(), "C".into()]
+    }
+
+    #[test]
+    fn each_state_has_distinct_fill_active_and_inactive() {
+        for style in [TabStyle::Underline, TabStyle::Filled, TabStyle::Pill] {
+            // `target` = hovered tab: 0 is the active tab, 1 inactive.
+            for target in [0usize, 1] {
+                crate::test_utils::assert_states_distinct(|st, ctx| {
+                    let mut tb = TabBar::new(tabs());
+                    tb.style = style;
+                    tb.hovered =
+                        matches!(st, WidgetState::Hover | WidgetState::Pressed).then_some(target);
+                    tb.pressed = st == WidgetState::Pressed;
+                    tb.disabled = st == WidgetState::Disabled;
+                    tb.draw(ctx, 0, 0, 90, 20).unwrap();
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn resting_active_fill_is_accent() {
+        let theme = Theme::dark();
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            TabBar::new(tabs()).draw(ctx, 0, 0, 90, 20).unwrap();
+        });
+        assert!(fills.contains(&theme.accent));
+        assert!(!fills.contains(&WidgetStateColors::surface_bg(&theme, WidgetState::Hover)));
+    }
+
+    #[test]
+    fn tab_at_matches_draw_layout() {
+        let tb = TabBar::new(tabs());
+        // 100 / 3 = 33 rem 1: tab 0 spans 0..34, tab 1 34..67, tab 2 67..100.
+        assert_eq!(tb.tab_at(0, 100), Some(0));
+        assert_eq!(tb.tab_at(33, 100), Some(0));
+        assert_eq!(tb.tab_at(34, 100), Some(1));
+        assert_eq!(tb.tab_at(66, 100), Some(1));
+        assert_eq!(tb.tab_at(67, 100), Some(2));
+        assert_eq!(tb.tab_at(99, 100), Some(2));
+        assert_eq!(tb.tab_at(100, 100), None);
+        assert_eq!(tb.tab_at(-1, 100), None);
+    }
 }
 
 impl Widget for TabBar {
@@ -228,17 +306,26 @@ impl Widget for TabBar {
             let this_tab_w = tab_w + if (i as u32) < remainder { 1 } else { 0 };
             let tx = x + (i as u32 * tab_w + extra_before) as i32;
             let active = i == self.active;
+            let state = self.tab_state(i);
+            let active_fill = WidgetStateColors::accent_bg(ctx.theme, state);
+
+            // Hover / press feedback on inactive tabs (none at rest).
+            if !active && matches!(state, WidgetState::Hover | WidgetState::Pressed) {
+                ctx.backend.fill_rounded_rect(
+                    tx + 2,
+                    y + 2,
+                    this_tab_w.saturating_sub(4),
+                    h.saturating_sub(4),
+                    ctx.theme.border_radius_sm,
+                    WidgetStateColors::surface_bg(ctx.theme, state),
+                )?;
+            }
 
             match self.style {
                 TabStyle::Underline => {
                     if active {
-                        ctx.backend.fill_rect(
-                            tx,
-                            y + h as i32 - 2,
-                            this_tab_w,
-                            2,
-                            ctx.theme.accent,
-                        )?;
+                        ctx.backend
+                            .fill_rect(tx, y + h as i32 - 2, this_tab_w, 2, active_fill)?;
                     }
                 },
                 TabStyle::Filled => {
@@ -249,7 +336,7 @@ impl Widget for TabBar {
                             this_tab_w.saturating_sub(4),
                             h - 4,
                             ctx.theme.border_radius_sm,
-                            ctx.theme.accent,
+                            active_fill,
                         )?;
                     }
                 },
@@ -261,7 +348,7 @@ impl Widget for TabBar {
                             this_tab_w.saturating_sub(4),
                             h - 4,
                             (h - 4) as u16 / 2,
-                            ctx.theme.accent,
+                            active_fill,
                         )?;
                     }
                 },
@@ -286,6 +373,8 @@ impl Widget for TabBar {
                     TabStyle::Underline => ctx.theme.accent,
                     TabStyle::Filled | TabStyle::Pill => ctx.theme.text_on_accent,
                 }
+            } else if self.disabled {
+                ctx.theme.text_disabled
             } else {
                 ctx.theme.text_secondary
             };

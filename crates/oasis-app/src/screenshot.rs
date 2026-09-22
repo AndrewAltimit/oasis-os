@@ -34,6 +34,7 @@ use oasis_core::skin::builtin::builtin_names;
 use oasis_core::skin::resolve_skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
+use oasis_core::terminal_sdi::{hide_media_page, update_media_page_with_vfs};
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
 use oasis_core::wm::{WindowConfig, WindowManager, WindowType};
@@ -239,7 +240,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         }
         status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
         bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-        update_media_page(&mut sdi, &bottom_bar, &active_theme);
+        update_media_page_with_vfs(&mut sdi, &bottom_bar, &active_theme, &vfs);
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -580,32 +581,6 @@ fn populate_skin_terminal(sdi: &mut SdiRegistry, lines: &[&str], cwd: &str, inpu
     }
 }
 
-fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &ActiveTheme) {
-    let page_name = "media_page_text";
-    if !sdi.contains(page_name) {
-        let obj = sdi.create(page_name);
-        obj.font_size = at.font_heading;
-        obj.text_color = at.app.text;
-        obj.w = 0;
-        obj.h = 0;
-    }
-    let page_str = format!("[ {} Page ]", bottom_bar.active_tab.label());
-    if let Ok(obj) = sdi.get_mut(page_name) {
-        obj.x = (at.screen_w as i32) / 2 - (page_str.len() as i32 * at.font_heading as i32 / 2);
-        obj.y = (at.screen_h as i32) / 2 - 16;
-        obj.visible = true;
-        obj.text = Some(page_str);
-    }
-}
-
-fn hide_media_page(sdi: &mut SdiRegistry) {
-    for name in &["media_page_text", "media_page_hint"] {
-        if let Ok(obj) = sdi.get_mut(name) {
-            obj.visible = false;
-        }
-    }
-}
-
 fn setup_terminal_objects(
     sdi: &mut SdiRegistry,
     output_lines: &[&str],
@@ -759,4 +734,14 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
 
     vfs.mkdir("/home/user/music").expect("VFS mkdir music");
     vfs.mkdir("/home/user/photos").expect("VFS mkdir photos");
+    // Placeholder tracks so the AUDIO media-tab screenshot shows a
+    // listing (contents are never decoded here).
+    for (name, size) in [
+        ("ambient_dawn.mp3", 312 * 1024),
+        ("nightfall_theme.mp3", 2_457_600),
+        ("city_lights.ogg", 1_843_200),
+    ] {
+        vfs.write(&format!("/home/user/music/{name}"), &vec![0u8; size])
+            .expect("VFS write demo track");
+    }
 }

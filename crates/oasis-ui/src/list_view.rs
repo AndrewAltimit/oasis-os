@@ -1,6 +1,7 @@
 //! ListView widget: scrollable list with virtualized item rendering.
 
 use crate::context::DrawContext;
+use crate::states::WidgetStateColors;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -19,6 +20,11 @@ pub struct ListView<T> {
     pub selected: Option<usize>,
     /// Callback to render a single item.
     pub render_item: fn(&T, &mut DrawContext<'_>, i32, i32, u32, u32, bool) -> Result<()>,
+    /// Index of the item under the pointer, if any.
+    pub hovered: Option<usize>,
+    /// Whether the list has keyboard focus (draws a focus ring around
+    /// the viewport).
+    pub focused: bool,
 }
 
 impl<T> ListView<T> {
@@ -34,7 +40,23 @@ impl<T> ListView<T> {
             item_height: item_height.max(1),
             selected: None,
             render_item,
+            hovered: None,
+            focused: false,
         }
+    }
+
+    /// Index of the item at local offset `dy` (pixels from the top of
+    /// the viewport), accounting for the scroll offset.
+    pub fn index_at(&self, dy: i32) -> Option<usize> {
+        if dy < 0 {
+            return None;
+        }
+        let content_y = dy + self.scroll_offset;
+        if content_y < 0 {
+            return None;
+        }
+        let i = (content_y / self.item_height as i32) as usize;
+        (i < self.items.len()).then_some(i)
     }
 
     /// Total content height.
@@ -56,7 +78,7 @@ impl<T> ListView<T> {
     pub fn draw_at(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         ctx.backend.push_clip_rect(x, y, w, h)?;
 
-        let result = (|| {
+        let result: Result<()> = (|| {
             let first = (self.scroll_offset / self.item_height as i32).max(0) as usize;
             // Exact visible count: items that fit plus one for
             // a partially visible trailing item.
@@ -66,15 +88,11 @@ impl<T> ListView<T> {
             for i in first..last {
                 let item_y = y + (i as i32 * self.item_height as i32) - self.scroll_offset;
                 let selected = self.selected == Some(i);
+                let hovered = self.hovered == Some(i);
 
-                if selected {
-                    ctx.backend.fill_rect(
-                        x,
-                        item_y,
-                        w,
-                        self.item_height,
-                        ctx.theme.accent_subtle,
-                    )?;
+                if let Some(fill) = WidgetStateColors::row_bg(ctx.theme, selected, hovered) {
+                    ctx.backend
+                        .fill_rect(x, item_y, w, self.item_height, fill)?;
                 }
 
                 (self.render_item)(
@@ -91,7 +109,13 @@ impl<T> ListView<T> {
         })();
 
         ctx.backend.pop_clip_rect()?;
-        result
+        result?;
+
+        // Keyboard focus ring around the viewport (outside the clip).
+        if self.focused {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
+        Ok(())
     }
 }
 
@@ -301,6 +325,54 @@ mod tests {
         // MockBackend does not record set_clip_rect in `calls`, but the call
         // must not fail. We verify the draw completed and items were rendered.
         assert!(backend.draw_text_count() > 0);
+    }
+
+    use oasis_types::backend::Color;
+
+    fn fills_for(hovered: Option<usize>, selected: Option<usize>, focused: bool) -> Vec<Color> {
+        crate::test_utils::fill_colors_of(|ctx| {
+            let items: Vec<String> = (0..3).map(|i| format!("item{i}")).collect();
+            let mut lv = ListView::new(items, 20, dummy_render);
+            lv.hovered = hovered;
+            lv.selected = selected;
+            lv.focused = focused;
+            lv.draw(ctx, 0, 0, 200, 60).unwrap();
+        })
+    }
+
+    #[test]
+    fn hovered_row_highlight_is_distinct() {
+        let theme = Theme::dark();
+        let rest = fills_for(None, None, false);
+        assert!(rest.is_empty(), "no fills at rest");
+        let sel = fills_for(None, Some(1), false);
+        assert_eq!(sel, vec![theme.accent_subtle]);
+        let hov = fills_for(Some(1), None, false);
+        let both = fills_for(Some(1), Some(1), false);
+        assert_eq!(hov.len(), 1);
+        assert_ne!(hov, sel);
+        assert_ne!(both, sel);
+        assert_ne!(both, hov);
+    }
+
+    #[test]
+    fn focused_list_draws_ring() {
+        let theme = Theme::dark();
+        let ring = crate::focus::FocusStyle::from_theme(&theme).color;
+        assert!(!fills_for(None, None, false).contains(&ring));
+        assert!(fills_for(None, None, true).contains(&ring));
+    }
+
+    #[test]
+    fn index_at_accounts_for_scroll() {
+        let items: Vec<String> = (0..5).map(|i| format!("item{i}")).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        assert_eq!(lv.index_at(0), Some(0));
+        assert_eq!(lv.index_at(45), Some(2));
+        assert_eq!(lv.index_at(-1), None);
+        assert_eq!(lv.index_at(100), None);
+        lv.scroll_offset = 40;
+        assert_eq!(lv.index_at(0), Some(2));
     }
 }
 

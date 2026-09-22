@@ -265,7 +265,10 @@ impl Skin {
         // -- Accessibility: WCAG AA contrast (advisory) --
         // Stylized skins may fail these on purpose; the lint informs
         // authors and never blocks loading.
-        for c in self.theme.validate_contrast() {
+        for c in self
+            .theme
+            .validate_contrast_placed(self.features.clock_in_bottombar)
+        {
             warnings.push(format!(
                 "contrast: {} is {:.2}:1, below the WCAG AA recommendation of {}:1",
                 c.pair, c.ratio, c.required

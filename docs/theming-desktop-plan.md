@@ -54,12 +54,36 @@ the same branch, closing the gaps a post-M5 audit surfaced:
 - **Uniform widget interaction states + focus rings**: a single
   `WidgetStateColors` resolver (`oasis-ui/src/states.rs`) maps the
   `WidgetState` (Disabled > Pressed > Hover > Normal) onto the existing
-  `ui::Theme` interaction fields, so `[widget_states.*]` overrides recolor
-  button / checkbox / radio / toggle / slider / spin box / dropdown /
-  tab bar / input field consistently instead of per-widget hardcoding.
-  Each of those focusable widgets now also draws a keyboard focus ring via
-  `FocusStyle::from_theme`. Pure rename for the default theme (rings only
-  show in the focused state) — screenshots unchanged.
+  `ui::Theme` interaction fields. Each focusable widget also draws a
+  keyboard focus ring via `FocusStyle::from_theme`. Pure rename for the
+  default theme (rings only show in the focused state) — screenshots
+  unchanged. *Correction:* when this landed only `Button` and the
+  `DrawContext::button_bg` helpers actually routed through the resolver;
+  the other widgets merely gained focus rings. The follow-up below closes
+  that gap.
+- **Widget interaction states (follow-up)**: every interactive widget now
+  exposes hover / pressed / disabled flags (plus `focused`) and resolves
+  its fills through `WidgetStateColors`:
+  - `Checkbox`, `Toggle`, `Slider`, `InputField`, `Dropdown` (header):
+    `hovered` / `pressed` / `disabled` bools and a `state()` accessor.
+    `Toggle` gained `disabled` (and `flip()`, a no-op while disabled);
+    `Dropdown` gained `disabled` (`toggle()` stays closed).
+  - `RadioGroup` / `TabBar`: `hovered: Option<usize>` + `pressed` for the
+    option/tab under the pointer (`option_state` / `tab_state`, hit tests
+    `option_at` / `tab_at`). `SpinBox`: `hovered: Option<SpinBoxPart>`
+    for the −/+ buttons (`part_at`).
+  - `Dropdown` (`hovered_index`, `option_at`), `ContextMenu`
+    (`hovered_index`, `item_at`, `hover_at`) and `ListView` (`hovered`,
+    `index_at`) highlight the row under the pointer via
+    `WidgetStateColors::row_bg`, distinct from the keyboard selection;
+    `ListView` also gained `focused` (focus ring around the viewport).
+  - Non-button surfaces use `WidgetStateColors::tinted` (`input_bg`,
+    `surface_bg`): Normal = the resting color unchanged, Hover / Pressed
+    blend 12% / 24% toward `text_primary`, Disabled halves the alpha.
+
+  All new fields default to the resting state, so default rendering is
+  unchanged. Each widget has a recording-backend test asserting that
+  Normal / Hover / Pressed / Disabled produce distinct fills.
 - **Terminal + shell holes**: 16-color `[palette]` ANSI table derived per
   skin, SGR foreground-color runs in terminal output (`ls`/`tree`/errors
   emit color), fully themeable boot splash (`[boot]`), themed procedural
@@ -358,9 +382,11 @@ screenshot-regression fixture for CI.
 
 ## 4. Track C — Wire up what already exists (cheap wins)
 
-- **`widget_states`**: make `oasis-ui` Button/InputField/Toggle query
-  `ActiveTheme::widget_state_color` for hover/pressed/disabled instead of
-  hardcoded derivation. (Parsed today, consumed nowhere.)
+- **`widget_states`**: ~~make `oasis-ui` Button/InputField/Toggle query
+  `ActiveTheme::widget_state_color` for hover/pressed/disabled~~ — done:
+  all interactive `oasis-ui` widgets resolve state colors through
+  `WidgetStateColors`, which reads the `ui::Theme` fields the
+  `[widget_states.*]` overrides flow into (see M6 follow-up above).
 - **`app_themes`**: adopt in the remaining apps (only tv-guide and paint read
   it) — at minimum terminal ANSI-ish palette, file manager, settings.
 - **Skin inheritance**: use it — rebase variant skins on a shared parent to
