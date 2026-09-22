@@ -61,5 +61,8 @@ env_logger = { workspace = true }
 anyhow = { workspace = true }
 png = { workspace = true }
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

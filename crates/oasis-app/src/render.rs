@@ -2,9 +2,12 @@ use oasis_backend_sdl::shader_bridge::Visibility;
 use oasis_core::apps::AppRunner;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
+use oasis_core::browser::BrowserWidget;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::toast::ToastManager;
+use oasis_core::wm::DesktopManager;
+use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{Window, WindowState, WmTheme};
 
 use crate::app_state::{AppState, Mode};
@@ -377,6 +380,39 @@ pub fn wallpaper_visibility(state: &AppState) -> Visibility {
     }
 }
 
+/// Whether any visible window's content (painted through the WM draw
+/// callback, which the SDI dirty tracking can't see) needs this frame
+/// drawn: an ongoing drag/resize or window animation, a runner whose
+/// content changed or animates ([`AppRunner::wants_frame`]), or a browser
+/// with pending paint work ([`BrowserWidget::wants_frame`]).
+///
+/// Minimized windows and windows on other virtual desktops are not drawn,
+/// so their content can't need a frame (restoring one changes SDI state).
+/// Windows without a runner or browser paint only SDI objects.
+pub fn windows_want_frame(
+    wm: &WindowManager,
+    desktops: &DesktopManager,
+    runners: &[(String, AppRunner)],
+    browser: Option<&BrowserWidget>,
+) -> bool {
+    if wm.is_animating() || wm.is_dragging() {
+        return true;
+    }
+    wm.windows().iter().any(|win| {
+        let id = win.id.as_str();
+        if win.state == WindowState::Minimized || !desktops.is_visible(id) {
+            return false;
+        }
+        if id == "browser" {
+            return browser.is_some_and(BrowserWidget::wants_frame);
+        }
+        runners
+            .iter()
+            .find(|(rid, _)| rid == id)
+            .is_some_and(|(_, runner)| runner.wants_frame())
+    })
+}
+
 /// Whether a window's chrome provably paints every pixel of its outer
 /// rect opaquely.
 ///
@@ -458,6 +494,143 @@ mod tests {
         win.outer_w = w;
         win.outer_h = h;
         win
+    }
+
+    // -- windows_want_frame (idle-frame elision with open windows) --
+
+    fn open_window(wm: &mut WindowManager, sdi: &mut SdiRegistry, id: &str) {
+        let config = WindowConfig {
+            id: id.to_string(),
+            title: id.to_string(),
+            x: Some(20),
+            y: Some(20),
+            width: 200,
+            height: 120,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        wm.create_window(&config, sdi).expect("create window");
+    }
+
+    fn launch_runner(title: &str, vfs: &oasis_core::vfs::MemoryVfs) -> AppRunner {
+        let entry = oasis_core::dashboard::AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: Color::rgb(100, 100, 100),
+        };
+        AppRunner::launch(&entry, vfs)
+    }
+
+    /// Mimic a drawn frame: every visible runner's content is on screen.
+    fn draw_frame(runners: &mut [(String, AppRunner)]) {
+        for (_, runner) in runners {
+            runner.mark_drawn();
+        }
+    }
+
+    #[test]
+    fn idle_terminal_and_static_page_elide_frames() {
+        use oasis_core::browser::BrowserConfig;
+        use oasis_core::vfs::{MemoryVfs, Vfs};
+
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        let desktops = DesktopManager::new(1);
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites/home").expect("mkdir");
+        vfs.write(
+            "/sites/home/index.html",
+            b"<html><body><h1>Static</h1><p>Nothing moves.</p></body></html>",
+        )
+        .expect("write");
+
+        open_window(&mut wm, &mut sdi, "terminal");
+        open_window(&mut wm, &mut sdi, "browser");
+        let mut runners = vec![("terminal".to_string(), launch_runner("Terminal", &vfs))];
+        let mut browser = BrowserWidget::new(BrowserConfig::default());
+        browser.set_window(20, 40, 200, 100);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Freshly opened content must be drawn.
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+
+        // Host frame loop: tick, then draw only frames that want it.
+        let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+        let mut drawn = 0;
+        let frames = 120;
+        for _ in 0..frames {
+            browser.tick(&vfs);
+            for (_, runner) in &mut runners {
+                runner.tick(16, &vfs);
+            }
+            if windows_want_frame(&wm, &desktops, &runners, Some(&browser)) {
+                browser.paint(&mut backend).expect("paint");
+                draw_frame(&mut runners);
+                drawn += 1;
+            }
+        }
+        assert!(
+            drawn <= 3,
+            "idle terminal + static page drew {drawn} of {frames} frames"
+        );
+
+        // Typing into the terminal window schedules a redraw ...
+        let output = vec!["$ echo hi".to_string(), "hi".to_string()];
+        runners[0].1.sync_terminal_lines(&output, "> ", 0);
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+        draw_frame(&mut runners);
+        runners[0].1.handle_text_input('x');
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+        draw_frame(&mut runners);
+        assert!(!windows_want_frame(
+            &wm,
+            &desktops,
+            &runners,
+            Some(&browser)
+        ));
+
+        // ... but not while its window is minimized (nothing is drawn).
+        wm.minimize_window("terminal", &mut sdi).expect("minimize");
+        runners[0].1.handle_text_input('y');
+        assert!(!windows_want_frame(
+            &wm,
+            &desktops,
+            &runners,
+            Some(&browser)
+        ));
+    }
+
+    #[test]
+    fn running_game_window_wants_frames_as_it_moves() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        let desktops = DesktopManager::new(1);
+        let vfs = oasis_core::vfs::MemoryVfs::new();
+        open_window(&mut wm, &mut sdi, "games");
+        let mut runners = vec![("games".to_string(), launch_runner("Games", &vfs))];
+        runners[0]
+            .1
+            .handle_input(&oasis_core::input::Button::Confirm, &vfs); // Snake.
+        draw_frame(&mut runners);
+
+        // 1 s at 60 fps with no input: the snake steps ~10 times, each
+        // step (and only a step) wants a frame.
+        let mut drawn = 0;
+        for _ in 0..60 {
+            for (_, runner) in &mut runners {
+                runner.tick(16, &vfs);
+            }
+            if windows_want_frame(&wm, &desktops, &runners, None) {
+                draw_frame(&mut runners);
+                drawn += 1;
+            }
+        }
+        assert!(
+            (8..=11).contains(&drawn),
+            "snake drew {drawn} frames in 1 s"
+        );
     }
 
     #[test]

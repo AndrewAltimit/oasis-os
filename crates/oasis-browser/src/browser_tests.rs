@@ -3371,3 +3371,119 @@ fn js_click_handler_infinite_loop_is_interrupted() {
     browser.handle_click(ox, oy, &vfs);
     assert!(hit(&browser, ok), "engine must stay usable after interrupt");
 }
+
+// ---------------------------------------------------------------
+// Idle-frame elision: wants_frame()
+// ---------------------------------------------------------------
+
+/// Tick + paint the way a host's frame loop does, until the widget stops
+/// asking for frames. Returns the number of frames painted.
+fn settle(browser: &mut BrowserWidget, vfs: &dyn Vfs, backend: &mut MockBackend) -> usize {
+    let mut drawn = 0;
+    for _ in 0..500 {
+        browser.tick(vfs);
+        if !browser.wants_frame() {
+            return drawn;
+        }
+        browser.paint(backend).unwrap();
+        drawn += 1;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("browser never settled");
+}
+
+#[test]
+fn static_page_stops_wanting_frames() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    assert!(browser.wants_frame(), "a fresh page must be painted");
+
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+    for _ in 0..10 {
+        browser.tick(&vfs);
+        assert!(!browser.wants_frame(), "static page must elide frames");
+    }
+    // The host re-sends the same window rect on every drawn frame; that
+    // is not a change.
+    browser.set_window(0, 0, 480, 272);
+    assert!(!browser.wants_frame());
+}
+
+#[test]
+fn window_moves_and_resizes_want_a_frame() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.set_window(10, 10, 480, 272);
+    assert!(browser.wants_frame(), "window move must repaint");
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.set_window(10, 10, 400, 272);
+    assert!(browser.wants_frame(), "window resize must relayout");
+    settle(&mut browser, &vfs, &mut backend);
+    assert!(!browser.wants_frame());
+}
+
+#[test]
+fn scroll_wants_frame_until_painted() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/long").unwrap();
+    let body: String = (0..200).map(|i| format!("<p>Line {i}</p>")).collect();
+    let html = format!("<html><body>{body}</body></html>");
+    vfs.write("/sites/long/index.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/long/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.handle_input(&InputEvent::ButtonPress(Button::Down), &vfs);
+    assert!(browser.wants_frame(), "scrolling must repaint");
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn >= 1);
+    assert!(!browser.wants_frame(), "scroll replay must settle");
+}
+
+#[test]
+fn image_finishing_loading_wants_a_frame() {
+    let vfs = test_vfs_with_image();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+    let mut backend = MockBackend::new();
+
+    // Host loop: tick every frame, paint only frames that want it. The
+    // frame on which the image lands must be one that gets painted.
+    let mut saw_decode = false;
+    for _ in 0..500 {
+        let before = browser.decoded_images.len();
+        browser.tick(&vfs);
+        if browser.decoded_images.len() > before {
+            assert!(browser.wants_frame(), "decoded image must be painted");
+            saw_decode = true;
+        }
+        if browser.wants_frame() {
+            browser.paint(&mut backend).unwrap();
+        } else if saw_decode {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(saw_decode, "image never decoded");
+    assert!(
+        !browser.image_textures.is_empty() || !browser.image_atlas.is_empty(),
+        "image must have been uploaded by a painted frame"
+    );
+    settle(&mut browser, &vfs, &mut backend);
+    assert!(!browser.wants_frame(), "loaded page must go idle");
+}

@@ -902,11 +902,19 @@ fn main() -> Result<()> {
             )
             || state.wm.is_animating();
 
-        // Windowed/fullscreen app content (browser, app runners, video)
-        // paints via draw callbacks the SDI registry can't see, and
-        // media playback repaints continuously — always redraw while any
-        // of it is on screen or playing.
-        let content_active = (state.mode == Mode::Desktop && state.wm.window_count() > 0)
+        // Windowed app content (browser, app runners) paints via draw
+        // callbacks the SDI registry can't see: redraw while a visible
+        // window's content changed or animates, or a window is being
+        // dragged/animated — not merely because a window is open.
+        // Fullscreen kiosk apps and media playback repaint continuously.
+        let windows_active = state.mode == Mode::Desktop
+            && render::windows_want_frame(
+                &state.wm,
+                &state.ui.desktops,
+                &state.content.open_runners,
+                state.content.browser.as_ref(),
+            );
+        let content_active = windows_active
             || state.content.fullscreen_app.is_some()
             || state.video_player.is_active()
             || state.radio_source.is_some()
@@ -1091,6 +1099,14 @@ fn main() -> Result<()> {
 
         backend.swap_buffers()?;
         last_present_at = std::time::Instant::now();
+        // Every drawn frame repaints all visible window content, so each
+        // runner's pending change is now on screen.
+        if let Some(ref mut runner) = state.content.app_runner {
+            runner.mark_drawn();
+        }
+        for (_, runner) in &mut state.content.open_runners {
+            runner.mark_drawn();
+        }
         if let (Some(stats), Some(pc)) = (frame_stats.as_mut(), phase_clock.take()) {
             stats.record_drawn(pc.finish());
         }

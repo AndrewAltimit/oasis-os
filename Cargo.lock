@@ -981,6 +981,7 @@ dependencies = [
  "oasis-core",
  "oasis-mcp",
  "oasis-shader",
+ "oasis-test-backend",
  "oasis-video",
  "png",
  "serde_json",

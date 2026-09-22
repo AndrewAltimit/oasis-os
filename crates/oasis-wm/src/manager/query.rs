@@ -38,6 +38,12 @@ impl WindowManager {
         self.windows.iter().find(|w| w.id == id)
     }
 
+    /// Whether a window drag or resize is in progress (hosts keep
+    /// redrawing while the user manipulates a window).
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     /// Returns `true` if any window is currently in fullscreen kiosk mode.
     pub fn has_fullscreen_kiosk(&self) -> bool {
         self.windows.iter().any(|w| w.fullscreen_kiosk)

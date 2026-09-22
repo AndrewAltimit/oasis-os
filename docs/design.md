@@ -426,6 +426,16 @@ Every input / render hook on `App` sees at most a shared `&dyn Vfs`, and `handle
 - **Games** run Snake and Memory Match on a fixed 60 Hz simulation step (wall time is accumulated and at most 250 ms is simulated per tick, so a stalled host doesn't replay seconds of game time at once). The Snake high score is persisted to `/home/user/.games.toml` (`[snake] high_score = N`), loaded lazily on the first tick and written through `apply_vfs_ops` when beaten.
 - **Photo Viewer** slideshows advance every `SLIDESHOW_INTERVAL_MS` (5 s). **Music Player** shuffle picks a random other playlist track (`oasis_skin::SimpleRng`) and Previous retraces the shuffled order.
 
+#### 4.3.4 Frame Requests and Idle Elision
+
+The SDL host skips clear/draw/present on frames where nothing visible changed. Window content is painted through the WM draw callback, outside the SDI dirty tracking, so an open window no longer forces a redraw by itself; instead `render::windows_want_frame` ORs over the visible (non-minimized, active-desktop) windows:
+
+- `AppRunner::wants_frame()` — true until the next drawn frame (`mark_drawn`) after any input, a `tick` returning `true`, applied VFS ops, a change to the mirrored lines / browse dir / viewing file, or mutable access via `delegate_as_mut`; and always true while `App::wants_frame()` is (continuous content such as the video embed).
+- `BrowserWidget::wants_frame()` — pending layout / repaint / dirty rects / unpainted scroll, a page or its resources still loading, and active CSS animations or transitions. Fired JS timers dirty the layout during `tick`, which runs on elided frames too.
+- WM window animations and drags.
+
+Video/audio playback, fullscreen kiosk apps, the input grace window and the 1 s heartbeat still force redraws as before (`OASIS_FRAME_STATS=1` reports the elided share). A running Snake game requests a frame only on the ~10 steps per second it actually moves.
+
 ### 4.4 Remote Terminal
 
 On platforms with networking (PSP via infrastructure WiFi, Linux, desktop), the framework runs a TCP listener that accepts remote terminal connections. The remote terminal feeds keystrokes into the same command interpreter as local input. This is functional on real hardware and in PPSSPP (1.19+ maps `sceNetInet` to host sockets). In UE5, the terminal is available for debugging -- connect to `localhost:9000` while the game is running to interact with any in-game computer's OS instance directly.
