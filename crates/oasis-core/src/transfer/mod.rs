@@ -145,21 +145,50 @@ const MAX_FTP_LINE_LEN: usize = 1024;
 /// Maximum commands to process per connection per poll cycle.
 const MAX_CMDS_PER_POLL: usize = 16;
 
+/// Maximum bytes read from one connection in a single poll.
+const MAX_READ_PER_POLL: usize = 64 * 1024;
+
+/// While more than this much output is queued for a connection (the peer
+/// is not reading), no further commands are processed on it, so memory per
+/// connection stays bounded at roughly this plus one response.
+const MAX_PENDING_OUTPUT: usize = 1024 * 1024;
+
+/// How long a closing connection may take to drain its queued output.
+const CLOSE_DRAIN_TIMEOUT_SECS: u64 = 2;
+
 /// Idle connection timeout in seconds.
 const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// Maximum failed authentication attempts before disconnecting.
 const MAX_AUTH_FAILURES: u8 = 3;
 
+/// Constant-time byte comparison (does not leak the password via timing).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// A single FTP client connection.
 struct FtpConnection {
     stream: Box<dyn NetworkStream>,
     read_buf: Vec<u8>,
+    /// Output the non-blocking socket has not accepted yet; bytes before
+    /// `write_pos` are already sent.
+    write_buf: Vec<u8>,
+    write_pos: usize,
     last_activity: Instant,
     /// Whether this connection has been authenticated.
     authenticated: bool,
     /// Number of failed authentication attempts.
     failed_attempts: u8,
+    /// Peer closed its side (read returned 0).
+    eof: bool,
+    /// Set when the connection should close once its output has drained.
+    closing_since: Option<Instant>,
+    /// Hard I/O failure: drop now.
+    dead: bool,
 }
 
 impl FtpConnection {
@@ -167,10 +196,156 @@ impl FtpConnection {
         Self {
             stream,
             read_buf: Vec::with_capacity(256),
+            write_buf: Vec::new(),
+            write_pos: 0,
             last_activity: Instant::now(),
             authenticated,
             failed_attempts: 0,
+            eof: false,
+            closing_since: None,
+            dead: false,
         }
+    }
+
+    fn pending(&self) -> usize {
+        self.write_buf.len() - self.write_pos
+    }
+
+    fn queue(&mut self, data: &[u8]) {
+        if !self.dead {
+            self.write_buf.extend_from_slice(data);
+        }
+    }
+
+    /// Write as much queued output as the non-blocking socket accepts.
+    fn flush(&mut self) {
+        while !self.dead && self.write_pos < self.write_buf.len() {
+            match self.stream.write(&self.write_buf[self.write_pos..]) {
+                Ok(0) => break,
+                Ok(n) => self.write_pos += n,
+                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => self.dead = true,
+            }
+        }
+        if self.write_pos == self.write_buf.len() {
+            self.write_buf.clear();
+            self.write_pos = 0;
+        } else if self.write_pos >= MAX_PENDING_OUTPUT {
+            self.write_buf.drain(..self.write_pos);
+            self.write_pos = 0;
+        }
+        let _ = self.stream.flush();
+    }
+
+    fn close_after_flush(&mut self) {
+        if self.closing_since.is_none() {
+            self.closing_since = Some(Instant::now());
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.dead
+            || self.closing_since.is_some_and(|since| {
+                self.pending() == 0 || since.elapsed().as_secs() >= CLOSE_DRAIN_TIMEOUT_SECS
+            })
+    }
+
+    /// Read until the socket would block, EOF, or the per-poll cap.
+    fn read_available(&mut self) {
+        let mut buf = [0u8; 4096];
+        let mut total = 0usize;
+        while total < MAX_READ_PER_POLL && !self.eof {
+            match self.stream.read(&mut buf) {
+                Ok(0) => self.eof = true,
+                Ok(n) => {
+                    total += n;
+                    self.last_activity = Instant::now();
+                    self.read_buf.extend_from_slice(&buf[..n]);
+                },
+                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => {
+                    self.dead = true;
+                    break;
+                },
+            }
+        }
+    }
+
+    /// Process up to [`MAX_CMDS_PER_POLL`] buffered lines.
+    fn process_lines(&mut self, password: Option<&str>, vfs: &mut dyn Vfs) {
+        let mut cmds_processed = 0usize;
+        while cmds_processed < MAX_CMDS_PER_POLL && self.pending() < MAX_PENDING_OUTPUT {
+            let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') else {
+                break;
+            };
+            if pos > MAX_FTP_LINE_LEN {
+                self.overlong();
+                return;
+            }
+            cmds_processed += 1;
+            let line_bytes: Vec<u8> = self.read_buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            // Check for QUIT (always allowed). Nothing after it runs.
+            if line.eq_ignore_ascii_case("QUIT") {
+                self.queue(b"200 goodbye\r\n");
+                self.read_buf.clear();
+                self.close_after_flush();
+                return;
+            }
+
+            // Authentication gate.
+            if !self.authenticated
+                && let Some(expected) = password
+            {
+                let supplied = line
+                    .get(..5)
+                    .filter(|p| p.eq_ignore_ascii_case("PASS "))
+                    .map(|_| line[5..].trim());
+                match supplied {
+                    Some(pass) if constant_time_eq(pass.as_bytes(), expected.as_bytes()) => {
+                        self.authenticated = true;
+                        self.queue(b"230 Authenticated\r\n");
+                    },
+                    Some(_) => {
+                        self.failed_attempts += 1;
+                        if self.failed_attempts >= MAX_AUTH_FAILURES {
+                            self.queue(b"530 Too many failures\r\n");
+                            // No further guesses on this connection.
+                            self.read_buf.clear();
+                            self.close_after_flush();
+                            return;
+                        }
+                        self.queue(b"530 Authentication failed\r\n");
+                    },
+                    None => self.queue(b"530 Not authenticated\r\n"),
+                }
+                continue;
+            }
+
+            // Process command against VFS.
+            let response = process_ftp_request(&line, vfs);
+            self.queue(response.as_bytes());
+        }
+
+        // Guard against overlong (unterminated) lines.
+        if self.read_buf.len() > MAX_FTP_LINE_LEN
+            && !self.read_buf[..=MAX_FTP_LINE_LEN].contains(&b'\n')
+        {
+            self.overlong();
+        }
+    }
+
+    /// The peer sent a line over [`MAX_FTP_LINE_LEN`]: report and hang up
+    /// (resyncing mid-line would run the tail as a command).
+    fn overlong(&mut self) {
+        self.read_buf.clear();
+        self.queue(b"500 line too long\r\n");
+        self.close_after_flush();
     }
 }
 
@@ -206,8 +381,17 @@ impl FtpServer {
     }
 
     /// Start listening on the configured port.
+    ///
+    /// Without a (non-empty) password the server grants read/write access to
+    /// anyone who can connect, so it binds loopback only
+    /// ([`NetworkBackend::listen_loopback`]); with a password it listens on
+    /// all interfaces.
     pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
-        backend.listen(self.port)?;
+        if self.password.as_deref().is_some_and(|p| !p.is_empty()) {
+            backend.listen(self.port)?;
+        } else {
+            backend.listen_loopback(self.port)?;
+        }
         self.listening = true;
         Ok(())
     }
@@ -225,7 +409,8 @@ impl FtpServer {
     /// Poll for new connections and process FTP commands.
     ///
     /// Call from the main loop each frame. Commands are executed
-    /// immediately against the provided VFS.
+    /// immediately against the provided VFS. Responses are queued and
+    /// written as the socket accepts them, so large `GET`s arrive intact.
     pub fn poll(&mut self, backend: &mut dyn NetworkBackend, vfs: &mut dyn Vfs) -> Result<()> {
         if !self.listening {
             return Ok(());
@@ -244,7 +429,8 @@ impl FtpServer {
                     } else {
                         &b"220 OASIS FTP server ready\r\n"[..]
                     };
-                    let _ = conn.stream.write(greeting);
+                    conn.queue(greeting);
+                    conn.flush();
                     self.connections.push(conn);
                 },
                 Ok(None) => {},
@@ -252,104 +438,52 @@ impl FtpServer {
             }
         }
 
-        // Read from all connections.
-        let mut to_remove = Vec::new();
-
-        for (idx, conn) in self.connections.iter_mut().enumerate() {
-            // Check idle timeout.
-            if conn.last_activity.elapsed() > idle_timeout {
-                let _ = conn.stream.write(b"421 Idle timeout\r\n");
-                to_remove.push(idx);
+        let password = self.password.as_deref();
+        for conn in &mut self.connections {
+            conn.flush();
+            if conn.dead || conn.closing_since.is_some() {
                 continue;
             }
 
-            let mut buf = [0u8; 512];
-            match conn.stream.read(&mut buf) {
-                Ok(0) => {},
-                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data yet.
-                },
-                Ok(n) => {
-                    conn.last_activity = Instant::now();
-                    conn.read_buf.extend_from_slice(&buf[..n]);
-
-                    // Process complete lines (capped per poll cycle).
-                    let mut cmds_processed = 0usize;
-                    let mut should_close = false;
-                    while cmds_processed < MAX_CMDS_PER_POLL {
-                        let Some(pos) = conn.read_buf.iter().position(|&b| b == b'\n') else {
-                            break;
-                        };
-                        cmds_processed += 1;
-                        let line_bytes: Vec<u8> = conn.read_buf.drain(..=pos).collect();
-                        let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
-
-                        if line.is_empty() {
-                            continue;
-                        }
-
-                        // Check for QUIT (always allowed).
-                        if line.eq_ignore_ascii_case("QUIT") {
-                            let _ = conn.stream.write(b"200 goodbye\r\n");
-                            to_remove.push(idx);
-                            should_close = true;
-                            break;
-                        }
-
-                        // Authentication gate.
-                        if !conn.authenticated
-                            && let Some(ref expected) = self.password
-                        {
-                            let upper = line.to_uppercase();
-                            if upper.starts_with("PASS ") {
-                                let supplied = line[5..].trim();
-                                if supplied == expected.as_str() {
-                                    conn.authenticated = true;
-                                    let _ = conn.stream.write(b"230 Authenticated\r\n");
-                                } else {
-                                    conn.failed_attempts += 1;
-                                    if conn.failed_attempts >= MAX_AUTH_FAILURES {
-                                        let _ = conn.stream.write(b"530 Too many failures\r\n");
-                                        to_remove.push(idx);
-                                        should_close = true;
-                                        break;
-                                    }
-                                    let _ = conn.stream.write(b"530 Authentication failed\r\n");
-                                }
-                            } else {
-                                let _ = conn.stream.write(b"530 Not authenticated\r\n");
-                            }
-                            continue;
-                        }
-
-                        // Process command against VFS.
-                        let response = process_ftp_request(&line, vfs);
-                        let _ = conn.stream.write(response.as_bytes());
-                    }
-
-                    if should_close {
-                        continue;
-                    }
-
-                    // Guard against overlong lines.
-                    if conn.read_buf.len() > MAX_FTP_LINE_LEN {
-                        conn.read_buf.clear();
-                        let _ = conn.stream.write(b"500 line too long\r\n");
-                    }
-                },
-                Err(_) => {
-                    to_remove.push(idx);
-                },
+            // Check idle timeout.
+            if conn.last_activity.elapsed() > idle_timeout {
+                conn.queue(b"421 Idle timeout\r\n");
+                conn.close_after_flush();
+                conn.flush();
+                continue;
             }
+
+            // Backpressure: leave input unread while the peer is not
+            // draining the responses already queued for it.
+            if conn.pending() < MAX_PENDING_OUTPUT {
+                conn.read_available();
+            }
+            if conn.dead {
+                continue;
+            }
+            // Buffered lines are processed every poll, not only when new
+            // bytes arrive (a burst beyond MAX_CMDS_PER_POLL would stall).
+            conn.process_lines(password, vfs);
+
+            // Peer closed: once every complete line has been answered, drop
+            // it (an unterminated trailing line is a partial transfer and is
+            // discarded).
+            if conn.eof && !conn.read_buf.contains(&b'\n') {
+                conn.read_buf.clear();
+                conn.close_after_flush();
+            }
+            conn.flush();
         }
 
-        // Remove closed connections (in reverse to preserve indices).
-        to_remove.sort_unstable();
-        to_remove.dedup();
-        for idx in to_remove.into_iter().rev() {
-            let mut conn = self.connections.remove(idx);
-            let _ = conn.stream.close();
-        }
+        // Remove finished connections.
+        self.connections.retain_mut(|conn| {
+            if conn.finished() {
+                let _ = conn.stream.close();
+                false
+            } else {
+                true
+            }
+        });
 
         Ok(())
     }
@@ -357,7 +491,8 @@ impl FtpServer {
     /// Shut down all connections and stop listening.
     pub fn stop(&mut self) {
         for conn in &mut self.connections {
-            let _ = conn.stream.write(b"421 Server shutting down\r\n");
+            conn.queue(b"421 Server shutting down\r\n");
+            conn.flush();
             let _ = conn.stream.close();
         }
         self.connections.clear();
@@ -1046,5 +1181,123 @@ mod tests {
             exec(&reg, &mut vfs, "ftp start --password").is_err(),
             "--password without value should error"
         );
+    }
+
+    /// Accepts at most `budget` more bytes; further writes would block.
+    struct TrickleStream {
+        input: VecDeque<u8>,
+        output: WriteBuf,
+        budget: Arc<Mutex<usize>>,
+    }
+
+    impl oasis_types::backend::NetworkStream for TrickleStream {
+        fn read(&mut self, buf: &mut [u8]) -> crate::error::Result<usize> {
+            if self.input.is_empty() {
+                return Err(OasisError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "no data",
+                )));
+            }
+            let n = buf.len().min(self.input.len());
+            for b in buf.iter_mut().take(n) {
+                *b = self.input.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+
+        fn write(&mut self, data: &[u8]) -> crate::error::Result<usize> {
+            let mut budget = self.budget.lock().unwrap();
+            if *budget == 0 {
+                return Err(OasisError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "full",
+                )));
+            }
+            let n = data.len().min(*budget);
+            *budget -= n;
+            self.output.lock().unwrap().extend_from_slice(&data[..n]);
+            Ok(n)
+        }
+
+        fn close(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ftp_large_get_survives_partial_writes() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let budget = Arc::new(Mutex::new(16usize));
+        let stream = TrickleStream {
+            input: VecDeque::from(b"GET /big.txt\n".to_vec()),
+            output: Arc::clone(&output),
+            budget: Arc::clone(&budget),
+        };
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+        let mut server = FtpServer::new(2121);
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        let big = "q".repeat(50_000);
+        vfs.write("/big.txt", big.as_bytes()).unwrap();
+
+        for _ in 0..100 {
+            *budget.lock().unwrap() = 1000;
+            server.poll(&mut backend, &mut vfs).unwrap();
+        }
+        let out = read_output(&output);
+        assert_eq!(
+            out,
+            format!("220 OASIS FTP server ready\r\n200 50000 bytes\n{big}")
+        );
+    }
+
+    #[test]
+    fn ftp_buffered_commands_run_without_new_data() {
+        // 40 commands arrive at once; only 16 run per poll, and the rest
+        // must still run on later polls although no new bytes arrive.
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let input: String = (0..40).map(|i| format!("PUT /f{i} x\n")).collect();
+        let stream = MockStream::new(input.as_bytes(), Arc::clone(&output));
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+        let mut server = FtpServer::new(2121);
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        for _ in 0..4 {
+            server.poll(&mut backend, &mut vfs).unwrap();
+        }
+        assert_eq!(read_output(&output).matches("200 written").count(), 40);
+    }
+
+    #[test]
+    fn ftp_eof_releases_connection() {
+        struct EofStream;
+        impl oasis_types::backend::NetworkStream for EofStream {
+            fn read(&mut self, _buf: &mut [u8]) -> crate::error::Result<usize> {
+                Ok(0)
+            }
+            fn write(&mut self, data: &[u8]) -> crate::error::Result<usize> {
+                Ok(data.len())
+            }
+            fn close(&mut self) -> crate::error::Result<()> {
+                Ok(())
+            }
+        }
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(EofStream));
+        let mut server = FtpServer::new(2121);
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn ftp_password_compare_is_exact() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret1"));
+        assert!(!constant_time_eq(b"", b"x"));
     }
 }
