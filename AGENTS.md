@@ -250,7 +250,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
 ## Key Files
 
-- `docs/design.md` -- Technical design document v2.6 (~1500 lines)
+- `docs/design.md` -- Technical design document v2.6 (~1400 lines)
 - `docs/skin-authoring.md` -- Skin creation guide with full TOML reference
 - `skins/classic/` -- Classic skin TOML configs (skin.toml, layout.toml, features.toml, theme.toml)
 - `skins/xp/` -- XP skin TOML configs (Windows XP Luna-inspired theme with start menu)
@@ -270,7 +270,7 @@ Key documentation for deeper context on specific topics. Read as needed rather t
 
 ### Architecture & Design
 - [`docs/README.md`](docs/README.md) -- Index of every document under `docs/`
-- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1500 lines, comprehensive architecture)
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1400 lines, comprehensive architecture)
 - [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
 - [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
 - [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy

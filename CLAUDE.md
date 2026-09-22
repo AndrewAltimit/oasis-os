@@ -233,7 +233,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 
 ### Architecture & Design
 - [`docs/README.md`](docs/README.md) -- Index of every document under `docs/`
-- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1500 lines, comprehensive architecture)
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1400 lines, comprehensive architecture)
 - [`docs/browser-engine.md`](docs/browser-engine.md) -- Browser feature catalogue (HTTP, HTML, CSS, layout, fonts, chrome, JS bindings)
 - [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
 - [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
