@@ -1,5 +1,7 @@
 //! Shadow and elevation system.
 
+use std::borrow::Cow;
+
 use crate::backend::{Color, SdiBackend};
 use crate::error::Result;
 
@@ -22,16 +24,21 @@ pub struct ShadowLayer {
 ///
 /// Each layer draws a filled rectangle behind the target element with
 /// increasing spread and decreasing alpha, producing a soft drop shadow.
+///
+/// The built-in [`elevation`](Self::elevation) levels borrow static
+/// tables, so creating one per draw is free; custom layer lists are owned.
 #[derive(Debug, Clone)]
 pub struct Shadow {
     /// Ordered list of shadow layers, drawn back to front.
-    pub layers: Vec<ShadowLayer>,
+    pub layers: Cow<'static, [ShadowLayer]>,
 }
 
 impl Shadow {
     /// No shadow.
     pub fn none() -> Self {
-        Self { layers: vec![] }
+        Self {
+            layers: Cow::Borrowed(&[]),
+        }
     }
 
     /// Draw the shadow behind a rectangle.
@@ -46,7 +53,7 @@ impl Shadow {
         h: u32,
         radius: u16,
     ) -> Result<()> {
-        for layer in &self.layers {
+        for layer in self.layers.iter() {
             let sx = x + layer.offset_x - layer.spread as i32;
             let sy = y + layer.offset_y - layer.spread as i32;
             let sw = w + layer.spread as u32 * 2;
@@ -62,9 +69,14 @@ impl Shadow {
     }
 
     /// Override the color of all shadow layers.
+    ///
+    /// Copies a borrowed built-in table only when the color actually
+    /// differs from a layer's current color.
     pub fn with_color(mut self, color: Color) -> Self {
-        for layer in &mut self.layers {
-            layer.color = color;
+        if self.layers.iter().any(|l| l.color != color) {
+            for layer in self.layers.to_mut() {
+                layer.color = color;
+            }
         }
         self
     }
@@ -81,86 +93,48 @@ impl Shadow {
     /// - Level 2: medium (3 layers, moderate offset)
     /// - Level 3+: prominent (4 layers, large offset)
     pub fn elevation(level: u8) -> Self {
-        match level {
-            0 => Shadow::none(),
-            1 => Shadow {
-                layers: vec![
-                    ShadowLayer {
-                        offset_x: 1,
-                        offset_y: 2,
-                        spread: 1,
-                        alpha: 30,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 1,
-                        offset_y: 2,
-                        spread: 2,
-                        alpha: 15,
-                        color: Color::BLACK,
-                    },
-                ],
-            },
-            2 => Shadow {
-                layers: vec![
-                    ShadowLayer {
-                        offset_x: 2,
-                        offset_y: 3,
-                        spread: 1,
-                        alpha: 40,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 2,
-                        offset_y: 3,
-                        spread: 2,
-                        alpha: 25,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 2,
-                        offset_y: 3,
-                        spread: 4,
-                        alpha: 12,
-                        color: Color::BLACK,
-                    },
-                ],
-            },
-            _ => Shadow {
-                layers: vec![
-                    ShadowLayer {
-                        offset_x: 3,
-                        offset_y: 5,
-                        spread: 1,
-                        alpha: 50,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 3,
-                        offset_y: 5,
-                        spread: 3,
-                        alpha: 35,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 3,
-                        offset_y: 5,
-                        spread: 5,
-                        alpha: 20,
-                        color: Color::BLACK,
-                    },
-                    ShadowLayer {
-                        offset_x: 3,
-                        offset_y: 5,
-                        spread: 8,
-                        alpha: 10,
-                        color: Color::BLACK,
-                    },
-                ],
-            },
+        // Static tables: resolving a level borrows, it never allocates
+        // (this runs for every shadowed SDI object on every frame).
+        let layers: &'static [ShadowLayer] = match level {
+            0 => &[],
+            1 => &ELEVATION_1,
+            2 => &ELEVATION_2,
+            _ => &ELEVATION_3,
+        };
+        Self {
+            layers: Cow::Borrowed(layers),
         }
     }
 }
+
+/// Shorthand for the built-in black elevation layers.
+const fn black_layer(offset_x: i32, offset_y: i32, spread: u16, alpha: u8) -> ShadowLayer {
+    ShadowLayer {
+        offset_x,
+        offset_y,
+        spread,
+        alpha,
+        color: Color::BLACK,
+    }
+}
+
+/// Elevation 1: subtle.
+const ELEVATION_1: [ShadowLayer; 2] = [black_layer(1, 2, 1, 30), black_layer(1, 2, 2, 15)];
+
+/// Elevation 2: medium.
+const ELEVATION_2: [ShadowLayer; 3] = [
+    black_layer(2, 3, 1, 40),
+    black_layer(2, 3, 2, 25),
+    black_layer(2, 3, 4, 12),
+];
+
+/// Elevation 3+: prominent.
+const ELEVATION_3: [ShadowLayer; 4] = [
+    black_layer(3, 5, 1, 50),
+    black_layer(3, 5, 3, 35),
+    black_layer(3, 5, 5, 20),
+    black_layer(3, 5, 8, 10),
+];
 
 /// A semantic elevation ladder mapping levels 0..=5 to concrete shadows.
 ///
@@ -206,7 +180,7 @@ impl ElevationLadder {
         let idx = level.min(Self::LEVELS - 1) as usize;
         match &self.overrides[idx] {
             Some(layers) => Shadow {
-                layers: layers.clone(),
+                layers: Cow::Owned(layers.clone()),
             },
             None => Shadow::elevation(level),
         }
@@ -256,7 +230,7 @@ mod tests {
     #[test]
     fn with_color_changes_all_layers() {
         let s = Shadow::elevation(2).with_color(Color::rgb(255, 0, 0));
-        for layer in &s.layers {
+        for layer in s.layers.iter() {
             assert_eq!(layer.color, Color::rgb(255, 0, 0));
         }
     }
@@ -268,6 +242,28 @@ mod tests {
         let max_offset_1 = s1.layers.iter().map(|l| l.offset_y).max().unwrap();
         let max_offset_3 = s3.layers.iter().map(|l| l.offset_y).max().unwrap();
         assert!(max_offset_3 > max_offset_1);
+    }
+
+    #[test]
+    fn builtin_elevations_borrow_static_tables() {
+        for level in 0..=5 {
+            assert!(matches!(Shadow::elevation(level).layers, Cow::Borrowed(_)));
+        }
+        assert!(matches!(Shadow::none().layers, Cow::Borrowed(_)));
+        // Recoloring to the existing color keeps the borrow.
+        let s = Shadow::elevation(2).with_color(Color::BLACK);
+        assert!(matches!(s.layers, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn with_color_does_not_touch_static_table() {
+        let _ = Shadow::elevation(1).with_color(Color::rgb(255, 0, 0));
+        assert!(
+            Shadow::elevation(1)
+                .layers
+                .iter()
+                .all(|l| l.color == Color::BLACK)
+        );
     }
 
     #[test]

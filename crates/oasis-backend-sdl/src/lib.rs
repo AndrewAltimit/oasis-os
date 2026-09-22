@@ -120,6 +120,10 @@ pub struct SdlBackend {
     /// (circle / rounded-corner outlines plot hundreds of points per
     /// call; one `SDL_RenderPoints` beats one FFI call per point).
     pub(crate) point_batch: Vec<FPoint>,
+    /// Reusable scratch buffer for batched ill_rects submissions: the
+    /// filled-shape scanline spans (rounded rects, circles, triangles,
+    /// polygons, arcs) go to SDL in one call instead of one per row.
+    pub(crate) rect_batch: Vec<FRect>,
     /// Reusable scratch buffer for polygon fills: translated vertices.
     /// Same reuse-instead-of-allocate pattern as `point_batch` —
     /// `fill_polygon` previously allocated a fresh `Vec` per call.
@@ -188,6 +192,7 @@ impl SdlBackend {
             viewport_h: height,
             last_draw_color: None,
             point_batch: Vec::new(),
+            rect_batch: Vec::new(),
             poly_points: Vec::new(),
             poly_xs: Vec::new(),
             texture_mods: HashMap::new(),

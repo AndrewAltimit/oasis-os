@@ -1702,11 +1702,7 @@ mod tests {
             match variant {
                 0 => {
                     // Bias toward the unscaled fast path.
-                    let (dw, dh) = if rng.one_in(2) {
-                        (tw, th)
-                    } else {
-                        (dw, dh)
-                    };
+                    let (dw, dh) = if rng.one_in(2) { (tw, th) } else { (dw, dh) };
                     fast.blit_texture(&tex, tw, th, dx, dy, dw, dh);
                     let d = (dx, dy, dw, dh);
                     reference::blit_sub(
@@ -1724,11 +1720,7 @@ mod tests {
                     let sy = rng.range(0, th as i64) as u32;
                     let sw = rng.range(0, (tw - sx) as i64 + 1) as u32;
                     let sh = rng.range(0, (th - sy) as i64 + 1) as u32;
-                    let (dw, dh) = if rng.one_in(2) {
-                        (sw, sh)
-                    } else {
-                        (dw, dh)
-                    };
+                    let (dw, dh) = if rng.one_in(2) { (sw, sh) } else { (dw, dh) };
                     let t = (variant == 3).then_some(tint);
                     match t {
                         None => fast.blit_texture_sub(&tex, tw, sx, sy, sw, sh, dx, dy, dw, dh),
