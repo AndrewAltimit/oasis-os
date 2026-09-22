@@ -551,6 +551,8 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut body_start: Option<usize> = None;
     let mut expected_body_len: Option<usize> = None;
     let mut is_chunked = false;
+    // Offset (within the body) of the next unparsed chunk-size line.
+    let mut chunk_cursor = 0usize;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
@@ -598,16 +600,14 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                             break;
                         }
                     } else if is_chunked {
-                        // Chunked: stop after the final `0\r\n\r\n` marker.
-                        // Only check the tail of the buffer to avoid false
-                        // positives from binary data containing the same
-                        // byte sequence mid-stream.
-                        let chunk_data = &buf[bs..];
-                        if chunk_data.ends_with(b"\r\n0\r\n\r\n")
-                            || chunk_data.ends_with(b"\r\n0\r\n")
-                            || chunk_data.ends_with(b"0\r\n\r\n")
-                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 5)
-                        {
+                        // Chunked: walk the chunk framing and stop once the
+                        // terminating zero-size chunk (plus trailers) has
+                        // fully arrived. Matching byte patterns at the tail
+                        // of the buffer is not enough: a chunk whose data
+                        // ends in "0\r\n" looks like the terminator when a
+                        // read happens to stop right after it.
+                        if let Some(end) = scan_chunked(&buf[bs..], &mut chunk_cursor) {
+                            buf.truncate(bs + end);
                             break;
                         }
                     }
@@ -625,6 +625,47 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
         }
     }
     Ok(buf)
+}
+
+/// Incrementally scan a chunked transfer-encoded body.
+///
+/// `cursor` is the offset of the first chunk-size line not yet known to
+/// be complete; it advances over every fully received chunk so repeated
+/// calls (one per socket read) stay linear. Returns the total length of
+/// the chunked body — through the zero-size chunk and its trailer
+/// section — once it has fully arrived, or `None` while more data is
+/// needed. Malformed framing ends the scan at the data received so far
+/// so the caller stops reading and `decode_chunked` reports the error.
+fn scan_chunked(data: &[u8], cursor: &mut usize) -> Option<usize> {
+    loop {
+        let rest = data.get(*cursor..)?;
+        let Some(line_len) = find_subsequence(rest, b"\r\n") else {
+            // A chunk-size line is a few hex digits plus optional
+            // extensions; anything this long without CRLF is garbage.
+            return (rest.len() > 1024).then_some(data.len());
+        };
+        let size_str = std::str::from_utf8(&rest[..line_len]).unwrap_or("");
+        let size_str = size_str.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size_str, 16) else {
+            return Some(data.len());
+        };
+        let data_start = *cursor + line_len + 2;
+        if size == 0 {
+            // Trailer section: header lines, then an empty line.
+            let trailers = data.get(data_start..)?;
+            if trailers.starts_with(b"\r\n") {
+                return Some(data_start + 2);
+            }
+            return find_subsequence(trailers, b"\r\n\r\n").map(|i| data_start + i + 4);
+        }
+        let Some(next) = data_start.checked_add(size).and_then(|e| e.checked_add(2)) else {
+            return Some(data.len());
+        };
+        if next > data.len() {
+            return None;
+        }
+        *cursor = next;
+    }
 }
 
 /// Parse raw bytes into status code, headers, and body.
@@ -1270,5 +1311,27 @@ mod tests {
         .into_bytes();
         raw.extend_from_slice(&body);
         assert!(parse_response(&raw).is_err());
+    }
+
+    #[test]
+    fn scan_chunked_waits_for_the_real_terminator() {
+        let mut cur = 0;
+        // Chunk data ending in "0\r\n" must not look like the end.
+        let partial = b"10\r\nabcdefghijklm0\r\n\r\n";
+        assert_eq!(scan_chunked(partial, &mut cur), None);
+        let mut full = partial.to_vec();
+        full.extend_from_slice(b"3\r\nxyz\r\n0\r\n\r\nNEXT");
+        assert_eq!(scan_chunked(&full, &mut cur), Some(full.len() - 4));
+    }
+
+    #[test]
+    fn scan_chunked_handles_trailers_and_garbage() {
+        let mut cur = 0;
+        let body = b"2\r\nhi\r\n0\r\nX-T: 1\r\n\r\n";
+        assert_eq!(scan_chunked(body, &mut cur), Some(body.len()));
+        let mut cur = 0;
+        assert_eq!(scan_chunked(b"zz\r\n", &mut cur), Some(4));
+        let mut cur = 0;
+        assert_eq!(scan_chunked(b"0\r\n", &mut cur), None);
     }
 }
