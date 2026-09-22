@@ -213,6 +213,25 @@ panic = "unwind"
 opt-level = 0
 debug = true
 
+# Software video decode is unusable unoptimized: at opt-level 0 openh264
+# (its C decoder and the Rust YUV->RGBA converter) takes ~110 ms per 720p
+# frame vs ~3.5 ms optimized, so `cargo run` TV Guide playback decoded at
+# ~9 fps and stuttered.  Optimize just the codec crates in dev builds.
+[profile.dev.package.openh264]
+opt-level = 3
+
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+
+[profile.dev.package.symphonia-core]
+opt-level = 3
+
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 3
+
 [profile.asan]
 inherits = "dev"
 opt-level = 1
