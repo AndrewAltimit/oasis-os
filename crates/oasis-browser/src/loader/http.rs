@@ -669,32 +669,31 @@ fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
     };
 
     match encoding.as_str() {
-        "gzip" => {
-            let mut decoder = GzDecoder::new(&body[..]);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("gzip decode: {e}").into()))?;
-            Ok(decompressed)
-        },
-        "deflate" => {
-            let mut decoder = DeflateDecoder::new(&body[..]);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("deflate decode: {e}").into()))?;
-            Ok(decompressed)
-        },
-        "br" => {
-            let mut decoder = BrotliDecoder::new(&body[..], 4096);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("brotli decode: {e}").into()))?;
-            Ok(decompressed)
-        },
+        "gzip" => read_decoded_bounded(GzDecoder::new(&body[..]), "gzip"),
+        "deflate" => read_decoded_bounded(DeflateDecoder::new(&body[..]), "deflate"),
+        "br" => read_decoded_bounded(BrotliDecoder::new(&body[..], 4096), "brotli"),
         _ => Ok(body),
     }
+}
+
+/// Drain a decompressor, refusing output larger than [`MAX_BODY_SIZE`].
+///
+/// The compressed body is already capped, but a few KB of gzip can expand to
+/// gigabytes (a "decompression bomb"), so the decoded size is capped too.
+/// Reading at most `MAX_BODY_SIZE + 1` bytes lets us tell "exactly at the
+/// limit" from "over it" without ever buffering more than that.
+fn read_decoded_bounded(decoder: impl Read, name: &str) -> Result<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    decoder
+        .take(MAX_BODY_SIZE as u64 + 1)
+        .read_to_end(&mut decompressed)
+        .map_err(|e| OasisError::Backend(format!("{name} decode: {e}").into()))?;
+    if decompressed.len() > MAX_BODY_SIZE {
+        return Err(OasisError::Backend(
+            format!("{name} decode: decompressed body exceeds 8 MB limit").into(),
+        ));
+    }
+    Ok(decompressed)
 }
 
 /// Parse the HTTP status code from the status line.
@@ -1127,5 +1126,81 @@ mod tests {
         let err = parse_response(&huge).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("16 KB"), "expected header limit error: {msg}");
+    }
+
+    // -- Decompression bomb protection --
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    fn encoding(value: &str) -> Vec<(String, String)> {
+        vec![("content-encoding".to_string(), value.to_string())]
+    }
+
+    /// Decoded size well beyond the cap: 12 MiB of zeros vs an 8 MiB limit.
+    const BOMB_SIZE: usize = 12 * 1024 * 1024;
+
+    #[test]
+    fn gzip_body_round_trips() {
+        let body = gzip(b"<html>hello</html>");
+        let out = decode_body(&encoding("gzip"), body).unwrap();
+        assert_eq!(out, b"<html>hello</html>");
+    }
+
+    #[test]
+    fn gzip_bomb_is_rejected() {
+        assert!(BOMB_SIZE > MAX_BODY_SIZE);
+        let body = gzip(&vec![0u8; BOMB_SIZE]);
+        // The compressed form is tiny, so it passes the wire-size limit...
+        assert!(body.len() < 64 * 1024, "compressed {} bytes", body.len());
+        // ...but decoding it must fail rather than allocate 12 MiB+.
+        let err = decode_body(&encoding("gzip"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn gzip_body_exactly_at_limit_is_accepted() {
+        let body = gzip(&vec![0u8; MAX_BODY_SIZE]);
+        let out = decode_body(&encoding("gzip"), body).unwrap();
+        assert_eq!(out.len(), MAX_BODY_SIZE);
+    }
+
+    #[test]
+    fn deflate_bomb_is_rejected() {
+        use std::io::Write as _;
+        let mut enc =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&vec![0u8; BOMB_SIZE]).unwrap();
+        let body = enc.finish().unwrap();
+        let err = decode_body(&encoding("deflate"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn brotli_bomb_is_rejected() {
+        use std::io::Write as _;
+        let mut body = Vec::new();
+        {
+            let mut enc = brotli::CompressorWriter::new(&mut body, 4096, 5, 22);
+            enc.write_all(&vec![0u8; BOMB_SIZE]).unwrap();
+        }
+        let err = decode_body(&encoding("br"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn parse_response_rejects_gzip_bomb() {
+        let body = gzip(&vec![0u8; BOMB_SIZE]);
+        let mut raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+        assert!(parse_response(&raw).is_err());
     }
 }
