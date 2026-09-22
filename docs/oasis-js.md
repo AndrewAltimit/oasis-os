@@ -39,15 +39,17 @@ Key entry points (paths are `crates/oasis-js/src/engine.rs`):
 
 | Method | Purpose |
 | --- | --- |
-| `JsEngine::new(max_memory_bytes)` (engine.rs:43) | Allocate the QuickJS runtime, install console / storage / fetch / timer globals. |
-| `set_max_exec_ms(ms)` (engine.rs:91) | Per-eval timeout. Default 5 s. Prevents infinite loops from hanging the host. |
-| `eval(script)` (engine.rs:99) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue on success. |
-| `eval_all(&[scripts])` (engine.rs:129) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
-| `tick_timers(dt_ms)` (engine.rs:159) | Advance the timer queue by `dt_ms`, fire due callbacks, drain microtasks between callbacks. Call once per host frame. |
-| `console_output()` / `take_console_output()` (engine.rs:134, 139) | Snapshot or drain the buffered console. |
-| `local_storage()` (engine.rs:145) | Borrow the in-memory `localStorage` map for snapshot or restore. |
-| `install_fetch_handler(Box::new(handler))` (engine.rs:151) | Install an HTTP transport. Replaces any previous handler. |
-| `with_context(\|ctx\| ...)` (engine.rs:186) | Escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals. |
+| `JsEngine::new(max_memory_bytes)` (engine.rs:51) | Allocate the QuickJS runtime, install console / storage / fetch / timer globals. |
+| `set_max_exec_ms(ms)` (engine.rs:99) | Execution budget per guarded entry (eval, timer callback, microtask drain, guarded event dispatch). Default 5 s. See [Watchdog](#watchdog). |
+| `eval(script)` (engine.rs:114) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue (bounded) afterwards. |
+| `eval_all(&[scripts])` (engine.rs:134) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
+| `tick_timers(dt_ms)` (engine.rs:170) | Advance the timer queue by `dt_ms`, fire due callbacks (each under its own deadline), drain microtasks between callbacks. Call once per host frame. |
+| `drain_microtasks()` (engine.rs:209) | Run pending promise jobs, bounded by the deadline and `MAX_MICROTASKS_PER_DRAIN`. Returns the number of jobs run. |
+| `console_output()` / `take_console_output()` (engine.rs:139, 144) | Snapshot or drain the buffered console. |
+| `local_storage()` (engine.rs:150) | Borrow the in-memory `localStorage` map for snapshot or restore. |
+| `install_fetch_handler(Box::new(handler))` (engine.rs:156) | Install an HTTP transport. Replaces any previous handler. |
+| `with_context_guarded(\|ctx\| ...)` (engine.rs:227) | Raw `Ctx` access with the watchdog armed. Use whenever the closure calls into page JS (event dispatch). |
+| `with_context(\|ctx\| ...)` (engine.rs:284) | Unguarded escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals; do **not** call page JS through it. |
 
 There is no explicit shutdown; dropping the `JsEngine` runs the QuickJS
 finalizers and releases the runtime.
@@ -75,14 +77,65 @@ appropriate (terminal pane, browser devtools, log file).
 
 ## Timers
 
-`TimerQueue` (`timers.rs:26`) backs `setTimeout`, `setInterval`, `clearTimeout`,
+`TimerQueue` (`timers.rs:63`) backs `setTimeout`, `setInterval`, `clearTimeout`,
 `clearInterval`. Timers are advanced and fired only inside `tick_timers(dt_ms)`
 — the engine never spawns its own thread. Microtasks are drained between
 callbacks, so a timer that resolves a promise will run the `.then` continuation
 before the next timer fires.
 
+Callbacks are stored once, as functions on `globalThis.__oasis_timer_cb_<id>`,
+and fired through a pre-compiled, non-writable `__oasis_fire_timer(id, repeat)`
+dispatcher (`TimerQueue::tick_fired` reports `FiredTimer { id, repeat }`), so a
+firing never re-parses JS source. The legacy `TimerQueue::tick`, which returns
+eval strings, is kept for API compatibility.
+
+Limits (see also [Watchdog](#watchdog)):
+
+- Delays that are NaN, infinite or negative are treated as `0`; delays above
+  `i32::MAX` ms are clamped.
+- `setInterval` periods are clamped to at least `MIN_INTERVAL_MS` (4 ms), an
+  approximation of the HTML spec's nested-timer clamp. An interval fires at
+  most once per `tick_timers` call and is rescheduled one period after "now",
+  so a long frame never causes a catch-up burst.
+- At most `MAX_LIVE_TIMERS` (1000) timers may be pending. Further
+  `setTimeout` / `setInterval` calls return `0`, register nothing, and a single
+  warning is logged to the console until a registration succeeds again.
+- A NaN / negative `dt_ms` passed to `tick_timers` is ignored (the timer clock
+  does not move backwards or become NaN).
+
 `requestAnimationFrame` is **not** implemented. Use `setInterval(fn, 16)` or
 schedule from the host's frame loop.
+
+## Watchdog
+
+QuickJS runs on the host's thread, so any JS that doesn't return freezes the
+whole OS. Every entry point that runs page JS is bounded:
+
+| Entry point | Bound |
+| --- | --- |
+| `eval` / `eval_all` | Interrupt handler armed with a deadline of `max_exec_ms` (default 5 s, `set_max_exec_ms`). The trailing microtask drain shares the same deadline. |
+| `tick_timers` | Each fired callback gets its own `max_exec_ms` deadline, followed by a bounded microtask drain. A runaway callback is interrupted and logged; later timers in the same tick still fire. |
+| `drain_microtasks` | Fresh `max_exec_ms` deadline **and** a cap of `MAX_MICROTASKS_PER_DRAIN` (10 000) jobs. |
+| `with_context_guarded` | Deadline armed for the duration of the closure. `oasis-browser` routes all DOM event dispatch (click, mouse, key, input) through it. |
+| `with_context` | **Unbounded.** Only for installing globals / reading state. |
+
+When the deadline passes, QuickJS raises an uncatchable `InternalError:
+interrupted`: the current script, callback or handler unwinds (JS `try/catch`
+cannot swallow it), the error is logged to the console buffer at
+`ConsoleLevel::Error`, and the interrupt handler is cleared so the engine stays
+usable for the next event or frame. DOM mutations the handler made before
+being interrupted are kept.
+
+The microtask cap exists because a self-perpetuating promise chain
+(`function f(){ Promise.resolve().then(f) }`) is made of many tiny jobs; the
+time-based interrupt only fires *inside* a job, so without the cap the chain
+could spin for the whole budget. When a drain is cut off (cap or deadline) a
+console warning is logged and the remaining jobs stay queued for the next
+drain — a runaway chain therefore costs at most one bounded slice per drain
+instead of freezing the host.
+
+`max_exec_ms` is a per-entry budget, not a per-frame budget: a page that
+schedules many slow timers can still use up to `max_exec_ms` per callback.
 
 ## Fetch
 
@@ -145,13 +198,14 @@ spec-compliant Web Storage semantics.
 
 The engine is **single-threaded and non-reentrant**:
 
-- `JsEngine` holds `Rc<RefCell<...>>` for its shared buffers (`engine.rs:30`).
+- `JsEngine` holds `Rc<RefCell<...>>` for its shared buffers (`engine.rs:34`).
   It is `!Send` and `!Sync`.
 - `eval` and `tick_timers` take `&self` because the shared state hides behind
   `RefCell`. Calling either re-entrantly from inside a native callback is a
   panic.
 - All JS callbacks (timer fires, fetch resolutions, event handlers) execute
-  synchronously on the host's call stack inside `eval` or `tick_timers`.
+  synchronously on the host's call stack inside `eval`, `tick_timers` or
+  `with_context_guarded`.
 
 If you need to drive multiple JS contexts, hold one per host thread; the
 QuickJS runtime cannot migrate between threads.

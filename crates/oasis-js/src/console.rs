@@ -60,6 +60,34 @@ fn fmt_args(args: &Rest<Value<'_>>) -> String {
 /// Shared timer queue reference for closures.
 pub(crate) type SharedTimerQueue = Rc<RefCell<TimerQueue>>;
 
+/// Name of the pre-compiled JS timer dispatcher (`(id, repeat) => void`)
+/// that [`crate::JsEngine::tick_timers`] calls for each fired timer.
+pub(crate) const FIRE_TIMER_FN: &str = "__oasis_fire_timer";
+
+/// Attach the callback global name to a freshly registered timer, or —
+/// when the registration was refused (`id == 0`, live-timer cap) — emit
+/// a one-off console warning. Returns `id` unchanged.
+fn finish_timer_registration(q: &mut TimerQueue, buf: &ConsoleBuffer, id: i32) -> i32 {
+    if id == 0 {
+        if q.note_cap_hit() {
+            buf.borrow_mut().push(ConsoleEntry {
+                level: ConsoleLevel::Warn,
+                message: format!(
+                    "timer limit reached ({} live timers); \
+                     setTimeout/setInterval returning 0",
+                    crate::timers::MAX_LIVE_TIMERS
+                ),
+            });
+        }
+        return 0;
+    }
+    // Timer was just pushed; it's always last — O(1).
+    if let Some(t) = q.timers_mut().last_mut() {
+        t.set_callback_global(format!("__oasis_timer_cb_{id}"));
+    }
+    id
+}
+
 /// Install `console`, `alert`, `setTimeout`, `setInterval`,
 /// `clearTimeout`, and `clearInterval` into the given JS context.
 pub(crate) fn install(
@@ -136,32 +164,24 @@ pub(crate) fn install(
     // the callback on globalThis themselves.
 
     let tq = Rc::clone(&timer_queue);
+    let b = Rc::clone(&buf);
     globals.set(
         "__oasis_add_timeout",
         Function::new(ctx.clone(), move |delay: f64| -> i32 {
             let mut q = tq.borrow_mut();
             let id = q.add_timeout(String::new(), delay);
-            let gn = format!("__oasis_timer_cb_{id}");
-            // Timer was just pushed; it's always last — O(1).
-            if let Some(t) = q.timers_mut().last_mut() {
-                t.set_callback_global(gn);
-            }
-            id
+            finish_timer_registration(&mut q, &b, id)
         })?,
     )?;
 
     let tq = Rc::clone(&timer_queue);
+    let b = Rc::clone(&buf);
     globals.set(
         "__oasis_add_interval",
         Function::new(ctx.clone(), move |delay: f64| -> i32 {
             let mut q = tq.borrow_mut();
             let id = q.add_interval(String::new(), delay);
-            let gn = format!("__oasis_timer_cb_{id}");
-            // Timer was just pushed; it's always last — O(1).
-            if let Some(t) = q.timers_mut().last_mut() {
-                t.set_callback_global(gn);
-            }
-            id
+            finish_timer_registration(&mut q, &b, id)
         })?,
     )?;
 
@@ -181,6 +201,8 @@ pub(crate) fn install(
 globalThis.setTimeout = function(cb, delay) {
     var d = (typeof delay === 'number') ? delay : 0;
     var id = __oasis_add_timeout(d);
+    // ID 0: live-timer cap reached, registration refused.
+    if (id === 0) return 0;
     var gn = '__oasis_timer_cb_' + id;
     if (typeof cb === 'function') {
         globalThis[gn] = cb;
@@ -192,6 +214,7 @@ globalThis.setTimeout = function(cb, delay) {
 globalThis.setInterval = function(cb, delay) {
     var d = (typeof delay === 'number') ? delay : 0;
     var id = __oasis_add_interval(d);
+    if (id === 0) return 0;
     var gn = '__oasis_timer_cb_' + id;
     if (typeof cb === 'function') {
         globalThis[gn] = cb;
@@ -200,6 +223,22 @@ globalThis.setInterval = function(cb, delay) {
     }
     return id;
 };
+// Pre-compiled dispatcher the host calls (with typed args) when a timer
+// fires, so firing never re-parses JS source. Non-writable so page
+// scripts can't hijack it.
+Object.defineProperty(globalThis, '__oasis_fire_timer', {
+    value: function(id, repeat) {
+        var gn = '__oasis_timer_cb_' + id;
+        var f = globalThis[gn];
+        // One-shot: delete before calling so it is cleaned up even if
+        // the callback throws.
+        if (!repeat) delete globalThis[gn];
+        if (typeof f === 'function') f();
+    },
+    writable: false,
+    configurable: false,
+    enumerable: false
+});
 globalThis.clearTimeout = function(id) {
     __oasis_clear_timer(id);
     delete globalThis['__oasis_timer_cb_' + id];

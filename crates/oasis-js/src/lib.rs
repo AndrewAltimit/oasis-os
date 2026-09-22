@@ -26,8 +26,8 @@ mod storage;
 mod timers;
 
 pub use console::{ConsoleEntry, ConsoleLevel};
-pub use engine::JsEngine;
+pub use engine::{JsEngine, MAX_MICROTASKS_PER_DRAIN};
 pub use fetch::{FetchHandler, FetchRequest, FetchResponse, MockFetchHandler};
 pub use rquickjs;
 pub use storage::LocalStorage;
-pub use timers::TimerQueue;
+pub use timers::{FiredTimer, MAX_LIVE_TIMERS, MIN_INTERVAL_MS, TimerQueue};

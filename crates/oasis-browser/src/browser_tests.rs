@@ -3317,3 +3317,57 @@ fn is_print_only_media_query_matches_print_variants_only() {
     ));
     assert!(!BrowserWidget::is_print_only_media_query(""));
 }
+
+// ---------------------------------------------------------------
+// JS watchdog: runaway event handlers must not freeze the host
+// ---------------------------------------------------------------
+
+#[cfg(feature = "javascript")]
+#[test]
+fn js_click_handler_infinite_loop_is_interrupted() {
+    let vfs = MemoryVfs::new();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.load_html(
+        "<html><body>\
+         <div id=\"spin\" style=\"width:200px;height:60px\" \
+              onclick=\"this.setAttribute('data-hit','1'); while(1){}\">spin</div>\
+         <div id=\"ok\" style=\"width:200px;height:60px\" \
+              onclick=\"this.setAttribute('data-hit','1')\">ok</div>\
+         </body></html>",
+        "test://js-watchdog",
+    );
+    // Short budget so the test doesn't wait out the 5 s default.
+    browser
+        .js_engine
+        .as_mut()
+        .expect("javascript engine")
+        .set_max_exec_ms(100);
+
+    let doc = browser.document.as_ref().expect("doc");
+    let spin = doc.get_element_by_id("spin").expect("spin");
+    let ok = doc.get_element_by_id("ok").expect("ok");
+
+    let (sx, sy) = node_center(&browser, spin);
+    let start = std::time::Instant::now();
+    browser.handle_click(sx, sy, &vfs);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "runaway onclick should be interrupted, took {elapsed:?}"
+    );
+
+    // The handler ran up to the loop, and the engine is still usable
+    // for the next event.
+    let hit = |browser: &BrowserWidget, nid: crate::html::dom::NodeId| {
+        let doc = browser.document.as_ref().expect("doc");
+        match &doc.nodes[nid].kind {
+            crate::html::dom::NodeKind::Element(e) => e.get_attribute("data-hit").is_some(),
+            _ => false,
+        }
+    };
+    assert!(hit(&browser, spin), "handler should have started");
+    let (ox, oy) = node_center(&browser, ok);
+    browser.handle_click(ox, oy, &vfs);
+    assert!(hit(&browser, ok), "engine must stay usable after interrupt");
+}
