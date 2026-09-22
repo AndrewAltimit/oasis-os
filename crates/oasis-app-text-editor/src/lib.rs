@@ -807,6 +807,14 @@ mod tests {
     }
 
     #[test]
+    fn buffer_keeps_trailing_newlines() {
+        for text in ["a\n", "a\n\n", "\n", "x\ny\n"] {
+            assert_eq!(EditorBuffer::from_text(text).text(), text);
+        }
+        assert_eq!(EditorBuffer::from_text("a\r\nb\r\n").text(), "a\nb\n");
+    }
+
+    #[test]
     fn buffer_line_len() {
         let buf = EditorBuffer::from_text("hello");
         assert_eq!(buf.line_len(0), 5);
