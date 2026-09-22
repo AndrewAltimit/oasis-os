@@ -863,6 +863,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ffmpeg"))]
     fn open_builds_keyframe_index() {
         let dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
         // Keyframes at 0.0s and 1.0s: requests snap back to the keyframe
@@ -875,6 +876,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ffmpeg"))]
     fn open_stream_with_moov_builds_keyframe_index() {
         let data = fixture_bytes();
         let moov = find_top_level_atom(&data, b"moov").expect("moov").to_vec();
@@ -913,6 +915,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ffmpeg"))]
     fn find_top_level_atom_walks_boxes() {
         let data = fixture_bytes();
         let moov = find_top_level_atom(&data, b"moov").expect("moov");
