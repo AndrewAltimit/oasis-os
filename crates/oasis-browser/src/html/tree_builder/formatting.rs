@@ -158,13 +158,15 @@ impl TreeBuilder {
                 // Step 13.6: create a clone of node, replace the
                 // entry in active formatting and open elements, then
                 // let node be the clone.
-                let (tag, attrs) = {
-                    let data = self
-                        .doc
-                        .element(node)
-                        .expect("open element must be element");
-                    (data.tag.clone(), data.attributes.clone())
+                // Open elements are always element nodes; if that invariant
+                // is ever broken, abandon the algorithm rather than panic on
+                // untrusted markup. The tree is still well-formed here (every
+                // move so far was a detach + append).
+                let Some(data) = self.doc.element(node) else {
+                    log::warn!("adoption agency: non-element on open stack; aborting");
+                    return;
                 };
+                let (tag, attrs) = (data.tag.clone(), data.attributes.clone());
                 let mut new_data = ElementData::new(tag);
                 new_data.attributes = attrs;
                 let clone = self.doc.add_node(NodeKind::Element(new_data));
@@ -194,13 +196,14 @@ impl TreeBuilder {
             self.doc.append_child(common_ancestor, last_node);
 
             // Step 15: create a clone of formatting element.
-            let (fmt_tag, fmt_attrs) = {
-                let data = self
-                    .doc
-                    .element(formatting_element)
-                    .expect("formatting element must be element");
-                (data.tag.clone(), data.attributes.clone())
+            let Some(data) = self.doc.element(formatting_element) else {
+                // Unreachable in practice (the entry matched `subject` by tag),
+                // but degrade gracefully instead of panicking on hostile input.
+                log::warn!("adoption agency: formatting entry is not an element; aborting");
+                self.active_formatting.remove(fmt_list_pos);
+                return;
             };
+            let (fmt_tag, fmt_attrs) = (data.tag.clone(), data.attributes.clone());
             let mut new_fmt = ElementData::new(fmt_tag);
             new_fmt.attributes = fmt_attrs;
             let fmt_clone = self.doc.add_node(NodeKind::Element(new_fmt));
