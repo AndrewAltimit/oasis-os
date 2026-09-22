@@ -89,8 +89,8 @@ fn frame(os: &Os) -> (u32, u32, Vec<u8>) {
 
 fn distinct_colors(px: &[u8]) -> usize {
     let mut set = std::collections::HashSet::new();
-    for p in px.chunks_exact(4) {
-        set.insert([p[0], p[1], p[2], p[3]]);
+    for p in px.as_chunks::<4>().0 {
+        set.insert(*p);
         if set.len() > 64 {
             break;
         }
@@ -188,7 +188,7 @@ fn full_lifecycle_like_a_host() {
         distinct_colors(&first)
     );
     assert!(
-        first.chunks_exact(4).all(|p| p[3] == 255),
+        first.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
         "framebuffer must be opaque RGBA"
     );
 
