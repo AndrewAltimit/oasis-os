@@ -651,7 +651,12 @@ impl SoftwareVideoDecoder {
 
         #[cfg(not(feature = "ffmpeg"))]
         {
-            (self.audio_sample_rate, self.audio_channels)
+            // The decoder refines rate/channels from the first decoded
+            // frame (e.g. a mono stream in a 2-channel sample entry).
+            match &self.aac {
+                Some(aac) => (aac.sample_rate(), aac.channels()),
+                None => (self.audio_sample_rate, self.audio_channels),
+            }
         }
     }
 }
