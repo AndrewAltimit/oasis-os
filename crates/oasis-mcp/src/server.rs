@@ -21,6 +21,14 @@ const MAX_READ_PER_POLL: usize = 64 * 1024;
 /// dispatching further requests on it until the backlog drains, so memory per
 /// connection stays bounded at roughly this cap plus one response.
 const MAX_WRITE_BUF: usize = 4 * 1024 * 1024;
+/// Lingering close: after the final response of a connection has been
+/// written, keep reading (and discarding) input until the peer has been quiet
+/// this long, so the close does not hit unread data. Closing a socket with
+/// unread input makes the OS send RST, which can destroy the response still
+/// in flight (e.g. a `413` while the client is streaming an oversized body).
+const LINGER_QUIET_MS: u64 = 100;
+/// Hard cap on how long a lingering close may take.
+const LINGER_MAX_SECS: u64 = 2;
 
 /// Constant-time byte comparison (avoids leaking the token via timing).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -50,6 +58,8 @@ struct HttpConn {
     /// Peer half-closed the connection (read returned 0).
     eof: bool,
     close_after_flush: bool,
+    /// Lingering-close state: `(started, last input seen)`.
+    linger: Option<(Instant, Instant)>,
 }
 
 impl HttpConn {
@@ -63,7 +73,32 @@ impl HttpConn {
             request_started: Some(now),
             eof: false,
             close_after_flush: false,
+            linger: None,
         }
+    }
+
+    /// Lingering close step: discard whatever input is available (bounded
+    /// per poll, never buffered). Returns `true` once the connection can be
+    /// closed without resetting it: the peer hit EOF, went quiet for `quiet`,
+    /// errored, or the `max` linger time elapsed.
+    fn linger_done(&mut self, quiet: Duration, max: Duration) -> bool {
+        let now = Instant::now();
+        let (started, mut last_input) = *self.linger.get_or_insert((now, now));
+        let mut buf = [0u8; READ_CHUNK];
+        let mut total = 0usize;
+        while !self.eof && total < MAX_READ_PER_POLL {
+            match self.stream.read(&mut buf) {
+                Ok(0) => self.eof = true,
+                Ok(n) => {
+                    total += n;
+                    last_input = now;
+                },
+                Err(ref e) if is_would_block(e) => break,
+                Err(_) => return true,
+            }
+        }
+        self.linger = Some((started, last_input));
+        self.eof || last_input.elapsed() >= quiet || started.elapsed() >= max
     }
 
     fn queue_write(&mut self, bytes: &[u8]) {
@@ -138,6 +173,8 @@ pub struct McpServer {
     max_connections: usize,
     idle_timeout: Duration,
     header_timeout: Duration,
+    linger_quiet: Duration,
+    linger_max: Duration,
     /// Optional bearer token required on every request.
     token: Option<String>,
 }
@@ -154,6 +191,8 @@ impl McpServer {
             max_connections: DEFAULT_MAX_CONNECTIONS,
             idle_timeout: Duration::from_secs(IDLE_TIMEOUT_SECS),
             header_timeout: Duration::from_secs(HEADER_TIMEOUT_SECS),
+            linger_quiet: Duration::from_millis(LINGER_QUIET_MS),
+            linger_max: Duration::from_secs(LINGER_MAX_SECS),
             token: token.filter(|t| !t.is_empty()),
         }
     }
@@ -186,6 +225,7 @@ impl McpServer {
         let token = self.token.clone();
         let idle_timeout = self.idle_timeout;
         let header_timeout = self.header_timeout;
+        let (linger_quiet, linger_max) = (self.linger_quiet, self.linger_max);
         let mut to_remove = Vec::new();
 
         for (idx, conn) in self.conns.iter_mut().enumerate() {
@@ -206,9 +246,8 @@ impl McpServer {
             {
                 conn.read_buf.clear();
                 conn.queue_write(&build_response(408, false, &[], None, b""));
+                conn.close_after_flush = true;
                 conn.flush_writes();
-                to_remove.push(idx);
-                continue;
             }
 
             // Backpressure: stop consuming input while the peer is not
@@ -247,7 +286,10 @@ impl McpServer {
                 conn.flush_writes();
             }
 
-            if conn.close_after_flush && conn.write_buf.is_empty() {
+            if conn.close_after_flush
+                && conn.write_buf.is_empty()
+                && conn.linger_done(linger_quiet, linger_max)
+            {
                 to_remove.push(idx);
             }
         }
@@ -634,12 +676,40 @@ mod tests {
     fn incomplete_headers_time_out_with_408() {
         let (mut server, pipe) = server_with(b"POST /mcp HTTP/1.1\r\nHost: 127", None);
         server.header_timeout = Duration::ZERO;
+        server.linger_quiet = Duration::ZERO;
         let mut disp = StubDispatcher;
         // Accept; the (zero) header deadline has already passed -> 408 + close.
         server.poll(&mut disp);
         assert!(last_http_response(&pipe).starts_with("HTTP/1.1 408"));
         assert!(lock(&pipe).closed);
         assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn error_close_lingers_and_discards_trailing_input() {
+        // A 413 while the client keeps streaming its body: the connection is
+        // not closed on top of unread input (which would RST the response).
+        let mut input = b"POST /mcp HTTP/1.1\r\nContent-Length: 9999999\r\n\r\n".to_vec();
+        input.extend_from_slice(&[b' '; 1000]);
+        let (mut server, pipe) = server_with(&input, None);
+        server.linger_quiet = Duration::from_secs(60);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        assert!(last_http_response(&pipe).starts_with("HTTP/1.1 413"));
+        // More body arrives after the response: still lingering, input drained
+        // without being buffered.
+        lock(&pipe).client_to_server.extend_from_slice(&[b' '; 5000]);
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+        assert!(lock(&pipe).client_to_server.is_empty());
+        assert!(server.conns[0].read_buf.is_empty());
+        assert!(!lock(&pipe).closed);
+        // Once the peer is quiet long enough, the connection closes.
+        server.linger_quiet = Duration::ZERO;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 0);
+        assert!(lock(&pipe).closed);
     }
 
     #[test]
