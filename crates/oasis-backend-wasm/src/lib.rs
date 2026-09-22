@@ -460,6 +460,15 @@ impl OasisWasm {
                 }
             }
 
+            // Let open apps apply queued VFS mutations (file manager
+            // deletes / renames / copies, paint's binary BMP saves).
+            if let Some(ref mut runner) = self.app_runner {
+                runner.apply_vfs_ops(&mut self.vfs);
+            }
+            for (_, runner) in &mut self.open_runners {
+                runner.apply_vfs_ops(&mut self.vfs);
+            }
+
             // Drive the YouTube search fetcher and let the embed app
             // pick up freshly-published results from VFS.
             #[cfg(feature = "wasm-youtube")]

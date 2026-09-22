@@ -748,6 +748,15 @@ fn main() -> Result<()> {
             }
         }
 
+        // Let open apps apply queued VFS mutations (file manager deletes /
+        // renames / copies, paint's binary BMP saves).
+        if let Some(ref mut runner) = state.content.app_runner {
+            runner.apply_vfs_ops(&mut vfs);
+        }
+        for (_, runner) in &mut state.content.open_runners {
+            runner.apply_vfs_ops(&mut vfs);
+        }
+
         // Dispatch any Settings-app IPC requests (skin swap, resolution
         // change). Must run after the pending-VFS-request block above,
         // which is what writes the IPC payload into the VFS.

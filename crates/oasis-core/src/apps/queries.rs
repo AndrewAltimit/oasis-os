@@ -94,6 +94,17 @@ impl AppRunner {
         AppAction::None
     }
 
+    /// Let the delegate apply its queued VFS mutations (see
+    /// [`crate::apps::App::apply_vfs_ops`]). Hosts call this once per frame
+    /// for every open runner.
+    pub fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) {
+        if let Some(ref mut app) = self.delegate
+            && app.apply_vfs_ops(vfs)
+        {
+            self.sync_from_delegate();
+        }
+    }
+
     /// Forward an `App::refresh` call to the delegate. Apps that don't
     /// override `refresh` get the no-op default; apps like the file
     /// manager use this to apply pending vfs work queued from
