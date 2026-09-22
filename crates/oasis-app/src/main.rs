@@ -668,6 +668,8 @@ fn main() -> Result<()> {
     let mut last_scene_sig: Option<u64> = None;
     let mut last_input_at = std::time::Instant::now();
     let mut last_present_at = std::time::Instant::now();
+    // Wall clock for `App::tick` deltas (independent of drawn frames).
+    let mut last_app_tick_at = std::time::Instant::now();
     // Drops the gamepad-style twin of a key press already consumed as a
     // shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
     let mut key_filter = oasis_core::input::KeyTwinFilter::default();
@@ -755,6 +757,22 @@ fn main() -> Result<()> {
         }
         for (_, runner) in &mut state.content.open_runners {
             runner.apply_vfs_ops(&mut vfs);
+        }
+
+        // Advance time-driven app state (game loops, slideshows) by wall
+        // time, every iteration — elided frames included — so it runs at
+        // a fixed rate independent of FPS and input.
+        {
+            let now = std::time::Instant::now();
+            let dt_ms =
+                u32::try_from(now.duration_since(last_app_tick_at).as_millis()).unwrap_or(u32::MAX);
+            last_app_tick_at = now;
+            if let Some(ref mut runner) = state.content.app_runner {
+                runner.tick(dt_ms, &vfs);
+            }
+            for (_, runner) in &mut state.content.open_runners {
+                runner.tick(dt_ms, &vfs);
+            }
         }
 
         // Dispatch any Settings-app IPC requests (skin swap, resolution
@@ -884,11 +902,19 @@ fn main() -> Result<()> {
             )
             || state.wm.is_animating();
 
-        // Windowed/fullscreen app content (browser, app runners, video)
-        // paints via draw callbacks the SDI registry can't see, and
-        // media playback repaints continuously — always redraw while any
-        // of it is on screen or playing.
-        let content_active = (state.mode == Mode::Desktop && state.wm.window_count() > 0)
+        // Windowed app content (browser, app runners) paints via draw
+        // callbacks the SDI registry can't see: redraw while a visible
+        // window's content changed or animates, or a window is being
+        // dragged/animated — not merely because a window is open.
+        // Fullscreen kiosk apps and media playback repaint continuously.
+        let windows_active = state.mode == Mode::Desktop
+            && render::windows_want_frame(
+                &state.wm,
+                &state.ui.desktops,
+                &state.content.open_runners,
+                state.content.browser.as_ref(),
+            );
+        let content_active = windows_active
             || state.content.fullscreen_app.is_some()
             || state.video_player.is_active()
             || state.radio_source.is_some()
@@ -1073,6 +1099,14 @@ fn main() -> Result<()> {
 
         backend.swap_buffers()?;
         last_present_at = std::time::Instant::now();
+        // Every drawn frame repaints all visible window content, so each
+        // runner's pending change is now on screen.
+        if let Some(ref mut runner) = state.content.app_runner {
+            runner.mark_drawn();
+        }
+        for (_, runner) in &mut state.content.open_runners {
+            runner.mark_drawn();
+        }
         if let (Some(stats), Some(pc)) = (frame_stats.as_mut(), phase_clock.take()) {
             stats.record_drawn(pc.finish());
         }

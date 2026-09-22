@@ -12,6 +12,7 @@ impl AppRunner {
         // Delegate to extracted app if present.
         if let Some(ref mut app) = self.delegate {
             let action = app.handle_input(button, vfs);
+            self.redraw_pending = true;
             self.sync_from_delegate();
             return action;
         }
@@ -28,6 +29,7 @@ impl AppRunner {
         let app = self.delegate.as_mut()?;
         let action = app.handle_key(key, mods, vfs);
         if action.is_some() {
+            self.redraw_pending = true;
             self.sync_from_delegate();
         }
         action
@@ -42,6 +44,7 @@ impl AppRunner {
     pub fn handle_text_input(&mut self, ch: char) {
         if let Some(ref mut app) = self.delegate {
             app.handle_text_input(ch);
+            self.redraw_pending = true;
         }
     }
 
@@ -49,6 +52,7 @@ impl AppRunner {
     pub fn handle_backspace(&mut self) {
         if let Some(ref mut app) = self.delegate {
             app.handle_backspace();
+            self.redraw_pending = true;
         }
     }
 }

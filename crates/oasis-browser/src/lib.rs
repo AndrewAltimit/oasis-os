@@ -785,6 +785,47 @@ impl BrowserWidget {
         self.layout_dirty
     }
 
+    /// Whether the next [`Self::paint`] would draw something different
+    /// from the last one, i.e. the host must not elide the frame.
+    ///
+    /// Call after [`Self::tick`] (which folds finished image decodes,
+    /// stylesheet arrivals, CSS animation/transition steps and fired JS
+    /// timers into the dirty flags below) and after input dispatch. A
+    /// page still loading counts as changing: the chrome shows progress
+    /// and resources land without further input. Pending JS timers alone
+    /// don't: `tick` keeps running them on elided frames, and one that
+    /// fires marks the layout dirty.
+    ///
+    /// An empty display list over a laid-out page is how a fresh
+    /// navigation shows up (`paint` re-records it); a page that records
+    /// no display items at all therefore keeps wanting frames — harmless
+    /// for correctness, just not elided.
+    pub fn wants_frame(&self) -> bool {
+        let repaint_pending = self.layout_dirty
+            || self.full_repaint_needed
+            || !self.dirty_rects.is_empty()
+            || self.image_info_dirty
+            || (self.layout_root.is_some() && self.display_list.is_empty())
+            // Scroll not yet painted (`paint` syncs the link-map offset
+            // on every scroll replay or re-record).
+            || self.link_map_scroll_y != self.scroll.scroll_y
+            || self.link_map_scroll_x != self.scroll.scroll_x;
+        let loading = self.state == LoadingState::Loading
+            || !self.pending_images.is_empty()
+            || self.pending_external_css_apply;
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        let loading = loading
+            || self.pending_page_load.is_some()
+            || !self.pending_io_images.is_empty()
+            || self.image_decode_in_flight > 0
+            || !self.pending_io_stylesheets.is_empty()
+            || !self.pending_vfs_stylesheets.is_empty();
+        let animating = self.animation_engine.has_active() || self.transition_engine.has_active();
+        #[cfg(feature = "javascript")]
+        let animating = animating || !self.deferred_scripts.is_empty();
+        repaint_pending || loading || animating
+    }
+
     /// Mark a screen-space rectangle as needing repaint.
     ///
     /// On the next `paint()` call, only display items intersecting

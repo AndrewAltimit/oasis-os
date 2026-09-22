@@ -456,6 +456,12 @@ impl App for VideoEmbedApp {
         AppAction::None
     }
 
+    /// Thumbnails stream in and the embedded player repaints on its own,
+    /// neither of which the host can observe: redraw every frame.
+    fn wants_frame(&self) -> bool {
+        true
+    }
+
     fn refresh(&mut self, vfs: &dyn Vfs) {
         if !vfs.exists(VIDEO_EMBED_RESULTS_PATH) {
             return;

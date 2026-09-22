@@ -419,6 +419,23 @@ Gamepad events that do not immediately follow a matching `Key` are never filtere
 
 Every input / render hook on `App` sees at most a shared `&dyn Vfs`, and `handle_click` sees none. Apps that need to change the file system queue the work and implement `App::apply_vfs_ops(&mut dyn Vfs) -> bool` (default no-op), which the SDL and WASM hosts call once per frame for every open app runner (`AppRunner::apply_vfs_ops`). The File Manager drains its delete / mkdir / rename / copy / move queue there, and Paint writes its binary BMP saves there (the older `take_pending_request` path only carries UTF-8 strings). Read-only follow-ups to a click (navigation, listing a folder) still go through `App::refresh(&dyn Vfs)`, which the host calls right after forwarding a click or a consumed key. Hosts forward only discrete clicks to apps — there are no drag / pointer-move events at the app level — so pointer-driven tools (e.g. Paint strokes) work click-by-click.
 
+#### 4.3.3 App Ticking
+
+`App::tick(dt_ms: u32, &dyn Vfs) -> bool` (default no-op returning `false`) advances time-driven app state. The SDL and WASM hosts call it once per frame for every open runner (`AppRunner::tick`), windowed or fullscreen, focused or not, with the wall time since the previous call — on the SDL host this includes frames whose redraw is elided, so app time never depends on the frame rate or on input. Apps accumulate `dt_ms` instead of counting calls, and return `true` when the tick changed something they draw (the runner then schedules a redraw, see §4.3.4). `refresh` is not a clock: it only runs after clicks and consumed keys.
+
+- **Games** run Snake and Memory Match on a fixed 60 Hz simulation step (wall time is accumulated and at most 250 ms is simulated per tick, so a stalled host doesn't replay seconds of game time at once). The Snake high score is persisted to `/home/user/.games.toml` (`[snake] high_score = N`), loaded lazily on the first tick and written through `apply_vfs_ops` when beaten.
+- **Photo Viewer** slideshows advance every `SLIDESHOW_INTERVAL_MS` (5 s). **Music Player** shuffle picks a random other playlist track (`oasis_skin::SimpleRng`) and Previous retraces the shuffled order.
+
+#### 4.3.4 Frame Requests and Idle Elision
+
+The SDL host skips clear/draw/present on frames where nothing visible changed. Window content is painted through the WM draw callback, outside the SDI dirty tracking, so an open window no longer forces a redraw by itself; instead `render::windows_want_frame` ORs over the visible (non-minimized, active-desktop) windows:
+
+- `AppRunner::wants_frame()` — true until the next drawn frame (`mark_drawn`) after any input, a `tick` returning `true`, applied VFS ops, a change to the mirrored lines / browse dir / viewing file, or mutable access via `delegate_as_mut`; and always true while `App::wants_frame()` is (continuous content such as the video embed).
+- `BrowserWidget::wants_frame()` — pending layout / repaint / dirty rects / unpainted scroll, a page or its resources still loading, and active CSS animations or transitions. Fired JS timers dirty the layout during `tick`, which runs on elided frames too.
+- WM window animations and drags.
+
+Video/audio playback, fullscreen kiosk apps, the input grace window and the 1 s heartbeat still force redraws as before (`OASIS_FRAME_STATS=1` reports the elided share). A running Snake game requests a frame only on the ~10 steps per second it actually moves.
+
 ### 4.4 Remote Terminal
 
 On platforms with networking (PSP via infrastructure WiFi, Linux, desktop), the framework runs a TCP listener that accepts remote terminal connections. The remote terminal feeds keystrokes into the same command interpreter as local input. This is functional on real hardware and in PPSSPP (1.19+ maps `sceNetInet` to host sockets). In UE5, the terminal is available for debugging -- connect to `localhost:9000` while the game is running to interact with any in-game computer's OS instance directly.

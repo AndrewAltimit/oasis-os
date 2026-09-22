@@ -13,6 +13,7 @@ use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
 use oasis_app_core::{App, AppAction, ContentState};
+use oasis_skin::SimpleRng;
 use oasis_types::backend::TextureId;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
@@ -36,13 +37,19 @@ pub struct BrowsingApp {
     playlist_index: usize,
     /// Whether playlist plays in shuffle order.
     shuffle: bool,
+    /// PRNG picking the next shuffled track. Also stepped once per
+    /// `tick`, so the sequence depends on when the user skips.
+    rng: SimpleRng,
+    /// Playlist indices played before the current one in shuffle mode,
+    /// so "previous" retraces the shuffled order.
+    shuffle_history: Vec<usize>,
     /// Zoom level for photo viewer (1 = fit, 2 = 2x, etc.).
     zoom_level: u32,
     /// Image rotation in degrees (0, 90, 180, 270).
     rotation: u16,
     /// Whether slideshow mode is active.
     slideshow: bool,
-    /// Frame counter for slideshow timing.
+    /// Milliseconds the current slide has been shown (slideshow mode).
     slideshow_timer: u32,
     /// Decoded pixel buffer for the currently viewed image (photo mode).
     /// Populated by `open_file`; the backend owns the GPU texture, keyed
@@ -105,6 +112,8 @@ impl BrowsingApp {
             playlist: Vec::new(),
             playlist_index: 0,
             shuffle: false,
+            rng: SimpleRng::new(0x05A1_5EED),
+            shuffle_history: Vec::new(),
             zoom_level: 1,
             rotation: 0,
             slideshow: false,
@@ -255,22 +264,43 @@ impl BrowsingApp {
         }
     }
 
-    /// Play the next track in the playlist.
+    /// Play the next track in the playlist (a random other track when
+    /// shuffle is on).
     fn playlist_next(&mut self, vfs: &dyn Vfs) {
-        if self.playlist.is_empty() {
+        let len = self.playlist.len();
+        if len == 0 {
             return;
         }
-        self.playlist_index = (self.playlist_index + 1) % self.playlist.len();
+        self.playlist_index = if self.shuffle && len > 1 {
+            // Uniform over the other len-1 tracks: never repeats the
+            // current one. High LCG bits; the low ones cycle quickly.
+            let pick = (self.rng.next_u32() >> 16) as usize % (len - 1);
+            let next = if pick >= self.playlist_index {
+                pick + 1
+            } else {
+                pick
+            };
+            self.shuffle_history.push(self.playlist_index);
+            next
+        } else {
+            (self.playlist_index + 1) % len
+        };
         let path = self.playlist[self.playlist_index].clone();
         self.open_file(vfs, &path);
     }
 
-    /// Play the previous track in the playlist.
+    /// Play the previous track in the playlist (retracing the shuffled
+    /// order when shuffle is on).
     fn playlist_prev(&mut self, vfs: &dyn Vfs) {
         if self.playlist.is_empty() {
             return;
         }
-        if self.playlist_index == 0 {
+        if self.shuffle
+            && let Some(prev) = self.shuffle_history.pop()
+            && prev < self.playlist.len()
+        {
+            self.playlist_index = prev;
+        } else if self.playlist_index == 0 {
             self.playlist_index = self.playlist.len() - 1;
         } else {
             self.playlist_index -= 1;
@@ -546,6 +576,9 @@ fn format_duration(secs: u32) -> String {
 /// `play_file <path>` / `stop` requests from the same path.
 pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
 
+/// How long each photo stays on screen in slideshow mode.
+pub const SLIDESHOW_INTERVAL_MS: u32 = 5_000;
+
 impl App for BrowsingApp {
     fn title(&self) -> &str {
         &self.content.title
@@ -661,6 +694,7 @@ impl App for BrowsingApp {
             // Music mode: Select toggles shuffle.
             Button::Select if matches!(self.viewer_mode, ViewerMode::Audio) => {
                 self.shuffle = !self.shuffle;
+                self.shuffle_history.clear();
                 AppAction::None
             },
             // Photo mode: Square rotates, L/R cycle zoom, Start toggles slideshow.
@@ -700,6 +734,27 @@ impl App for BrowsingApp {
             },
             _ => AppAction::None,
         }
+    }
+
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        // Mix frame timing into the shuffle sequence.
+        self.rng.next_u32();
+
+        if !self.slideshow
+            || !matches!(self.viewer_mode, ViewerMode::Image)
+            || self.content.viewing_file.is_none()
+        {
+            return false;
+        }
+        self.slideshow_timer = self.slideshow_timer.saturating_add(dt_ms);
+        if self.slideshow_timer < SLIDESHOW_INTERVAL_MS {
+            return false;
+        }
+        // Restart the interval rather than carrying the remainder: after
+        // a long stall this advances one slide, not a burst of them.
+        self.slideshow_timer = 0;
+        self.navigate_image(vfs, true);
+        true
     }
 
     fn browse_dir(&self) -> Option<&str> {
@@ -1039,6 +1094,89 @@ mod tests {
         assert!(app.slideshow_active());
         app.handle_input(&Button::Start, &vfs);
         assert!(!app.slideshow_active());
+    }
+
+    #[test]
+    fn slideshow_advances_on_wall_time() {
+        let mut vfs = setup_vfs();
+        oasis_vfs::Vfs::write(&mut vfs, "/home/user/photos/beach.png", b"fake png 2").unwrap();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/beach.png");
+
+        // Slideshow off: time passes, nothing happens.
+        assert!(!app.tick(SLIDESHOW_INTERVAL_MS * 2, &vfs));
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+
+        app.handle_input(&Button::Start, &vfs);
+        // Just under one interval at 60 fps: still on the first slide.
+        let mut t = 0;
+        while t + 16 < SLIDESHOW_INTERVAL_MS {
+            assert!(!app.tick(16, &vfs), "no redraw between slides");
+            t += 16;
+        }
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+        assert!(app.tick(16, &vfs), "advancing a slide requests a redraw");
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/sunset.png"));
+        // Same cadence at 10 fps, and it wraps around.
+        for _ in 0..(SLIDESHOW_INTERVAL_MS / 100) {
+            app.tick(100, &vfs);
+        }
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+    }
+
+    fn music_with_playlist(n: usize) -> (MemoryVfs, BrowsingApp) {
+        let mut vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        for i in 0..n {
+            let path = format!("/home/user/music/track{i}.mp3");
+            oasis_vfs::Vfs::write(&mut vfs, &path, b"fake mp3").unwrap();
+            app.playlist.push(path);
+        }
+        let first = app.playlist[0].clone();
+        app.open_file(&vfs, &first);
+        (vfs, app)
+    }
+
+    #[test]
+    fn shuffle_picks_random_other_tracks() {
+        let (vfs, mut app) = music_with_playlist(6);
+        app.handle_input(&Button::Select, &vfs); // Shuffle on.
+        let mut order = vec![app.playlist_index];
+        for _ in 0..60 {
+            app.handle_input(&Button::Right, &vfs);
+            assert_ne!(Some(&app.playlist_index), order.last(), "no repeats");
+            assert!(app.playlist_index < 6);
+            order.push(app.playlist_index);
+        }
+        let sequential: Vec<usize> = (0..order.len()).map(|i| i % 6).collect();
+        assert_ne!(order, sequential, "shuffle must not play in order");
+        for track in 0..6 {
+            assert!(order.contains(&track), "track {track} never played");
+        }
+        // Previous retraces the shuffled order.
+        let last = order.len() - 1;
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.playlist_index, order[last - 1]);
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.playlist_index, order[last - 2]);
+    }
+
+    #[test]
+    fn shuffle_off_plays_in_order() {
+        let (vfs, mut app) = music_with_playlist(3);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 1);
+        app.handle_input(&Button::Right, &vfs);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 0);
+    }
+
+    #[test]
+    fn shuffle_single_track_stays_put() {
+        let (vfs, mut app) = music_with_playlist(1);
+        app.handle_input(&Button::Select, &vfs);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 0);
     }
 
     #[test]
