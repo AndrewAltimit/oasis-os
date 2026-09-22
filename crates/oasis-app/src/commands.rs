@@ -1084,6 +1084,7 @@ pub fn poll_mcp_server(
         ref mut content,
         ref mut terminal,
         ref skin,
+        ref active_theme,
         ref mut browser_config,
         ref platform,
         ref net,
@@ -1106,8 +1107,11 @@ pub fn poll_mcp_server(
         ..
     } = *terminal;
 
-    let screen_w = skin.manifest.screen_width;
-    let screen_h = skin.manifest.screen_height;
+    // The live framebuffer size: skins are scaled to the configured
+    // resolution, so the manifest's native size can be smaller than the
+    // screen (the screenshot then only captured the top-left corner).
+    let screen_w = active_theme.screen_w;
+    let screen_h = active_theme.screen_h;
 
     let mut disp = crate::mcp_tools::AppDispatcher {
         wm,

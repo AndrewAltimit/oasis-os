@@ -242,8 +242,11 @@ impl AppDispatcher<'_> {
             return ToolResult::error(format!("no window with id '{id}'"));
         };
         // move_window takes a delta; convert absolute target to a delta.
-        let dx = (x - win.x as i64) as i32;
-        let dy = (y - win.y as i64) as i32;
+        // Bound the target first: the WM clamps the result on screen, but
+        // the delta itself must not overflow (`x: i64::MAX` panicked).
+        const LIMIT: i64 = 1 << 20;
+        let dx = (x.clamp(-LIMIT, LIMIT) - i64::from(win.x)) as i32;
+        let dy = (y.clamp(-LIMIT, LIMIT) - i64::from(win.y)) as i32;
         wm_result(
             self.wm.move_window(&id, dx, dy, self.sdi),
             format!("moved {id} toward ({x}, {y})"),
