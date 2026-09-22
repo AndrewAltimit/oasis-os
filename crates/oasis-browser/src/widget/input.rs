@@ -1411,6 +1411,10 @@ impl BrowserWidget {
         // layout, paint, link map, form manager — sees the new tree.
         let new_doc = js_doc.borrow().clone();
         self.body_node_id = new_doc.body();
+        // `document.title = ...` shows up in the chrome / history.
+        if let Some(title) = new_doc.title() {
+            self.nav.update_title(&title);
+        }
         self.document = Some(new_doc);
 
         // Rebuild inline-style cache from the mutated DOM. JS may have
