@@ -21,7 +21,7 @@ src/layout/
 ├── text.rs           word breaking, soft hyphen, bidi run detection
 ├── text_cache.rs     CachingMeasurer + SharedTextCache
 ├── flex.rs           CSS flexbox: main / cross axis, grow / shrink, gap
-├── grid.rs           CSS grid: explicit + implicit tracks, area resolution
+├── grid.rs           CSS grid: auto-repeat, placement, auto-flow, track sizing
 ├── table.rs          table-wrapper / table-row / table-cell, auto width
 ├── multicol.rs       multi-column balancing (partial)
 └── replaced.rs       intrinsic-size resolution for <img>, <video>, etc.
@@ -130,9 +130,24 @@ which makes lookups effectively free for steady-state pages.
   `flex-basis`, `gap`, `order`. It does not implement
   `align-tracks` / `justify-tracks`.
 - **Grid** (`grid.rs`) supports `grid-template-{columns,rows,areas}`,
-  `grid-auto-{columns,rows,flow}`, named lines, `repeat()`, `minmax()`,
-  `fr` units, `gap`, and explicit / implicit grids. Subgrid is **not**
-  implemented.
+  `grid-auto-{columns,rows}`, `grid-auto-flow: [row | column] || dense`,
+  `gap`, and explicit / implicit grids. Track lists are parsed by
+  `css/values/grid.rs` with a paren-aware tokenizer: nested
+  `repeat(3, minmax(0, 1fr))`, multi-track `repeat(2, 1fr 2fr)`, and
+  `px` / `%` / `em` / `rem` / `fr` / `auto` / `min-content` /
+  `max-content` / `fit-content()` / `minmax()` tracks.
+  `repeat(auto-fill | auto-fit, ...)` is resolved at layout time from
+  the container size (the largest repetition count whose tracks and
+  gutters fit, minimum 1); `auto-fit` then collapses empty repeated
+  tracks. Placement accepts line numbers (negative lines count from the
+  end of the explicit grid), `span n`, the `a / b` slash syntax on
+  `grid-row` / `grid-column` / `grid-area`, and area names (`grid-area:
+  main`, or `main-start` / `main-end` lines). Track sizing follows the
+  shape of §11 (base sizes, maximize, flexible tracks with minimum
+  freezing, auto-track stretch); `fr` rows resolve against a definite
+  container `height`. Item intrinsic widths are approximate. Subgrid,
+  `[line-name]` references and `align-items` stretch of grid items are
+  **not** implemented.
 - **Table** (`table.rs`) implements `border-collapse: separate` and the
   HTML table model with auto-sizing columns. `border-collapse: collapse`
   is parsed and stored but the painter still draws separate borders.

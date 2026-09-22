@@ -7,6 +7,7 @@
 
 mod apply;
 mod computed;
+mod grid;
 pub(crate) mod resolve;
 pub mod types;
 
@@ -19,10 +20,11 @@ pub use types::{
     BackgroundSize, BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear,
     ClipLength, ClipPath, ColorScheme, Cursor, Dimension, Display, FilterFunction, FlexDirection,
     FlexWrap, Float, FontFamily, FontFamilyName, FontStyle, FontWeight, GradientDirection,
-    GradientStop, GridTrackSize, Isolation, JustifyContent, LinearGradient, ListStylePosition,
-    ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap, PerspectiveOrigin,
-    PointerEvents, Position, ROOT_FONT_SIZE, RadialGradient, Resize, TextAlign, TextDecoration,
-    TextDecorationLine, TextDecorationStyle, TextDirection, TextOverflow, TextShadow,
-    TextTransform, TextWrap, TimingFunction, TouchAction, TransformFunction, TransformOrigin,
-    Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    GradientStop, GridAutoRepeat, GridLine, GridTemplate, GridTrackSize, Isolation, JustifyContent,
+    LinearGradient, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow,
+    OverflowWrap, PerspectiveOrigin, PointerEvents, Position, ROOT_FONT_SIZE, RadialGradient,
+    Resize, TextAlign, TextDecoration, TextDecorationLine, TextDecorationStyle, TextDirection,
+    TextOverflow, TextShadow, TextTransform, TextWrap, TimingFunction, TouchAction, TrackBreadth,
+    TransformFunction, TransformOrigin, Transition, UserSelect, VerticalAlign, Visibility,
+    WhiteSpace, WordBreak,
 };

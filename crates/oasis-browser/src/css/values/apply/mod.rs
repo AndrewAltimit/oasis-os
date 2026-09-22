@@ -11,8 +11,12 @@
 use oasis_types::backend::Color;
 
 use super::computed::ComputedStyle;
+use super::grid::{
+    parse_grid_area, parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line_pair,
+    parse_grid_line_value, parse_grid_template,
+};
 use super::resolve::{
-    as_keyword, parse_grid_template, resolve_border_style, resolve_color_or_current_with_scheme,
+    as_keyword, resolve_border_style, resolve_color_or_current_with_scheme,
     resolve_color_with_scheme, resolve_dimension, resolve_font_size, resolve_font_weight,
     resolve_length, resolve_line_height,
 };
@@ -899,35 +903,19 @@ impl ComputedStyle {
             "grid-template-rows" => {
                 self.grid_template_rows = parse_grid_template(value, parent_font_size);
             },
-            "grid-column-start" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_column_start = Some(*n as i32);
-                }
-            },
-            "grid-column-end" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_column_end = Some(*n as i32);
-                }
-            },
+            "grid-column-start" => self.grid_column_start = parse_grid_line_value(value),
+            "grid-column-end" => self.grid_column_end = parse_grid_line_value(value),
             "grid-column" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_column_start = Some(*n as i32);
-                }
+                let (start, end) = parse_grid_line_pair(value);
+                self.grid_column_start = start;
+                self.grid_column_end = end;
             },
-            "grid-row-start" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_row_start = Some(*n as i32);
-                }
-            },
-            "grid-row-end" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_row_end = Some(*n as i32);
-                }
-            },
+            "grid-row-start" => self.grid_row_start = parse_grid_line_value(value),
+            "grid-row-end" => self.grid_row_end = parse_grid_line_value(value),
             "grid-row" => {
-                if let CssValue::Number(n) = value {
-                    self.grid_row_start = Some(*n as i32);
-                }
+                let (start, end) = parse_grid_line_pair(value);
+                self.grid_row_start = start;
+                self.grid_row_end = end;
             },
 
             // -- Visual effects -----------------------------------------
@@ -1521,29 +1509,27 @@ impl ComputedStyle {
 
             // -- Grid extensions -------------------------------------------
             "grid-auto-flow" => {
-                if let Some(kw) = as_keyword(value) {
-                    self.grid_auto_flow_column = kw.contains("column");
-                } else if let CssValue::String(s) = value {
-                    self.grid_auto_flow_column = s.contains("column");
+                if let Some((column, dense)) = parse_grid_auto_flow(value) {
+                    self.grid_auto_flow_column = column;
+                    self.grid_auto_flow_dense = dense;
                 }
             },
             "grid-template-areas" => {
                 self.grid_template_areas = parse_grid_template_areas(value);
             },
             "grid-area" => {
-                if let Some(kw) = as_keyword(value) {
-                    self.grid_area = Some(kw.to_string());
-                } else if let CssValue::String(s) = value {
-                    self.grid_area = Some(s.clone());
-                } else if let CssValue::Number(n) = value {
-                    self.grid_row_start = Some(*n as i32);
-                }
+                let area = parse_grid_area(value);
+                self.grid_area = area.name;
+                self.grid_row_start = area.row_start;
+                self.grid_column_start = area.column_start;
+                self.grid_row_end = area.row_end;
+                self.grid_column_end = area.column_end;
             },
             "grid-auto-rows" => {
-                self.grid_auto_rows = parse_grid_template(value, parent_font_size);
+                self.grid_auto_rows = parse_grid_auto_tracks(value, parent_font_size);
             },
             "grid-auto-columns" => {
-                self.grid_auto_columns = parse_grid_template(value, parent_font_size);
+                self.grid_auto_columns = parse_grid_auto_tracks(value, parent_font_size);
             },
 
             // -- Table layout -----------------------------------------------

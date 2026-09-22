@@ -8,7 +8,7 @@ use super::super::computed::ComputedStyle;
 use super::super::resolve::resolve_length;
 use super::super::types::{
     Animation, AnimationDirection, AnimationFillMode, AnimationPlayState, Appearance,
-    BackgroundPosition, BackgroundRepeat, BackgroundSize, ColorScheme, Cursor, Isolation,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, ColorScheme, Cursor, GridLine, Isolation,
     ObjectFit, ObjectPosition, Overflow, PointerEvents, Resize, TextDecorationStyle, TextDirection,
     TimingFunction, TouchAction, Transition, UserSelect,
 };
@@ -264,9 +264,32 @@ impl ComputedStyle {
                 self.column_count = 0;
                 self.column_width = 0.0;
             },
-            "grid-auto-flow" => self.grid_auto_flow_column = false,
+            "grid-auto-flow" => {
+                self.grid_auto_flow_column = false;
+                self.grid_auto_flow_dense = false;
+            },
             "grid-template-areas" => self.grid_template_areas = Vec::new(),
-            "grid-area" => self.grid_area = None,
+            "grid-template-columns" => self.grid_template_columns = initial.grid_template_columns,
+            "grid-template-rows" => self.grid_template_rows = initial.grid_template_rows,
+            "grid-column-start" => self.grid_column_start = GridLine::Auto,
+            "grid-column-end" => self.grid_column_end = GridLine::Auto,
+            "grid-row-start" => self.grid_row_start = GridLine::Auto,
+            "grid-row-end" => self.grid_row_end = GridLine::Auto,
+            "grid-column" => {
+                self.grid_column_start = GridLine::Auto;
+                self.grid_column_end = GridLine::Auto;
+            },
+            "grid-row" => {
+                self.grid_row_start = GridLine::Auto;
+                self.grid_row_end = GridLine::Auto;
+            },
+            "grid-area" => {
+                self.grid_area = None;
+                self.grid_column_start = GridLine::Auto;
+                self.grid_column_end = GridLine::Auto;
+                self.grid_row_start = GridLine::Auto;
+                self.grid_row_end = GridLine::Auto;
+            },
             "object-fit" => self.object_fit = ObjectFit::Fill,
             "grid-auto-rows" => self.grid_auto_rows = Vec::new(),
             "grid-auto-columns" => self.grid_auto_columns = Vec::new(),

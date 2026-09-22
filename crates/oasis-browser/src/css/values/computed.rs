@@ -10,13 +10,13 @@ use super::types::{
     BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
     ContainerType, ContentVisibility, Cursor, Dimension, Display, FieldSizing, FilterFunction,
     FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
-    FontWeight, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
-    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
-    OverscrollBehavior, PerspectiveOrigin, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
-    ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration,
-    TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform,
-    TextUnderlinePosition, TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition,
-    UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    FontWeight, GridLine, GridTemplate, GridTrackSize, Hyphens, ImageRendering, Isolation,
+    JustifyContent, JustifySelf, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition,
+    Overflow, OverflowWrap, OverscrollBehavior, PerspectiveOrigin, PointerEvents, Position,
+    ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign,
+    TextAlignLast, TextDecoration, TextDirection, TextJustify, TextOverflow, TextRendering,
+    TextShadow, TextTransform, TextUnderlinePosition, TextWrap, TouchAction, TransformOrigin,
+    TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -193,12 +193,12 @@ pub struct ComputedStyle {
     pub flex_basis: Dimension,
     pub gap: f32,
 
-    pub grid_template_columns: Vec<GridTrackSize>,
-    pub grid_template_rows: Vec<GridTrackSize>,
-    pub grid_column_start: Option<i32>,
-    pub grid_column_end: Option<i32>,
-    pub grid_row_start: Option<i32>,
-    pub grid_row_end: Option<i32>,
+    pub grid_template_columns: GridTemplate,
+    pub grid_template_rows: GridTemplate,
+    pub grid_column_start: GridLine,
+    pub grid_column_end: GridLine,
+    pub grid_row_start: GridLine,
+    pub grid_row_end: GridLine,
     pub column_gap: f32,
     pub row_gap: f32,
 
@@ -241,6 +241,8 @@ pub struct ComputedStyle {
 
     // -- Grid extensions ------------------------------------------------
     pub grid_auto_flow_column: bool,
+    /// `grid-auto-flow: dense` — backfill holes during auto-placement.
+    pub grid_auto_flow_dense: bool,
     pub grid_template_areas: Vec<Vec<String>>,
     pub grid_area: Option<String>,
     pub grid_auto_rows: Vec<GridTrackSize>,
@@ -527,12 +529,12 @@ impl Default for ComputedStyle {
             flex_basis: Dimension::Auto,
             gap: 0.0,
 
-            grid_template_columns: Vec::new(),
-            grid_template_rows: Vec::new(),
-            grid_column_start: None,
-            grid_column_end: None,
-            grid_row_start: None,
-            grid_row_end: None,
+            grid_template_columns: GridTemplate::default(),
+            grid_template_rows: GridTemplate::default(),
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
             column_gap: 0.0,
             row_gap: 0.0,
 
@@ -561,6 +563,7 @@ impl Default for ComputedStyle {
             column_width: 0.0,
 
             grid_auto_flow_column: false,
+            grid_auto_flow_dense: false,
             grid_template_areas: Vec::new(),
             grid_area: None,
             grid_auto_rows: Vec::new(),

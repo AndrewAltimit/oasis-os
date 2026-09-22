@@ -182,6 +182,17 @@ impl CssParser {
             return parse_font_weight(tokens);
         }
 
+        // Grid track lists and placements need `repeat()` / `minmax()`
+        // nesting and the `/` separator, which the generic value-list
+        // parser drops. Keep them as raw text for the grid parsers.
+        if is_raw_text_grid_property(&prop_lower)
+            && !tokens
+                .iter()
+                .any(|t| matches!(t, CssToken::Function(f) if f.eq_ignore_ascii_case("var")))
+        {
+            return CssValue::Keyword(tokens_to_css_text(tokens));
+        }
+
         // Collect individual parsed values (skip whitespace separators).
         let values = parse_value_list(tokens);
 
@@ -199,6 +210,28 @@ impl CssParser {
 // -------------------------------------------------------------------
 // Value parsing helpers
 // -------------------------------------------------------------------
+
+/// Grid properties whose values are stored as raw CSS text (see
+/// `css::values::grid`).
+fn is_raw_text_grid_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "grid-template-columns"
+            | "grid-template-rows"
+            | "grid-template-areas"
+            | "grid-template"
+            | "grid-auto-columns"
+            | "grid-auto-rows"
+            | "grid-auto-flow"
+            | "grid-column"
+            | "grid-row"
+            | "grid-column-start"
+            | "grid-column-end"
+            | "grid-row-start"
+            | "grid-row-end"
+            | "grid-area"
+    )
+}
 
 pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
     let mut out = Vec::new();
