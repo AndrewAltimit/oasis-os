@@ -265,6 +265,9 @@ pub fn apply_skin_object(
     prefs.apply_font_scale(&mut state.active_theme);
     state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
     state.wm.set_theme(swapped.theme.build_wm_theme());
+    // Open windows take the new skin's chrome and work area.
+    state.wm.restyle_windows(sdi);
+    state.wm.fit_to_screen(sdi);
 
     // Component SDI objects (dashboard icons, status/bottom bar,
     // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
@@ -709,6 +712,7 @@ pub fn apply_resolution_change(
     );
 
     state.wm.set_screen_size(new_w, new_h);
+    state.wm.restyle_windows(sdi);
     // Refit open windows: maximized / snapped / tiled / fullscreen ones
     // take the new screen's geometry and floating ones are pulled back on
     // screen, so no titlebar or close button ends up out of reach.
@@ -979,6 +983,8 @@ pub(crate) fn format_remote_response(
                         .with_features(&swapped.features);
                     *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                     wm.set_theme(swapped.theme.build_wm_theme());
+                    wm.restyle_windows(sdi);
+                    wm.fit_to_screen(sdi);
                     let msg = format!("Switched to skin: {}", swapped.manifest.name);
                     *skin = swapped;
                     msg

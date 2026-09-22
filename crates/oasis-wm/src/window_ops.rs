@@ -740,4 +740,41 @@ mod tests {
         wm.close_window("a", &mut sdi).expect("close");
         assert_eq!(wm.active_window(), None, "only a minimized window left");
     }
+
+    #[test]
+    fn restyle_windows_applies_the_new_theme_and_keeps_state() {
+        use oasis_types::backend::Color;
+        let (mut wm, mut sdi) = setup(&["a", "b", "c"]);
+        wm.minimize_window("c", &mut sdi).expect("minimize");
+        wm.focus_window("a", &mut sdi).expect("focus");
+        let order: Vec<_> = wm.windows().iter().map(|w| w.id.clone()).collect();
+        let theme = WmTheme {
+            frame_color: Color::rgb(1, 2, 3),
+            titlebar_height: 31,
+            ..WmTheme::default()
+        };
+        wm.set_theme(theme.clone());
+        wm.restyle_windows(&mut sdi);
+
+        let frame = sdi.get("b.frame").expect("frame");
+        assert_eq!((frame.color.r, frame.color.g, frame.color.b), (1, 2, 3));
+        assert_eq!(sdi.get("b.titlebar").expect("titlebar").h, 31);
+        assert!(
+            !sdi.get("c.frame").expect("frame").visible,
+            "c stays hidden"
+        );
+        assert_eq!(wm.active_window(), Some("a"));
+        let after: Vec<_> = wm.windows().iter().map(|w| w.id.clone()).collect();
+        assert_eq!(order, after);
+        // SDI stacking follows the window order: a's frame is above b's.
+        assert!(sdi.get("a.frame").expect("a").z > sdi.get("b.frame").expect("b").z);
+        assert_eq!(
+            sdi.get("a.titlebar").expect("a").color,
+            theme.titlebar_active_color
+        );
+        assert_eq!(
+            sdi.get("b.titlebar").expect("b").color,
+            theme.titlebar_inactive_color
+        );
+    }
 }

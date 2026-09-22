@@ -1055,3 +1055,48 @@ fn status_bar_clock_updates() {
     h.advance(std::time::Duration::from_millis(1100));
     assert!(h.sdi_text_contains("14:05"), "{:?}", h.sdi_texts());
 }
+
+/// Windows open across a skin switch adopt the new skin's chrome (colors,
+/// titlebar height) and a maximized one fills the new work area.
+#[test]
+fn open_windows_adopt_the_new_skin_chrome() {
+    use oasis_core::vfs::Vfs;
+    let mut h = boot("classic");
+    let calc = open(&mut h, "Calculator");
+    let paint = open(&mut h, "Paint");
+    let (mx, my) = rect_center(h.window_chrome("Paint").unwrap().maximize.unwrap());
+    h.click(mx, my);
+    h.settle();
+    for skin in ["xp", "macos", "win95", "classic"] {
+        h.vfs_mut()
+            .write(
+                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                skin.as_bytes(),
+            )
+            .unwrap();
+        h.settle();
+        let theme = h.state().wm.theme().clone();
+        for id in [&calc.id, &paint.id] {
+            let frame = h.shell.sdi.get(&format!("{id}.frame")).unwrap();
+            // (Alpha differs for inactive windows: focus dims their frame.)
+            let rgb = |c: oasis_core::backend::Color| (c.r, c.g, c.b);
+            assert_eq!(
+                rgb(frame.color),
+                rgb(theme.frame_color),
+                "{skin}: {id} frame color follows the skin"
+            );
+            let tb = h.shell.sdi.get(&format!("{id}.titlebar")).unwrap();
+            assert_eq!(
+                tb.h, theme.titlebar_height,
+                "{skin}: {id} titlebar height follows the skin"
+            );
+        }
+        let work = h.state().wm.work_area();
+        assert_eq!(
+            h.find_window("Paint").unwrap().frame,
+            (work.x, work.y, work.w, work.h),
+            "{skin}: maximized window fills the new work area"
+        );
+        assert_window_reachable(&h, "Calculator", &format!("skin_{skin}"));
+    }
+}

@@ -205,6 +205,48 @@ impl WindowManager {
         }
     }
 
+    /// Rebuild every window's SDI objects from the current theme. Call
+    /// after [`WindowManager::set_theme`]: chrome colors, sizes, radii and
+    /// fonts are baked into the objects when a window is created, so open
+    /// windows would otherwise keep the previous skin's look. Geometry,
+    /// state (minimized / kiosk), z-order and focus are kept; running
+    /// open/minimize animations are finished and closing ghosts dropped.
+    pub fn restyle_windows(&mut self, sdi: &mut SdiRegistry) {
+        let ids: Vec<_> = self.windows.iter().map(|w| w.id.clone()).collect();
+        for id in &ids {
+            if self.anim.is_animating(id) {
+                self.finish_animation(id, sdi);
+            }
+        }
+        self.flush_closing(None, sdi);
+        self.hover_button = None;
+        for window in &self.windows {
+            self.destroy_sdi_objects(window, sdi);
+            self.create_sdi_objects(window, sdi);
+            self.layout_window_sdi(window, sdi);
+            let minimized = window.state == super::window::WindowState::Minimized;
+            for suffix in window.sdi_suffixes() {
+                if minimized || (window.fullscreen_kiosk && *suffix != "content") {
+                    if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
+                        obj.visible = false;
+                    }
+                }
+            }
+        }
+        // Restore z-order (new objects were appended on top) and the
+        // active / inactive titlebar colors.
+        match self.active_window.clone() {
+            Some(active) => self.focus_window_internal(&active, sdi),
+            None => {
+                for window in &self.windows {
+                    for suffix in window.sdi_suffixes() {
+                        let _ = sdi.move_to_top(&window.sdi_name(suffix));
+                    }
+                }
+            },
+        }
+    }
+
     /// Destroy all SDI objects for a window.
     pub(crate) fn destroy_sdi_objects(
         &self,
