@@ -55,6 +55,9 @@ pub(crate) fn draw_label(
     icon_center: Option<i32>,
     cache: &LabelWrapCache,
 ) {
+    // Built-in app titles follow the UI locale (like the taskbar and the
+    // start menu); plugin and document titles pass through unchanged.
+    let title = oasis_i18n::translate_app_title(title);
     let fs = at.font_small;
     let glyph_h = (fs.max(8) / 8) as u32 * 8;
     let max_w = label_max_width(cell_w);
