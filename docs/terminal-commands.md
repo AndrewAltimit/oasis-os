@@ -232,7 +232,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>]` | Window manager control. |
+| `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>\|maximize <id>]` | Window manager control (the shell publishes `/var/wm/status` and applies `/var/wm/request`). |
 | `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects: `list` prints every object (z-ordered, hidden ones marked); `get` prints all fields of one object (position, size, z, visibility, colors, text, texture, radius, gradient, stroke, shadow). Resolved by the host via `CommandSignal::SdiInspect`. |
 | `theme` | `theme [show\|colors]` | Show the current theme. |
 | `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification. |

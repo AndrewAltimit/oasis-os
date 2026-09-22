@@ -1132,11 +1132,17 @@ pub fn poll_mcp_server(
         screen_h,
         activity: agent_activity,
         pending_skin: None,
+        closed_windows: Vec::new(),
     };
     server.poll(&mut disp);
+    let pending_skin = disp.pending_skin.take();
+    let closed = std::mem::take(&mut disp.closed_windows);
+    for id in closed {
+        finish_window_close(state, &id);
+    }
     // Apply a skin swap requested by `run_command` now that the whole
     // state is available again (see `format_remote_response`).
-    if let Some(new_skin) = disp.pending_skin.take() {
+    if let Some(new_skin) = pending_skin {
         apply_skin_object(new_skin, state, sdi, vfs);
     }
 }
@@ -1201,6 +1207,117 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
 
     if let Err(e) = server.poll(backend, vfs) {
         log::warn!("FTP server poll error: {e}");
+    }
+}
+
+/// VFS IPC path the `wm` terminal command writes requests to.
+pub const WM_REQUEST_PATH: &str = "/var/wm/request";
+/// VFS IPC path the `wm list` terminal command reads window state from.
+pub const WM_STATUS_PATH: &str = "/var/wm/status";
+
+/// Service the `wm` terminal command's VFS IPC (local, remote terminal and
+/// MCP `run_command` alike): publish the window list to
+/// [`WM_STATUS_PATH`] and apply `close|focus|minimize|maximize <id>`
+/// requests from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
+/// in the desktop shell (and failed outright: `/var/wm` did not exist).
+pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    if !vfs.exists("/var/wm") && vfs.mkdir("/var/wm").is_err() {
+        return;
+    }
+    if let Ok(data) = vfs.read(WM_REQUEST_PATH)
+        && !data.is_empty()
+    {
+        let _ = vfs.write(WM_REQUEST_PATH, b"");
+        let request = String::from_utf8_lossy(&data).into_owned();
+        apply_wm_request(request.trim(), state, sdi);
+    }
+    let status = wm_status_text(&state.wm);
+    if vfs.read(WM_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
+        let _ = vfs.write(WM_STATUS_PATH, status.as_bytes());
+    }
+}
+
+fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry) {
+    let Some((op, id)) = request.split_once(' ') else {
+        log::warn!("wm request without a window id: {request:?}");
+        return;
+    };
+    let id = id.trim();
+    if state.wm.get_window(id).is_none() {
+        log::warn!("wm request for unknown window {id:?}");
+        return;
+    }
+    let result = match op {
+        "close" => {
+            if state.content.fullscreen_app.as_deref() == Some(id) {
+                let _ = state.wm.exit_fullscreen(id, sdi);
+            }
+            let r = state.wm.close_window(id, sdi);
+            if r.is_ok() {
+                finish_window_close(state, id);
+            }
+            r
+        },
+        "focus" => state.wm.focus_window(id, sdi),
+        "minimize" => state.wm.minimize_window(id, sdi),
+        "maximize" => state.wm.maximize_window(id, sdi),
+        other => {
+            log::warn!("unknown wm request {other:?}");
+            return;
+        },
+    };
+    if let Err(e) = result {
+        log::warn!("wm {op} {id}: {e}");
+    }
+}
+
+/// One line per window: `id | title | state | x,y wxh`, the focused
+/// window marked with `*`.
+fn wm_status_text(wm: &oasis_core::wm::manager::WindowManager) -> String {
+    if wm.window_count() == 0 {
+        return "(no windows)".to_string();
+    }
+    let active = wm.active_window();
+    wm.windows()
+        .iter()
+        .map(|w| {
+            let mark = if active == Some(w.id.as_str()) {
+                "*"
+            } else {
+                " "
+            };
+            format!(
+                "{mark}{} | {} | {:?} | {},{} {}x{}",
+                w.id.as_str(),
+                w.title,
+                w.state,
+                w.x,
+                w.y,
+                w.outer_w,
+                w.outer_h
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Shell-side cleanup after window `id` was closed through the window
+/// manager directly (MCP `close_window`, `wm close`), mirroring the
+/// titlebar close button: stop the radio / music the app owned, drop its
+/// runner (or the browser widget) and fall back to the dashboard when no
+/// window is left. Without this the app kept running invisibly.
+pub(crate) fn finish_window_close(state: &mut AppState, id: &str) {
+    if state.content.fullscreen_app.as_deref() == Some(id) {
+        state.content.fullscreen_app = None;
+    }
+    crate::input::stop_radio_if_radio_runner(state, id);
+    crate::input::stop_music_if_music_runner(state, id);
+    state.content.open_runners.retain(|(rid, _)| rid != id);
+    if id == "browser" {
+        state.content.browser = None;
+    }
+    if state.wm.window_count() == 0 && state.mode == crate::app_state::Mode::Desktop {
+        state.mode = crate::app_state::Mode::Dashboard;
     }
 }
 

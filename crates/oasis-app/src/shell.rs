@@ -866,6 +866,9 @@ impl<B: ShellBackend> Shell<B> {
         // Poll remote client for received data.
         commands::poll_remote_client(state);
 
+        // `wm` terminal command IPC (window list + close/focus/... requests).
+        commands::poll_wm_ipc(state, sdi, vfs);
+
         // Run the next queued background terminal job (`cmd &`), if any.
         terminal_input::poll_jobs(state, sdi, vfs);
 

@@ -105,6 +105,9 @@ pub struct AppDispatcher<'a> {
     /// Skin resolved by a `run_command` skin swap, applied by the caller
     /// after the poll (it needs the whole `AppState`).
     pub pending_skin: Option<Skin>,
+    /// Windows closed by `close_window`; the caller finishes the shell-side
+    /// cleanup (runner, radio / music, mode) after the poll.
+    pub closed_windows: Vec<String>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -215,7 +218,14 @@ impl AppDispatcher<'_> {
         }
         match op {
             "focus" => wm_result(self.wm.focus_window(&id, self.sdi), format!("focused {id}")),
-            "close" => wm_result(self.wm.close_window(&id, self.sdi), format!("closed {id}")),
+            "close" => {
+                let res = self.wm.close_window(&id, self.sdi);
+                if res.is_ok() {
+                    self.closed_windows.push(id.clone());
+                }
+                wm_result(res, format!("closed {id}"))
+            },
+
             "minimize" => wm_result(
                 self.wm.minimize_window(&id, self.sdi),
                 format!("minimized {id}"),
