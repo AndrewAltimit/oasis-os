@@ -91,8 +91,7 @@ pub struct AppDispatcher<'a> {
     pub open_runners: &'a mut Vec<(String, AppRunner)>,
     pub cmd_reg: &'a mut CommandRegistry,
     pub cwd: &'a mut String,
-    pub skin: &'a mut Skin,
-    pub active_theme: &'a mut ActiveTheme,
+    pub skin: &'a Skin,
     pub browser_config: &'a mut BrowserConfig,
     pub platform: &'a DesktopPlatform,
     pub tls_provider: &'a RustlsTlsProvider,
@@ -103,6 +102,9 @@ pub struct AppDispatcher<'a> {
     pub screen_w: u32,
     pub screen_h: u32,
     pub activity: &'a mut AgentActivity,
+    /// Skin resolved by a `run_command` skin swap, applied by the caller
+    /// after the poll (it needs the whole `AppState`).
+    pub pending_skin: Option<Skin>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -288,10 +290,8 @@ impl AppDispatcher<'_> {
             result,
             self.browser,
             self.skin,
-            self.active_theme,
-            self.browser_config,
-            self.wm,
             self.sdi,
+            &mut self.pending_skin,
         );
         ToolResult::text(text)
     }

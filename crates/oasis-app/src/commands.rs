@@ -16,7 +16,7 @@ use oasis_core::wallpaper;
 
 #[cfg(test)]
 use crate::app_state::UiLayer;
-use crate::app_state::{AppState, ContentLayer, NetworkLayer, TerminalLayer};
+use crate::app_state::{AppState, NetworkLayer, TerminalLayer};
 
 /// Process a local terminal command result. Returns a pending skin swap name
 /// if the command was `SkinSwap`.
@@ -940,15 +940,19 @@ fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
 }
 
 /// Format a remote command result as a response string, applying side effects
-/// (browser sandbox, skin swap) as needed.
+/// that only need the browser (sandbox toggle).
+///
+/// A skin swap is *resolved* here (so a bad name is reported to the remote
+/// caller) but not applied: the resolved skin is stored in `pending_skin`
+/// and the caller applies it with [`apply_skin_object`] once it holds the
+/// whole [`AppState`]. Applying it here with only the theme/WM borrows
+/// left the dashboard, clear color, wallpaper and SFX on the old skin.
 pub(crate) fn format_remote_response(
     result: oasis_core::error::Result<CommandOutput>,
     browser: &mut Option<oasis_core::browser::BrowserWidget>,
-    skin: &mut Skin,
-    active_theme: &mut ActiveTheme,
-    browser_config: &mut BrowserConfig,
-    wm: &mut oasis_core::wm::manager::WindowManager,
-    sdi: &mut SdiRegistry,
+    skin: &Skin,
+    sdi: &SdiRegistry,
+    pending_skin: &mut Option<Skin>,
 ) -> String {
     match result {
         Ok(CommandOutput::Text(text)) => text,
@@ -983,18 +987,13 @@ pub(crate) fn format_remote_response(
             format!("Browser sandbox: {st}")
         },
         Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
-            match resolve_skin_request(&name, skin) {
+            // Variant requests derive from the skin that will be active
+            // by then (an earlier swap in the same batch counts).
+            let base = pending_skin.as_ref().unwrap_or(skin);
+            match resolve_skin_request(&name, base) {
                 Ok(new_skin) => {
-                    let sw = active_theme.screen_w;
-                    let sh = active_theme.screen_h;
-                    let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
-                    *active_theme = ActiveTheme::from_skin(&swapped.theme)
-                        .with_screen_size(sw, sh)
-                        .with_features(&swapped.features);
-                    *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-                    wm.set_theme(swapped.theme.build_wm_theme());
-                    let msg = format!("Switched to skin: {}", swapped.manifest.name);
-                    *skin = swapped;
+                    let msg = format!("Switched to skin: {}", new_skin.manifest.name);
+                    *pending_skin = Some(new_skin);
                     msg
                 },
                 Err(e) => format!("Skin error: {e}"),
@@ -1003,15 +1002,7 @@ pub(crate) fn format_remote_response(
         Ok(CommandOutput::Multi(outputs)) => {
             let mut parts = Vec::new();
             for output in outputs {
-                let resp = format_remote_response(
-                    Ok(output),
-                    browser,
-                    skin,
-                    active_theme,
-                    browser_config,
-                    wm,
-                    sdi,
-                );
+                let resp = format_remote_response(Ok(output), browser, skin, sdi, pending_skin);
                 if !resp.is_empty() {
                     parts.push(resp);
                 }
@@ -1024,57 +1015,55 @@ pub(crate) fn format_remote_response(
 
 /// Poll the remote listener for incoming commands and execute them.
 pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
-    // Destructure to allow field-level borrow splitting.
-    let AppState {
-        ref mut net,
-        ref mut terminal,
-        ref mut content,
-        ref platform,
-        ref mut skin,
-        ref mut active_theme,
-        ref mut browser_config,
-        ref mut wm,
-        ..
-    } = *state;
+    let remote_cmds = {
+        let NetworkLayer {
+            ref mut listener,
+            listener_backend: ref mut backend,
+            ..
+        } = state.net;
+        let Some(l) = listener else { return };
+        l.poll(backend)
+    };
 
-    let NetworkLayer {
-        ref mut listener,
-        listener_backend: ref mut backend,
-        ref tls_provider,
-        ..
-    } = *net;
-
-    let TerminalLayer {
-        ref mut cmd_reg,
-        ref mut cwd,
-        ..
-    } = *terminal;
-
-    let ContentLayer {
-        ref mut browser, ..
-    } = *content;
-
-    let Some(l) = listener else { return };
-
-    let remote_cmds = l.poll(backend);
     for (cmd_line, conn_idx) in remote_cmds {
         log::info!("Remote command from #{conn_idx}: {cmd_line}");
-        let mut env = Environment {
-            cwd: cwd.clone(),
-            vfs,
-            power: Some(platform),
-            time: Some(platform),
-            usb: Some(platform),
-            network: None,
-            tls: Some(tls_provider),
-            stdin: None,
-            stderr: String::new(),
+        let mut pending_skin = None;
+        let response = {
+            // Destructure to allow field-level borrow splitting.
+            let AppState {
+                ref net,
+                ref mut terminal,
+                ref mut content,
+                ref platform,
+                ref skin,
+                ..
+            } = *state;
+            let TerminalLayer {
+                ref mut cmd_reg,
+                ref mut cwd,
+                ..
+            } = *terminal;
+            let mut env = Environment {
+                cwd: cwd.clone(),
+                vfs: &mut *vfs,
+                power: Some(platform),
+                time: Some(platform),
+                usb: Some(platform),
+                network: None,
+                tls: Some(&net.tls_provider),
+                stdin: None,
+                stderr: String::new(),
+            };
+            let result = cmd_reg.execute(&cmd_line, &mut env);
+            *cwd = env.cwd;
+            format_remote_response(result, &mut content.browser, skin, sdi, &mut pending_skin)
         };
-        let result = cmd_reg.execute(&cmd_line, &mut env);
-        *cwd = env.cwd;
-        let response =
-            format_remote_response(result, browser, skin, active_theme, browser_config, wm, sdi);
-        let _ = l.send_response(conn_idx, &response);
+        if let Some(new_skin) = pending_skin {
+            apply_skin_object(new_skin, state, sdi, vfs);
+        }
+        if let Some(l) = state.net.listener.as_mut() {
+            let _ = l.send_response(conn_idx, &response);
+        }
     }
 }
 
@@ -1094,8 +1083,7 @@ pub fn poll_mcp_server(
         ref mut wm,
         ref mut content,
         ref mut terminal,
-        ref mut skin,
-        ref mut active_theme,
+        ref skin,
         ref mut browser_config,
         ref platform,
         ref net,
@@ -1107,7 +1095,7 @@ pub fn poll_mcp_server(
 
     let Some(server) = mcp else { return };
 
-    let ContentLayer {
+    let crate::app_state::ContentLayer {
         ref mut browser,
         ref mut open_runners,
         ..
@@ -1130,7 +1118,6 @@ pub fn poll_mcp_server(
         cmd_reg,
         cwd,
         skin,
-        active_theme,
         browser_config,
         platform,
         tls_provider: &net.tls_provider,
@@ -1140,8 +1127,14 @@ pub fn poll_mcp_server(
         screen_w,
         screen_h,
         activity: agent_activity,
+        pending_skin: None,
     };
     server.poll(&mut disp);
+    // Apply a skin swap requested by `run_command` now that the whole
+    // state is available again (see `format_remote_response`).
+    if let Some(new_skin) = disp.pending_skin.take() {
+        apply_skin_object(new_skin, state, sdi, vfs);
+    }
 }
 
 /// Start the MCP server from environment variables at boot (`OASIS_MCP=1`,
@@ -1234,6 +1227,7 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_state::ContentLayer;
     use oasis_core::terminal::{CommandOutput, CommandSignal};
 
     // -- trim_output --
