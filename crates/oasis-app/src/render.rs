@@ -168,10 +168,15 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     // count (scrollback + prompt) gives that away.
                     && (changed || runner.lines.len() != state.terminal.output_lines.len() + 1)
                 {
-                    let mut lines = state.terminal.output_lines.clone();
+                    // Incremental sync: only lines not already in the
+                    // runner are cloned (was a full scrollback clone here
+                    // plus another inside the runner).
                     let prompt = format!("> {}", state.terminal.input_buf);
-                    lines.push(prompt);
-                    runner.set_lines(lines, state.terminal.scroll_offset);
+                    runner.sync_terminal_lines(
+                        &state.terminal.output_lines,
+                        &prompt,
+                        state.terminal.scroll_offset,
+                    );
                     state.terminal.sync_signature = Some((
                         state.terminal.output_lines.len(),
                         state.terminal.scroll_offset,

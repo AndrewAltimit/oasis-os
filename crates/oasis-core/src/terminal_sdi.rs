@@ -7,6 +7,16 @@ use crate::sdi::SdiRegistry;
 /// Maximum lines retained in the scrollback buffer.
 pub const MAX_OUTPUT_LINES: usize = 2000;
 
+/// Trim a scrollback buffer to [`MAX_OUTPUT_LINES`], dropping the oldest
+/// lines with a single `drain` (one O(n) shift; a `remove(0)` loop was
+/// O(n*k) when a command printed k lines into a full buffer).
+pub fn trim_scrollback(output_lines: &mut Vec<String>) {
+    let excess = output_lines.len().saturating_sub(MAX_OUTPUT_LINES);
+    if excess > 0 {
+        output_lines.drain(..excess);
+    }
+}
+
 /// Resolved terminal colors, honoring `[app_themes.terminal]` skin overrides.
 ///
 /// Each slot falls back to the exact theme-derived color the terminal used
@@ -95,7 +105,7 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
         obj.x = (at.screen_w as i32) / 2 - (page_str.len() as i32 * at.font_heading as i32 / 2);
         obj.y = (at.screen_h as i32) / 2 - 16;
         obj.visible = true;
-        obj.text = Some(page_str);
+        obj.set_text(&page_str);
     }
 
     let hint_name = "media_page_hint";
@@ -111,53 +121,78 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
         obj.x = (at.screen_w as i32) / 2 - (hint_str.len() as i32 * at.font_hint as i32 / 2);
         obj.y = (at.screen_h as i32) / 2 + 9;
         obj.visible = true;
-        obj.text = Some(hint_str.to_string());
+        obj.set_text(hint_str);
     }
 }
 
 /// Hide media page SDI objects.
 pub fn hide_media_page(sdi: &mut SdiRegistry) {
-    for name in &["media_page_text", "media_page_hint"] {
-        if let Ok(obj) = sdi.get_mut(name) {
-            obj.visible = false;
-        }
+    for name in ["media_page_text", "media_page_hint"] {
+        sdi.set_visible(name, false);
     }
 }
 
 /// Maximum extra colored-run objects per terminal line (`term_line_{i}_r{j}`).
 const MAX_LINE_RUNS: usize = 8;
 
+/// Upper bound on `term_line_{i}` objects the visibility pass walks
+/// (generous enough for every supported resolution).
+const MAX_TERM_LINES: usize = 200;
+
+/// Cached `term_line_{i}` / `term_line_{i}_r{j}` object names.
+///
+/// `set_terminal_visible(sdi, false)` runs every frame in every non-terminal
+/// mode; formatting up to 200 x 9 names per frame was pure churn.
+/// `runs[i][j - 1]` is the name of run `j` of line `i`.
+struct TermNames {
+    lines: Vec<String>,
+    runs: Vec<[String; MAX_LINE_RUNS]>,
+}
+
+fn term_names() -> &'static TermNames {
+    static NAMES: std::sync::OnceLock<TermNames> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| TermNames {
+        lines: (0..MAX_TERM_LINES)
+            .map(|i| format!("term_line_{i}"))
+            .collect(),
+        runs: (0..MAX_TERM_LINES)
+            .map(|i| std::array::from_fn(|j| format!("term_line_{i}_r{}", j + 1)))
+            .collect(),
+    })
+}
+
 /// Set terminal-mode SDI objects visible/hidden.
+///
+/// Only objects whose visibility actually changes are touched, so the
+/// per-frame hide pass in non-terminal modes leaves the scene clean.
+/// Hiding is also short-circuited: every path that shows terminal
+/// objects (`setup_terminal_objects`, this function) shows `terminal_bg`,
+/// `term_prompt`, and `term_line_0` together, so when all three are
+/// already hidden the walk over the line pool is skipped.
 pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
-    if let Ok(obj) = sdi.get_mut("terminal_bg") {
-        obj.visible = visible;
+    let names = term_names();
+    if !visible {
+        let hidden = |name: &str| sdi.get(name).ok().is_none_or(|o| !o.visible);
+        if hidden("terminal_bg") && hidden("term_prompt") && hidden(&names.lines[0]) {
+            return;
+        }
     }
-    // Hide up to a generous upper bound of term lines (handles all resolutions).
-    for i in 0..200 {
-        let name = format!("term_line_{i}");
-        if !sdi.contains(&name) {
+    sdi.set_visible("terminal_bg", visible);
+    for (line, runs) in names.lines.iter().zip(&names.runs) {
+        if !sdi.contains(line) {
             break;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.visible = visible;
-        }
+        sdi.set_visible(line, visible);
         // Extra colored-run objects for this line (SGR spans).
-        for j in 1..=MAX_LINE_RUNS {
-            let run_name = format!("term_line_{i}_r{j}");
-            if !sdi.contains(&run_name) {
+        for run in runs {
+            if !sdi.contains(run) {
                 break;
             }
-            if let Ok(obj) = sdi.get_mut(&run_name) {
-                obj.visible = visible;
-            }
+            sdi.set_visible(run, visible);
         }
     }
-    if let Ok(obj) = sdi.get_mut("term_input_bg") {
-        obj.visible = visible;
-    }
-    if let Ok(obj) = sdi.get_mut("term_prompt") {
-        obj.visible = visible;
-    }
+    sdi.set_visible("term_input_bg", visible);
+    sdi.set_visible("term_prompt", visible);
 }
 
 /// Create/update terminal-mode SDI objects with theme-driven colors and layout.
@@ -397,6 +432,20 @@ mod tests {
     }
 
     #[test]
+    fn trim_scrollback_5000_into_full_buffer() {
+        let mut lines: Vec<String> = (0..MAX_OUTPUT_LINES).map(|i| format!("old {i}")).collect();
+        lines.extend((0..5000).map(|i| format!("new {i}")));
+        trim_scrollback(&mut lines);
+        assert_eq!(lines.len(), MAX_OUTPUT_LINES);
+        assert_eq!(lines[0], format!("new {}", 5000 - MAX_OUTPUT_LINES));
+        assert_eq!(lines[MAX_OUTPUT_LINES - 1], "new 4999");
+        // Under the cap: untouched.
+        let mut short = vec!["a".to_string()];
+        trim_scrollback(&mut short);
+        assert_eq!(short, ["a"]);
+    }
+
+    #[test]
     fn visible_lines_default_theme() {
         let at = ActiveTheme::default();
         let lines = visible_output_lines(&at);
@@ -524,6 +573,37 @@ mod tests {
         set_terminal_visible(&mut sdi, true);
         assert!(sdi.get("terminal_bg").unwrap().visible);
         assert!(sdi.get("term_prompt").unwrap().visible);
+    }
+
+    #[test]
+    fn set_terminal_visible_hide_pass_leaves_scene_clean() {
+        let mut sdi = SdiRegistry::new();
+        let lines: Vec<String> = (0..40)
+            .map(|i| format!("\u{1b}[31mx\u{1b}[0m {i}"))
+            .collect();
+        let at = ActiveTheme::default().with_screen_size(800, 600);
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+        set_terminal_visible(&mut sdi, false);
+        assert!(sdi.take_scene_dirty(), "first hide is a real change");
+        // Every following frame re-runs the hide pass: nothing changes.
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.is_scene_dirty());
+        assert!(!sdi.get("term_line_5_r1").unwrap().visible);
+    }
+
+    #[test]
+    fn set_terminal_visible_hides_after_partial_show() {
+        // Short-circuit must not skip a pass while the anchor objects
+        // are still visible.
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let lines: Vec<String> = (0..20).map(|i| format!("l{i}")).collect();
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
+        set_terminal_visible(&mut sdi, false);
+        set_terminal_visible(&mut sdi, true);
+        assert!(sdi.get("term_line_3").unwrap().visible);
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.get("term_line_3").unwrap().visible);
     }
 
     #[test]

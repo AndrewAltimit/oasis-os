@@ -136,6 +136,28 @@ impl AppRunner {
         self.sync_from_delegate();
     }
 
+    /// Sync terminal scrollback plus a trailing prompt line into a
+    /// Terminal runner, incrementally (see
+    /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)).
+    ///
+    /// Same result as `set_lines(output + [prompt], scroll_offset)`
+    /// without deep-copying the scrollback — neither into the delegate nor
+    /// into the mirrored `lines` field. Returns the number of lines cloned
+    /// into the delegate (0 if this runner is not a Terminal).
+    pub fn sync_terminal_lines(
+        &mut self,
+        output: &[String],
+        prompt: &str,
+        scroll_offset: usize,
+    ) -> usize {
+        let cloned = match self.delegate_as_mut::<super::simple_app::SimpleApp>() {
+            Some(simple) => simple.sync_terminal_lines(output, prompt, scroll_offset),
+            None => 0,
+        };
+        self.sync_from_delegate();
+        cloned
+    }
+
     /// Render app content directly into a windowed content area.
     ///
     /// Unlike `update_sdi()` which creates named SDI objects for full-screen
@@ -165,7 +187,10 @@ impl AppRunner {
     /// external code that reads these fields directly.
     pub(crate) fn sync_from_delegate(&mut self) {
         if let Some(ref app) = self.delegate {
-            self.lines = app.lines().to_vec();
+            // Incremental: after an append only the new lines are cloned
+            // (a to_vec() here deep-copied the whole scrollback on every
+            // input event while a terminal window was open).
+            super::simple_app::sync_lines(&mut self.lines, app.lines());
             self.browse_dir = app.browse_dir().map(String::from);
             self.viewing_file = app.viewing_file().map(String::from);
         }
@@ -254,6 +279,32 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         assert!(runner.lines.iter().any(|l| l.contains("480")));
+    }
+
+    #[test]
+    fn terminal_sync_one_line_does_not_clone_scrollback() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        let mut output: Vec<String> = (0..2000).map(|i| format!("out {i}")).collect();
+        runner.sync_terminal_lines(&output, "> ", 0);
+        assert_eq!(runner.lines.len(), 2001);
+        let mirror_ptr = runner.lines[500].as_ptr();
+
+        output.push("one more".into());
+        let cloned = runner.sync_terminal_lines(&output, "> ls", 0);
+        assert_eq!(cloned, 2, "new line + prompt only");
+        assert_eq!(runner.lines.len(), 2002);
+        assert_eq!(runner.lines[2000], "one more");
+        assert_eq!(runner.lines[2001], "> ls");
+        assert_eq!(
+            runner.lines[500].as_ptr(),
+            mirror_ptr,
+            "mirrored lines field must be updated in place, not re-cloned"
+        );
+        let app = runner
+            .delegate_as::<crate::apps::simple_app::SimpleApp>()
+            .expect("terminal delegate");
+        assert_eq!(app.content.lines, runner.lines);
     }
 
     #[test]

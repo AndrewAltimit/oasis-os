@@ -69,5 +69,9 @@ criterion = { workspace = true }
 name = "dashboard_frame"
 harness = false
 
+[[bench]]
+name = "terminal_scrollback"
+harness = false
+
 [lints]
 workspace = true

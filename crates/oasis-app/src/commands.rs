@@ -1174,9 +1174,7 @@ pub fn poll_remote_client(state: &mut AppState) {
 
 /// Truncate output lines to `MAX_OUTPUT_LINES`.
 pub fn trim_output(output_lines: &mut Vec<String>) {
-    while output_lines.len() > terminal_sdi::MAX_OUTPUT_LINES {
-        output_lines.remove(0);
-    }
+    terminal_sdi::trim_scrollback(output_lines);
 }
 
 #[cfg(test)]

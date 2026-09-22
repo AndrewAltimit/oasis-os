@@ -8,6 +8,43 @@ use oasis_ui::flex;
 use crate::app_trait::ContentState;
 use crate::layout::AppLayout;
 
+/// Size of the `app_line_{i}` / `app_lp_line_{i}` / `app_rp_line_{i}` pools
+/// the hide pass walks.
+const MAX_APP_LINES: usize = 100;
+
+/// Cached pool object names: `hide_app_sdi` runs every frame in every
+/// non-app mode, and `render_content_sdi` every frame in app mode, so a
+/// `format!` per pool slot per frame was pure allocation churn.
+struct AppLineNames {
+    line: Vec<String>,
+    lp: Vec<String>,
+    rp: Vec<String>,
+}
+
+fn app_line_names() -> &'static AppLineNames {
+    static NAMES: std::sync::OnceLock<AppLineNames> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        let pool = |prefix: &str| {
+            (0..MAX_APP_LINES)
+                .map(|i| format!("{prefix}{i}"))
+                .collect::<Vec<_>>()
+        };
+        AppLineNames {
+            line: pool("app_line_"),
+            lp: pool("app_lp_line_"),
+            rp: pool("app_rp_line_"),
+        }
+    })
+}
+
+/// Name of the `app_line_{i}` object (cached for `i < 100`).
+fn app_line_name(i: usize) -> std::borrow::Cow<'static, str> {
+    match app_line_names().line.get(i) {
+        Some(name) => std::borrow::Cow::Borrowed(name.as_str()),
+        None => std::borrow::Cow::Owned(format!("app_line_{i}")),
+    }
+}
+
 /// Render the app background and title bar chrome to SDI.
 pub fn render_app_chrome(sdi: &mut SdiRegistry, at: &ActiveTheme) {
     if !sdi.contains("app_bg") {
@@ -117,14 +154,14 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
     }
 
     for (i, rect) in line_rects.iter().enumerate() {
-        let name = format!("app_line_{i}");
+        let name = app_line_name(i);
         if !sdi.contains(&name) {
-            sdi.create(&name);
+            sdi.create(name.as_ref());
         }
         if let Ok(obj) = sdi.get_mut(&name) {
             let line_idx = content.scroll + i;
-            if line_idx < content.lines.len() {
-                obj.text = Some(content.lines[line_idx].clone());
+            if let Some(line) = content.lines.get(line_idx) {
+                obj.set_text(line);
                 obj.visible = true;
             } else {
                 obj.text = None;
@@ -220,11 +257,16 @@ pub fn draw_content_windowed(
         .len()
         .saturating_sub(content.scroll)
         .min(max_lines);
+    // One buffer reused for every "{prefix}{line}" string (a single
+    // draw_text call keeps proportional-font glyph placement identical).
+    let mut text = String::new();
     for i in 0..visible {
         let line_idx = content.scroll + i;
         let line = &content.lines[line_idx];
         let prefix = if i == content.cursor { "> " } else { "  " };
-        let text = format!("{prefix}{line}");
+        text.clear();
+        text.push_str(prefix);
+        text.push_str(line);
         let text_color = if i == content.cursor {
             at.app.selected_text
         } else {
@@ -254,6 +296,10 @@ pub fn draw_content_windowed(
 ///
 /// This hides objects created by `render_app_chrome` and `render_content_sdi`.
 /// App-specific objects (e.g., TV Guide EPG) should be hidden separately.
+///
+/// Runs every frame outside app mode, so it only touches objects whose
+/// visibility actually changes (see `SdiRegistry::set_visible`): on an
+/// already-hidden pool it is lookups only and leaves the scene clean.
 pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
     let fixed = [
         "app_bg",
@@ -264,32 +310,22 @@ pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
         "app_sel_bg",
         "app_sel_accent",
     ];
-    for name in &fixed {
-        if let Ok(obj) = sdi.get_mut(name) {
-            obj.visible = false;
-        }
+    for name in fixed {
+        sdi.set_visible(name, false);
     }
-    for i in 0..100 {
-        let name = format!("app_line_{i}");
-        if !sdi.contains(&name) {
+    let names = app_line_names();
+    for name in &names.line {
+        if !sdi.contains(name) {
             break;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.visible = false;
-        }
+        sdi.set_visible(name, false);
     }
-    for i in 0..100 {
-        let lp = format!("app_lp_line_{i}");
-        if !sdi.contains(&lp) {
+    for (lp, rp) in names.lp.iter().zip(&names.rp) {
+        if !sdi.contains(lp) {
             break;
         }
-        let rp = format!("app_rp_line_{i}");
-        if let Ok(obj) = sdi.get_mut(&lp) {
-            obj.visible = false;
-        }
-        if let Ok(obj) = sdi.get_mut(&rp) {
-            obj.visible = false;
-        }
+        sdi.set_visible(lp, false);
+        sdi.set_visible(rp, false);
     }
 }
 
@@ -355,6 +391,47 @@ mod tests {
     impl oasis_types::backend::SdiVector for TextRecorder {}
     impl oasis_types::backend::SdiBatch for TextRecorder {}
     impl oasis_types::backend::SdiRenderTarget for TextRecorder {}
+
+    #[test]
+    fn hide_app_sdi_repeat_leaves_scene_clean() {
+        let mut content = ContentState::new("Files", "/apps/files");
+        content.lines = (0..50).map(|i| format!("entry {i}")).collect();
+        let at = ActiveTheme::default();
+        let mut sdi = SdiRegistry::new();
+        render_app_chrome(&mut sdi, &at);
+        render_content_sdi(&content, &mut sdi, &at);
+        hide_app_sdi(&mut sdi);
+        assert!(sdi.take_scene_dirty());
+        assert!(!sdi.get("app_line_0").unwrap().visible);
+        assert!(!sdi.get("app_bg").unwrap().visible);
+        // The per-frame repeat must not dirty the scene.
+        hide_app_sdi(&mut sdi);
+        assert!(!sdi.is_scene_dirty());
+    }
+
+    #[test]
+    fn render_content_sdi_idle_frame_is_clean() {
+        let mut content = ContentState::new("Files", "/apps/files");
+        content.lines = (0..50).map(|i| format!("entry {i}")).collect();
+        let at = ActiveTheme::default();
+        let mut sdi = SdiRegistry::new();
+        render_content_sdi(&content, &mut sdi, &at);
+        sdi.clear_scene_dirty();
+        render_content_sdi(&content, &mut sdi, &at);
+        assert!(!sdi.is_scene_dirty());
+        assert_eq!(
+            sdi.get("app_line_1").unwrap().text.as_deref(),
+            Some("entry 1")
+        );
+        // Scrolling changes line text: dirty.
+        content.scroll = 1;
+        render_content_sdi(&content, &mut sdi, &at);
+        assert!(sdi.is_scene_dirty());
+        assert_eq!(
+            sdi.get("app_line_1").unwrap().text.as_deref(),
+            Some("entry 2")
+        );
+    }
 
     #[test]
     fn windowed_draw_omits_app_title() {
