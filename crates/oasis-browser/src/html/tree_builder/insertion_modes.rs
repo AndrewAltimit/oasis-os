@@ -394,13 +394,13 @@ impl TreeBuilder {
                 self.reconstruct_formatting();
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.active_formatting.push(id);
+                self.push_active_formatting(id);
             },
             _ if tag_name.is_formatting() => {
                 self.reconstruct_formatting();
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.active_formatting.push(id);
+                self.push_active_formatting(id);
             },
             _ => {
                 // Generic start tag.

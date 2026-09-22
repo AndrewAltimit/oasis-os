@@ -68,8 +68,13 @@ impl BrowserWidget {
     pub fn navigate_cached_or_fetch(&mut self, url: &str, vfs: &dyn Vfs) {
         use crate::loader::ContentType;
 
-        // Check if we have a cached response for this URL.
-        if let Some(entry) = self.cache.get(url) {
+        // Check if we have a cached response for this URL. The fragment
+        // is not part of the resource's identity.
+        let key = match url.split_once('#') {
+            Some((base, _)) if self.cache.get(url).is_none() => base,
+            _ => url,
+        };
+        if let Some(entry) = self.cache.get(key) {
             let body = entry.response.body.clone();
             let ct = entry.response.content_type;
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
@@ -94,7 +99,7 @@ impl BrowserWidget {
                 self.cached_image_info.clear();
                 self.image_info_dirty = false;
 
-                let text = String::from_utf8_lossy(&body);
+                let text = html_for_text_body(ct, &body);
                 self.load_html(&text, url);
 
                 self.collect_page_image_requests();
@@ -138,6 +143,7 @@ impl BrowserWidget {
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
             self.pending_page_load = None;
+            self.pending_page_url = None;
             self.pending_io_images.clear();
         }
     }
@@ -351,8 +357,10 @@ impl BrowserWidget {
         let validators = self.cache.peek_validators(&request.url);
 
         if let Some(ref mut io) = self.io_thread {
+            let url = request.url.clone();
             let id = io.send(IoRequestKind::PageLoad, request, validators, None);
             self.pending_page_load = Some(id);
+            self.pending_page_url = Some(url);
         }
     }
 
@@ -413,8 +421,16 @@ impl BrowserWidget {
         for result in page_results {
             if self.pending_page_load == Some(result.id) {
                 self.pending_page_load = None;
+                let requested_url = self.pending_page_url.take();
                 match result.result {
-                    Ok(loaded) => {
+                    Ok(mut loaded) => {
+                        // `304 Not Modified` answers our conditional
+                        // request: the body to show is the cached one.
+                        if loaded.response.status == 304
+                            && let Some(cached) = self.cache.peek_response(&loaded.response.url)
+                        {
+                            loaded.response = cached;
+                        }
                         let url_str = loaded.response.url.clone();
                         let etag = loaded.etag.clone();
                         let last_modified = loaded.last_modified.clone();
@@ -424,7 +440,10 @@ impl BrowserWidget {
                     },
                     Err(e) => {
                         let err_msg = e.to_string();
-                        let url = "about:error";
+                        // Render the error page under the URL that
+                        // failed so it stays in the URL bar / history
+                        // and can be retried with a reload.
+                        let url = requested_url.as_deref().unwrap_or("about:error");
                         let err_resp = loader::vfs::error_page(url, &err_msg);
                         self.process_response(err_resp);
                         self.state = LoadingState::Error;
@@ -452,7 +471,14 @@ impl BrowserWidget {
 
             match result.result {
                 Ok(loaded) => {
-                    let body = loaded.response.body;
+                    // A 304 revalidation carries no body: use the cached one.
+                    let cached = (loaded.response.status == 304)
+                        .then(|| self.cache.peek_response(&loaded.response.url))
+                        .flatten();
+                    let body = match cached {
+                        Some(cached) => cached.body,
+                        None => loaded.response.body,
+                    };
                     // Dispatch to the background decode thread.
                     self.ensure_decode_thread();
                     let sent = if let Some(ref tx) = self.image_decode_tx {
@@ -527,7 +553,8 @@ impl BrowserWidget {
                         hover: true,
                         pointer: "fine",
                     };
-                    css::parser::Stylesheet::parse_with_viewport(&css_text, viewport)
+                    let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
+                    (sheet, css_text)
                 },
                 Err(e) => {
                     log::debug!("external stylesheet fetch failed: {e}");
@@ -536,7 +563,9 @@ impl BrowserWidget {
                 },
             };
             if idx < self.external_stylesheets.len() {
+                let (sheet, css_text) = sheet;
                 self.external_stylesheets[idx] = Some(sheet);
+                self.record_external_source(idx, css_text);
                 self.pending_external_css_apply = true;
             }
         }
@@ -560,7 +589,7 @@ impl BrowserWidget {
 
         match content_type {
             ContentType::Html | ContentType::PlainText | ContentType::Unknown => {
-                let body = String::from_utf8_lossy(&response.body);
+                let body = html_for_text_body(content_type, &response.body);
                 self.load_html(&body, &url);
             },
             ContentType::GeminiText => {
@@ -750,6 +779,10 @@ impl BrowserWidget {
                     );
                 },
             }
+            // Mutations made while the page loaded are already in the
+            // document we are about to lay out; don't replay them on the
+            // first tick.
+            self.js_dom_dirty.set(false);
             // Try to take ownership without cloning. This succeeds when
             // no JS engine was retained (init failure or no scripts).
             // When the engine holds a clone via js_doc, fall back to clone.
@@ -791,6 +824,11 @@ impl BrowserWidget {
         //     inline CSS.
         let (linked_urls, linked_positions) = Self::collect_linked_stylesheet_urls(&doc, url);
         self.external_stylesheets = vec![None; linked_urls.len()];
+        self.external_stylesheet_sources = vec![None; linked_urls.len()];
+        self.styled_viewport = (self.window_w, self.window_h);
+        self.media_dependent_css = author_sheet_positions
+            .iter()
+            .any(|&nid| css_uses_media_queries(&doc.text_content(nid)));
         self.external_stylesheet_positions = linked_positions;
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
@@ -962,6 +1000,14 @@ impl BrowserWidget {
             Self::populate_forms_from_dom(doc, &mut self.form_manager);
         }
         self.scroll.reset();
+        // Seed the scrollable extent from the fresh layout right away:
+        // history restores (`go_back`) and fragment scrolls position the
+        // viewport before the first paint records the display list, and
+        // `ScrollState` clamps against this height.
+        if let Some(layout) = &self.layout_root {
+            self.scroll
+                .set_content_height(layout.dimensions.margin_box().height as i32);
+        }
         self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
         self.layout_dirty = false;
@@ -974,6 +1020,12 @@ impl BrowserWidget {
             self.nav.navigate(url, &title);
         }
         self.skip_nav_push = false;
+
+        // 9. `page#fragment` loads land on the fragment target.
+        if let Some((_, fragment)) = url.split_once('#') {
+            let fragment = fragment.to_string();
+            self.scroll_to_fragment(&fragment);
+        }
         self.diag("[BR] load_html done");
     }
 
@@ -1075,6 +1127,8 @@ impl BrowserWidget {
                             "checkbox" => {
                                 let checked = elem.get_attribute("checked").is_some();
                                 let label = String::new();
+                                // A checkbox without `value` submits "on".
+                                let value = elem.get_attribute("value").unwrap_or("on").to_string();
                                 form_manager.add_element(
                                     form_id,
                                     FormElement::Checkbox {
@@ -1087,6 +1141,7 @@ impl BrowserWidget {
                             },
                             "radio" => {
                                 let checked = elem.get_attribute("checked").is_some();
+                                let value = elem.get_attribute("value").unwrap_or("on").to_string();
                                 form_manager.add_element(
                                     form_id,
                                     FormElement::RadioButton {
@@ -1560,6 +1615,7 @@ impl BrowserWidget {
                     let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
                     if idx < self.external_stylesheets.len() {
                         self.external_stylesheets[idx] = Some(sheet);
+                        self.record_external_source(idx, css_text);
                         self.pending_external_css_apply = true;
                     }
                 },
@@ -1567,6 +1623,64 @@ impl BrowserWidget {
                     log::debug!("vfs stylesheet fetch failed: {e}");
                 },
             }
+        }
+    }
+
+    /// Remember the source text of external sheet `idx` (for re-parsing
+    /// on viewport changes) and note whether it is media-dependent.
+    #[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+    fn record_external_source(&mut self, idx: usize, css_text: String) {
+        if css_uses_media_queries(&css_text) {
+            self.media_dependent_css = true;
+        }
+        if let Some(slot) = self.external_stylesheet_sources.get_mut(idx) {
+            *slot = Some(css_text);
+        }
+    }
+
+    /// Re-evaluate `@media` rules after the window size changed.
+    ///
+    /// Media queries are resolved when a sheet is parsed, so the author
+    /// sheets are re-parsed for the new viewport (inline `<style>` text
+    /// from the DOM, linked sheets from their saved source) and the page
+    /// is re-cascaded. No-op when the size is unchanged or no sheet uses
+    /// `@media`.
+    pub(crate) fn restyle_for_viewport_if_needed(&mut self) {
+        let size = (self.window_w, self.window_h);
+        if !self.media_dependent_css || size == self.styled_viewport {
+            return;
+        }
+        let Some(doc) = self.document.as_ref() else {
+            return;
+        };
+        self.styled_viewport = size;
+        let viewport = css::parser::MediaViewport {
+            width: self.window_w as f32,
+            height: self.window_h as f32,
+            dark_mode: false,
+            prefers_reduced_motion: false,
+            hover: true,
+            pointer: "fine",
+        };
+        let (sheets, positions) = Self::collect_style_sheets(doc, viewport);
+        self.cached_author_sheets = sheets;
+        self.cached_author_sheet_positions = positions;
+        for (slot, source) in self
+            .external_stylesheets
+            .iter_mut()
+            .zip(&self.external_stylesheet_sources)
+        {
+            if let Some(source) = source {
+                *slot = Some(css::parser::Stylesheet::parse_with_viewport(
+                    source, viewport,
+                ));
+            }
+        }
+        self.pending_external_css_apply = true;
+        self.apply_external_stylesheets_if_pending();
+        #[cfg(feature = "javascript")]
+        {
+            *self.js_styles.borrow_mut() = self.styles.clone();
         }
     }
 
@@ -1578,29 +1692,41 @@ impl BrowserWidget {
     /// sheets (or vice-versa) would flip the winner for any rule of
     /// equal specificity.
     fn author_sheets_in_dom_order(&self) -> Vec<&css::parser::Stylesheet> {
-        let inline_n = self.cached_author_sheets.len();
-        let external_n = self.external_stylesheets.len();
+        Self::merge_author_sheets(
+            &self.cached_author_sheets,
+            &self.cached_author_sheet_positions,
+            &self.external_stylesheets,
+            &self.external_stylesheet_positions,
+        )
+    }
+
+    /// Field-level form of [`Self::author_sheets_in_dom_order`], for
+    /// callers that need to mutate other fields (e.g. `styles`) while
+    /// the returned sheet references are alive. Every re-cascade must
+    /// use the full inline + linked list: the cached selector index is
+    /// built over it, so a shorter list both drops `<link>` rules and
+    /// indexes out of bounds.
+    pub(crate) fn merge_author_sheets<'a>(
+        inline: &'a [css::parser::Stylesheet],
+        inline_positions: &[NodeId],
+        external: &'a [Option<css::parser::Stylesheet>],
+        external_positions: &[NodeId],
+    ) -> Vec<&'a css::parser::Stylesheet> {
+        let inline_n = inline.len();
+        let external_n = external.len();
         let mut out: Vec<&css::parser::Stylesheet> = Vec::with_capacity(inline_n + external_n);
         let mut i = 0; // inline cursor
         let mut e = 0; // external cursor
         while i < inline_n || e < external_n {
-            let inline_pos = self
-                .cached_author_sheet_positions
-                .get(i)
-                .copied()
-                .unwrap_or(usize::MAX);
-            let external_pos = self
-                .external_stylesheet_positions
-                .get(e)
-                .copied()
-                .unwrap_or(usize::MAX);
+            let inline_pos = inline_positions.get(i).copied().unwrap_or(usize::MAX);
+            let external_pos = external_positions.get(e).copied().unwrap_or(usize::MAX);
             if inline_pos <= external_pos {
                 if i < inline_n {
-                    out.push(&self.cached_author_sheets[i]);
+                    out.push(&inline[i]);
                 }
                 i += 1;
             } else {
-                if let Some(Some(sheet)) = self.external_stylesheets.get(e) {
+                if let Some(Some(sheet)) = external.get(e) {
                     out.push(sheet);
                 }
                 e += 1;
@@ -1837,7 +1963,7 @@ impl BrowserWidget {
                     let body = entry.response.body.clone();
                     let ct = entry.response.content_type;
                     if ct == ContentType::Html || ct == ContentType::PlainText {
-                        let text = String::from_utf8_lossy(&body);
+                        let text = html_for_text_body(ct, &body);
                         self.load_html(&text, &url);
                     }
                 }
@@ -1911,6 +2037,30 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
     }
 
     html.push_str("</body></html>");
+    html
+}
+
+/// Whether a stylesheet's source contains media-dependent rules.
+fn css_uses_media_queries(css_text: &str) -> bool {
+    css_text
+        .as_bytes()
+        .windows(6)
+        .any(|w| w.eq_ignore_ascii_case(b"@media"))
+}
+
+/// HTML source to render for a text-like response body. HTML (and
+/// untyped bodies, which are sniffed as HTML) is used as-is; `text/plain`
+/// is escaped into a `<pre>` so markup in it is displayed verbatim rather
+/// than parsed — and any `<script>` in it never runs.
+fn html_for_text_body(content_type: ContentType, body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    if content_type != ContentType::PlainText {
+        return text.into_owned();
+    }
+    let mut html = String::with_capacity(text.len() + 96);
+    html.push_str("<!DOCTYPE html><html><body><pre style=\"white-space:pre-wrap\">");
+    push_escaped(&mut html, &text);
+    html.push_str("</pre></body></html>");
     html
 }
 

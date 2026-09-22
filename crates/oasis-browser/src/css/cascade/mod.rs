@@ -404,9 +404,64 @@ fn style_subtree(
     elements_styled: &mut u64,
     total_elements: u64,
 ) {
-    let node = &doc.nodes[node_id];
-
     // Only elements get computed styles.
+    if matches!(doc.nodes[node_id].kind, NodeKind::Element(_)) {
+        style_element(
+            doc,
+            node_id,
+            stylesheets,
+            index,
+            inline_map,
+            styles,
+            ctx,
+            tag_cache,
+            elements_styled,
+            total_elements,
+        );
+    }
+
+    // Recurse into children. Iterate by index to avoid cloning the Vec.
+    let num_children = doc.nodes[node_id].children.len();
+    for i in 0..num_children {
+        let child_id = doc.nodes[node_id].children[i];
+        style_subtree(
+            doc,
+            child_id,
+            stylesheets,
+            index,
+            inline_map,
+            styles,
+            ctx,
+            tag_cache,
+            elements_styled,
+            total_elements,
+        );
+    }
+}
+
+/// Compute and store the style of one element (the non-recursive half of
+/// [`style_subtree`]).
+///
+/// Out of line on purpose: `compute_style` and its ~1.5 KB
+/// `ComputedStyle` temporaries would otherwise sit in every frame of
+/// the depth-first recursion, overflowing a 1 MiB UI-thread stack on
+/// deeply nested (≤256-level) documents.
+#[cfg(not(feature = "parallel-style"))]
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn style_element(
+    doc: &Document,
+    node_id: NodeId,
+    stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
+    inline_map: &FxHashMap<NodeId, &[Declaration]>,
+    styles: &mut [Option<ComputedStyle>],
+    ctx: &CascadeContext<'_>,
+    tag_cache: &mut FxHashMap<String, String>,
+    elements_styled: &mut u64,
+    total_elements: u64,
+) {
+    let node = &doc.nodes[node_id];
     if let NodeKind::Element(elem) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
         let style = compute_style(
@@ -445,24 +500,6 @@ fn style_subtree(
         if elements_styled.is_multiple_of(log_interval) {
             cascade_progress(*elements_styled, total_elements);
         }
-    }
-
-    // Recurse into children. Iterate by index to avoid cloning the Vec.
-    let num_children = doc.nodes[node_id].children.len();
-    for i in 0..num_children {
-        let child_id = doc.nodes[node_id].children[i];
-        style_subtree(
-            doc,
-            child_id,
-            stylesheets,
-            index,
-            inline_map,
-            styles,
-            ctx,
-            tag_cache,
-            elements_styled,
-            total_elements,
-        );
     }
 }
 

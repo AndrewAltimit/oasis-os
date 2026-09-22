@@ -309,6 +309,11 @@ pub struct BrowserWidget {
     /// DOM node currently under the cursor (for `:hover`).
     hover_node: Option<NodeId>,
 
+    /// Last pointer position (screen coordinates) seen via
+    /// `CursorMove`, used to route wheel events to the nested scroll
+    /// container under the pointer.
+    last_cursor: Option<(i32, i32)>,
+
     /// DOM node that currently has keyboard/tab focus (for `:focus`).
     focused_node: Option<NodeId>,
 
@@ -352,6 +357,12 @@ pub struct BrowserWidget {
     /// Pending page load request ID (in-flight on the I/O thread).
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_page_load: Option<loader::io_thread::IoRequestId>,
+
+    /// URL of the in-flight [`Self::pending_page_load`], so a failed
+    /// async load can render its error page under the URL the user
+    /// actually asked for (keeping it in the URL bar and history).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_page_url: Option<String>,
 
     /// In-flight image requests on the I/O thread, keyed by request ID
     /// mapped to the resolved image URL.
@@ -419,6 +430,18 @@ pub struct BrowserWidget {
     /// `cached_author_sheet_positions` so the two lists can be merged
     /// back into DOM order at cascade time.
     external_stylesheet_positions: Vec<NodeId>,
+
+    /// Raw CSS text of each arrived `external_stylesheets` entry, kept
+    /// so the sheet can be re-parsed when the viewport changes (media
+    /// queries are evaluated at parse time).
+    external_stylesheet_sources: Vec<Option<String>>,
+
+    /// Window size the current author sheets were parsed for.
+    styled_viewport: (u32, u32),
+
+    /// Whether any author sheet of the current page uses `@media`, i.e.
+    /// a viewport change may change which rules apply.
+    media_dependent_css: bool,
 
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
@@ -647,6 +670,7 @@ impl BrowserWidget {
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
+            last_cursor: None,
             focused_node: None,
             body_node_id: None,
             decoded_images: HashMap::new(),
@@ -657,6 +681,8 @@ impl BrowserWidget {
             tls: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_page_load: None,
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_page_url: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -677,6 +703,9 @@ impl BrowserWidget {
             cached_author_sheet_positions: Vec::new(),
             external_stylesheets: Vec::new(),
             external_stylesheet_positions: Vec::new(),
+            external_stylesheet_sources: Vec::new(),
+            styled_viewport: (480, 272),
+            media_dependent_css: false,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -859,6 +888,10 @@ impl BrowserWidget {
             self.layout_dirty = false;
             return false;
         }
+
+        // A resize can flip `@media` conditions: re-parse and re-cascade
+        // before laying out at the new size.
+        self.restyle_for_viewport_if_needed();
 
         self.refresh_image_info();
         let doc = self
@@ -1063,3 +1096,6 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+mod e2e_tests;

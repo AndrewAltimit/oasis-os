@@ -350,7 +350,15 @@ pub(super) fn install_dom_bindings(
             "__oasis_settitle",
             Function::new(ctx.clone(), move |val: String| {
                 let mut doc = d.borrow_mut();
-                if let Some(tid) = doc.title_element() {
+                // Per HTML, setting document.title on a document without
+                // a <title> creates one in <head>.
+                let tid = doc.title_element().or_else(|| {
+                    let head = doc.head()?;
+                    let tid = doc.add_node(NodeKind::Element(ElementData::new(TagName::Title)));
+                    doc.append_child(head, tid);
+                    Some(tid)
+                });
+                if let Some(tid) = tid {
                     set_text_logged(&mut doc, tid, &val, &freed);
                     mark_dirty(&dirty);
                 }

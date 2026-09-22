@@ -247,6 +247,40 @@ impl TreeBuilder {
         }
     }
 
+    /// Push a just-inserted formatting element onto the list of active
+    /// formatting elements.
+    ///
+    /// - An element that could not be pushed onto the open-elements
+    ///   stack (nesting cap reached) is not tracked: it can never be
+    ///   "open", so tracking it would make every later
+    ///   [`Self::reconstruct_formatting`] clone it again, blowing the
+    ///   node count up quadratically on pathological input.
+    /// - Noah's Ark clause (WHATWG §13.2.4.3): at most three entries
+    ///   with the same tag and attributes; the earliest is dropped.
+    pub(crate) fn push_active_formatting(&mut self, id: super::super::dom::NodeId) {
+        if self.open_elements.last() != Some(&id) {
+            return;
+        }
+        let same = |a: &ElementData, b: &ElementData| {
+            a.tag == b.tag
+                && a.attributes.len() == b.attributes.len()
+                && a.attributes.iter().all(|x| b.attributes.contains(x))
+        };
+        if let Some(new) = self.doc.element(id) {
+            let matching: Vec<usize> = self
+                .active_formatting
+                .iter()
+                .enumerate()
+                .filter(|&(_, &fid)| self.doc.element(fid).is_some_and(|e| same(e, new)))
+                .map(|(i, _)| i)
+                .collect();
+            if matching.len() >= 3 {
+                self.active_formatting.remove(matching[0]);
+            }
+        }
+        self.active_formatting.push(id);
+    }
+
     /// Simplified reconstruction of active formatting elements.
     pub(crate) fn reconstruct_formatting(&mut self) {
         if self.active_formatting.is_empty() {
@@ -260,6 +294,11 @@ impl TreeBuilder {
             .collect();
 
         for id in to_reopen {
+            // At the nesting cap a clone would not be pushed onto the
+            // stack either, and would just be cloned again next time.
+            if self.open_elements.len() >= super::MAX_NESTING_DEPTH {
+                break;
+            }
             let (tag, attrs) = if let Some(data) = self.doc.element(id) {
                 (data.tag.clone(), data.attributes.clone())
             } else {
