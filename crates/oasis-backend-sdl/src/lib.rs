@@ -1314,17 +1314,13 @@ mod tests {
         backend.swap_buffers().unwrap();
 
         let pixels = backend.read_pixels(0, 0, 64, 64).unwrap();
-        // read_pixels returns ABGR8888 format, 4 bytes per pixel.
-        // Check a sample pixel at (0,0).
+        // read_pixels returns RGBA bytes, 4 per pixel, regardless of the
+        // renderer's native format.
         assert_eq!(pixels.len(), 64 * 64 * 4);
-        // First pixel should be red (exact format depends on SDL).
-        // At minimum, the red channel should be 255 and blue should be 0.
-        let r = pixels[0];
-        let g = pixels[1];
-        let b = pixels[2];
-        assert!(
-            r > 200 || b > 200,
-            "red channel should be dominant: r={r} g={g} b={b}"
+        assert_eq!(
+            &pixels[..4],
+            &[255, 0, 0, 255],
+            "pixel (0,0) must be RGBA red"
         );
     }
 

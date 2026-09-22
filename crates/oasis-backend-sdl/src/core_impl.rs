@@ -145,7 +145,15 @@ impl SdiCore for SdlBackend {
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         let rect = Rect::new(x, y, w, h);
-        let surface = self.canvas.read_pixels(rect).backend_err()?;
+        // SDL returns the renderer's native format (commonly ARGB8888, i.e.
+        // B,G,R,A bytes in memory); normalize to RGBA byte order, which is
+        // what every caller (screenshots, MCP, tests) expects.
+        let surface = self
+            .canvas
+            .read_pixels(rect)
+            .backend_err()?
+            .convert_format(PixelFormat::RGBA32)
+            .backend_err()?;
         let pitch = surface.pitch() as usize;
         let height = surface.height() as usize;
         let width = surface.width() as usize;
