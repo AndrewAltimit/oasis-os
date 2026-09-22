@@ -227,13 +227,24 @@ impl Mp4Demuxer {
     /// the full source to scan for the avcC box (required for AVCC→Annex B
     /// conversion), then seeks back to the start before handing off to
     /// symphonia.
-    pub fn open_stream(mut source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+        Self::open_stream_scanned(source, |_| ()).map(|(demuxer, ())| demuxer)
+    }
+
+    /// [`open_stream`](Self::open_stream), additionally running `scan` over
+    /// the full source bytes (read once for the avcC scan anyway) and
+    /// returning its result.
+    pub fn open_stream_scanned<T>(
+        mut source: Box<dyn VideoSource>,
+        scan: impl FnOnce(&[u8]) -> T,
+    ) -> Result<(Self, T), VideoError> {
         // Read the entire source to scan for the avcC box.
         let mut buf = Vec::new();
         source
             .read_to_end(&mut buf)
             .map_err(|e| VideoError::Demux(format!("read source: {e}")))?;
         let avcc = find_avcc_in_mp4(&buf);
+        let scanned = scan(&buf);
         // Seek back to the start so symphonia can read from the beginning.
         source
             .seek(std::io::SeekFrom::Start(0))
@@ -242,7 +253,7 @@ impl Mp4Demuxer {
 
         let adapter = VideoSourceAdapter(source);
         let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-        Self::open_from_mss(mss, avcc)
+        Ok((Self::open_from_mss(mss, avcc)?, scanned))
     }
 
     /// Open an MP4 from a streaming source with pre-extracted avcC config.

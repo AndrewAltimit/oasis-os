@@ -19,7 +19,7 @@ use std::io::{Read, Seek, SeekFrom};
 use atom::parse_boxes;
 use sample_table::{
     SampleTable, find_keyframe_before, find_sample_at, is_keyframe, read_sample,
-    sample_file_offset, sample_pts,
+    sample_containing_dts, sample_dts_delta, sample_file_offset, sample_pts,
 };
 
 // Re-export public API items.
@@ -90,6 +90,72 @@ impl TrackInfo {
     /// Whether a sample is a sync (key) frame.
     pub fn sample_is_keyframe(&self, idx: usize) -> bool {
         is_keyframe(&self.table, idx)
+    }
+
+    /// Timescale (ticks per second) from this track's `mdhd`.
+    pub fn timescale(&self) -> u32 {
+        self.table.timescale
+    }
+
+    /// Index of the sample whose decode interval contains `secs`.
+    ///
+    /// Decode (not presentation) time, which is how sample-accurate
+    /// demuxers such as symphonia's isomp4 resolve a seek.
+    pub fn sample_at_decode_time(&self, secs: f64) -> usize {
+        let ts = self.table.timescale;
+        if ts == 0 || self.table.stsz.is_empty() {
+            return 0;
+        }
+        let target = (secs.max(0.0) * ts as f64) as u64;
+        sample_containing_dts(&self.table, target).min(self.table.stsz.len() - 1)
+    }
+
+    /// The sync sample at or before `idx` (decode order): the first sync
+    /// sample if `idx` precedes all of them, `idx` itself when the track has
+    /// no `stss` (every sample is a sync sample).
+    pub fn keyframe_at_or_before(&self, idx: usize) -> usize {
+        let stss = &self.table.stss;
+        if stss.is_empty() {
+            return idx;
+        }
+        let one_based = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+        match stss.binary_search(&one_based) {
+            Ok(_) => idx,
+            Err(0) => (stss[0] as usize).saturating_sub(1),
+            Err(i) => (stss[i - 1] as usize).saturating_sub(1),
+        }
+    }
+
+    /// A time (seconds) that seeks a sample-accurate demuxer exactly onto
+    /// sample `idx`: the middle of its decode interval, so rounding in the
+    /// demuxer's seconds-to-ticks conversion cannot land on a neighbour.
+    pub fn sample_seek_time(&self, idx: usize) -> f64 {
+        let ts = self.table.timescale;
+        if ts == 0 {
+            return 0.0;
+        }
+        let (dts, delta) = sample_dts_delta(&self.table, idx);
+        (dts as f64 + delta as f64 / 2.0) / ts as f64
+    }
+
+    /// Every sync sample as `(decode_secs, seek_secs)`, ascending:
+    /// `decode_secs` is where its decode interval starts, `seek_secs` the
+    /// [`sample_seek_time`](Self::sample_seek_time) that lands on it.
+    /// Empty when the track has no `stss` (every sample is a sync sample).
+    pub fn keyframe_times(&self) -> Vec<(f64, f64)> {
+        let ts = self.table.timescale;
+        if ts == 0 {
+            return Vec::new();
+        }
+        self.table
+            .stss
+            .iter()
+            .map(|&one_based| {
+                let idx = (one_based as usize).saturating_sub(1);
+                let (dts, _) = sample_dts_delta(&self.table, idx);
+                (dts as f64 / ts as f64, self.sample_seek_time(idx))
+            })
+            .collect()
     }
 
     /// Largest sample size in the track (bytes).
@@ -232,57 +298,57 @@ pub fn parse_moov_tracks(
     Ok((video, audio))
 }
 
-/// Find the byte offset of the keyframe nearest to `seek_secs` using
-/// sample tables parsed from moov data.
+/// Where a seek lands in an MP4 file, computed from its `moov` atom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoovSeekPoint {
+    /// Time (seconds) to hand a sample-accurate demuxer so that the video
+    /// track lands exactly on the keyframe at or before the requested time.
+    /// Symphonia's isomp4 demuxer ignores `stss`, so seeking it to the raw
+    /// request lands mid-GOP and the decoder has to discard everything up
+    /// to the next keyframe (seconds of frozen video, audio running ahead).
+    pub keyframe_secs: f64,
+    /// Lowest file offset the demuxer reads after seeking to
+    /// `keyframe_secs`: the minimum of the video keyframe's offset and the
+    /// audio sample at that time (tracks are interleaved independently, so
+    /// either may come first).  A streaming download must start at or
+    /// before this byte or the first packet read falls outside the data.
+    pub min_byte: u64,
+}
+
+/// Compute the [`MoovSeekPoint`] for `seek_secs` from raw moov bytes
+/// (the complete atom including its 8-byte header).
 ///
-/// Returns `Some(byte_offset)` of the keyframe's file position, or `None`
-/// if the moov doesn't contain enough information.
-pub fn seek_byte_from_moov(moov_data: &[u8], seek_secs: f64) -> Option<u64> {
-    let (video, _audio) = parse_moov_tracks(moov_data).ok()?;
-    let track = video?;
-    let count = track.sample_count();
-    if count == 0 {
+/// Returns `None` if the moov has no usable video track.
+pub fn seek_point_from_moov(moov_data: &[u8], seek_secs: f64) -> Option<MoovSeekPoint> {
+    let (video, audio) = parse_moov_tracks(moov_data).ok()?;
+    let video = video?;
+    if video.sample_count() == 0 || video.timescale() == 0 {
         return None;
     }
+    let target = video.sample_at_decode_time(seek_secs);
+    let key = video.keyframe_at_or_before(target);
+    let keyframe_secs = video.sample_seek_time(key);
+    let (video_off, _) = video.sample_offset_size(key)?;
 
-    // Find sample nearest to seek_secs via binary search on timestamp.
-    let target_sample = {
-        let mut lo = 0usize;
-        let mut hi = count;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let ts = track.sample_timestamp(mid);
-            if ts < seek_secs {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        if lo > 0 { lo - 1 } else { 0 }
-    };
+    let audio_off = audio
+        .filter(|a| a.sample_count() > 0 && a.timescale() > 0)
+        .and_then(|a| {
+            let idx = a.sample_at_decode_time(keyframe_secs);
+            a.sample_offset_size(idx).map(|(off, _)| off)
+        });
+    let min_byte = audio_off.map_or(video_off, |a| a.min(video_off));
+    Some(MoovSeekPoint {
+        keyframe_secs,
+        min_byte,
+    })
+}
 
-    // Find the nearest keyframe at or before target_sample.
-    let keyframe_sample = if track.table.stss.is_empty() {
-        // All frames are keyframes.
-        target_sample
-    } else {
-        // stss is 1-based and sorted. Find largest entry <= target_sample+1.
-        let one_based = (target_sample + 1) as u32;
-        match track.table.stss.binary_search(&one_based) {
-            Ok(_) => target_sample,
-            Err(0) => {
-                // Before first keyframe -- use first keyframe.
-                (track.table.stss[0] as usize).saturating_sub(1)
-            },
-            Err(i) => {
-                // stss[i-1] is the largest keyframe <= target.
-                (track.table.stss[i - 1] as usize).saturating_sub(1)
-            },
-        }
-    };
-
-    let (offset, _size) = track.sample_offset_size(keyframe_sample)?;
-    Some(offset)
+/// Lowest byte offset a demuxer reads when seeking to `seek_secs` (see
+/// [`MoovSeekPoint::min_byte`]).
+///
+/// Returns `None` if the moov doesn't contain enough information.
+pub fn seek_byte_from_moov(moov_data: &[u8], seek_secs: f64) -> Option<u64> {
+    seek_point_from_moov(moov_data, seek_secs).map(|p| p.min_byte)
 }
 
 // ---------------------------------------------------------------------------
@@ -633,5 +699,102 @@ mod tests {
         let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
         assert!(mp4.video_track_info().is_none());
         assert!(mp4.audio_track_info().is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // Per-track timescale + seek points (streaming seek regression)
+    // ---------------------------------------------------------------
+
+    /// The fixture's complete moov atom (header included).
+    fn fixture_moov() -> Vec<u8> {
+        let data = fixture_bytes();
+        let mut pos = 0usize;
+        while pos + 8 <= data.len() {
+            let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                as usize;
+            if &data[pos + 4..pos + 8] == b"moov" {
+                return data[pos..pos + size].to_vec();
+            }
+            pos += size;
+        }
+        panic!("fixture has no moov");
+    }
+
+    #[test]
+    fn each_track_gets_its_own_mdhd_timescale() {
+        // Regression: mdhd precedes stsd (which creates the track), so the
+        // video trak's mdhd used to be dropped and the audio trak's mdhd
+        // (44.1/48 kHz) was written onto the video track -- every video
+        // timestamp and seek-byte estimate came out ~3x too small.
+        let (video, audio) = parse_moov_tracks(&fixture_moov()).unwrap();
+        assert_eq!(video.unwrap().timescale(), 15360);
+        assert_eq!(audio.unwrap().timescale(), 22050);
+
+        let mp4 = Mp4Lite::open(Cursor::new(fixture_bytes())).unwrap();
+        assert_eq!(mp4.video_track_info().unwrap().timescale(), 15360);
+        assert_eq!(mp4.audio_track_info().unwrap().timescale(), 22050);
+    }
+
+    #[test]
+    fn video_timestamps_span_the_file_duration() {
+        let mp4 = Mp4Lite::open(Cursor::new(fixture_bytes())).unwrap();
+        let vt = mp4.video_track_info().unwrap();
+        let last = vt.sample_timestamp(vt.sample_count() - 1);
+        // 30 frames at 15 fps: last frame starts at ~1.93s of a 2s clip.
+        assert!((1.8..2.0).contains(&last), "last video ts {last}");
+    }
+
+    #[test]
+    fn keyframe_times_are_decode_start_and_mid_sample() {
+        let (video, _) = parse_moov_tracks(&fixture_moov()).unwrap();
+        let kf = video.unwrap().keyframe_times();
+        // stss = [1, 16]; 1024-tick samples at 15360 Hz.
+        assert_eq!(kf.len(), 2);
+        assert!((kf[0].0 - 0.0).abs() < 1e-9);
+        assert!((kf[1].0 - 1.0).abs() < 1e-9);
+        assert!((kf[1].1 - (15.0 * 1024.0 + 512.0) / 15360.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn seek_point_lands_on_keyframe_at_or_before_target() {
+        let moov = fixture_moov();
+        let (video, audio) = parse_moov_tracks(&moov).unwrap();
+        let (video, audio) = (video.unwrap(), audio.unwrap());
+
+        // Mid-GOP request snaps back to the keyframe at 1.0s (sample 15).
+        let p = seek_point_from_moov(&moov, 1.6).unwrap();
+        assert_eq!(video.sample_at_decode_time(p.keyframe_secs), 15);
+        assert!(video.sample_is_keyframe(15));
+        let (key_off, _) = video.sample_offset_size(15).unwrap();
+        let audio_idx = audio.sample_at_decode_time(p.keyframe_secs);
+        let (audio_off, _) = audio.sample_offset_size(audio_idx).unwrap();
+        assert_eq!(p.min_byte, key_off.min(audio_off));
+
+        // Before the second keyframe -> the first one.
+        let p = seek_point_from_moov(&moov, 0.9).unwrap();
+        assert_eq!(video.sample_at_decode_time(p.keyframe_secs), 0);
+
+        // Exactly on a keyframe stays on it.
+        let p = seek_point_from_moov(&moov, 1.0).unwrap();
+        assert_eq!(video.sample_at_decode_time(p.keyframe_secs), 15);
+    }
+
+    #[test]
+    fn seek_byte_never_past_the_first_packet_read() {
+        // The streaming download restarts at this byte: every packet the
+        // demuxer reads after seeking must be at or beyond it.
+        let moov = fixture_moov();
+        let (video, audio) = parse_moov_tracks(&moov).unwrap();
+        let (video, audio) = (video.unwrap(), audio.unwrap());
+        for tenths in 0..20 {
+            let secs = f64::from(tenths) / 10.0;
+            let p = seek_point_from_moov(&moov, secs).unwrap();
+            let v = video.sample_at_decode_time(p.keyframe_secs);
+            let a = audio.sample_at_decode_time(p.keyframe_secs);
+            let (voff, _) = video.sample_offset_size(v).unwrap();
+            let (aoff, _) = audio.sample_offset_size(a).unwrap();
+            assert!(p.min_byte <= voff && p.min_byte <= aoff, "secs={secs}");
+            assert_eq!(seek_byte_from_moov(&moov, secs), Some(p.min_byte));
+        }
     }
 }

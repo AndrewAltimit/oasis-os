@@ -1888,3 +1888,87 @@ fn split_redirect_target_http_with_explicit_port() {
     assert_eq!(t.port, 8080);
     assert_eq!(t.path, "/v.mp4");
 }
+
+// ---------------------------------------------------------------
+// Seek-restart estimate: exact sample-table byte beats linear
+// (regression for "read from evicted buffer region" after a seek)
+// ---------------------------------------------------------------
+
+/// The shared test fixture's complete moov atom (320x240, 2s, moov at start).
+fn fixture_moov() -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/test_320x240_2s.mp4");
+    let data = std::fs::read(path).unwrap();
+    let mut pos = 0usize;
+    while pos + 8 <= data.len() {
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        if &data[pos + 4..pos + 8] == b"moov" {
+            return data[pos..pos + size].to_vec();
+        }
+        pos += size;
+    }
+    panic!("fixture has no moov");
+}
+
+#[test]
+fn seek_estimate_prefers_exact_sample_table_byte() {
+    use super::seek::estimate_seek_byte;
+    let moov = fixture_moov();
+    // A wildly wrong mdat range makes the linear estimate land far past the
+    // real sample (as VBR video did in the field: linear 99.7MB, real 90.6MB,
+    // Range restart at 97.7MB -> every read below the window).
+    let est = estimate_seek_byte(&moov, 1, Some((0, 500_000_000))).unwrap();
+    let exact = oasis_video::demux_lite::seek_point_from_moov(&moov, 1.0).unwrap();
+    assert!(est.exact);
+    assert_eq!(est.byte, exact.min_byte);
+    assert!(est.byte < 20_000, "fixture is ~12KB, got {}", est.byte);
+}
+
+#[test]
+fn seek_estimate_falls_back_to_linear_without_sample_tables() {
+    use super::seek::estimate_seek_byte;
+    // mvhd only: duration 120s, no tracks.
+    let moov = build_moov_v0(1000, 120_000);
+    let est = estimate_seek_byte(&moov, 60, Some((1000, 100_000_000))).unwrap();
+    assert!(!est.exact);
+    assert_eq!(est.byte, 1000 + 50_000_000);
+    assert!(estimate_seek_byte(&moov, 60, None).is_none());
+}
+
+#[test]
+fn seek_restart_backs_off_by_estimate_margin() {
+    use super::seek::{EXACT_SEEK_MARGIN, LINEAR_SEEK_MARGIN, SeekEstimate};
+    let byte = 90 * 1024 * 1024;
+    let exact = SeekEstimate { byte, exact: true };
+    assert_eq!(exact.restart_from(), byte - EXACT_SEEK_MARGIN);
+    let linear = SeekEstimate { byte, exact: false };
+    assert_eq!(linear.restart_from(), byte - LINEAR_SEEK_MARGIN);
+    let tiny = SeekEstimate {
+        byte: 10,
+        exact: true,
+    };
+    assert_eq!(tiny.restart_from(), 0);
+}
+
+#[test]
+fn moov_at_start_restart_uses_exact_byte_not_linear() {
+    use super::seek::check_moov_at_start_restart;
+    let moov = fixture_moov();
+    // A 500MB mdat on a 2s clip: linear puts 1s at ~250MB and would restart
+    // the download there, far past the real sample a few KB in.  The exact
+    // byte is within reach of the current download, so no restart.
+    let s = SlidingState {
+        buf: Vec::new(),
+        base_offset: 0,
+        moov: Some((32, std::sync::Arc::new(moov))),
+        header: None,
+        atoms: vec![
+            (0, 32, *b"ftyp"),
+            (32, 2235, *b"moov"),
+            (2275, 500_000_000, *b"mdat"),
+        ],
+        atoms_scanned_to: 2275,
+    };
+    assert_eq!(check_moov_at_start_restart(&s, 1, 2267), None);
+}
