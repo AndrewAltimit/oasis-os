@@ -12,6 +12,7 @@
 //! - `drag_resize.rs` — Drag/resize state machine
 //! - `input.rs` — Input dispatch
 //! - `window_ops.rs` — Snapping, keyboard window management, tiling
+//! - `motion.rs` — Open/close/minimize/restore animations
 //! - `query.rs` — Query/lookup methods and accessors
 
 mod input;
@@ -20,11 +21,12 @@ mod query;
 use oasis_sdi::SdiRegistry;
 use oasis_types::error::{OasisError, Result, WmError};
 
+use super::animation::AnimationManager;
 use super::drag_resize::{DragState, clamp_position};
 use super::hit_test::ButtonKind;
 use super::snap::SnapManager;
 use super::tiling::{TilingLayout, TilingManager};
-use super::window::{Window, WindowId, WmTheme};
+use super::window::{Geometry, Window, WindowId, WmTheme};
 
 /// Events produced by the WM in response to input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +108,17 @@ pub struct WindowManager {
     pub(crate) tiling: TilingManager,
     /// Active tiling layout (`None` = windows float freely).
     pub(crate) tiling_layout: Option<TilingLayout>,
+    /// Open/close/minimize/restore animations (see `motion.rs`).
+    pub(crate) anim: AnimationManager,
+    /// Whether window animations are enabled (off by default).
+    pub(crate) motion_enabled: bool,
+    /// Closed windows whose SDI objects stay on screen until their close
+    /// animation finishes. Not interactive.
+    pub(crate) closing: Vec<Window>,
+    /// Interpolated geometry of windows mid-animation, used for drawing.
+    pub(crate) anim_visual: Vec<(WindowId, Geometry)>,
+    /// Time of the previous `tick_animations` call.
+    pub(crate) anim_last_tick: Option<web_time::Instant>,
 }
 
 impl WindowManager {
@@ -126,6 +139,15 @@ impl WindowManager {
             snap_enabled: true,
             tiling: TilingManager::new(),
             tiling_layout: None,
+            anim: {
+                let mut anim = AnimationManager::new();
+                anim.set_reduced_motion(true);
+                anim
+            },
+            motion_enabled: false,
+            closing: Vec::new(),
+            anim_visual: Vec::new(),
+            anim_last_tick: None,
         }
     }
 

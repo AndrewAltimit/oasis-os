@@ -218,12 +218,23 @@ impl WindowManager {
     }
 
     /// Reposition all SDI objects based on window's current geometry.
-    pub(crate) fn update_sdi_positions(&self, id: &str, sdi: &mut SdiRegistry) {
-        let window = match self.windows.iter().find(|w| w.id == id) {
-            Some(w) => w,
-            None => return,
-        };
+    ///
+    /// Any open/minimize/restore animation running on the window is
+    /// finished first: a logical geometry change supersedes it.
+    pub(crate) fn update_sdi_positions(&mut self, id: &str, sdi: &mut SdiRegistry) {
+        if self.anim.is_animating(id) {
+            self.finish_animation(id, sdi);
+        }
+        if let Some(window) = self.windows.iter().find(|w| w.id == id) {
+            self.layout_window_sdi(window, sdi);
+        }
+    }
 
+    /// Position every SDI object of `window` from its current geometry.
+    ///
+    /// Animations call this with a temporary copy of the window carrying
+    /// the interpolated geometry.
+    pub(crate) fn layout_window_sdi(&self, window: &super::window::Window, sdi: &mut SdiRegistry) {
         let theme = &self.theme;
 
         // Frame.

@@ -476,8 +476,22 @@ impl Window {
 
     /// Compute the content area rectangle (position and size within the frame).
     pub fn content_rect(&self, theme: &WmTheme) -> (i32, i32, u32, u32) {
+        self.content_rect_at(
+            theme,
+            Geometry {
+                x: self.x,
+                y: self.y,
+                w: self.outer_w,
+                h: self.outer_h,
+            },
+        )
+    }
+
+    /// Content area rectangle if the window's outer frame were at `outer`
+    /// (used to draw windows at their animated geometry).
+    pub fn content_rect_at(&self, theme: &WmTheme, outer: Geometry) -> (i32, i32, u32, u32) {
         if self.fullscreen_kiosk {
-            return (self.x, self.y, self.outer_w, self.outer_h);
+            return (outer.x, outer.y, outer.w, outer.h);
         }
 
         let has_titlebar = self.window_type != WindowType::Fullscreen;
@@ -490,11 +504,11 @@ impl Window {
             0
         };
 
-        let cx = self.x + border as i32;
-        let cy = self.y + titlebar_h as i32 + border as i32;
-        let cw = self.outer_w.saturating_sub(border * 2);
-        let ch = self
-            .outer_h
+        let cx = outer.x + border as i32;
+        let cy = outer.y + titlebar_h as i32 + border as i32;
+        let cw = outer.w.saturating_sub(border * 2);
+        let ch = outer
+            .h
             .saturating_sub(titlebar_h)
             .saturating_sub(border * 2);
         (cx, cy, cw, ch)

@@ -12,6 +12,7 @@ mod focus;
 pub mod hit_test;
 mod lifecycle;
 pub mod manager;
+mod motion;
 mod render;
 mod sdi_objects;
 pub mod snap;
