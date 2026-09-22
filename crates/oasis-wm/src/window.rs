@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use oasis_types::backend::Color;
+use oasis_types::bitmap_font::glyph_advance_scaled;
 use oasis_types::nine_patch::NinePatchSlices;
 
 /// Shared, reference-counted window identifier.
@@ -344,6 +345,51 @@ pub struct Geometry {
     pub h: u32,
 }
 
+/// Result of [`Window::title_layout`]: where and what to draw in the titlebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleLayout {
+    /// X position where the text is drawn.
+    pub x: i32,
+    /// Width of the region the title may occupy (buttons excluded).
+    pub avail_w: u32,
+    /// Measured pixel width of `text`.
+    pub text_w: u32,
+    /// The title, truncated with `"..."` when it does not fit.
+    pub text: String,
+}
+
+/// Measure the pixel width of `s` with the proportional bitmap-font metrics.
+pub fn text_px(s: &str, font_size: u16) -> i32 {
+    s.chars()
+        .map(|c| glyph_advance_scaled(c, font_size) as i32)
+        .sum()
+}
+
+/// Truncate `title` so its rendered width fits in `max_px`, appending
+/// `"..."` when truncated. Returns an empty string when not even the
+/// ellipsis fits.
+pub fn truncate_to_width(title: &str, font_size: u16, max_px: i32) -> String {
+    if text_px(title, font_size) <= max_px {
+        return title.to_string();
+    }
+    let ellipsis_w = text_px("...", font_size);
+    let target = max_px - ellipsis_w;
+    if target < 0 {
+        return String::new();
+    }
+    let mut w = 0i32;
+    let mut end = 0;
+    for (i, c) in title.char_indices() {
+        let cw = glyph_advance_scaled(c, font_size) as i32;
+        if w + cw > target {
+            break;
+        }
+        w += cw;
+        end = i + c.len_utf8();
+    }
+    format!("{}...", title[..end].trim_end())
+}
+
 /// A managed window in the WM.
 ///
 /// Tracks the window's metadata, geometry, state, and the names of its
@@ -464,10 +510,11 @@ impl Window {
 
     /// Compute a button's X position given its index.
     ///
-    /// Indices are assigned so that physical left-to-right order is always
-    /// minimize (leftmost), maximize (middle), close (rightmost), regardless
-    /// of whether `button_side` is "left" or "right". `idx` counts from the
-    /// edge indicated by `button_side` inward.
+    /// `idx` counts from the edge indicated by `button_side` inward. With
+    /// `button_side == "right"` the physical left-to-right order is minimize,
+    /// maximize, close (Windows / GNOME convention: close at the corner).
+    /// With `button_side == "left"` it is close, minimize, maximize (macOS
+    /// traffic-light convention: close at the corner).
     fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
         let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
         let sp = theme.button_spacing;
@@ -479,29 +526,25 @@ impl Window {
         }
     }
 
-    /// Index of the minimize button (leftmost when present).
-    fn minimize_btn_idx(&self, theme: &WmTheme) -> i32 {
-        if theme.button_side == "left" { 0 } else { 2 }
-    }
-
-    /// Index of the maximize button (middle when present).
-    fn maximize_btn_idx(&self) -> i32 {
-        1
-    }
-
-    /// Index of the close button (rightmost when present).
+    /// Index of the minimize button (counted from the button edge).
     ///
-    /// When close is the only button on the titlebar (Dialog, FloatingWidget),
-    /// put it at the edge so it doesn't float out in empty space.
-    fn close_btn_idx(&self, theme: &WmTheme) -> i32 {
-        let alone = !self.has_minimize_button() && !self.has_maximize_button();
-        if alone {
-            0
-        } else if theme.button_side == "left" {
-            2
-        } else {
-            0
-        }
+    /// Left side: second from the edge (after close). Right side: furthest
+    /// from the edge (leftmost of the group).
+    fn minimize_btn_idx(&self, theme: &WmTheme) -> i32 {
+        if theme.button_side == "left" { 1 } else { 2 }
+    }
+
+    /// Index of the maximize button (counted from the button edge).
+    ///
+    /// Left side: furthest from the edge. Right side: middle.
+    fn maximize_btn_idx(&self, theme: &WmTheme) -> i32 {
+        if theme.button_side == "left" { 2 } else { 1 }
+    }
+
+    /// Index of the close button: always at the titlebar edge, on either
+    /// side (and when it is the only button, e.g. Dialog/FloatingWidget).
+    fn close_btn_idx(&self) -> i32 {
+        0
     }
 
     /// Compute close button rectangle.
@@ -511,7 +554,7 @@ impl Window {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, self.close_btn_idx(theme));
+        let bx = self.button_x(theme, tx, tw, self.close_btn_idx());
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
@@ -535,41 +578,78 @@ impl Window {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, self.maximize_btn_idx());
+        let bx = self.button_x(theme, tx, tw, self.maximize_btn_idx(theme));
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
 
-    /// Compute the title text X position and available width.
-    pub fn title_text_x(&self, theme: &WmTheme) -> Option<(i32, u32)> {
-        let (tx, _ty, tw, _th) = self.titlebar_rect(theme)?;
-        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
-        let sp = theme.button_spacing;
-        // Count how many buttons this window type has.
-        let btn_count = [
+    /// Number of titlebar buttons this window shows.
+    fn button_count(&self) -> i32 {
+        [
             self.has_close_button(),
             self.has_minimize_button(),
             self.has_maximize_button(),
         ]
         .iter()
         .filter(|&&v| v)
-        .count() as i32;
+        .count() as i32
+    }
+
+    /// Lay out the title text: where it starts, the space available to it,
+    /// and the (possibly ellipsized) string that fits in that space.
+    ///
+    /// The button group plus a gap is reserved on the button side. For
+    /// `title_align == "center"` the same reservation is mirrored on the
+    /// opposite side, so the title is centered on the whole titlebar (using
+    /// the measured glyph width) yet can never run under a button. Titles
+    /// wider than the available space are truncated with `"..."`.
+    pub fn title_layout(&self, theme: &WmTheme) -> Option<TitleLayout> {
+        let (tx, _ty, tw, _th) = self.titlebar_rect(theme)?;
+        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
+        let sp = theme.button_spacing;
         let inset = Self::button_inset(theme);
-        let text_inset = inset * 2; // padding on each side
+        let text_inset = inset * 2;
+        let btn_count = self.button_count();
+        // Pixels reserved on the button side: edge inset + buttons + gap.
         let buttons_w = if btn_count > 0 {
-            btn_count * btn_size + (btn_count - 1) * sp + text_inset
+            inset + btn_count * btn_size + (btn_count - 1) * sp + text_inset
         } else {
-            0
+            text_inset
         };
-        let margin = buttons_w as u32 + text_inset as u32 * 2;
-        let (text_x, avail_w) = if theme.title_align == "center" {
-            (tx + text_inset, tw.saturating_sub(margin))
+        let tw_i = tw as i32;
+        let font = theme.titlebar_font_size;
+
+        let (region_x, region_w) = if theme.title_align == "center" {
+            (tx + buttons_w, tw_i - buttons_w * 2)
         } else if theme.button_side == "left" {
-            (tx + buttons_w + text_inset, tw.saturating_sub(margin))
+            (tx + buttons_w, tw_i - buttons_w - text_inset)
         } else {
-            (tx + text_inset, tw.saturating_sub(margin))
+            (tx + text_inset, tw_i - buttons_w - text_inset)
         };
-        Some((text_x, avail_w))
+        let region_w = region_w.max(0);
+
+        let text = truncate_to_width(&self.title, font, region_w);
+        let text_w = text_px(&text, font).min(region_w);
+        let x = if theme.title_align == "center" {
+            // Center on the full titlebar; the symmetric reservation keeps
+            // the result inside [region_x, region_x + region_w].
+            (tx + (tw_i - text_w) / 2).clamp(region_x, region_x + region_w - text_w)
+        } else {
+            region_x
+        };
+        Some(TitleLayout {
+            x,
+            avail_w: region_w as u32,
+            text_w: text_w as u32,
+            text,
+        })
+    }
+
+    /// Compute the title text X position and available width.
+    ///
+    /// Convenience wrapper over [`Self::title_layout`].
+    pub fn title_text_x(&self, theme: &WmTheme) -> Option<(i32, u32)> {
+        self.title_layout(theme).map(|l| (l.x, l.avail_w))
     }
 
     /// Whether this window type has a close button.
@@ -877,6 +957,128 @@ mod tests {
         assert!(win.titlebar_rect(&theme).is_some());
         win.fullscreen_kiosk = true;
         assert!(win.titlebar_rect(&theme).is_none());
+    }
+
+    fn macos_theme() -> WmTheme {
+        WmTheme {
+            button_side: "left".to_string(),
+            title_align: "center".to_string(),
+            button_size: 12,
+            button_spacing: 6,
+            ..WmTheme::default()
+        }
+    }
+
+    fn rect_right(r: (i32, i32, u32, u32)) -> i32 {
+        r.0 + r.2 as i32
+    }
+
+    #[test]
+    fn left_side_order_is_close_minimize_maximize() {
+        let theme = macos_theme();
+        let win = Window::new(&test_config(), 0, 0, &theme);
+        let close = win.close_btn_rect(&theme).unwrap();
+        let min = win.minimize_btn_rect(&theme).unwrap();
+        let max = win.maximize_btn_rect(&theme).unwrap();
+        assert!(close.0 < min.0 && min.0 < max.0);
+        // Buttons don't overlap each other.
+        assert!(rect_right(close) <= min.0 && rect_right(min) <= max.0);
+    }
+
+    #[test]
+    fn right_side_order_is_minimize_maximize_close() {
+        let theme = WmTheme::default();
+        let win = Window::new(&test_config(), 0, 0, &theme);
+        let close = win.close_btn_rect(&theme).unwrap();
+        let min = win.minimize_btn_rect(&theme).unwrap();
+        let max = win.maximize_btn_rect(&theme).unwrap();
+        assert!(min.0 < max.0 && max.0 < close.0);
+    }
+
+    #[test]
+    fn centered_title_is_centered_on_titlebar() {
+        let theme = macos_theme();
+        let mut cfg = test_config();
+        cfg.title = "Terminal".to_string();
+        let win = Window::new(&cfg, 0, 0, &theme);
+        let (tx, _, tw, _) = win.titlebar_rect(&theme).unwrap();
+        let layout = win.title_layout(&theme).unwrap();
+        assert_eq!(layout.text, "Terminal");
+        assert_eq!(
+            layout.text_w as i32,
+            text_px("Terminal", theme.titlebar_font_size)
+        );
+        let center = layout.x + layout.text_w as i32 / 2;
+        let bar_center = tx + tw as i32 / 2;
+        assert!((center - bar_center).abs() <= 1, "{center} vs {bar_center}");
+    }
+
+    #[test]
+    fn centered_title_never_intersects_buttons() {
+        let theme = macos_theme();
+        // Narrow window: centering would otherwise push text under buttons.
+        for width in [60u32, 90, 120, 160, 200, 400] {
+            let mut cfg = test_config();
+            cfg.width = width;
+            cfg.title = "A fairly long terminal window title".to_string();
+            let win = Window::new(&cfg, 5, 0, &theme);
+            let layout = win.title_layout(&theme).unwrap();
+            let text_end = layout.x + layout.text_w as i32;
+            for btn in [
+                win.close_btn_rect(&theme),
+                win.minimize_btn_rect(&theme),
+                win.maximize_btn_rect(&theme),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let overlaps = layout.text_w > 0 && layout.x < rect_right(btn) && btn.0 < text_end;
+                assert!(!overlaps, "width {width}: title overlaps button {btn:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn left_aligned_title_starts_after_left_buttons() {
+        let theme = WmTheme {
+            title_align: "left".to_string(),
+            ..macos_theme()
+        };
+        let win = Window::new(&test_config(), 0, 0, &theme);
+        let layout = win.title_layout(&theme).unwrap();
+        let max = win.maximize_btn_rect(&theme).unwrap();
+        assert!(layout.x >= rect_right(max));
+    }
+
+    #[test]
+    fn long_title_gets_ellipsis() {
+        let theme = WmTheme::default();
+        let mut cfg = test_config();
+        cfg.width = 120;
+        cfg.title = "An Extremely Long Window Title That Cannot Possibly Fit".to_string();
+        let win = Window::new(&cfg, 0, 0, &theme);
+        let layout = win.title_layout(&theme).unwrap();
+        assert!(layout.text.ends_with("..."), "{}", layout.text);
+        assert!(layout.text_w <= layout.avail_w);
+        assert!(layout.text.len() > 3);
+    }
+
+    #[test]
+    fn short_title_not_truncated() {
+        let theme = WmTheme::default();
+        let win = Window::new(&test_config(), 0, 0, &theme);
+        assert_eq!(win.title_layout(&theme).unwrap().text, "Test Window");
+    }
+
+    #[test]
+    fn truncate_to_width_edge_cases() {
+        assert_eq!(truncate_to_width("Hi", 8, 200), "Hi");
+        assert_eq!(truncate_to_width("Hello World", 8, 0), "");
+        let t = truncate_to_width("Hello World", 8, 30);
+        assert!(t.ends_with("...") && text_px(&t, 8) <= 30, "{t}");
+        // Multi-byte characters never split.
+        let t = truncate_to_width("日本語のタイトルです", 8, 30);
+        assert!(t.is_empty() || t.ends_with("..."));
     }
 
     #[test]

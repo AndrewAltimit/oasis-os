@@ -1153,7 +1153,7 @@ mod tests {
         assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
     }
 
-    // ---- Button order (minimize, maximize, close, left-to-right) ----
+    // ---- Button order (close at the corner on either side) ----
 
     #[test]
     fn button_order_right_side_is_minimize_maximize_close() {
@@ -1178,7 +1178,8 @@ mod tests {
     }
 
     #[test]
-    fn button_order_left_side_is_minimize_maximize_close() {
+    fn button_order_left_side_is_close_minimize_maximize() {
+        // macOS traffic-light order: close sits at the corner.
         let theme = crate::window::WmTheme {
             button_side: "left".to_string(),
             ..crate::window::WmTheme::default()
@@ -1193,12 +1194,12 @@ mod tests {
         let close_x = win.close_btn_rect(&wm.theme).unwrap().0;
 
         assert!(
-            min_x < max_x,
-            "minimize ({min_x}) should be left of maximize ({max_x})"
+            close_x < min_x,
+            "close ({close_x}) should be left of minimize ({min_x})"
         );
         assert!(
-            max_x < close_x,
-            "maximize ({max_x}) should be left of close ({close_x})"
+            min_x < max_x,
+            "minimize ({min_x}) should be left of maximize ({max_x})"
         );
     }
 

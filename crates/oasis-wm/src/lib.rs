@@ -29,4 +29,6 @@ pub use snap::{KeyboardSnapDirection, SnapManager, SnapPreview, SnapZone, keyboa
 pub use tiling::{
     TileGeometry, TilingConfig, TilingLayout, TilingManager, adjust_master_ratio, cycle_layout,
 };
-pub use window::{Geometry, Window, WindowConfig, WindowId, WindowState, WindowType, WmTheme};
+pub use window::{
+    Geometry, TitleLayout, Window, WindowConfig, WindowId, WindowState, WindowType, WmTheme,
+};
