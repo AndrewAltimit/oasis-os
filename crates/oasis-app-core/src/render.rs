@@ -268,6 +268,59 @@ pub fn windowed_line_origin(
     Some((cx + 4, cy + content_top + i as i32 * line_h, prefix))
 }
 
+/// Theme metrics [`draw_content_windowed`] lays lines out with. Apps cache
+/// them while drawing (their click handler gets no theme) and pass them to
+/// [`windowed_line_at`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowedMetrics {
+    /// Height of the context header row (`at.app.title_bar_height`).
+    pub title_bar_height: u32,
+    /// Content line height (`at.terminal_line_height`, at least 12).
+    pub line_h: u32,
+}
+
+impl WindowedMetrics {
+    /// Metrics of `at`.
+    pub fn from_theme(at: &ActiveTheme) -> Self {
+        Self {
+            title_bar_height: at.app.title_bar_height,
+            line_h: at.terminal_line_height.max(12),
+        }
+    }
+}
+
+impl Default for WindowedMetrics {
+    fn default() -> Self {
+        Self::from_theme(&ActiveTheme::default())
+    }
+}
+
+/// The content line [`draw_content_windowed`] drew at content-local `ly`
+/// in a window whose content area is `ch` tall (the inverse of
+/// [`windowed_line_origin`]), or `None` when `ly` is outside the lines.
+pub fn windowed_line_at(
+    content: &ContentState,
+    ch: u32,
+    metrics: WindowedMetrics,
+    ly: i32,
+) -> Option<usize> {
+    let has_context = content.viewing_file.is_some() || content.browse_dir.is_some();
+    let content_top = if has_context {
+        metrics.title_bar_height as i32
+    } else {
+        WINDOWED_TOP_PAD as i32
+    };
+    let line_h = metrics.line_h.max(1) as i32;
+    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
+    let (first, _, visible) = windowed_rows(content, max_lines);
+    let y = ly - content_top;
+    if y < 0 {
+        return None;
+    }
+    let row = (y / line_h) as usize;
+    (row < visible).then_some(first + row)
+}
+
 /// Draw generic content to a windowed region.
 ///
 /// The app title is NOT drawn here — the WM titlebar already shows it. A
@@ -441,6 +494,34 @@ mod tests {
     impl oasis_types::backend::SdiVector for TextRecorder {}
     impl oasis_types::backend::SdiBatch for TextRecorder {}
     impl oasis_types::backend::SdiRenderTarget for TextRecorder {}
+
+    #[test]
+    fn windowed_line_at_inverts_windowed_line_origin() {
+        let at = ActiveTheme::default();
+        let m = WindowedMetrics::from_theme(&at);
+        for browse in [false, true] {
+            let mut content = ContentState::new("Files", "/apps/files");
+            content.lines = (0..40).map(|i| format!("entry {i}")).collect();
+            if browse {
+                content.browse_dir = Some("/home".into());
+            }
+            // Cursor far enough down that the windowed view shifts.
+            content.cursor = 20;
+            let ch = 200;
+            let mut seen = 0;
+            for idx in 0..content.lines.len() {
+                if let Some((_, y, _)) = windowed_line_origin(&content, 0, 0, ch, &at, idx) {
+                    for dy in [0, m.line_h as i32 - 1] {
+                        assert_eq!(windowed_line_at(&content, ch, m, y + dy), Some(idx));
+                    }
+                    seen += 1;
+                }
+            }
+            assert!(seen > 3, "some lines visible");
+            assert_eq!(windowed_line_at(&content, ch, m, -1), None);
+            assert_eq!(windowed_line_at(&content, ch, m, ch as i32), None);
+        }
+    }
 
     #[test]
     fn hide_app_sdi_repeat_leaves_scene_clean() {

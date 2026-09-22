@@ -10,7 +10,8 @@ use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
 use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    WindowedMetrics, draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    windowed_line_at,
 };
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_skin::SimpleRng;
@@ -80,6 +81,16 @@ pub struct BrowsingApp {
     /// host reports a position for *this* file (the progress bar is
     /// hidden meanwhile).
     playback: Option<(u64, u64)>,
+    /// Layout metrics of the last windowed listing draw (click
+    /// hit-testing has no theme).
+    windowed_metrics: Cell<WindowedMetrics>,
+    /// A click activated the selected listing entry; opened on the next
+    /// `refresh` (the first hook with VFS access).
+    pending_activate: bool,
+    /// Listing line hit by the previous click: clicking the same line
+    /// again opens it (double-click without timing info, as in the File
+    /// Manager).
+    last_click_line: Option<usize>,
 }
 
 /// How files should be viewed when opened.
@@ -131,6 +142,9 @@ impl BrowsingApp {
             track_duration_str: None,
             track_size_bytes: None,
             playback: None,
+            windowed_metrics: Cell::new(WindowedMetrics::default()),
+            pending_activate: false,
+            last_click_line: None,
         }
     }
 
@@ -667,6 +681,7 @@ impl App for BrowsingApp {
     ) -> oasis_types::error::Result<()> {
         // File listing: default content renderer.
         if self.content.viewing_file.is_none() {
+            self.windowed_metrics.set(WindowedMetrics::from_theme(at));
             return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
         }
         match self.viewer_mode {
@@ -694,6 +709,43 @@ impl App for BrowsingApp {
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    /// Windowed listing: a click selects an entry, a second click on it
+    /// (a double-click) opens it like Confirm.
+    fn handle_click(
+        &mut self,
+        _lx: i32,
+        ly: i32,
+        _cw: u32,
+        ch: u32,
+        fullscreen: bool,
+    ) -> AppAction {
+        if fullscreen || self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
+            return AppAction::None;
+        }
+        let Some(idx) = windowed_line_at(&self.content, ch, self.windowed_metrics.get(), ly) else {
+            return AppAction::None;
+        };
+        if self.last_click_line == Some(idx) && idx == self.content.scroll + self.content.cursor {
+            self.last_click_line = None;
+            self.pending_activate = true;
+            return AppAction::None;
+        }
+        self.last_click_line = Some(idx);
+        if idx >= self.content.scroll {
+            self.content.cursor = idx - self.content.scroll;
+        } else {
+            self.content.scroll = idx;
+            self.content.cursor = 0;
+        }
+        AppAction::None
+    }
+
+    fn refresh(&mut self, vfs: &dyn Vfs) {
+        if std::mem::take(&mut self.pending_activate) {
+            self.enter_selected(vfs);
+        }
     }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
@@ -1079,6 +1131,48 @@ mod tests {
         app.handle_input(&Button::Triangle, &vfs);
         app.handle_input(&Button::Triangle, &vfs);
         assert_eq!(app.playlist().len(), 1);
+    }
+
+    #[test]
+    fn windowed_click_selects_then_double_click_opens() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        let ch = 220;
+        let idx = app
+            .content
+            .lines
+            .iter()
+            .position(|l| l.starts_with("ambient_dawn.mp3"))
+            .expect("track listed");
+        let (_, y, _) = oasis_app_core::render::windowed_line_origin(
+            &app.content,
+            0,
+            0,
+            ch,
+            &oasis_skin::ActiveTheme::default(),
+            idx,
+        )
+        .expect("visible");
+        // First click only selects.
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(app.content.scroll + app.content.cursor, idx);
+        assert!(app.content.viewing_file.is_none());
+        // Second click on the same line opens it (and asks to play).
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(
+            app.content.viewing_file.as_deref(),
+            Some("/home/user/music/ambient_dawn.mp3")
+        );
+        assert!(app.content.pending_vfs_request.is_some());
+        // Clicks are ignored while a track is open, and in fullscreen.
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(
+            app.content.viewing_file.as_deref(),
+            Some("/home/user/music/ambient_dawn.mp3")
+        );
     }
 
     #[test]
