@@ -87,93 +87,12 @@ pub fn rasterize_triangle(
     }
 }
 
-/// Rasterize a filled circle using the midpoint circle algorithm.
-pub fn rasterize_circle(sink: &mut impl PixelSink, cx: i32, cy: i32, radius: u16, color: Color) {
-    let r = radius as i32;
-    if r <= 0 {
-        sink.draw_hline(cx, cx, cy, color);
-        return;
-    }
-
-    let mut x = 0i32;
-    let mut y = r;
-    let mut d = 1 - r;
-
-    while x <= y {
-        sink.draw_hline(cx - y, cx + y, cy + x, color);
-        sink.draw_hline(cx - y, cx + y, cy - x, color);
-        sink.draw_hline(cx - x, cx + x, cy + y, color);
-        sink.draw_hline(cx - x, cx + x, cy - y, color);
-
-        x += 1;
-        if d < 0 {
-            d += 2 * x + 1;
-        } else {
-            y -= 1;
-            d += 2 * (x - y) + 1;
-        }
-    }
-}
-
-/// Rasterize a filled rounded rectangle.
-///
-/// Draws the center body, top/bottom strips, and corner arcs using the
-/// midpoint circle algorithm.
-pub fn rasterize_rounded_rect(
-    sink: &mut impl PixelSink,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: u16,
-    color: Color,
-) {
-    let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
-    if r <= 0 {
-        for row in y..y + h as i32 {
-            sink.draw_hline(x, x + w as i32 - 1, row, color);
-        }
-        return;
-    }
-
-    let wi = w as i32;
-    let hi = h as i32;
-
-    // Center body.
-    for row in (y + r)..(y + hi - r) {
-        sink.draw_hline(x, x + wi - 1, row, color);
-    }
-    // Top strip.
-    for row in y..(y + r) {
-        sink.draw_hline(x + r, x + wi - 1 - r, row, color);
-    }
-    // Bottom strip.
-    for row in (y + hi - r)..(y + hi) {
-        sink.draw_hline(x + r, x + wi - 1 - r, row, color);
-    }
-
-    // Corner arcs via midpoint circle.
-    let mut cx = 0i32;
-    let mut cy = r;
-    let mut d = 1 - r;
-
-    while cx <= cy {
-        // Top-left to top-right at each arc scanline.
-        sink.draw_hline(x + r - cy, x + wi - 1 - r + cy, y + r - cx, color);
-        sink.draw_hline(x + r - cx, x + wi - 1 - r + cx, y + r - cy, color);
-        // Bottom-left to bottom-right.
-        sink.draw_hline(x + r - cy, x + wi - 1 - r + cy, y + hi - 1 - r + cx, color);
-        sink.draw_hline(x + r - cx, x + wi - 1 - r + cx, y + hi - 1 - r + cy, color);
-
-        cx += 1;
-        if d < 0 {
-            d += 2 * cx + 1;
-        } else {
-            cy -= 1;
-            d += 2 * (cx - cy) + 1;
-        }
-    }
-}
+// `rasterize_circle` / `rasterize_rounded_rect` used to live here. They were
+// unused anywhere in the workspace (every software path goes through
+// `oasis-rasterize`) and emitted some scanlines more than once, which
+// double-blends translucent fills -- the bug fixed in `oasis-rasterize` by
+// `midpoint_row_extents` / `rounded_rect_rows`. They were removed rather
+// than fixed so there is a single, correct implementation to reuse.
 
 /// Compute the perpendicular unit normal for a line direction vector.
 ///
@@ -262,40 +181,6 @@ mod tests {
         for &(_, _, y) in &rec.spans {
             assert!(y >= 0 && y <= 10);
         }
-    }
-
-    #[test]
-    fn circle_zero_radius() {
-        let mut rec = SpanRecorder::new();
-        rasterize_circle(&mut rec, 5, 5, 0, Color::WHITE);
-        assert_eq!(rec.spans.len(), 1);
-        assert_eq!(rec.spans[0], (5, 5, 5));
-    }
-
-    #[test]
-    fn circle_produces_symmetric_spans() {
-        let mut rec = SpanRecorder::new();
-        rasterize_circle(&mut rec, 50, 50, 10, Color::WHITE);
-        assert!(!rec.spans.is_empty());
-        // All spans should be centered around cx=50.
-        for &(x1, x2, _) in &rec.spans {
-            assert!(x1 <= 50 && x2 >= 50);
-        }
-    }
-
-    #[test]
-    fn rounded_rect_zero_radius_is_rect() {
-        let mut rec = SpanRecorder::new();
-        rasterize_rounded_rect(&mut rec, 0, 0, 10, 5, 0, Color::WHITE);
-        // Should produce 5 rows of spans.
-        assert!(!rec.spans.is_empty());
-    }
-
-    #[test]
-    fn rounded_rect_produces_spans() {
-        let mut rec = SpanRecorder::new();
-        rasterize_rounded_rect(&mut rec, 10, 10, 100, 50, 8, Color::WHITE);
-        assert!(!rec.spans.is_empty());
     }
 
     #[test]
