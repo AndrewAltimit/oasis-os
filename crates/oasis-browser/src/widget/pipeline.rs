@@ -776,6 +776,10 @@ impl BrowserWidget {
                     );
                 },
             }
+            // Mutations made while the page loaded are already in the
+            // document we are about to lay out; don't replay them on the
+            // first tick.
+            self.js_dom_dirty.set(false);
             // Try to take ownership without cloning. This succeeds when
             // no JS engine was retained (init failure or no scripts).
             // When the engine holds a clone via js_doc, fall back to clone.

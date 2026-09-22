@@ -174,6 +174,12 @@ impl BrowserWidget {
             self.execute_deferred_scripts();
         }
 
+        // Timer callbacks and deferred scripts mutate the JS-side
+        // document; pull those mutations into the rendered document
+        // (re-cascade + relayout) or they never reach the screen.
+        #[cfg(feature = "javascript")]
+        self.apply_js_dom_mutations();
+
         // Process pending JS navigation actions.
         #[cfg(feature = "javascript")]
         {
