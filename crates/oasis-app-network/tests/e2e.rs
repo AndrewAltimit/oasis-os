@@ -51,9 +51,6 @@ fn cursor_moves_with_keys_and_clicks_are_harmless() {
 /// Every line must be reachable in a small window: scrolling with Down
 /// has to bring the last line into view.
 #[test]
-#[ignore = "oasis-app-core bug: ContentState scrolls by cached_max_visible (13, only \
-            updated by the fullscreen update_sdi path), so a windowed app smaller than \
-            13 rows never scrolls and its bottom lines are unreachable"]
 fn small_window_can_scroll_to_the_last_line() {
     let mut h = net(false, false);
     h.set_size(160, 80);

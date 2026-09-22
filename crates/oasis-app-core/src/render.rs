@@ -217,6 +217,25 @@ pub const WINDOWED_TOP_PAD: u32 = 4;
 /// Font size [`draw_content_windowed`] draws content lines with.
 pub const WINDOWED_FONT_SIZE: u16 = 12;
 
+/// Rows [`draw_content_windowed`] shows in a window with room for
+/// `max_lines`: `(first line index, selected row, row count)`.
+///
+/// `ContentState` scrolls against a row count cached from the fullscreen
+/// layout, and a smaller window shows fewer rows. The drawn range is
+/// shifted so the selected row is always on screen; otherwise the cursor
+/// walks off the bottom of a small window and the last lines can never be
+/// reached.
+fn windowed_rows(content: &ContentState, max_lines: usize) -> (usize, usize, usize) {
+    let shift = if max_lines > 0 {
+        (content.cursor + 1).saturating_sub(max_lines)
+    } else {
+        0
+    };
+    let first = content.scroll + shift;
+    let visible = content.lines.len().saturating_sub(first).min(max_lines);
+    (first, content.cursor - shift, visible)
+}
+
 /// Where [`draw_content_windowed`] draws line `line_idx` of `content` in a
 /// window whose content area starts at `(cx, cy)` and is `ch` tall.
 ///
@@ -240,16 +259,12 @@ pub fn windowed_line_origin(
     };
     let line_h = at.terminal_line_height.max(12) as i32;
     let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
-    let visible = content
-        .lines
-        .len()
-        .saturating_sub(content.scroll)
-        .min(max_lines);
-    let i = line_idx.checked_sub(content.scroll)?;
+    let (first, cursor_row, visible) = windowed_rows(content, max_lines);
+    let i = line_idx.checked_sub(first)?;
     if i >= visible {
         return None;
     }
-    let prefix = if i == content.cursor { "> " } else { "  " };
+    let prefix = if i == cursor_row { "> " } else { "  " };
     Some((cx + 4, cy + content_top + i as i32 * line_h, prefix))
 }
 
@@ -291,22 +306,18 @@ pub fn draw_content_windowed(
     // Content lines.
     let line_h = at.terminal_line_height.max(12) as i32;
     let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
-    let visible = content
-        .lines
-        .len()
-        .saturating_sub(content.scroll)
-        .min(max_lines);
+    let (first, cursor_row, visible) = windowed_rows(content, max_lines);
     // One buffer reused for every "{prefix}{line}" string (a single
     // draw_text call keeps proportional-font glyph placement identical).
     let mut text = String::new();
     for i in 0..visible {
-        let line_idx = content.scroll + i;
+        let line_idx = first + i;
         let line = &content.lines[line_idx];
-        let prefix = if i == content.cursor { "> " } else { "  " };
+        let prefix = if i == cursor_row { "> " } else { "  " };
         text.clear();
         text.push_str(prefix);
         text.push_str(line);
-        let text_color = if i == content.cursor {
+        let text_color = if i == cursor_row {
             at.app.selected_text
         } else {
             at.app.text
@@ -319,7 +330,7 @@ pub fn draw_content_windowed(
     let scroll_text = if content.lines.len() > max_lines {
         format!(
             "[{}/{}]  Cancel=back",
-            content.scroll + 1,
+            first + 1,
             content.lines.len().saturating_sub(max_lines) + 1,
         )
     } else {
