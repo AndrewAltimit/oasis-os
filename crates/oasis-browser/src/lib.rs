@@ -309,6 +309,11 @@ pub struct BrowserWidget {
     /// DOM node currently under the cursor (for `:hover`).
     hover_node: Option<NodeId>,
 
+    /// Last pointer position (screen coordinates) seen via
+    /// `CursorMove`, used to route wheel events to the nested scroll
+    /// container under the pointer.
+    last_cursor: Option<(i32, i32)>,
+
     /// DOM node that currently has keyboard/tab focus (for `:focus`).
     focused_node: Option<NodeId>,
 
@@ -653,6 +658,7 @@ impl BrowserWidget {
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
+            last_cursor: None,
             focused_node: None,
             body_node_id: None,
             decoded_images: HashMap::new(),

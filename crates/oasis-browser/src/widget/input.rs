@@ -368,6 +368,7 @@ impl BrowserWidget {
                 true
             },
             InputEvent::CursorMove { x, y } => {
+                self.last_cursor = Some((*x, *y));
                 self.handle_cursor_move(*x, *y);
                 true
             },
@@ -1802,69 +1803,25 @@ impl BrowserWidget {
         use crate::css::values::Overflow;
 
         let layout = self.layout_root.as_ref()?;
-        // Use hover_node as a proxy for cursor position — walk its ancestors
-        // looking for the nearest scroll container.
-        let hover = self.hover_node?;
-        Self::find_scroll_ancestor(layout, hover).filter(|&nid| {
-            // Only return if this node is an overflow container.
-            if let Some(Some(style)) = self.styles.get(nid) {
-                matches!(style.overflow, Overflow::Auto | Overflow::Scroll)
-            } else {
-                false
+        let doc = self.document.as_ref()?;
+        // Hit-test the last pointer position and walk up the DOM to the
+        // nearest overflow container that actually has something to
+        // scroll. (`hover_node` is only tracked for links, so it can't
+        // stand in for the pointer position over ordinary content.)
+        let (x, y) = self.last_cursor?;
+        let (lx, ly) = self.screen_to_layout(x, y);
+        let mut cur = layout.hit_test(lx, ly);
+        while let Some(nid) = cur {
+            let is_scroller = matches!(
+                self.styles.get(nid),
+                Some(Some(style)) if matches!(style.overflow, Overflow::Auto | Overflow::Scroll)
+            );
+            if is_scroller && Self::find_scroll_bounds(layout, nid).is_some_and(|b| b > 0.0) {
+                return Some(nid);
             }
-        })
-    }
-
-    /// Walk the layout tree to find the nearest ancestor of `target_nid`
-    /// that has `overflow: auto/scroll`.
-    fn find_scroll_ancestor(layout_box: &LayoutBox, target_nid: NodeId) -> Option<NodeId> {
-        use crate::css::values::Overflow;
-
-        // Check if this box IS the target node.
-        if layout_box.node == Some(target_nid) {
-            // The target itself may be a scroll container.
-            if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
-                return layout_box.node;
-            }
-            return None;
-        }
-
-        for child in &layout_box.children {
-            // If child IS the target, return this box if it's a scroll container.
-            if child.node == Some(target_nid) {
-                if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
-                    return layout_box.node;
-                }
-                return None;
-            }
-
-            // Recurse into child.
-            if let Some(found) = Self::find_scroll_ancestor(child, target_nid) {
-                return Some(found);
-            }
-
-            // Check if target is somewhere in this child's subtree.
-            if Self::subtree_contains(child, target_nid) {
-                // Target is inside this child. If this box is a scroll
-                // container, return it.
-                if matches!(layout_box.style.overflow, Overflow::Auto | Overflow::Scroll) {
-                    return layout_box.node;
-                }
-                return None;
-            }
+            cur = doc.nodes.get(nid).and_then(|n| n.parent);
         }
         None
-    }
-
-    /// Check if a layout subtree contains a node with the given ID.
-    fn subtree_contains(layout_box: &LayoutBox, nid: NodeId) -> bool {
-        if layout_box.node == Some(nid) {
-            return true;
-        }
-        layout_box
-            .children
-            .iter()
-            .any(|c| Self::subtree_contains(c, nid))
     }
 
     /// Find the maximum scroll Y for a nested scroll container.
