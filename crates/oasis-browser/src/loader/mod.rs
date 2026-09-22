@@ -270,8 +270,11 @@ impl Url {
             return Some(self.clone());
         }
 
-        // Absolute URL (has scheme) -- return as-is.
-        if relative.contains("://") {
+        // Absolute URL (starts with a scheme) -- return as-is. Only a
+        // leading `scheme:` counts: a relative reference may carry
+        // `://` in its query (`login?next=http://x/`) and must still
+        // resolve against the base.
+        if has_scheme(relative) {
             return Url::parse(relative);
         }
 
@@ -376,6 +379,19 @@ impl fmt::Display for Url {
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
+
+/// Whether `s` begins with a URI scheme (`ALPHA *( ALPHA / DIGIT / "+" /
+/// "-" / "." ) ":"`, RFC 3986 §3.1), i.e. is an absolute reference
+/// rather than a relative one.
+fn has_scheme(s: &str) -> bool {
+    let Some(colon) = s.find(':') else {
+        return false;
+    };
+    let scheme = &s[..colon];
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
 
 /// Split a (possibly relative) path string into `(path, query, fragment)`.
 fn split_path_query_fragment(s: &str) -> (String, Option<String>, Option<String>) {
@@ -838,6 +854,21 @@ mod tests {
         let resolved = base.resolve("#section2").unwrap();
         assert_eq!(resolved.path, "/page.html");
         assert_eq!(resolved.fragment, Some("section2".to_string()));
+    }
+
+    #[test]
+    fn resolve_relative_with_url_in_query() {
+        let base = Url::parse("http://example.com/a/page.html").unwrap();
+        let resolved = base.resolve("login?next=http://other.test/x").unwrap();
+        assert_eq!(resolved.host, "example.com");
+        assert_eq!(resolved.path, "/a/login");
+        assert_eq!(resolved.query.as_deref(), Some("next=http://other.test/x"));
+        let resolved = base.resolve("/go?to=https://other.test/").unwrap();
+        assert_eq!(resolved.host, "example.com");
+        assert_eq!(resolved.path, "/go");
+        // A real absolute URL still wins.
+        let resolved = base.resolve("HTTPS://other.test/p").unwrap();
+        assert_eq!(resolved.host, "other.test");
     }
 
     #[test]
