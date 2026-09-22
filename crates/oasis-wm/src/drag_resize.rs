@@ -268,22 +268,33 @@ impl WindowManager {
                 let (mut new_x, mut new_y, mut new_w, mut new_h) =
                     compute_resize(start_geometry, edge, dx, dy, &self.theme);
 
-                // Clamp resize to screen bounds.
+                // Keep the *dragged* edges from growing past the screen.
+                // Only the edges being dragged are clamped, and never
+                // further in than where they started: a window that is
+                // already partly off-screen (dragged there by its
+                // titlebar) must not jump or shrink below its minimum size
+                // when the user grabs the opposite, on-screen edge.
                 let sw = self.screen_w as i32;
                 let sh = self.screen_h as i32;
-                if new_x < 0 {
-                    new_w = new_w.saturating_sub((-new_x) as u32);
-                    new_x = 0;
+                let g = start_geometry;
+                let (drags_left, drags_right, drags_top, drags_bottom) = edge_sides(edge);
+                let left_limit = g.x.min(0);
+                let top_limit = g.y.min(0);
+                let right_limit = (g.x + g.w as i32).max(sw);
+                let bottom_limit = (g.y + g.h as i32).max(sh);
+                if drags_left && new_x < left_limit {
+                    new_w = new_w.saturating_sub((left_limit - new_x) as u32);
+                    new_x = left_limit;
                 }
-                if new_y < 0 {
-                    new_h = new_h.saturating_sub((-new_y) as u32);
-                    new_y = 0;
+                if drags_top && new_y < top_limit {
+                    new_h = new_h.saturating_sub((top_limit - new_y) as u32);
+                    new_y = top_limit;
                 }
-                if new_x + new_w as i32 > sw {
-                    new_w = (sw - new_x).max(0) as u32;
+                if drags_right && new_x + new_w as i32 > right_limit {
+                    new_w = (right_limit - new_x).max(0) as u32;
                 }
-                if new_y + new_h as i32 > sh {
-                    new_h = (sh - new_y).max(0) as u32;
+                if drags_bottom && new_y + new_h as i32 > bottom_limit {
+                    new_h = (bottom_limit - new_y).max(0) as u32;
                 }
 
                 if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
@@ -356,6 +367,21 @@ impl WindowManager {
         }
         self.update_sdi_positions(id.as_str(), sdi);
         Some((nx, ny))
+    }
+}
+
+/// Which sides of the frame a resize handle moves:
+/// `(left, right, top, bottom)`.
+fn edge_sides(edge: ResizeEdge) -> (bool, bool, bool, bool) {
+    match edge {
+        ResizeEdge::North => (false, false, true, false),
+        ResizeEdge::South => (false, false, false, true),
+        ResizeEdge::East => (false, true, false, false),
+        ResizeEdge::West => (true, false, false, false),
+        ResizeEdge::NorthEast => (false, true, true, false),
+        ResizeEdge::NorthWest => (true, false, true, false),
+        ResizeEdge::SouthEast => (false, true, false, true),
+        ResizeEdge::SouthWest => (true, false, false, true),
     }
 }
 
