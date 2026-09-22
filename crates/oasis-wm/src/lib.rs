@@ -12,12 +12,14 @@ mod focus;
 pub mod hit_test;
 mod lifecycle;
 pub mod manager;
+mod motion;
 mod render;
 mod sdi_objects;
 pub mod snap;
 mod stacking;
 pub mod tiling;
 pub mod window;
+mod window_ops;
 
 pub use animation::{
     AnimationDurations, AnimationFrame, AnimationKind, AnimationManager, AnimationState,
@@ -29,4 +31,6 @@ pub use snap::{KeyboardSnapDirection, SnapManager, SnapPreview, SnapZone, keyboa
 pub use tiling::{
     TileGeometry, TilingConfig, TilingLayout, TilingManager, adjust_master_ratio, cycle_layout,
 };
-pub use window::{Geometry, Window, WindowConfig, WindowId, WindowState, WindowType, WmTheme};
+pub use window::{
+    Geometry, TitleLayout, Window, WindowConfig, WindowId, WindowState, WindowType, WmTheme,
+};

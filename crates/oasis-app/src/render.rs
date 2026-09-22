@@ -1,5 +1,6 @@
 use oasis_backend_sdl::shader_bridge::Visibility;
 use oasis_core::apps::AppRunner;
+use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
@@ -283,6 +284,40 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     }
 }
 
+/// Draw the window manager's drag-to-snap preview: a translucent, outlined
+/// rectangle (tinted with the skin's active titlebar color) showing where
+/// the dragged window will land if released now. No-op when no window is
+/// being dragged into a snap zone.
+pub fn draw_snap_preview(
+    state: &AppState,
+    backend: &mut dyn SdiBackend,
+) -> oasis_core::error::Result<()> {
+    let Some(p) = state.wm.snap_preview() else {
+        return Ok(());
+    };
+    let theme = state.wm.theme();
+    let (fill, edge) = snap_preview_colors(theme.titlebar_active_color);
+    // Inset slightly so the outline stays visible at screen edges.
+    let inset = 4;
+    let (x, y) = (p.x + inset, p.y + inset);
+    let w = p.width.saturating_sub(inset as u32 * 2);
+    let h = p.height.saturating_sub(inset as u32 * 2);
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let radius = theme.frame_border_radius.max(4);
+    backend.fill_rounded_rect(x, y, w, h, radius, fill)?;
+    backend.stroke_rounded_rect(x, y, w, h, radius, 2, edge)
+}
+
+/// Fill and outline colors for the snap preview, derived from `base`.
+fn snap_preview_colors(base: Color) -> (Color, Color) {
+    (
+        Color::rgba(base.r, base.g, base.b, 70),
+        Color::rgba(base.r, base.g, base.b, 200),
+    )
+}
+
 /// Compute how much of the shader wallpaper can actually be seen this
 /// frame, from state the main loop already tracks (mode, window manager).
 ///
@@ -402,7 +437,6 @@ mod tests {
         }
     }
 
-    use oasis_core::backend::Color;
     use oasis_core::wm::window::{WindowConfig, WindowType};
 
     fn test_window(window_type: WindowType, x: i32, y: i32, w: u32, h: u32) -> Window {
@@ -424,6 +458,13 @@ mod tests {
         win.outer_w = w;
         win.outer_h = h;
         win
+    }
+
+    #[test]
+    fn snap_preview_colors_are_translucent_tint_of_base() {
+        let (fill, edge) = snap_preview_colors(Color::rgb(10, 20, 30));
+        assert_eq!((fill.r, fill.g, fill.b), (10, 20, 30));
+        assert!(fill.a < edge.a && edge.a < 255);
     }
 
     #[test]

@@ -34,6 +34,10 @@ impl WindowManager {
             },
         };
 
+        // A window with this id may still be fading out; drop its ghost
+        // so the two don't share SDI objects.
+        self.flush_closing(Some(&config.id), sdi);
+
         let window = Window::new(config, x, y, &self.theme);
         let is_modal = window.modal;
 
@@ -50,6 +54,7 @@ impl WindowManager {
 
         // Focus the new window (will respect z-order groups).
         self.focus_window_internal(&id, sdi);
+        self.animate_open(&id, sdi);
 
         Ok(id)
     }
@@ -63,6 +68,11 @@ impl WindowManager {
                 let _ = sdi.destroy(&name);
             }
         }
+        for window in &windows {
+            self.anim.cancel(&window.id);
+        }
+        self.anim_visual.clear();
+        self.flush_closing(None, sdi);
         self.drag = None;
         self.active_window = None;
         self.hide_modal_overlay(sdi);
@@ -77,9 +87,14 @@ impl WindowManager {
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         let was_modal = self.windows[idx].modal;
-        let window = &self.windows[idx];
-        self.destroy_sdi_objects(window, sdi);
-        self.windows.remove(idx);
+        let window = self.windows.remove(idx);
+        self.anim_visual.retain(|(wid, _)| *wid != id);
+        // With motion on, the SDI objects outlive the window until the
+        // close animation ends (see `motion.rs`).
+        if !self.animate_close(&window) {
+            self.anim.cancel(id);
+            self.destroy_sdi_objects(&window, sdi);
+        }
 
         // Cancel any drag on this window.
         if let Some(ref drag) = self.drag {
@@ -129,11 +144,15 @@ impl WindowManager {
         }
         window.state = WindowState::Minimized;
 
-        // Hide all SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
+        // Hide all SDI objects (after the minimize animation, if any).
+        if !self.animate_minimize(id, sdi)
+            && let Some(window) = self.windows.iter().find(|w| w.id == id)
+        {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
             }
         }
 
@@ -212,6 +231,9 @@ impl WindowManager {
         }
 
         self.update_sdi_positions(id, sdi);
+        if was_minimized {
+            self.animate_unminimize(id, sdi);
+        }
 
         Ok(())
     }

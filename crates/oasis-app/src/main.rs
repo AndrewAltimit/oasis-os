@@ -815,6 +815,13 @@ fn main() -> Result<()> {
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
+        // Window open/close/minimize/restore animations; skins that ask
+        // for reduced motion get instant transitions.
+        state
+            .wm
+            .set_motion_enabled(!state.skin.features.reduced_motion);
+        state.wm.tick_animations(&mut sdi);
+
         // Assemble entrance: slide the bars in and hide bar content while
         // the transition runs (no-op for fade/none entrances).
         if let Some(ref trans) = state.active_transition {
@@ -865,7 +872,8 @@ fn main() -> Result<()> {
             || oasis_core::vector_overlay::layers_animated(
                 &state.active_theme.chrome_layers,
                 state.active_theme.background_reduced_motion,
-            );
+            )
+            || state.wm.is_animating();
 
         // Windowed/fullscreen app content (browser, app runners, video)
         // paints via draw callbacks the SDI registry can't see, and
@@ -988,6 +996,8 @@ fn main() -> Result<()> {
                     }
                 },
             )?;
+            // Drag-to-edge snap preview, on top of the windows.
+            render::draw_snap_preview(&state, &mut backend)?;
         } else if state.mode == Mode::Dashboard
             && (state.active_theme.icon.style == "vector"
                 || !state.active_theme.background_layers.is_empty())

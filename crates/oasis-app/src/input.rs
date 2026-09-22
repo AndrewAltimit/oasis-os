@@ -692,6 +692,74 @@ fn route_key(
     }
 }
 
+/// Keyboard window management in desktop mode. Returns `true` when the
+/// key was a window-management shortcut (and has been handled):
+///
+/// | Shortcut | Action |
+/// |---|---|
+/// | Alt+Tab / Alt+Shift+Tab | Cycle focus forward / backward (minimized windows skipped) |
+/// | Super+Left/Right or Ctrl+Alt+Left/Right | Snap active window to that half (opposite half unsnaps) |
+/// | Super+Up or Ctrl+Alt+Up | Maximize active window |
+/// | Super+Down or Ctrl+Alt+Down | Restore a maximized/snapped window, else minimize |
+/// | Super+T or Ctrl+Alt+T | Cycle tiling layouts (last step returns to floating) |
+///
+/// Every combo includes Ctrl, Alt or Super, so a text-entry window keeps
+/// receiving plain Tab, arrows and letters. Ctrl+Alt+Arrow exists because
+/// desktop OSes commonly swallow Super+Arrow before it reaches the app.
+pub fn handle_wm_shortcut(
+    key: &Key,
+    mods: Modifiers,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+) -> bool {
+    use oasis_core::wm::KeyboardSnapDirection as Dir;
+
+    if !mods.has_command() || !state.skin.features.window_manager {
+        return false;
+    }
+    // A kiosk-fullscreen app owns the whole screen (and its keys).
+    if state.content.fullscreen_app.is_some() {
+        return false;
+    }
+    let alt_only = mods.only(Modifiers::ALT) || mods.only(Modifiers::ALT | Modifiers::SHIFT);
+    let wm_mod = mods.only(Modifiers::SUPER) || mods.only(Modifiers::CTRL | Modifiers::ALT);
+
+    match key {
+        Key::Tab if alt_only => {
+            // Modal dialogs keep focus until dismissed.
+            if !state.wm.has_modal() {
+                state.wm.cycle_focus(!mods.shift(), sdi);
+            }
+            true
+        },
+        Key::Left | Key::Right | Key::Up | Key::Down if wm_mod => {
+            let dir = match key {
+                Key::Left => Dir::Left,
+                Key::Right => Dir::Right,
+                Key::Up => Dir::Up,
+                _ => Dir::Down,
+            };
+            if let Some(active) = state.wm.active_window().map(str::to_string) {
+                state.wm.keyboard_snap_window(&active, dir, sdi);
+            }
+            true
+        },
+        Key::Char('t') if wm_mod => {
+            let msg = match state.wm.cycle_tiling(sdi) {
+                Some(layout) => format!("Tiling: {layout:?}"),
+                None => "Tiling off".to_string(),
+            };
+            state.toasts.show(
+                msg,
+                oasis_core::toast::ToastLevel::Info,
+                state.active_theme.toast.ttl,
+            );
+            true
+        },
+        _ => false,
+    }
+}
+
 /// Top-level per-event entry point used by the main loop.
 ///
 /// Handles [`InputEvent::Key`] (routing it to the focused app and arming
@@ -709,6 +777,13 @@ pub fn handle_event(
         return InputResult::Continue;
     }
     if let InputEvent::Key { key, mods } = event {
+        // Window-management shortcuts win over the focused app, like an
+        // OS-level hotkey. They all need Ctrl/Alt/Super, so plain keys
+        // (Tab, arrows, letters) still reach text-entry windows.
+        if state.mode == Mode::Desktop && handle_wm_shortcut(key, *mods, state, sdi) {
+            key_filter.suppress_twin(*key, *mods);
+            return InputResult::Continue;
+        }
         let typing = key.produces_text(*mods) && text_focus(state);
         let consumed = route_key(key, *mods, state, sdi, vfs);
         if consumed || typing {
@@ -1823,6 +1898,172 @@ mod tests {
         let text = runner.lines.join("\n");
         assert!(text.contains("qe "), "editor text: {text:?}");
         assert!(!text.contains("Find:"), "Triangle leaked: {text:?}");
+    }
+
+    /// Launch another desktop window into an existing state.
+    fn launch_more(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs, title: &str) {
+        use oasis_core::dashboard::AppEntry;
+
+        let app = AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let result = launch::launch_app_window(
+            &app,
+            &mut state.wm,
+            sdi,
+            &mut state.content.open_runners,
+            &mut state.content.browser,
+            &state.browser_config,
+            vfs,
+            &state.net.tls_provider,
+            state.skin.features.window_manager,
+            &state.plugin_manager,
+        );
+        launch::apply_launch(result, &mut state.mode);
+    }
+
+    /// Feed a key (plus its legacy twin, as the SDL backend does).
+    fn press(
+        key: Key,
+        mods: Modifiers,
+        filter: &mut KeyTwinFilter,
+        state: &mut AppState,
+        sdi: &mut SdiRegistry,
+        vfs: &mut MemoryVfs,
+    ) {
+        let mut events = vec![InputEvent::Key { key, mods }];
+        events.extend(key.legacy_press(mods));
+        for ev in events {
+            handle_event(&ev, filter, state, sdi, vfs);
+        }
+    }
+
+    #[test]
+    fn alt_tab_cycles_focus_skipping_minimized() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        launch_more(&mut state, &mut sdi, &vfs, "Calculator");
+        launch_more(&mut state, &mut sdi, &vfs, "Text Editor");
+        assert_eq!(state.wm.window_count(), 3);
+        let ids: Vec<String> = state
+            .wm
+            .windows()
+            .iter()
+            .map(|w| w.id.to_string())
+            .collect();
+        state
+            .wm
+            .minimize_window(&ids[1], &mut sdi)
+            .expect("minimize");
+        let mut filter = KeyTwinFilter::default();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            press(
+                Key::Tab,
+                Modifiers::ALT,
+                &mut filter,
+                &mut state,
+                &mut sdi,
+                &mut vfs,
+            );
+            seen.push(state.wm.active_window().map(str::to_string));
+        }
+        assert!(seen.iter().all(|a| a.as_deref() != Some(ids[1].as_str())));
+        assert!(seen.contains(&Some(ids[0].clone())));
+        assert!(seen.contains(&Some(ids[2].clone())));
+        // Alt+Shift+Tab goes back the other way.
+        let before = state.wm.active_window().map(str::to_string);
+        press(
+            Key::Tab,
+            Modifiers::ALT | Modifiers::SHIFT,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_ne!(state.wm.active_window().map(str::to_string), before);
+    }
+
+    #[test]
+    fn plain_tab_in_text_editor_is_not_a_wm_shortcut() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        launch_more(&mut state, &mut sdi, &vfs, "Text Editor");
+        assert!(text_focus(&state));
+        let active = state.wm.active_window().map(str::to_string);
+        assert!(!handle_wm_shortcut(
+            &Key::Tab,
+            Modifiers::NONE,
+            &mut state,
+            &mut sdi
+        ));
+        assert!(!handle_wm_shortcut(
+            &Key::Left,
+            Modifiers::NONE,
+            &mut state,
+            &mut sdi
+        ));
+        assert!(!handle_wm_shortcut(
+            &Key::Char('t'),
+            Modifiers::SHIFT,
+            &mut state,
+            &mut sdi
+        ));
+        let mut filter = KeyTwinFilter::default();
+        press(
+            Key::Tab,
+            Modifiers::NONE,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.wm.active_window().map(str::to_string), active);
+    }
+
+    #[test]
+    fn super_and_ctrl_alt_arrows_snap_active_window() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        let id = state
+            .wm
+            .active_window()
+            .map(str::to_string)
+            .expect("active");
+        let area = state.wm.work_area();
+        let mut filter = KeyTwinFilter::default();
+        press(
+            Key::Left,
+            Modifiers::SUPER,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        let w = state.wm.get_window(&id).expect("window");
+        assert_eq!((w.x, w.y, w.outer_w), (0, area.y, area.w / 2));
+        press(
+            Key::Up,
+            Modifiers::CTRL | Modifiers::ALT,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(
+            state.wm.get_window(&id).expect("window").state,
+            oasis_core::wm::window::WindowState::Maximized
+        );
+        // Super+T toggles tiling on.
+        press(
+            Key::Char('t'),
+            Modifiers::SUPER,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.wm.tiling_layout().is_some());
     }
 
     #[test]
