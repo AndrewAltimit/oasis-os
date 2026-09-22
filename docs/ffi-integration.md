@@ -20,7 +20,7 @@ The crate is also built as an `rlib`, so Rust hosts can depend on it directly.
 | Feature | Default | Effect |
 |---------|---------|--------|
 | `video-decode` | No | Exports the `oasis_video_*` functions using the software decoder (openh264 + symphonia; needs only a C/C++ compiler) |
-| `video-decode-ffmpeg` | No | Exports the `oasis_video_*` functions using ffmpeg (needs the ffmpeg dev libraries + `pkg-config`, see [getting-started.md](getting-started.md#ffmpeg-video-decode)) |
+| `video-decode-ffmpeg` | No | Exports the `oasis_video_*` functions using ffmpeg (needs the ffmpeg dev libraries + `pkg-config`, see [getting-started.md](getting-started.md#build-dependencies)) |
 
 Without either feature, the `oasis_video_*` symbols are **not exported**.
 
