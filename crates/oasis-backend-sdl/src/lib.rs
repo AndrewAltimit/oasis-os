@@ -150,7 +150,6 @@ impl SdlBackend {
             .build()
             .backend_err()?;
         let canvas: Canvas<Window> = window.into_canvas();
-        let texture_creator = canvas.texture_creator();
         let headless =
             std::env::var("SDL_RENDER_DRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
         if !headless {
@@ -172,8 +171,58 @@ impl SdlBackend {
         let event_pump = sdl.event_pump().backend_err()?;
 
         log::info!("SDL3 backend initialized: {width}x{height}");
+        Ok(Self::from_canvas(canvas, event_pump, width, height))
+    }
 
-        Ok(Self {
+    /// Create a backend that renders without a visible window, for tests
+    /// and offscreen rendering.
+    ///
+    /// With `render_driver: None` the process-wide SDL hints are forced
+    /// (in-process, overriding any environment variables) to the
+    /// `offscreen` video driver and the `software` renderer, so this works
+    /// on a CI box with no display. `Some(driver)` keeps the platform
+    /// video driver and asks for that renderer (e.g. `"direct3d11"`,
+    /// `"opengl"`, `"vulkan"`) on a hidden window, to exercise a hardware
+    /// path such as padded texture pitches locally.
+    ///
+    /// SDL may only be initialized from one thread at a time: callers
+    /// creating several backends from test threads must serialize them
+    /// (and drop each backend before creating the next).
+    pub fn new_headless(width: u32, height: u32, render_driver: Option<&str>) -> Result<Self> {
+        use sdl3::hint::{self, Hint};
+        let (video_driver, renderer) = match render_driver {
+            None => (Some("offscreen"), "software"),
+            Some(driver) => (None, driver),
+        };
+        if let Some(v) = video_driver {
+            hint::set_with_priority("SDL_VIDEO_DRIVER", v, &Hint::Override);
+        }
+        hint::set_with_priority("SDL_RENDER_DRIVER", renderer, &Hint::Override);
+        let sdl = sdl3::init().backend_err()?;
+        let video = sdl.video().backend_err()?;
+        let window = video
+            .window("oasis-headless", width, height)
+            .hidden()
+            .build()
+            .backend_err()?;
+        let canvas: Canvas<Window> = window.into_canvas();
+        let event_pump = sdl.event_pump().backend_err()?;
+        log::info!(
+            "SDL3 headless backend initialized: {width}x{height} ({} renderer)",
+            canvas.renderer_name
+        );
+        Ok(Self::from_canvas(canvas, event_pump, width, height))
+    }
+
+    /// Name of the active SDL renderer (e.g. `"software"`,
+    /// `"direct3d11"`).
+    pub fn renderer_name(&self) -> &str {
+        &self.canvas.renderer_name
+    }
+
+    fn from_canvas(canvas: Canvas<Window>, event_pump: EventPump, width: u32, height: u32) -> Self {
+        let texture_creator = canvas.texture_creator();
+        Self {
             canvas,
             event_pump,
             textures: HashMap::new(),
@@ -196,7 +245,7 @@ impl SdlBackend {
             poly_points: Vec::new(),
             poly_xs: Vec::new(),
             texture_mods: HashMap::new(),
-        })
+        }
     }
 
     /// Access the underlying SDL window.
