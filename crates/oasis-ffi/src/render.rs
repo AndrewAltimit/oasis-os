@@ -86,6 +86,26 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
                     }
                 }
             },
+            // Pointer input on the dashboard, like the desktop shell: a
+            // click on an icon selects and launches it, pointer motion
+            // drives the icon hover lift. (These events used to be accepted
+            // by `oasis_send_input` and then silently dropped.)
+            InputEvent::PointerClick { x, y } => {
+                if let Some(ref mut dashboard) = instance.dashboard
+                    && let Some(idx) = dashboard.icon_at(*x, *y)
+                    && let Some(app) = dashboard.current_page_apps().get(idx)
+                {
+                    let title = app.title.clone();
+                    dashboard.selected = idx;
+                    pending_callbacks.push((OASIS_CB_APP_LAUNCH, title));
+                }
+            },
+            InputEvent::CursorMove { x, y } => {
+                if let Some(ref mut dashboard) = instance.dashboard {
+                    let hit = dashboard.icon_at(*x, *y);
+                    dashboard.set_hover(hit);
+                }
+            },
             InputEvent::TriggerPress(Trigger::Right) => {
                 if let Some(ref mut dashboard) = instance.dashboard {
                     dashboard.next_page();
