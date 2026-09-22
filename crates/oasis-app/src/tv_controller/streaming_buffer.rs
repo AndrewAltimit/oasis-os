@@ -678,12 +678,31 @@ impl std::io::Read for StreamingBuffer {
                 break n;
             }
 
-            // Position is at or beyond file end -- EOF.
             let total = self
                 .inner
                 .total_size
                 .load(std::sync::atomic::Ordering::Relaxed);
-            if total > 0 && self.pos >= total {
+            let in_probe = self
+                .inner
+                .probe_mode
+                .load(std::sync::atomic::Ordering::Acquire);
+            // Where reads hit EOF.  While probing, a top-level atom that
+            // claims to extend past the end of a truncated file (an `mdat`
+            // cut short) still reads -- as zeros -- to its declared end:
+            // the demuxer skips over the atom body during the probe, and
+            // an EOF there failed the whole open ("probe failed: end of
+            // stream") although moov and most of the media were present.
+            let eof_at = if in_probe && total > 0 {
+                s.atoms
+                    .iter()
+                    .find(|(off, size, _)| self.pos >= *off && self.pos < off + size)
+                    .map_or(total, |(off, size, _)| total.max(off + size))
+            } else {
+                total
+            };
+
+            // Position is at or beyond file end -- EOF.
+            if total > 0 && self.pos >= eof_at {
                 break 0; // EOF
             }
 
