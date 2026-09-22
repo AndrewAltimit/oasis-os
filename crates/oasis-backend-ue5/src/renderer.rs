@@ -632,9 +632,10 @@ impl SdiRenderTarget for Ue5Backend {
         let sh = src.height();
         debug_assert_eq!(sw, dst_w, "composite_render_target: dst_w != src width");
         debug_assert_eq!(sh, dst_h, "composite_render_target: dst_h != src height");
-        let src_pixels = src.data().to_vec();
+        // `render_targets` and `fb` are disjoint fields, so the layer can be
+        // composited straight from its storage -- no per-composite copy.
         self.fb
-            .composite_rgba(dst_x, dst_y, sw, sh, &src_pixels, opacity);
+            .composite_rgba(dst_x, dst_y, sw, sh, src.data(), opacity);
         self.dirty = true;
         Ok(())
     }
