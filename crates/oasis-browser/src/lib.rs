@@ -431,6 +431,18 @@ pub struct BrowserWidget {
     /// back into DOM order at cascade time.
     external_stylesheet_positions: Vec<NodeId>,
 
+    /// Raw CSS text of each arrived `external_stylesheets` entry, kept
+    /// so the sheet can be re-parsed when the viewport changes (media
+    /// queries are evaluated at parse time).
+    external_stylesheet_sources: Vec<Option<String>>,
+
+    /// Window size the current author sheets were parsed for.
+    styled_viewport: (u32, u32),
+
+    /// Whether any author sheet of the current page uses `@media`, i.e.
+    /// a viewport change may change which rules apply.
+    media_dependent_css: bool,
+
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -691,6 +703,9 @@ impl BrowserWidget {
             cached_author_sheet_positions: Vec::new(),
             external_stylesheets: Vec::new(),
             external_stylesheet_positions: Vec::new(),
+            external_stylesheet_sources: Vec::new(),
+            styled_viewport: (480, 272),
+            media_dependent_css: false,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -873,6 +888,10 @@ impl BrowserWidget {
             self.layout_dirty = false;
             return false;
         }
+
+        // A resize can flip `@media` conditions: re-parse and re-cascade
+        // before laying out at the new size.
+        self.restyle_for_viewport_if_needed();
 
         self.refresh_image_info();
         let doc = self

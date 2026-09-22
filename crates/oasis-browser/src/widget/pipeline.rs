@@ -553,7 +553,8 @@ impl BrowserWidget {
                         hover: true,
                         pointer: "fine",
                     };
-                    css::parser::Stylesheet::parse_with_viewport(&css_text, viewport)
+                    let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
+                    (sheet, css_text)
                 },
                 Err(e) => {
                     log::debug!("external stylesheet fetch failed: {e}");
@@ -562,7 +563,9 @@ impl BrowserWidget {
                 },
             };
             if idx < self.external_stylesheets.len() {
+                let (sheet, css_text) = sheet;
                 self.external_stylesheets[idx] = Some(sheet);
+                self.record_external_source(idx, css_text);
                 self.pending_external_css_apply = true;
             }
         }
@@ -821,6 +824,11 @@ impl BrowserWidget {
         //     inline CSS.
         let (linked_urls, linked_positions) = Self::collect_linked_stylesheet_urls(&doc, url);
         self.external_stylesheets = vec![None; linked_urls.len()];
+        self.external_stylesheet_sources = vec![None; linked_urls.len()];
+        self.styled_viewport = (self.window_w, self.window_h);
+        self.media_dependent_css = author_sheet_positions
+            .iter()
+            .any(|&nid| css_uses_media_queries(&doc.text_content(nid)));
         self.external_stylesheet_positions = linked_positions;
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         {
@@ -1607,6 +1615,7 @@ impl BrowserWidget {
                     let sheet = css::parser::Stylesheet::parse_with_viewport(&css_text, viewport);
                     if idx < self.external_stylesheets.len() {
                         self.external_stylesheets[idx] = Some(sheet);
+                        self.record_external_source(idx, css_text);
                         self.pending_external_css_apply = true;
                     }
                 },
@@ -1614,6 +1623,61 @@ impl BrowserWidget {
                     log::debug!("vfs stylesheet fetch failed: {e}");
                 },
             }
+        }
+    }
+
+    /// Remember the source text of external sheet `idx` (for re-parsing
+    /// on viewport changes) and note whether it is media-dependent.
+    fn record_external_source(&mut self, idx: usize, css_text: String) {
+        if css_uses_media_queries(&css_text) {
+            self.media_dependent_css = true;
+        }
+        if let Some(slot) = self.external_stylesheet_sources.get_mut(idx) {
+            *slot = Some(css_text);
+        }
+    }
+
+    /// Re-evaluate `@media` rules after the window size changed.
+    ///
+    /// Media queries are resolved when a sheet is parsed, so the author
+    /// sheets are re-parsed for the new viewport (inline `<style>` text
+    /// from the DOM, linked sheets from their saved source) and the page
+    /// is re-cascaded. No-op when the size is unchanged or no sheet uses
+    /// `@media`.
+    pub(crate) fn restyle_for_viewport_if_needed(&mut self) {
+        let size = (self.window_w, self.window_h);
+        if !self.media_dependent_css || size == self.styled_viewport {
+            return;
+        }
+        let Some(doc) = self.document.as_ref() else {
+            return;
+        };
+        self.styled_viewport = size;
+        let viewport = css::parser::MediaViewport {
+            width: self.window_w as f32,
+            height: self.window_h as f32,
+            dark_mode: false,
+            prefers_reduced_motion: false,
+            hover: true,
+            pointer: "fine",
+        };
+        let (sheets, positions) = Self::collect_style_sheets(doc, viewport);
+        self.cached_author_sheets = sheets;
+        self.cached_author_sheet_positions = positions;
+        for (slot, source) in self
+            .external_stylesheets
+            .iter_mut()
+            .zip(&self.external_stylesheet_sources)
+        {
+            if let Some(source) = source {
+                *slot = Some(css::parser::Stylesheet::parse_with_viewport(source, viewport));
+            }
+        }
+        self.pending_external_css_apply = true;
+        self.apply_external_stylesheets_if_pending();
+        #[cfg(feature = "javascript")]
+        {
+            *self.js_styles.borrow_mut() = self.styles.clone();
         }
     }
 
@@ -1971,6 +2035,14 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
 
     html.push_str("</body></html>");
     html
+}
+
+/// Whether a stylesheet's source contains media-dependent rules.
+fn css_uses_media_queries(css_text: &str) -> bool {
+    css_text
+        .as_bytes()
+        .windows(6)
+        .any(|w| w.eq_ignore_ascii_case(b"@media"))
 }
 
 /// HTML source to render for a text-like response body. HTML (and
