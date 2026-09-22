@@ -42,6 +42,8 @@ pub struct CommandRegistry {
     pub(crate) exec_depth: Cell<usize>,
     /// Background jobs queued with a trailing `&`.
     pub(crate) jobs: RefCell<JobManager>,
+    /// Nesting depth of `run <script>` calls.
+    pub(crate) script_depth: Cell<usize>,
 }
 
 impl CommandRegistry {
@@ -65,6 +67,7 @@ impl CommandRegistry {
             local_scopes: RefCell::new(Vec::new()),
             exec_depth: Cell::new(0),
             jobs: RefCell::new(JobManager::new()),
+            script_depth: Cell::new(0),
         }
     }
 
