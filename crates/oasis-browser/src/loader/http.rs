@@ -206,6 +206,45 @@ pub fn http_request_full(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(method, url, body, extra_headers, tls, None)
+}
+
+/// Policy hooks for [`http_request_guarded`].
+///
+/// Used by the JS `fetch()` binding to keep page-initiated requests off
+/// loopback / private networks even via redirects or DNS rebinding.
+pub struct RequestGuard<'a> {
+    /// Consulted before following each redirect; `false` aborts the
+    /// request with an error.
+    pub redirect_ok: &'a dyn Fn(&Url) -> bool,
+    /// Consulted with the resolved peer address right before every TCP
+    /// connect; `false` aborts the request with an error. Guarded
+    /// requests also bypass the keep-alive pool so every request is
+    /// checked against a fresh resolution.
+    pub addr_ok: &'a dyn Fn(std::net::IpAddr) -> bool,
+}
+
+/// Like [`http_request_full`] but enforces a [`RequestGuard`] on every
+/// redirect hop and connection.
+pub fn http_request_guarded(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    guard: &RequestGuard<'_>,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(method, url, body, extra_headers, tls, Some(guard))
+}
+
+fn http_request_inner(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    guard: Option<&RequestGuard<'_>>,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme == "https" && tls.is_none() {
         return Ok((https_error_page(url, url), Vec::new()));
     }
@@ -228,6 +267,7 @@ pub fn http_request_full(
             current_body.as_deref(),
             extra_headers,
             tls,
+            guard.map(|g| g.addr_ok),
         )?;
 
         if is_redirect(resp.status_code)
@@ -237,6 +277,13 @@ pub fn http_request_full(
             current_url = current_url.resolve(&location).ok_or_else(|| {
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
+            if let Some(g) = guard
+                && !(g.redirect_ok)(&current_url)
+            {
+                return Err(OasisError::Backend(
+                    format!("redirect to {current_url} blocked by request policy").into(),
+                ));
+            }
             if current_url.scheme == "https" && tls.is_none() {
                 return Ok((https_error_page(url, &current_url), Vec::new()));
             }
@@ -302,6 +349,7 @@ fn do_request_with_method(
     body: Option<&[u8]>,
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
+    addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
 ) -> Result<HttpResponse> {
     let host = &url.host;
     let is_https = url.scheme == "https";
@@ -311,7 +359,7 @@ fn do_request_with_method(
     if is_https {
         let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
-        let stream = tcp_connect(host, port)?;
+        let stream = tcp_connect(host, port, addr_ok)?;
         // Wrap the TcpStream as a NetworkStream, then upgrade to TLS
         // while offering ALPN. If the server picks `h2`, route the
         // request through the HTTP/2 driver; otherwise fall through
@@ -330,9 +378,10 @@ fn do_request_with_method(
     } else {
         // Try a pooled connection first, but only for idempotent methods.
         // Re-sending a POST/PUT/PATCH on a stale connection could cause
-        // duplicate side-effects on the server.
+        // duplicate side-effects on the server. Guarded requests never
+        // reuse (or feed) the pool: every connect must pass `addr_ok`.
         let is_idempotent = matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE");
-        let pooled = if is_idempotent {
+        let pooled = if is_idempotent && addr_ok.is_none() {
             CONN_POOL.with(|pool| pool.borrow_mut().take(host, port))
         } else {
             None
@@ -349,11 +398,13 @@ fn do_request_with_method(
             }
         }
 
-        let mut stream = tcp_connect(host, port)?;
+        let mut stream = tcp_connect(host, port, addr_ok)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut stream)?;
         let resp = parse_response(&raw)?;
-        maybe_return_to_pool(&resp, host, port, stream);
+        if addr_ok.is_none() {
+            maybe_return_to_pool(&resp, host, port, stream);
+        }
         Ok(resp)
     }
 }
@@ -386,7 +437,15 @@ fn maybe_return_to_pool(resp: &HttpResponse, host: &str, port: u16, stream: TcpS
 }
 
 /// Open a TCP connection with a connect timeout.
-fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
+///
+/// When `addr_ok` is given, the resolved peer address must pass it or
+/// the connect is refused (checked on the exact address we dial, so a
+/// DNS answer cannot change between the check and the connect).
+fn tcp_connect(
+    host: &str,
+    port: u16,
+    addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
+) -> Result<TcpStream> {
     use std::net::ToSocketAddrs;
 
     let addr = format!("{host}:{port}")
@@ -394,6 +453,14 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
         .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
         .next()
         .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}").into()))?;
+
+    if let Some(check) = addr_ok
+        && !check(addr.ip())
+    {
+        return Err(OasisError::Backend(
+            format!("connection to {} blocked by request policy", addr.ip()).into(),
+        ));
+    }
 
     let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
         .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}").into()))?;

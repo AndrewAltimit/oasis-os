@@ -500,24 +500,9 @@
     get length() { return 1; }
   };
 
-  // -- fetch API (synchronous under the hood) --
-  globalThis.fetch = function(url, options) {
-    var method = (options && options.method) || "GET";
-    var reqBody = (options && options.body) || "";
-    var body = __oasis_fetch(method, String(url), String(reqBody));
-    return {
-      then: function(fn) {
-        var result = fn({
-          ok: body.length > 0,
-          status: body.length > 0 ? 200 : 0,
-          text: function() { return { then: function(f) { return f(body); } }; },
-          json: function() { return { then: function(f) { return f(JSON.parse(body)); } }; }
-        });
-        return { then: function(f) { return f ? f(result) : result; }, catch: function() { return this; } };
-      },
-      catch: function(fn) { return this; }
-    };
-  };
+  // -- fetch API --
+  // `fetch` / `Response` / `Headers` come from oasis-js (real Promises);
+  // js_dom/fetch.rs binds the page's origin-aware transport behind them.
 
   // -- getComputedStyle --
   globalThis.getComputedStyle = function(el) {
@@ -529,13 +514,27 @@
   };
 
   // -- localStorage / sessionStorage --
-  // kind: 0 = localStorage, 1 = sessionStorage (separate backing stores)
+  // kind: 0 = localStorage, 1 = sessionStorage (separate, per-origin
+  // backing stores). Missing keys come back as null; "" is a real value.
   var __make_storage = function(kind) {
     return {
-      getItem: function(k) { var v = __oasis_storage_get(kind, String(k)); return v === "" ? null : v; },
-      setItem: function(k, v) { __oasis_storage_set(kind, String(k), String(v)); },
+      getItem: function(k) {
+        var v = __oasis_storage_get(kind, String(k));
+        return v === undefined ? null : v;
+      },
+      setItem: function(k, v) {
+        if (!__oasis_storage_set(kind, String(k), String(v))) {
+          throw new DOMException(
+            "Failed to execute 'setItem' on 'Storage': quota exceeded",
+            'QuotaExceededError');
+        }
+      },
       removeItem: function(k) { __oasis_storage_remove(kind, String(k)); },
       clear: function() { __oasis_storage_clear(kind); },
+      key: function(i) {
+        var k = __oasis_storage_key(kind, Number(i) | 0);
+        return k === undefined ? null : k;
+      },
       get length() { return __oasis_storage_length(kind); }
     };
   };
