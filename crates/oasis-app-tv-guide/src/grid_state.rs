@@ -170,6 +170,13 @@ impl TvGuideState {
         if self.channels.is_empty() {
             return 1;
         }
+        // The rows scroll one at a time, so the window stops at
+        // `len - VISIBLE_ROWS`, which need not be a page boundary: report
+        // the last page once the last channel is visible (otherwise 12
+        // channels showed "PAGE 2/3" at the bottom and never 3/3).
+        if self.scroll_offset + VISIBLE_ROWS >= self.channels.len() {
+            return self.total_pages();
+        }
         self.scroll_offset / VISIBLE_ROWS + 1
     }
 
