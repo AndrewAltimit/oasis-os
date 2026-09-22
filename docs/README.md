@@ -10,6 +10,7 @@ Runnable code samples live in [`examples/`](../examples/README.md).
 |-----|----------------|
 | [getting-started.md](getting-started.md) | Dependencies and build/run instructions for desktop, WASM, UE5/FFI and PSP; feature flags; tests and lint |
 | [writing-apps.md](writing-apps.md) | Writing an app: the `App` trait lifecycle and hooks, idle-frame rules, a minimal example, registration |
+| [testing.md](testing.md) | Test layers and the headless shell e2e harness (`oasis_app::harness`): API, scenarios, limits |
 | [skin-authoring.md](skin-authoring.md) | Writing a skin: directory layout and the full TOML reference |
 | [adding-commands.md](adding-commands.md) | Adding a terminal command |
 | [plugin-development.md](plugin-development.md) | Writing a runtime plugin |

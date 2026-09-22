@@ -1,7 +1,7 @@
 //! TV Guide tune/untune logic: handling tune requests and starting video playback.
 
 use crate::app_state::AppState;
-use oasis_core::backend::{AudioBackend, SdiBackend};
+use oasis_core::backend::SdiBackend;
 use oasis_core::vfs::Vfs;
 
 /// Handle TV Guide tune requests -- start in-app video player.
@@ -71,6 +71,21 @@ pub(super) fn handle_tune_requests(
     let preview_w = at.screen_w;
     let preview_h = usable_h;
     log::info!("TV: video decode {preview_w}x{preview_h}, seek={seek_secs}s");
+
+    // Offline (headless harness): no download. Start an injected decode
+    // session so the scenario can feed frames/audio through the real
+    // player -> audio-backend path.
+    if state.offline {
+        #[cfg(feature = "_video")]
+        {
+            state.tv_current_url = Some(url.to_string());
+            state.video_player.start_injected(preview_w, preview_h);
+            setup_streaming_audio(state);
+        }
+        #[cfg(not(feature = "_video"))]
+        log::info!("TV: offline, not starting ffmpeg playback for {url}");
+        return;
+    }
 
     #[cfg(feature = "_video")]
     start_video_download(state, url, seek_secs, preview_w, preview_h);

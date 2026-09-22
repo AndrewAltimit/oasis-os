@@ -979,6 +979,7 @@ dependencies = [
  "oasis-app-system-monitor",
  "oasis-audio",
  "oasis-backend-sdl",
+ "oasis-backend-ue5",
  "oasis-core",
  "oasis-mcp",
  "oasis-shader",

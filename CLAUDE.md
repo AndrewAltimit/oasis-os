@@ -120,7 +120,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-system-monitor  (System Monitor app)
 └── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal; all apps live in oasis-app-* crates)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (binaries oasis-app, oasis-screenshot; features video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
+    │   └── oasis-app      (lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
@@ -218,6 +218,7 @@ Exports C-ABI functions: `oasis_create`, `oasis_create_full`, `oasis_destroy`, `
 - Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = deny
 - All unsafe blocks require `// SAFETY:` comments
 - Unit tests are in-module (`#[cfg(test)] mod tests`); add new tests there. A few crates also have `tests/` integration suites (oasis-browser, oasis-terminal, oasis-test-backend, oasis-vfs, oasis-wm) and criterion `benches/`
+- User-flow / wiring changes in the desktop shell get an end-to-end scenario in `crates/oasis-app/tests/e2e_*.rs` using `oasis_app::harness::Harness` (see [`docs/testing.md`](docs/testing.md))
 - Dual-licensed: Unlicense + MIT
 
 ## Docker Services
@@ -248,6 +249,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
 - [`docs/writing-apps.md`](docs/writing-apps.md) -- `App` trait lifecycle, hooks, idle-frame rules, minimal example app
+- [`docs/testing.md`](docs/testing.md) -- Test layers and the headless shell e2e harness (`oasis_app::harness`): drive the real shell (click, key, type, open apps, pixels, drawn text, captured audio)
 - [`docs/ui-widgets.md`](docs/ui-widgets.md) -- `oasis-ui` widget catalogue
 - [`docs/window-manager.md`](docs/window-manager.md) -- `WindowManager` API, snapping, shortcuts, animations
 - [`docs/wasm-backend.md`](docs/wasm-backend.md) -- WASM build, serving, input mapping, iframe overlay

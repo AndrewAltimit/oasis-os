@@ -1,7 +1,7 @@
 //! Video player ticking: frame upload, audio feed, untune detection, episode auto-advance.
 
 use crate::app_state::AppState;
-use oasis_core::backend::{AudioBackend, SdiBackend};
+use oasis_core::backend::SdiBackend;
 
 /// Tick video player: upload frames, collect audio chunks.
 pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {

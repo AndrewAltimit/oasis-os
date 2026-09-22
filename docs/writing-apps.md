@@ -57,6 +57,11 @@ default; everything else is opt-in.
 | `browse_dir` / `viewing_file` | `None` | Host queries | For file-browsing apps |
 | `as_any` / `as_any_mut` | required | Host downcasts to a concrete app | Return `self` |
 
+To test an app inside the real shell (launch from the dashboard, clicks,
+keys, what gets painted), write a scenario with the headless harness; see
+[testing.md](testing.md).
+
+
 ### `AppAction`
 
 Returned from `handle_input`, `handle_key` and `handle_click`:

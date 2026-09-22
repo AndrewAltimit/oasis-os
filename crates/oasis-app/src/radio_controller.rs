@@ -52,7 +52,7 @@ fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
     } else {
         let _ = state
             .radio_manager
-            .process_request(&request, &mut state.audio_backend);
+            .process_request(&request, state.audio_backend.as_mut());
         // Clear catalog on stop.
         if state.radio_manager.state() == oasis_audio::radio::RadioState::Stopped {
             state.archive_catalog = None;
@@ -86,7 +86,7 @@ fn process_tune_request(state: &mut AppState, target: &str) {
 
     let _ = state
         .radio_manager
-        .tune(&station.name, station.bitrate, &mut state.audio_backend);
+        .tune(&station.name, station.bitrate, state.audio_backend.as_mut());
 
     // Clear stale catalog/pending fetches on station change.
     state.archive_catalog = None;
@@ -99,6 +99,11 @@ fn process_tune_request(state: &mut AppState, target: &str) {
     state
         .radio_manager
         .set_source_info(&station.source_type, &station.collection);
+
+    if state.offline {
+        state.radio_manager.set_error("offline: network disabled");
+        return;
+    }
 
     if station.source_type == "archive" && !station.collection.is_empty() {
         // Internet Archive: spawn background thread to fetch catalog.
@@ -208,12 +213,13 @@ fn poll_track_fetch(state: &mut AppState) {
 fn tick_state_machine(state: &mut AppState) {
     let _ = state
         .radio_manager
-        .tick(&mut state.radio_source, &mut state.audio_backend);
+        .tick(&mut state.radio_source, state.audio_backend.as_mut());
 }
 
 /// Auto-advance to next track for archive stations (non-blocking).
 fn auto_advance_track(state: &mut AppState) {
     if state.radio_manager.needs_next_track()
+        && !state.offline
         && state.pending_source_fetch.is_none()
         && let Some(ref mut catalog) = state.archive_catalog
         && let Some(track) = catalog.next_track().cloned()

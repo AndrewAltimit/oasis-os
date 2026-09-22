@@ -17,7 +17,6 @@
 use std::path::PathBuf;
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::AudioBackend;
 use oasis_core::i18n::{self, Locale};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::settings::{self, SettingsStore, UserPrefs, pref_keys};

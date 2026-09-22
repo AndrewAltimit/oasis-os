@@ -141,7 +141,8 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
 
 /// Start TV catalog fetch if a TV Guide app needs it.
 pub(super) fn start_catalog_fetch_if_needed(state: &mut AppState) {
-    if state.pending_tv_catalog_fetch.is_some() {
+    // Offline (headless harness): catalogs are injected by the scenario.
+    if state.offline || state.pending_tv_catalog_fetch.is_some() {
         return;
     }
     let runner = super::find_tv_guide_runner(

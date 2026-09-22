@@ -257,7 +257,8 @@ Verbs:
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
 and the main loop polls connections each frame
-(`oasis-app/src/main.rs:622`). Status and request files live at
+(`Shell::step` in `oasis-app/src/shell.rs`). Status and request files live at
+
 `/var/ftp/status` and `/var/ftp/request` so headless drivers can inspect or
 trigger transfers via the VFS.
 

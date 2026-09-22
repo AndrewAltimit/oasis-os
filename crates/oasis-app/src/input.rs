@@ -89,7 +89,7 @@ fn apply_page_change_fade(state: &mut AppState) {
 fn stop_radio(state: &mut AppState) {
     let _ = state
         .radio_manager
-        .process_request("stop", &mut state.audio_backend);
+        .process_request("stop", state.audio_backend.as_mut());
     state.archive_catalog = None;
     state.pending_catalog_fetch = None;
     state.pending_source_fetch = None;
@@ -350,6 +350,24 @@ pub fn handle_desktop_input(
         },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                // App windows own Cancel: it backs out of dialogs, leaves
+                // viewers, untunes the TV and raises the Text Editor's
+                // unsaved-changes prompt. The window only closes when the
+                // app answers `Exit` (which every app does at top level).
+                // The browser and the windowed terminal are not `App`s and
+                // keep the plain close-on-Cancel behavior.
+                if active_id != "browser"
+                    && active_id != "terminal"
+                    && let Some((_, runner)) = state
+                        .content
+                        .open_runners
+                        .iter_mut()
+                        .find(|(id, _)| *id == active_id)
+                {
+                    let action = runner.handle_input(&Button::Cancel, vfs);
+                    apply_window_action(action, active_id, state, sdi, vfs);
+                    return InputResult::Continue;
+                }
                 state.ui_sounds.push(UiSound::Close);
                 // If closing the fullscreen window, clear fullscreen state first.
                 if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
@@ -1210,7 +1228,8 @@ mod tests {
             archive_catalog: None,
             pending_catalog_fetch: None,
             pending_source_fetch: None,
-            audio_backend: SdlAudioBackend::new(),
+            audio_backend: Box::new(SdlAudioBackend::new()),
+            offline: true,
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
