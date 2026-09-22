@@ -95,7 +95,7 @@ pub mod prelude {
     pub use oasis_types::error::{OasisError, Result};
 
     // Input
-    pub use oasis_types::input::{Button, InputEvent, Trigger};
+    pub use oasis_types::input::{Button, InputEvent, Key, Modifiers, Trigger};
 
     // Configuration
     pub use oasis_types::config::OasisConfig;
