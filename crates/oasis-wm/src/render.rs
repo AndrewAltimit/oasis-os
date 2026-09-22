@@ -87,9 +87,14 @@ impl WindowManager {
                 None => window.content_rect(&self.theme),
             };
             if cw > 0 && ch > 0 {
-                backend.set_clip_rect(cx, cy, cw, ch)?;
-                draw_content(&window.id, cx, cy, cw, ch, backend)?;
-                backend.reset_clip_rect()?;
+                // Push (not `set_clip_rect`): the backends' clip stack must
+                // know about the window clip, or an app's own push/pop pair
+                // restores "no clip" and the rest of its drawing spills over
+                // other windows and the desktop.
+                backend.push_clip_rect(cx, cy, cw, ch)?;
+                let drawn = draw_content(&window.id, cx, cy, cw, ch, backend);
+                backend.pop_clip_rect()?;
+                drawn?;
             }
         }
 
