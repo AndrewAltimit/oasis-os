@@ -278,6 +278,7 @@ impl RemoteListener {
         // Read from all connections.
         let mut commands = Vec::new();
         let mut to_remove = Vec::new();
+        let mut auth_failures = 0u32;
         let psk_bytes = self.config.psk.as_bytes().to_vec();
 
         for (idx, conn) in self.connections.iter_mut().enumerate() {
@@ -291,7 +292,9 @@ impl RemoteListener {
             let mut buf = [0u8; 512];
             match conn.stream.read(&mut buf) {
                 Ok(0) => {
-                    // Connection closed (EOF).
+                    // Peer closed the connection (EOF): free the slot now
+                    // rather than holding it until the idle timeout.
+                    to_remove.push(idx);
                 },
                 Err(oasis_types::error::OasisError::Io(ref e))
                     if e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -319,12 +322,20 @@ impl RemoteListener {
                                 } else {
                                     let _ = conn.stream.write(b"AUTH_FAIL\n");
                                     to_remove.push(idx);
+                                    auth_failures += 1;
+                                    // Ignore the rest of the buffer: no
+                                    // further PSK guesses on this connection.
+                                    conn.read_buf.clear();
+                                    break;
                                 }
                             },
                             AuthState::Authenticated => {
                                 if line == "quit" || line == "exit" {
                                     let _ = conn.stream.write(b"Goodbye.\n");
                                     to_remove.push(idx);
+                                    // Nothing after `quit` may run.
+                                    conn.read_buf.clear();
+                                    break;
                                 } else {
                                     commands.push((line, idx));
                                 }
@@ -337,6 +348,9 @@ impl RemoteListener {
                         conn.read_buf.clear();
                         let _ = conn.stream.write(b"error: line too long\n");
                         to_remove.push(idx);
+                        if conn.auth == AuthState::AwaitingAuth {
+                            auth_failures += 1;
+                        }
                     }
                 },
                 Err(e) => {
@@ -346,16 +360,9 @@ impl RemoteListener {
             }
         }
 
-        // Record auth failures from this poll cycle.
-        let auth_failure_count = to_remove
-            .iter()
-            .filter(|&&idx| {
-                self.connections
-                    .get(idx)
-                    .is_some_and(|c| c.auth == AuthState::AwaitingAuth)
-            })
-            .count();
-        for _ in 0..auth_failure_count {
+        // Record auth failures from this poll cycle (a wrong PSK or garbage
+        // before authenticating; a plain disconnect is not a failed guess).
+        for _ in 0..auth_failures {
             self.record_auth_failure();
         }
 
