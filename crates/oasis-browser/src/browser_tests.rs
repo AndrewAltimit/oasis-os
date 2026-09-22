@@ -3412,6 +3412,46 @@ fn static_page_stops_wanting_frames() {
     assert!(!browser.wants_frame());
 }
 
+/// `@import` inside a `vfs://` linked sheet is followed too (the VFS
+/// sheets load on `tick`, not on the I/O thread).
+#[test]
+fn vfs_linked_stylesheet_imports_are_followed() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/imp").unwrap();
+    vfs.write(
+        "/sites/imp/index.html",
+        b"<html><head><link rel=\"stylesheet\" href=\"main.css\"></head>\
+          <body><p class=\"a\">HiddenByImport</p><p>Visible</p></body></html>",
+    )
+    .unwrap();
+    vfs.write("/sites/imp/main.css", b"@import 'a.css'; p { color: red; }")
+        .unwrap();
+    vfs.write("/sites/imp/a.css", b".a { display: none; }")
+        .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/imp/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+    let mut frame = MockBackend::new();
+    browser.full_repaint_needed = true;
+    browser.paint(&mut frame).unwrap();
+    let texts: Vec<String> = frame
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            crate::test_utils::DrawCall::DrawText { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("Visible")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.contains("HiddenByImport")),
+        "{texts:?}"
+    );
+}
+
 /// Going back to a page that fell out of the resource cache refetches
 /// it; that load used to push a fresh history entry, wiping the forward
 /// stack (Forward did nothing after such a Back).

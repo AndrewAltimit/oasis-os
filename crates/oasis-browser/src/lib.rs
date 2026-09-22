@@ -453,6 +453,11 @@ pub struct BrowserWidget {
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
 
+    /// `@import`ed stylesheet URLs already requested for the current
+    /// page (dedupes imports and bounds import chains and cycles).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    imported_stylesheet_urls: HashSet<String>,
+
     /// Set once any external stylesheet has arrived that was not yet
     /// applied to the cascade. A later `tick` call re-runs cascade +
     /// layout so the new styles land on-screen.
@@ -717,6 +722,8 @@ impl BrowserWidget {
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_vfs_stylesheets: Vec::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            imported_stylesheet_urls: HashSet::new(),
             pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
             cached_selector_index: None,
