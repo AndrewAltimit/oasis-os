@@ -1,24 +1,35 @@
 //! Settings application for OASIS_OS.
 //!
 //! Provides a categorised settings screen with skin selection, resolution
-//! switching, audio configuration, and system/about details. Changes are
-//! published back to the shell through VFS IPC paths, and the shell applies
-//! them live to the running session.
+//! switching, audio volume, interface language, accessibility options and
+//! system/about details. Changes are published back to the shell through
+//! VFS IPC paths; the shell applies them live, persists them to
+//! `/system/settings.toml` and publishes the resulting state under
+//! `/system/state/*`, which this app reads back.
+
+use std::cell::Cell;
 
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
+use oasis_i18n::{Locale, tr};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
 use oasis_skin::theme::{contrast_ratio, parse_hex_color};
 use oasis_skin::{SkinTheme, SkinVariant, resolve_skin};
 use oasis_types::backend::{Color, SdiBackend};
-use oasis_types::input::Button;
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
 
 mod colors;
+mod layout;
+mod render;
+mod rows;
 
 pub use colors::SettingsColors;
+
+use layout::SettingsLayout;
+use rows::{Row, row_of_item, scroll_for};
 
 /// VFS IPC path used to request a skin change.
 pub const SKIN_CHANGE_REQUEST_PATH: &str = "/system/ipc/skin-change";
@@ -39,6 +50,25 @@ pub const SKIN_SAVE_CUSTOM_REQUEST_PATH: &str = "/system/ipc/skin-save-custom";
 /// The payload is `"WIDTHxHEIGHT"` (e.g. `"1280x720"`).
 pub const RESOLUTION_CHANGE_REQUEST_PATH: &str = "/system/ipc/resolution-change";
 
+/// VFS IPC path used to set the master volume. Payload: `0`-`100`.
+pub const VOLUME_CHANGE_REQUEST_PATH: &str = "/system/ipc/volume";
+
+/// VFS IPC path used to select the UI locale. Payload: a locale code
+/// (`"en"`, `"de"`, ...).
+pub const LOCALE_CHANGE_REQUEST_PATH: &str = "/system/ipc/locale";
+
+/// VFS IPC path used to set the font scale. Payload: a float such as
+/// `"1.25"`.
+pub const FONT_SCALE_REQUEST_PATH: &str = "/system/ipc/font-scale";
+
+/// VFS IPC path used to switch reduced motion. Payload: `"1"` or `"0"`.
+pub const REDUCED_MOTION_REQUEST_PATH: &str = "/system/ipc/reduced-motion";
+
+/// VFS IPC path for the high-contrast shortcut. Payload: `"on"` (swap to
+/// [`HIGH_CONTRAST_SKIN`], remembering the current skin) or `"off"` (swap
+/// back to the remembered skin).
+pub const HIGH_CONTRAST_REQUEST_PATH: &str = "/system/ipc/high-contrast";
+
 /// VFS path where the shell publishes the currently active skin name.
 pub const SKIN_STATE_PATH: &str = "/system/state/skin";
 
@@ -47,6 +77,27 @@ pub const RESOLUTION_STATE_PATH: &str = "/system/state/resolution";
 
 /// VFS path where the shell publishes the current backend name.
 pub const BACKEND_STATE_PATH: &str = "/system/state/backend";
+
+/// VFS path where the shell publishes the master volume (`0`-`100`).
+pub const VOLUME_STATE_PATH: &str = "/system/state/volume";
+
+/// VFS path where the shell publishes the selected locale code.
+pub const LOCALE_STATE_PATH: &str = "/system/state/locale";
+
+/// VFS path where the shell publishes the font scale.
+pub const FONT_SCALE_STATE_PATH: &str = "/system/state/font-scale";
+
+/// VFS path where the shell publishes the reduced-motion switch (`1`/`0`).
+pub const REDUCED_MOTION_STATE_PATH: &str = "/system/state/reduced-motion";
+
+/// Built-in skin used by the Accessibility high-contrast shortcut.
+pub const HIGH_CONTRAST_SKIN: &str = "highcontrast";
+
+/// Font scale steps offered by the Accessibility slider.
+pub const FONT_SCALE_PRESETS: &[f32] = &[0.75, 1.0, 1.25, 1.5];
+
+/// Volume change per Up/Down press.
+const VOLUME_STEP: u32 = 5;
 
 /// Resolution presets offered by the Settings UI.
 ///
@@ -69,31 +120,49 @@ enum Category {
     Appearance,
     Resolution,
     Audio,
+    Language,
+    Accessibility,
     System,
     About,
 }
 
 impl Category {
-    const ALL: [Category; 6] = [
+    const ALL: [Category; 8] = [
         Category::Display,
         Category::Appearance,
         Category::Resolution,
         Category::Audio,
+        Category::Language,
+        Category::Accessibility,
         Category::System,
         Category::About,
     ];
 
     fn label(self) -> &'static str {
         match self {
-            Category::Display => "Display",
-            Category::Appearance => "Appearance",
-            Category::Resolution => "Resolution",
-            Category::Audio => "Audio",
-            Category::System => "System",
-            Category::About => "About",
+            Category::Display => tr!("settings.cat_display"),
+            Category::Appearance => tr!("settings.cat_appearance"),
+            Category::Resolution => tr!("settings.cat_resolution"),
+            Category::Audio => tr!("settings.cat_audio"),
+            Category::Language => tr!("settings.cat_language"),
+            Category::Accessibility => tr!("settings.cat_accessibility"),
+            Category::System => tr!("settings.cat_system"),
+            Category::About => tr!("settings.cat_about"),
         }
     }
+
+    /// Whether Up/Down move a selection cursor over items (as opposed to
+    /// adjusting a value or scrolling text).
+    fn has_items(self) -> bool {
+        !matches!(self, Category::Audio | Category::System | Category::About)
+    }
 }
+
+/// Selectable items of the Accessibility category.
+const A11Y_FONT_SCALE: usize = 0;
+const A11Y_HIGH_CONTRAST: usize = 1;
+const A11Y_REDUCED_MOTION: usize = 2;
+const A11Y_ITEMS: usize = 3;
 
 /// Labels for the 9 editable base palette colors, in `SkinTheme` order.
 const BASE_COLOR_LABELS: [&str; 9] = [
@@ -203,6 +272,37 @@ impl AppearanceState {
     }
 }
 
+/// Last raw values read from the shell-published preference state paths.
+///
+/// Preference controls (volume, font scale, reduced motion) update the UI
+/// optimistically and post a request; the shell applies it a frame later.
+/// Syncing only when a state file *changes* keeps a stale published value
+/// from snapping the control back in the meantime.
+#[derive(Debug, Default)]
+struct SeenState {
+    volume: Option<String>,
+    locale: Option<String>,
+    font_scale: Option<String>,
+    reduced_motion: Option<String>,
+}
+
+/// Font metrics of the last windowed draw, reused by click hit-testing.
+#[derive(Debug, Clone, Copy)]
+struct Metrics {
+    font_body: u16,
+    font_hint: u16,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        let at = ActiveTheme::default();
+        Self {
+            font_body: at.font_body,
+            font_hint: at.font_hint,
+        }
+    }
+}
+
 /// Settings application state.
 #[derive(Debug)]
 pub struct SettingsApp {
@@ -221,6 +321,19 @@ pub struct SettingsApp {
     backend_name: String,
     /// Audio volume level (0-100).
     volume: u32,
+    /// Selected UI locale.
+    locale: Locale,
+    /// Font scale multiplier.
+    font_scale: f32,
+    /// Reduced-motion accessibility switch.
+    reduced_motion: bool,
+    /// Scroll offset for the text-only categories (System / About) in the
+    /// windowed renderer.
+    text_scroll: usize,
+    /// Last seen shell-published preference state.
+    seen: SeenState,
+    /// Font metrics of the last windowed draw (click hit-testing).
+    metrics: Cell<Metrics>,
     /// Appearance editor state (base palette, edit mode).
     appearance: AppearanceState,
 }
@@ -241,6 +354,12 @@ impl SettingsApp {
             height,
             backend_name: backend_name.to_string(),
             volume: 80,
+            locale: Locale::English,
+            font_scale: 1.0,
+            reduced_motion: false,
+            text_scroll: 0,
+            seen: SeenState::default(),
+            metrics: Cell::new(Metrics::default()),
             appearance: AppearanceState::default(),
         };
         // Align the cursor with the currently active skin so the highlight
@@ -270,7 +389,11 @@ impl SettingsApp {
             .unwrap_or((default_w, default_h));
         let backend =
             read_utf8(vfs, BACKEND_STATE_PATH).unwrap_or_else(|| default_backend.to_string());
-        Self::new(path, &skin, width, height, &backend)
+        let mut app = Self::new(path, &skin, width, height, &backend);
+        if app.sync_prefs(vfs) {
+            app.refresh_lines();
+        }
+        app
     }
 
     /// Index into [`RESOLUTION_PRESETS`] for the currently active resolution,
@@ -281,7 +404,31 @@ impl SettingsApp {
             .position(|(w, h)| *w == self.width && *h == self.height)
     }
 
-    /// Build display lines for the current category.
+    /// Whether the high-contrast shortcut is currently on.
+    fn high_contrast(&self) -> bool {
+        self.current_skin == HIGH_CONTRAST_SKIN
+    }
+
+    // -- Row model ---------------------------------------------------------
+
+    /// Body rows of the current category.
+    fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        match self.category {
+            Category::Display => self.display_rows(&mut rows),
+            Category::Appearance => self.appearance_rows(&mut rows),
+            Category::Resolution => self.resolution_rows(&mut rows),
+            Category::Audio => self.audio_rows(&mut rows),
+            Category::Language => self.language_rows(&mut rows),
+            Category::Accessibility => self.accessibility_rows(&mut rows),
+            Category::System => self.system_rows(&mut rows),
+            Category::About => self.about_rows(&mut rows),
+        }
+        rows
+    }
+
+    /// Build display lines for the current category (fullscreen SDI path
+    /// and [`App::lines`]).
     fn build_lines(&self) -> Vec<String> {
         let sep = "\u{2500}".repeat(36);
         let mut lines = Vec::new();
@@ -299,56 +446,45 @@ impl SettingsApp {
             .collect();
         lines.push(format!("  {}", tabs.join("  ")));
         lines.push(sep.clone());
-
-        match self.category {
-            Category::Display => self.build_display_lines(&mut lines),
-            Category::Appearance => self.build_appearance_lines(&mut lines),
-            Category::Resolution => self.build_resolution_lines(&mut lines),
-            Category::Audio => self.build_audio_lines(&mut lines),
-            Category::System => self.build_system_lines(&mut lines),
-            Category::About => self.build_about_lines(&mut lines),
-        }
-
+        lines.extend(self.rows().iter().map(Row::to_line));
         lines.push(sep);
         lines.push(String::new());
-        lines.push("  [L/R]=Category  [U/D]=Navigate".to_string());
-        lines.push("  [Confirm]=Apply  [Cancel]=Exit".to_string());
+        lines.push(format!("  {}", tr!("settings.nav_hint")));
+        lines.push(format!("  {}", tr!("settings.confirm_hint")));
         lines
     }
 
-    /// Build lines for the Display category.
-    fn build_display_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  Skin Selection".to_string());
-        lines.push(String::new());
-
-        // No embedded cursor marker: `draw_content_windowed` renders the
-        // selection `>` from `content.cursor`, which `sync_content_cursor`
-        // keeps aligned with `item_cursor`. Including a second marker here
-        // would double-draw the prefix and desync on scroll.
-        let names = builtin_names();
-        for name in names.iter() {
-            let marker = if *name == self.current_skin { " *" } else { "" };
-            lines.push(format!("   {name}{marker}"));
+    /// Rows for the Display category.
+    fn display_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.skin_selection").to_string()));
+        rows.push(Row::Blank);
+        for (i, name) in builtin_names().iter().enumerate() {
+            rows.push(Row::Item {
+                item: i,
+                label: (*name).to_string(),
+                active: *name == self.current_skin,
+            });
         }
-
-        lines.push(String::new());
-        lines.push(format!("  Resolution: {} x {}", self.width, self.height));
+        rows.push(Row::Blank);
+        rows.push(Row::Text(tr!(
+            "settings.resolution_value",
+            width = self.width,
+            height = self.height,
+        )));
     }
 
-    /// Build lines for the Appearance category (base-color editor).
+    /// Rows for the Appearance category (base-color editor).
     ///
-    /// Layout mirrors the other list categories: header at line 2, blank at
-    /// line 3, selectable items from [`Self::ITEMS_START`] on. Items are the
-    /// 9 base colors followed by the action rows (Apply / Save / variants),
-    /// with no gaps so `item_cursor` maps 1:1 to lines.
-    fn build_appearance_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  Appearance - Base Colors".to_string());
-        lines.push(String::new());
+    /// Items are the 9 base colors followed by the action rows (Apply /
+    /// Save / variants), with no gaps so `item_cursor` maps 1:1 to rows.
+    fn appearance_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.appearance_title").to_string()));
+        rows.push(Row::Blank);
 
         for (i, label) in BASE_COLOR_LABELS.iter().enumerate() {
             let c = self.appearance.colors[i];
             let readout = self.contrast_readout(i);
-            if self.item_cursor == i && self.appearance.editing_channel.is_some() {
+            let text = if self.item_cursor == i && self.appearance.editing_channel.is_some() {
                 let ch = self.appearance.editing_channel.unwrap_or(0);
                 let mark = |idx: u8, name: char, v: u8| {
                     if ch == idx {
@@ -357,31 +493,51 @@ impl SettingsApp {
                         format!(" {name}:{v:3} ")
                     }
                 };
-                lines.push(format!(
-                    "   {label:<11} {} {}{}{} {readout}",
+                format!(
+                    "{label:<11} {} {}{}{} {readout}",
                     hex(c),
                     mark(0, 'R', c.r),
                     mark(1, 'G', c.g),
                     mark(2, 'B', c.b),
-                ));
+                )
             } else {
-                lines.push(format!("   {label:<11} {}  {readout}", hex(c)));
-            }
+                format!("{label:<11} {}  {readout}", hex(c))
+            };
+            rows.push(Row::Item {
+                item: i,
+                label: text,
+                active: false,
+            });
         }
 
-        lines.push("   [ Apply (preview) ]".to_string());
-        lines.push(format!("   [ Save as '{}' ]", self.custom_skin_name()));
-        for v in SkinVariant::ALL {
-            lines.push(format!("   [ Variant: {} ]", v.label()));
+        let n = BASE_COLOR_LABELS.len();
+        let mut actions = vec![
+            format!("[ {} ]", tr!("settings.apply_preview")),
+            format!(
+                "[ {} ]",
+                tr!("settings.save_as", name = self.custom_skin_name())
+            ),
+        ];
+        actions.extend(
+            SkinVariant::ALL
+                .iter()
+                .map(|v| format!("[ {} ]", tr!("settings.variant", name = v.label()))),
+        );
+        for (i, label) in actions.into_iter().enumerate() {
+            rows.push(Row::Item {
+                item: n + i,
+                label,
+                active: false,
+            });
         }
 
-        lines.push(String::new());
+        rows.push(Row::Blank);
         if self.appearance.editing_channel.is_some() {
-            lines.push("  [U/D]=Value  [L/R]=Channel".to_string());
-            lines.push("  [Confirm]=Done  [Cancel]=Revert".to_string());
+            rows.push(Row::Text(tr!("settings.edit_hint_value").to_string()));
+            rows.push(Row::Text(tr!("settings.edit_hint_done").to_string()));
         } else {
-            lines.push("  [Confirm]=Edit color / activate".to_string());
-            lines.push("  AA = passes WCAG contrast, low = below".to_string());
+            rows.push(Row::Text(tr!("settings.edit_hint").to_string()));
+            rows.push(Row::Text(tr!("settings.contrast_hint").to_string()));
         }
     }
 
@@ -450,16 +606,14 @@ impl SettingsApp {
             // Apply (preview): send the edited theme for an in-memory swap.
             0 => {
                 if let Ok(toml_doc) = self.edited_theme().to_toml_string() {
-                    self.content.pending_vfs_request =
-                        Some((SKIN_APPLY_THEME_REQUEST_PATH.to_string(), toml_doc));
+                    self.post(SKIN_APPLY_THEME_REQUEST_PATH, toml_doc);
                 }
             },
             // Save as custom skin: the shell writes skins/<name>/ and swaps.
             1 => {
                 if let Ok(toml_doc) = self.edited_theme().to_toml_string() {
                     let payload = format!("{}\n{toml_doc}", self.custom_skin_name());
-                    self.content.pending_vfs_request =
-                        Some((SKIN_SAVE_CUSTOM_REQUEST_PATH.to_string(), payload));
+                    self.post(SKIN_SAVE_CUSTOM_REQUEST_PATH, payload);
                 }
             },
             // Variant rows: transform the local palette, then auto-preview so
@@ -470,8 +624,7 @@ impl SettingsApp {
                     let loaded_for = self.appearance.loaded_for.clone();
                     self.appearance.load_from_theme(&variant_theme, &loaded_for);
                     if let Ok(toml_doc) = variant_theme.to_toml_string() {
-                        self.content.pending_vfs_request =
-                            Some((SKIN_APPLY_THEME_REQUEST_PATH.to_string(), toml_doc));
+                        self.post(SKIN_APPLY_THEME_REQUEST_PATH, toml_doc);
                     }
                     self.refresh_lines();
                 }
@@ -521,79 +674,141 @@ impl SettingsApp {
         AppAction::None
     }
 
-    /// Build lines for the Resolution category.
-    fn build_resolution_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  Virtual Resolution".to_string());
-        lines.push(String::new());
-
-        for (w, h) in RESOLUTION_PRESETS.iter() {
-            let active = *w == self.width && *h == self.height;
-            let marker = if active { " *" } else { "" };
-            let label = preset_label(*w, *h);
-            lines.push(format!("   {w}x{h}  {label}{marker}"));
+    /// Rows for the Resolution category.
+    fn resolution_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.virtual_resolution").to_string()));
+        rows.push(Row::Blank);
+        for (i, (w, h)) in RESOLUTION_PRESETS.iter().enumerate() {
+            rows.push(Row::Item {
+                item: i,
+                label: format!("{w}x{h}  {}", preset_label(*w, *h)),
+                active: *w == self.width && *h == self.height,
+            });
         }
-
-        lines.push(String::new());
-        lines.push("  Window + layout resize live.".to_string());
+        rows.push(Row::Blank);
+        rows.push(Row::Text(tr!("settings.resolution_live").to_string()));
     }
 
-    /// Build lines for the Audio category.
-    fn build_audio_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  Audio Settings".to_string());
-        lines.push(String::new());
-
-        // Volume bar visualisation.
-        let filled = (self.volume / 5) as usize;
-        let empty = 20_usize.saturating_sub(filled);
-        let bar = format!(
-            "  Volume: [{}{}] {}%",
-            "\u{2588}".repeat(filled),
-            "\u{2591}".repeat(empty),
-            self.volume
-        );
-        lines.push(bar);
-        lines.push(String::new());
-        lines.push("  [U/D] = Adjust volume".to_string());
-        lines.push(String::new());
-        lines.push("  Audio Output:  Default".to_string());
-        lines.push("  Sample Rate:   44100 Hz".to_string());
-        lines.push("  Channels:      Stereo".to_string());
+    /// Rows for the Audio category.
+    fn audio_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.audio_title").to_string()));
+        rows.push(Row::Blank);
+        rows.push(Row::Slider {
+            item: 0,
+            label: tr!("system.volume").to_string(),
+            value: self.volume as f32,
+            min: 0.0,
+            max: 100.0,
+            value_text: format!("{}%", self.volume),
+        });
+        rows.push(Row::Blank);
+        rows.push(Row::Text(tr!("settings.volume_hint").to_string()));
+        rows.push(Row::Blank);
+        rows.push(Row::Text(tr!("settings.audio_output").to_string()));
+        rows.push(Row::Text(tr!("settings.sample_rate").to_string()));
+        rows.push(Row::Text(tr!("settings.channels").to_string()));
     }
 
-    /// Build lines for the System category.
-    fn build_system_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  System Information".to_string());
-        lines.push(String::new());
-        lines.push(format!("  Backend:       {}", self.backend_name));
-        lines.push(format!("  Resolution:    {} x {}", self.width, self.height));
-        lines.push(format!("  Active Skin:   {}", self.current_skin));
-        lines.push(format!("  Version:       {}", env!("CARGO_PKG_VERSION")));
-        lines.push(String::new());
-        lines.push("  VFS:           MemoryVfs".to_string());
-        lines.push("  Rust Edition:  2024".to_string());
-        lines.push("  MSRV:          1.91.0".to_string());
+    /// Rows for the Language category.
+    fn language_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.language_title").to_string()));
+        rows.push(Row::Blank);
+        for (i, locale) in Locale::all().iter().enumerate() {
+            rows.push(Row::Item {
+                item: i,
+                label: locale_label(*locale),
+                active: *locale == self.locale,
+            });
+        }
+        rows.push(Row::Blank);
+        if !oasis_i18n::bitmap_font_supports(self.locale) {
+            rows.push(Row::Text(tr!("settings.language_fallback").to_string()));
+        }
     }
 
-    /// Build lines for the About category.
-    fn build_about_lines(&self, lines: &mut Vec<String>) {
-        lines.push("  About OASIS_OS".to_string());
-        lines.push(String::new());
-        lines.push(format!("  Version:    {}", env!("CARGO_PKG_VERSION")));
-        lines.push("  License:    MIT / Unlicense".to_string());
-        lines.push("  Crates:     20 workspace crates".to_string());
-        lines.push("  Apps:       16 built-in".to_string());
-        lines.push("  Skins:      18 built-in".to_string());
-        lines.push(String::new());
-        lines.push("  An embeddable operating system".to_string());
-        lines.push("  framework originally ported from".to_string());
-        lines.push("  Inspired by PSP homebrew (PSIX).".to_string());
-        lines.push(String::new());
-        lines.push("  github.com/AndrewAltimit/oasis-os".to_string());
+    /// Rows for the Accessibility category.
+    fn accessibility_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(
+            tr!("settings.accessibility_title").to_string(),
+        ));
+        rows.push(Row::Blank);
+        let (min, max) = font_scale_range();
+        rows.push(Row::Slider {
+            item: A11Y_FONT_SCALE,
+            label: tr!("settings.font_scale").to_string(),
+            value: self.font_scale,
+            min,
+            max,
+            value_text: format!("{:.0}%", self.font_scale * 100.0),
+        });
+        rows.push(Row::Toggle {
+            item: A11Y_HIGH_CONTRAST,
+            label: tr!("settings.high_contrast").to_string(),
+            on: self.high_contrast(),
+        });
+        rows.push(Row::Toggle {
+            item: A11Y_REDUCED_MOTION,
+            label: tr!("settings.reduced_motion").to_string(),
+            on: self.reduced_motion,
+        });
+        rows.push(Row::Blank);
+        rows.push(Row::Text(tr!("settings.a11y_hint").to_string()));
     }
 
-    /// Re-read the shell-published state from VFS. Called on each tick so the
-    /// UI reflects changes applied by the shell after we posted a request.
-    fn sync_from_vfs(&mut self, vfs: &dyn Vfs) {
+    /// Rows for the System category.
+    fn system_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.system_title").to_string()));
+        rows.push(Row::Blank);
+        rows.push(Row::Text(format!("Backend:       {}", self.backend_name)));
+        rows.push(Row::Text(format!(
+            "Resolution:    {} x {}",
+            self.width, self.height
+        )));
+        rows.push(Row::Text(format!("Active Skin:   {}", self.current_skin)));
+        rows.push(Row::Text(format!(
+            "Version:       {}",
+            env!("CARGO_PKG_VERSION")
+        )));
+        rows.push(Row::Blank);
+        rows.push(Row::Text("VFS:           MemoryVfs".to_string()));
+        rows.push(Row::Text("Rust Edition:  2024".to_string()));
+        rows.push(Row::Text("MSRV:          1.91.0".to_string()));
+    }
+
+    /// Rows for the About category.
+    fn about_rows(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Heading(tr!("settings.about_title").to_string()));
+        rows.push(Row::Blank);
+        rows.push(Row::Text(format!(
+            "Version:    {}",
+            env!("CARGO_PKG_VERSION")
+        )));
+        for text in [
+            "License:    MIT / Unlicense",
+            "Crates:     20 workspace crates",
+            "Apps:       16 built-in",
+            "Skins:      18 built-in",
+        ] {
+            rows.push(Row::Text(text.to_string()));
+        }
+        rows.push(Row::Blank);
+        for text in [
+            "An embeddable operating system",
+            "framework originally ported from",
+            "Inspired by PSP homebrew (PSIX).",
+        ] {
+            rows.push(Row::Text(text.to_string()));
+        }
+        rows.push(Row::Blank);
+        rows.push(Row::Text("github.com/AndrewAltimit/oasis-os".to_string()));
+    }
+
+    // -- Shell state sync --------------------------------------------------
+
+    /// Re-read the shell-published state from VFS. Called on input and on
+    /// every tick so the UI reflects changes applied by the shell after we
+    /// posted a request. Returns `true` when anything changed.
+    fn sync_from_vfs(&mut self, vfs: &dyn Vfs) -> bool {
         let mut changed = false;
 
         if let Some(skin) = read_utf8(vfs, SKIN_STATE_PATH)
@@ -644,10 +859,49 @@ impl SettingsApp {
             changed = true;
         }
 
+        changed |= self.sync_prefs(vfs);
+
         if changed {
             self.refresh_lines();
             self.sync_content_cursor();
         }
+        changed
+    }
+
+    /// Adopt shell-published preference values that changed since the last
+    /// sync (see [`SeenState`]). Returns `true` when anything changed.
+    fn sync_prefs(&mut self, vfs: &dyn Vfs) -> bool {
+        let mut changed = false;
+        if let Some(v) = read_changed(vfs, VOLUME_STATE_PATH, &mut self.seen.volume)
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            changed |= v.min(100) != self.volume;
+            self.volume = v.min(100);
+        }
+        if let Some(l) = read_changed(vfs, LOCALE_STATE_PATH, &mut self.seen.locale)
+            .and_then(|s| Locale::from_code(&s))
+        {
+            changed |= l != self.locale;
+            self.locale = l;
+        }
+        if let Some(f) = read_changed(vfs, FONT_SCALE_STATE_PATH, &mut self.seen.font_scale)
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|f| f.is_finite())
+        {
+            changed |= (f - self.font_scale).abs() > f32::EPSILON;
+            self.font_scale = f;
+        }
+        if let Some(on) = read_changed(
+            vfs,
+            REDUCED_MOTION_STATE_PATH,
+            &mut self.seen.reduced_motion,
+        )
+        .map(|s| parse_bool(&s))
+        {
+            changed |= on != self.reduced_motion;
+            self.reduced_motion = on;
+        }
+        changed
     }
 
     /// Rebuild display lines from current state.
@@ -655,28 +909,25 @@ impl SettingsApp {
         self.content.lines = self.build_lines();
     }
 
-    /// First content-line index where selectable items begin in the
-    /// Display / Resolution categories. Layout is:
+    /// First content-line index where selectable items begin in the list
+    /// categories. Layout is:
     ///   0 = tab header
     ///   1 = separator
-    ///   2 = section header ("Skin Selection" / "Virtual Resolution")
+    ///   2 = section heading
     ///   3 = blank
     ///   4 = first item
-    /// Kept in sync with [`Self::build_display_lines`] and
-    /// [`Self::build_resolution_lines`], and also used by
-    /// [`Self::handle_click`] to map clicks back to item indices.
+    /// Every list category's rows start with heading + blank, and
+    /// [`Self::handle_click`] uses this to map fullscreen clicks back to
+    /// item indices.
     const ITEMS_START: usize = 4;
 
     /// Align `content.cursor` (and scroll, if needed) with the active item
-    /// so the single `>` prefix drawn by `draw_content_windowed` lands on
+    /// so the single `>` prefix drawn by the fullscreen renderer lands on
     /// the item `item_cursor` points at. Only meaningful for categories
     /// that actually have a list of selectable items — scrollable text
     /// categories leave content.cursor alone.
     fn sync_content_cursor(&mut self) {
-        if !matches!(
-            self.category,
-            Category::Display | Category::Appearance | Category::Resolution
-        ) {
+        if !self.category.has_items() && self.category != Category::Audio {
             return;
         }
         let target = Self::ITEMS_START + self.item_cursor;
@@ -695,8 +946,12 @@ impl SettingsApp {
             Category::Display => builtin_names().len(),
             Category::Appearance => BASE_COLOR_LABELS.len() + APPEARANCE_ACTIONS,
             Category::Resolution => RESOLUTION_PRESETS.len(),
-            // No selectable items -- Audio uses Up/Down for volume directly.
-            Category::Audio | Category::System | Category::About => 0,
+            Category::Language => Locale::all().len(),
+            Category::Accessibility => A11Y_ITEMS,
+            // The Audio volume slider is the category's only control;
+            // Up/Down adjust it directly.
+            Category::Audio => 1,
+            Category::System | Category::About => 0,
         }
     }
 
@@ -708,32 +963,37 @@ impl SettingsApp {
                 .position(|n| *n == self.current_skin)
                 .unwrap_or(0),
             Category::Resolution => self.current_resolution_index().unwrap_or(0),
+            Category::Language => Locale::all()
+                .iter()
+                .position(|l| *l == self.locale)
+                .unwrap_or(0),
             _ => 0,
         }
     }
 
     /// Switch to the next category (right).
     fn next_category(&mut self) {
-        let idx = Category::ALL
-            .iter()
-            .position(|c| *c == self.category)
-            .unwrap_or(0);
+        let idx = self.category_index();
         let next = (idx + 1) % Category::ALL.len();
         self.enter_category(Category::ALL[next]);
     }
 
     /// Switch to the previous category (left).
     fn prev_category(&mut self) {
-        let idx = Category::ALL
-            .iter()
-            .position(|c| *c == self.category)
-            .unwrap_or(0);
+        let idx = self.category_index();
         let prev = if idx == 0 {
             Category::ALL.len() - 1
         } else {
             idx - 1
         };
         self.enter_category(Category::ALL[prev]);
+    }
+
+    fn category_index(&self) -> usize {
+        Category::ALL
+            .iter()
+            .position(|c| *c == self.category)
+            .unwrap_or(0)
     }
 
     /// Common category-switch bookkeeping.
@@ -745,10 +1005,68 @@ impl SettingsApp {
             self.ensure_appearance_palette();
         }
         self.item_cursor = self.cursor_for_category(category);
+        self.text_scroll = 0;
         self.content.scroll = 0;
         self.content.cursor = 0;
         self.refresh_lines();
         self.sync_content_cursor();
+    }
+
+    /// Queue an IPC request for the shell.
+    fn post(&mut self, path: &str, payload: String) {
+        self.content.pending_vfs_request = Some((path.to_string(), payload));
+    }
+
+    /// Set the volume (clamped) and ask the shell to apply it.
+    fn set_volume(&mut self, volume: u32) {
+        let volume = volume.min(100);
+        if volume == self.volume {
+            return;
+        }
+        self.volume = volume;
+        self.post(VOLUME_CHANGE_REQUEST_PATH, volume.to_string());
+        self.refresh_lines();
+    }
+
+    /// Set the font scale (clamped to the preset range) and ask the shell
+    /// to apply it.
+    fn set_font_scale(&mut self, scale: f32) {
+        let (min, max) = font_scale_range();
+        let scale = scale.clamp(min, max);
+        if (scale - self.font_scale).abs() < f32::EPSILON {
+            return;
+        }
+        self.font_scale = scale;
+        self.post(FONT_SCALE_REQUEST_PATH, format!("{scale}"));
+        self.refresh_lines();
+    }
+
+    /// Step the font scale one preset up (`up`) or down, clamping at the
+    /// ends. `wrap` wraps from the largest back to the smallest (Confirm
+    /// cycles through the presets).
+    fn step_font_scale(&mut self, up: bool, wrap: bool) {
+        let n = FONT_SCALE_PRESETS.len();
+        let current = nearest_preset(self.font_scale);
+        let next = if up {
+            if current + 1 < n {
+                current + 1
+            } else if wrap {
+                0
+            } else {
+                current
+            }
+        } else {
+            current.saturating_sub(1)
+        };
+        self.set_font_scale(FONT_SCALE_PRESETS[next]);
+    }
+
+    /// Toggle reduced motion and ask the shell to apply it.
+    fn toggle_reduced_motion(&mut self) {
+        self.reduced_motion = !self.reduced_motion;
+        let payload = if self.reduced_motion { "1" } else { "0" };
+        self.post(REDUCED_MOTION_REQUEST_PATH, payload.to_string());
+        self.refresh_lines();
     }
 
     /// Handle confirm action in the current category.
@@ -763,21 +1081,56 @@ impl SettingsApp {
                         // Don't mutate current_skin yet — wait for the shell
                         // to publish the new state back. This makes the UI
                         // accurately reflect whether the swap actually took.
-                        self.content.pending_vfs_request =
-                            Some((SKIN_CHANGE_REQUEST_PATH.to_string(), selected.to_string()));
+                        self.post(SKIN_CHANGE_REQUEST_PATH, selected.to_string());
                     }
                 }
             },
             Category::Resolution if self.item_cursor < RESOLUTION_PRESETS.len() => {
                 let (w, h) = RESOLUTION_PRESETS[self.item_cursor];
                 if w != self.width || h != self.height {
-                    self.content.pending_vfs_request = Some((
-                        RESOLUTION_CHANGE_REQUEST_PATH.to_string(),
-                        format!("{w}x{h}"),
-                    ));
+                    self.post(RESOLUTION_CHANGE_REQUEST_PATH, format!("{w}x{h}"));
                 }
             },
+            Category::Language => {
+                if let Some(&locale) = Locale::all().get(self.item_cursor)
+                    && locale != self.locale
+                {
+                    // Like skins, wait for the shell to publish the applied
+                    // locale before marking it active.
+                    self.post(LOCALE_CHANGE_REQUEST_PATH, locale.code().to_string());
+                }
+            },
+            Category::Accessibility => match self.item_cursor {
+                A11Y_FONT_SCALE => self.step_font_scale(true, true),
+                A11Y_HIGH_CONTRAST => {
+                    let payload = if self.high_contrast() { "off" } else { "on" };
+                    self.post(HIGH_CONTRAST_REQUEST_PATH, payload.to_string());
+                },
+                A11Y_REDUCED_MOTION => self.toggle_reduced_motion(),
+                _ => {},
+            },
             _ => {},
+        }
+    }
+
+    /// Adjust the current category's slider by one step. Returns `true`
+    /// when the current row is a slider.
+    fn adjust_slider(&mut self, up: bool) -> bool {
+        match self.category {
+            Category::Audio => {
+                let v = if up {
+                    self.volume + VOLUME_STEP
+                } else {
+                    self.volume.saturating_sub(VOLUME_STEP)
+                };
+                self.set_volume(v);
+                true
+            },
+            Category::Accessibility if self.item_cursor == A11Y_FONT_SCALE => {
+                self.step_font_scale(up, false);
+                true
+            },
+            _ => false,
         }
     }
 
@@ -820,6 +1173,101 @@ impl SettingsApp {
             }
         }
     }
+
+    /// Windowed layout for a content rect of the given size, using the
+    /// font metrics of the last draw.
+    fn layout(&self, cx: i32, cy: i32, cw: u32, ch: u32) -> SettingsLayout {
+        let m = self.metrics.get();
+        SettingsLayout::compute(
+            cx,
+            cy,
+            cw,
+            ch,
+            Category::ALL.len(),
+            m.font_body,
+            m.font_hint,
+        )
+    }
+
+    /// First visible body row in the windowed renderer.
+    fn body_scroll(&self, rows: &[Row], visible: usize) -> usize {
+        let focus = if self.category.has_items() || self.category == Category::Audio {
+            row_of_item(rows, self.item_cursor)
+        } else {
+            None
+        };
+        scroll_for(rows.len(), visible, focus, self.text_scroll)
+    }
+
+    /// Windowed click: tabs switch category, rows select + activate,
+    /// slider tracks set the value at the click position.
+    fn handle_windowed_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) {
+        let l = self.layout(0, 0, cw, ch);
+        if let Some(i) = l.tabs.iter().position(|t| t.contains(lx, ly)) {
+            if Category::ALL[i] != self.category {
+                self.enter_category(Category::ALL[i]);
+            }
+            return;
+        }
+        let Some(vis) = l.row_at(lx, ly) else {
+            return;
+        };
+        let rows = self.rows();
+        let scroll = self.body_scroll(&rows, l.visible_rows());
+        let Some(row) = rows.get(scroll + vis) else {
+            return;
+        };
+        let Some(item) = row.item() else {
+            return;
+        };
+        if self.category == Category::Appearance && self.appearance.editing_channel.is_some() {
+            // A click elsewhere commits the edit in progress.
+            self.appearance.editing_channel = None;
+        }
+        self.item_cursor = item;
+        match row {
+            Row::Slider { min, max, .. } => {
+                let track = l.control_rect(l.row_rect(vis));
+                if track.contains(lx, ly) {
+                    let frac = (lx - track.x) as f32 / track.w.max(1) as f32;
+                    let value = min + (max - min) * frac.clamp(0.0, 1.0);
+                    match self.category {
+                        Category::Audio => {
+                            let v = (value / VOLUME_STEP as f32).round() as u32 * VOLUME_STEP;
+                            self.set_volume(v);
+                        },
+                        _ => self.set_font_scale(FONT_SCALE_PRESETS[nearest_preset(value)]),
+                    }
+                }
+            },
+            _ => self.handle_confirm(),
+        }
+        self.refresh_lines();
+        self.sync_content_cursor();
+    }
+
+    /// Fullscreen click: map the Y coordinate to a content line using the
+    /// shared content renderer's metrics (content starts at the shared
+    /// `WINDOWED_TOP_PAD`, rows are `cached_line_h` tall).
+    fn handle_fullscreen_click(&mut self, ly: i32) {
+        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
+        let line_h = self.content.cached_line_h.max(1) as i32;
+        let y_in_content = ly - content_top;
+        if y_in_content < 0 {
+            return;
+        }
+        let line_idx = self.content.scroll + (y_in_content / line_h) as usize;
+        if line_idx < Self::ITEMS_START || !self.category.has_items() {
+            return;
+        }
+        let item_idx = line_idx - Self::ITEMS_START;
+        if item_idx < self.item_count() {
+            self.item_cursor = item_idx;
+            self.handle_confirm();
+            self.refresh_lines();
+            self.sync_content_cursor();
+        }
+    }
 }
 
 impl App for SettingsApp {
@@ -841,66 +1289,23 @@ impl App for SettingsApp {
         self.apply_sdi_colors(sdi, &SettingsColors::from_theme(at));
     }
 
-    /// Windowed renderer. Mirrors
-    /// `oasis_app_core::render::draw_content_windowed` (no-context path)
-    /// line-for-line, but sources colors from [`SettingsColors`] so skins
-    /// can restyle the Settings window via `[app_themes.settings]`. Keep
-    /// the layout metrics in sync with the shared renderer (and with
-    /// `handle_click`).
+    /// Windowed renderer: category tab strip, a row list drawn with
+    /// oasis-ui widgets (Slider / Toggle) and a hint footer, all sized from
+    /// the active theme's fonts (which carry the user's font scale).
     fn draw_windowed(
         &self,
         cx: i32,
         cy: i32,
-        _cw: u32,
+        cw: u32,
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        let colors = SettingsColors::from_theme(at);
-        let content = &self.content;
-
-        // No inner title row — the WM titlebar already shows "Settings".
-        // Settings never sets `browse_dir`/`viewing_file`, so the generic
-        // renderer's context header row never applies either: content
-        // starts at the shared windowed top inset.
-        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
-
-        // Content lines.
-        let line_h = at.terminal_line_height.max(12) as i32;
-        let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
-        let visible = content
-            .lines
-            .len()
-            .saturating_sub(content.scroll)
-            .min(max_lines);
-        for i in 0..visible {
-            let line_idx = content.scroll + i;
-            let line = &content.lines[line_idx];
-            let prefix = if i == content.cursor { "> " } else { "  " };
-            let text = format!("{prefix}{line}");
-            let text_color = if i == content.cursor {
-                colors.selected_text
-            } else {
-                colors.text
-            };
-            let y = cy + content_top + i as i32 * line_h;
-            backend.draw_text(&text, cx + 4, y, 12, text_color)?;
-        }
-
-        // Scroll indicator.
-        let scroll_text = if content.lines.len() > max_lines {
-            format!(
-                "[{}/{}]  Cancel=back",
-                content.scroll + 1,
-                content.lines.len().saturating_sub(max_lines) + 1,
-            )
-        } else {
-            "Cancel=back".to_string()
-        };
-        let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, colors.dim_text)?;
-
-        Ok(())
+        self.metrics.set(Metrics {
+            font_body: at.font_body,
+            font_hint: at.font_hint,
+        });
+        self.draw_settings(cx, cy, cw, ch, backend, at)
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {
@@ -915,6 +1320,10 @@ impl App for SettingsApp {
         self.content.pending_vfs_request.as_ref()
     }
 
+    fn tick(&mut self, _dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.sync_from_vfs(vfs)
+    }
+
     fn lines(&self) -> &[String] {
         &self.content.lines
     }
@@ -925,6 +1334,18 @@ impl App for SettingsApp {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn handle_key(&mut self, key: &Key, mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+        if mods.has_command() {
+            return None;
+        }
+        let up = match key {
+            Key::Char('+' | '=') => true,
+            Key::Char('-' | '_') => false,
+            _ => return None,
+        };
+        self.adjust_slider(up).then_some(AppAction::None)
     }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
@@ -954,46 +1375,45 @@ impl App for SettingsApp {
                 AppAction::None
             },
 
-            Button::Up => {
+            Button::Up | Button::Down => {
+                let up = matches!(button, Button::Up);
                 match self.category {
                     Category::Audio => {
-                        self.volume = (self.volume + 5).min(100);
-                        self.refresh_lines();
-                    },
-                    Category::Display | Category::Appearance | Category::Resolution => {
-                        if self.item_cursor > 0 {
-                            self.item_cursor -= 1;
-                            self.refresh_lines();
-                            self.sync_content_cursor();
-                        }
+                        self.adjust_slider(up);
                     },
                     Category::System | Category::About => {
                         // Plain scrollable text — let the content cursor
-                        // drive itself.
-                        self.content.navigate_up();
+                        // drive itself (fullscreen) and scroll the windowed
+                        // row list.
+                        if up {
+                            self.content.navigate_up();
+                            self.text_scroll = self.text_scroll.saturating_sub(1);
+                        } else {
+                            self.content.navigate_down();
+                            let max = self.rows().len().saturating_sub(1);
+                            self.text_scroll = (self.text_scroll + 1).min(max);
+                        }
+                    },
+                    _ => {
+                        let count = self.item_count();
+                        if up && self.item_cursor > 0 {
+                            self.item_cursor -= 1;
+                        } else if !up && self.item_cursor + 1 < count {
+                            self.item_cursor += 1;
+                        } else {
+                            return AppAction::None;
+                        }
+                        self.refresh_lines();
+                        self.sync_content_cursor();
                     },
                 }
                 AppAction::None
             },
 
-            Button::Down => {
-                match self.category {
-                    Category::Audio => {
-                        self.volume = self.volume.saturating_sub(5);
-                        self.refresh_lines();
-                    },
-                    Category::Display | Category::Appearance | Category::Resolution => {
-                        let count = self.item_count();
-                        if count > 0 && self.item_cursor + 1 < count {
-                            self.item_cursor += 1;
-                            self.refresh_lines();
-                            self.sync_content_cursor();
-                        }
-                    },
-                    Category::System | Category::About => {
-                        self.content.navigate_down();
-                    },
-                }
+            // Square steps the focused slider down (font scale); Confirm
+            // steps / cycles it up.
+            Button::Square => {
+                self.adjust_slider(false);
                 AppAction::None
             },
 
@@ -1008,56 +1428,11 @@ impl App for SettingsApp {
         }
     }
 
-    fn handle_click(
-        &mut self,
-        _lx: i32,
-        ly: i32,
-        _cw: u32,
-        _ch: u32,
-        _fullscreen: bool,
-    ) -> AppAction {
-        // Map the click Y coordinate back to a content-line index using the
-        // same metrics as the windowed renderer: content starts at the
-        // shared `WINDOWED_TOP_PAD` (there is no inner title row — the WM
-        // titlebar shows the app title), rows are `cached_line_h` tall.
-        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
-        let line_h = self.content.cached_line_h.max(1) as i32;
-
-        let y_in_content = ly - content_top;
-        if y_in_content < 0 {
-            return AppAction::None;
-        }
-        let visible_idx = (y_in_content / line_h) as usize;
-        let line_idx = self.content.scroll + visible_idx;
-
-        if line_idx < Self::ITEMS_START {
-            return AppAction::None;
-        }
-        let item_idx = line_idx - Self::ITEMS_START;
-
-        match self.category {
-            Category::Display => {
-                let names = builtin_names();
-                if item_idx < names.len() {
-                    self.item_cursor = item_idx;
-                    self.handle_confirm();
-                    self.refresh_lines();
-                    self.sync_content_cursor();
-                }
-            },
-            Category::Appearance if item_idx < self.item_count() => {
-                self.item_cursor = item_idx;
-                self.handle_confirm();
-                self.refresh_lines();
-                self.sync_content_cursor();
-            },
-            Category::Resolution if item_idx < RESOLUTION_PRESETS.len() => {
-                self.item_cursor = item_idx;
-                self.handle_confirm();
-                self.refresh_lines();
-                self.sync_content_cursor();
-            },
-            _ => {},
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
+        if fullscreen {
+            self.handle_fullscreen_click(ly);
+        } else {
+            self.handle_windowed_click(lx, ly, cw, ch);
         }
         AppAction::None
     }
@@ -1073,6 +1448,53 @@ fn read_utf8(vfs: &dyn Vfs, path: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+/// Read a state file and return its value only if it differs from the last
+/// value seen (updating `seen`).
+fn read_changed(vfs: &dyn Vfs, path: &str, seen: &mut Option<String>) -> Option<String> {
+    let value = read_utf8(vfs, path)?;
+    if seen.as_deref() == Some(value.as_str()) {
+        return None;
+    }
+    *seen = Some(value.clone());
+    Some(value)
+}
+
+/// Parse a boolean state payload (`1`/`true`/`on`).
+fn parse_bool(s: &str) -> bool {
+    matches!(s.trim(), "1" | "true" | "on" | "yes")
+}
+
+/// Index of the font-scale preset closest to `scale`.
+fn nearest_preset(scale: f32) -> usize {
+    FONT_SCALE_PRESETS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - scale)
+                .abs()
+                .partial_cmp(&(*b - scale).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map_or(1, |(i, _)| i)
+}
+
+/// Smallest and largest font-scale preset.
+fn font_scale_range() -> (f32, f32) {
+    let min = FONT_SCALE_PRESETS.first().copied().unwrap_or(1.0);
+    let max = FONT_SCALE_PRESETS.last().copied().unwrap_or(1.0);
+    (min, max)
+}
+
+/// List label for a locale: its native name when the bitmap font can draw
+/// it, otherwise the English name plus the code.
+fn locale_label(locale: Locale) -> String {
+    if oasis_i18n::bitmap_font_supports(locale) {
+        locale.name().to_string()
+    } else {
+        format!("{} ({})", locale.english_name(), locale.code())
     }
 }
 
@@ -1281,7 +1703,7 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         // Navigate to System.
-        for _ in 0..4 {
+        for _ in 0..6 {
             app.handle_input(&Button::Right, &vfs);
         }
         assert_eq!(app.category, Category::System);
@@ -1295,13 +1717,36 @@ mod tests {
         let vfs = make_vfs();
         let mut app = make_app();
         // Navigate to About.
-        for _ in 0..5 {
+        for _ in 0..7 {
             app.handle_input(&Button::Right, &vfs);
         }
         assert_eq!(app.category, Category::About);
         let lines = app.lines();
         assert!(lines.iter().any(|l| l.contains("MIT")));
         assert!(lines.iter().any(|l| l.contains("PSP")));
+    }
+
+    #[test]
+    fn ui_strings_resolve_through_catalog() {
+        // A missing key would render as the raw key ("settings.cat_...").
+        for c in Category::ALL {
+            assert!(!c.label().starts_with("settings."), "{c:?}");
+        }
+        let vfs = make_vfs();
+        for c in Category::ALL {
+            let app = app_in(c, &vfs);
+            for line in app.lines() {
+                assert!(
+                    !line.contains("settings.") && !line.contains("system."),
+                    "untranslated key in {c:?}: {line}"
+                );
+            }
+        }
+        // German strings exist for the categories (Latin-1, drawable).
+        assert_eq!(
+            oasis_i18n::translate_for("settings.cat_language", Locale::German),
+            "Sprache"
+        );
     }
 
     #[test]
@@ -1489,14 +1934,27 @@ mod tests {
         );
     }
 
+    /// Windowed content size used by the click tests.
+    const CW: u32 = 480;
+    const CH: u32 = 260;
+
+    /// Content-local point in the middle of the row showing `item`, using
+    /// the same layout + scroll the renderer uses. `x_frac` positions the
+    /// point across the row (0.0 = left edge, 1.0 = right edge).
+    fn item_point(app: &SettingsApp, item: usize, x_frac: f32) -> (i32, i32) {
+        let l = app.layout(0, 0, CW, CH);
+        let rows = app.rows();
+        let scroll = app.body_scroll(&rows, l.visible_rows());
+        let row = row_of_item(&rows, item).expect("item has a row");
+        let r = l.row_rect(row - scroll);
+        (r.x + (r.w as f32 * x_frac) as i32, r.y + r.h as i32 / 2)
+    }
+
     #[test]
     fn click_on_skin_row_applies() {
         let mut app = make_app();
-        // Items render starting at line 4 (tabs + separator + header + blank).
-        // Renderer uses WINDOWED_TOP_PAD = 4 + line_h = 14, so line 4 lives
-        // at y = 4 + 4*14 = 60. Line 5 (second skin, not the active one)
-        // lives at y = 74.
-        let _action = app.handle_click(10, 74, 400, 220, false);
+        let (x, y) = item_point(&app, 1, 0.2);
+        let _action = app.handle_click(x, y, CW, CH, false);
         let req = app.take_pending_request();
         let (path, data) = req.expect("click on non-active skin should post IPC");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
@@ -1506,23 +1964,33 @@ mod tests {
 
     #[test]
     fn click_on_active_skin_noop() {
-        let vfs = make_vfs();
         let mut app = make_app();
-        // Line 4 = first skin ("classic"), which is the active one
-        // (y = 4 + 4*14 = 60).
-        let _action = app.handle_click(10, 60, 400, 220, false);
+        // Item 0 = "classic", which is the active skin.
+        let (x, y) = item_point(&app, 0, 0.2);
+        let _action = app.handle_click(x, y, CW, CH, false);
         assert!(app.take_pending_request().is_none());
-        // Double-check we pulled the vfs arg in via sync (no panic).
-        let _ = vfs;
     }
 
     #[test]
     fn click_above_content_area_ignored() {
         let mut app = make_app();
-        // Click on the tab strip (line 0, well above the first skin row) —
-        // ignored because it maps to a line index below ITEMS_START.
-        let _action = app.handle_click(10, 5, 400, 220, false);
+        // Top-left padding above the tab strip: nothing to hit.
+        let _action = app.handle_click(1, 1, CW, CH, false);
         assert!(app.take_pending_request().is_none());
+        assert_eq!(app.category, Category::Display);
+    }
+
+    #[test]
+    fn click_on_tab_switches_category() {
+        let mut app = make_app();
+        let l = app.layout(0, 0, CW, CH);
+        let audio = Category::ALL
+            .iter()
+            .position(|c| *c == Category::Audio)
+            .expect("audio tab");
+        let t = l.tabs[audio];
+        app.handle_click(t.x + 2, t.y + 2, CW, CH, false);
+        assert_eq!(app.category, Category::Audio);
     }
 
     #[test]
@@ -1533,13 +2001,244 @@ mod tests {
         app.handle_input(&Button::Right, &vfs);
         app.handle_input(&Button::Right, &vfs);
         assert_eq!(app.category, Category::Resolution);
-        // Click the 4th preset (1280x720, index 3 → content line 4+3=7 →
-        // y = 4 + 7*14 = 102).
-        let _action = app.handle_click(10, 102, 400, 220, false);
+        // Click the 4th preset (1280x720, index 3).
+        let (x, y) = item_point(&app, 3, 0.2);
+        let _action = app.handle_click(x, y, CW, CH, false);
         let req = app.take_pending_request();
         let (path, data) = req.expect("click on non-active preset should post IPC");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);
         assert_eq!(data, "1280x720");
+    }
+
+    #[test]
+    fn fullscreen_click_maps_content_lines() {
+        let mut app = make_app();
+        // Fullscreen keeps the line-based mapping: items start at content
+        // line 4; with WINDOWED_TOP_PAD = 4 and line_h = 14, line 5 (the
+        // second skin) lives at y = 4 + 5*14 = 74.
+        app.handle_click(10, 74, 400, 220, true);
+        let (path, data) = app.take_pending_request().expect("fullscreen click posts");
+        assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
+        assert_eq!(data, builtin_names()[1]);
+    }
+
+    // -- Audio / Language / Accessibility --
+
+    /// Navigate a fresh app to `category`.
+    fn app_in(category: Category, vfs: &MemoryVfs) -> SettingsApp {
+        let mut app = make_app();
+        while app.category != category {
+            app.handle_input(&Button::Right, vfs);
+        }
+        app
+    }
+
+    #[test]
+    fn volume_change_emits_ipc_request() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Audio, &vfs);
+        app.handle_input(&Button::Up, &vfs);
+        let (path, data) = app.take_pending_request().expect("volume posts IPC");
+        assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
+        assert_eq!(data, "85");
+        app.handle_input(&Button::Down, &vfs);
+        app.handle_input(&Button::Down, &vfs);
+        let (_, data) = app.take_pending_request().expect("volume posts IPC");
+        assert_eq!(data, "75");
+    }
+
+    #[test]
+    fn volume_at_limit_posts_nothing() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Audio, &vfs);
+        app.volume = 100;
+        app.handle_input(&Button::Up, &vfs);
+        assert!(app.take_pending_request().is_none());
+    }
+
+    #[test]
+    fn volume_plus_minus_keys() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Audio, &vfs);
+        let consumed = app.handle_key(&Key::Char('-'), Modifiers::default(), &vfs);
+        assert_eq!(consumed, Some(AppAction::None));
+        assert_eq!(app.volume, 75);
+        // Outside slider categories the keys fall through.
+        let mut other = make_app();
+        assert!(
+            other
+                .handle_key(&Key::Char('+'), Modifiers::default(), &vfs)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn click_on_volume_slider_sets_value() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Audio, &vfs);
+        let l = app.layout(0, 0, CW, CH);
+        let rows = app.rows();
+        let row = row_of_item(&rows, 0).expect("volume row");
+        let track = l.control_rect(l.row_rect(row));
+        // Click near the left end of the track -> low volume.
+        app.handle_click(track.x + 1, track.y + 2, CW, CH, false);
+        assert!(app.volume <= 5, "volume {}", app.volume);
+        let (path, _) = app.take_pending_request().expect("slider click posts");
+        assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
+    }
+
+    #[test]
+    fn shell_volume_state_is_adopted_once() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/system").unwrap();
+        vfs.mkdir("/system/state").unwrap();
+        vfs.write(VOLUME_STATE_PATH, b"40").unwrap();
+        let mut app = SettingsApp::from_vfs("/apps/settings", &vfs, "classic", 480, 272, "SDL3");
+        assert_eq!(app.volume, 40);
+        // Optimistic local change survives a sync while the shell still
+        // publishes the old value ...
+        app.enter_category(Category::Audio);
+        app.handle_input(&Button::Up, &vfs);
+        assert!(!app.tick(16, &vfs));
+        assert_eq!(app.volume, 45);
+        // ... and a new published value is adopted.
+        vfs.write(VOLUME_STATE_PATH, b"60").unwrap();
+        assert!(app.tick(16, &vfs));
+        assert_eq!(app.volume, 60);
+    }
+
+    #[test]
+    fn language_lists_locales_and_requests_change() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Language, &vfs);
+        let lines = app.lines();
+        assert!(lines.iter().any(|l| l.contains("Deutsch")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("English") && l.contains('*')),
+            "active locale marked"
+        );
+        // English is first; move to the next locale and confirm.
+        app.handle_input(&Button::Down, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, data) = app.take_pending_request().expect("locale posts IPC");
+        assert_eq!(path, LOCALE_CHANGE_REQUEST_PATH);
+        assert_eq!(data, Locale::all()[1].code());
+    }
+
+    #[test]
+    fn language_marks_published_locale() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/system").unwrap();
+        vfs.mkdir("/system/state").unwrap();
+        vfs.write(LOCALE_STATE_PATH, b"fr").unwrap();
+        let mut app = SettingsApp::from_vfs("/apps/settings", &vfs, "classic", 480, 272, "SDL3");
+        assert_eq!(app.locale, Locale::French);
+        app.enter_category(Category::Language);
+        let fr = Locale::all()
+            .iter()
+            .position(|l| *l == Locale::French)
+            .expect("fr");
+        assert_eq!(app.item_cursor, fr);
+    }
+
+    #[test]
+    fn accessibility_font_scale_cycles_and_posts() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Accessibility, &vfs);
+        assert_eq!(app.item_cursor, A11Y_FONT_SCALE);
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, data) = app.take_pending_request().expect("font scale posts");
+        assert_eq!(path, FONT_SCALE_REQUEST_PATH);
+        assert_eq!(data.parse::<f32>().ok(), Some(1.25));
+        // Square steps back down.
+        app.handle_input(&Button::Square, &vfs);
+        assert_eq!(app.font_scale, 1.0);
+        // Confirm at the largest preset wraps to the smallest.
+        app.font_scale = 1.5;
+        app.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(app.font_scale, 0.75);
+    }
+
+    #[test]
+    fn accessibility_toggles_post_requests() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::Accessibility, &vfs);
+        app.handle_input(&Button::Down, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, data) = app.take_pending_request().expect("high contrast posts");
+        assert_eq!(path, HIGH_CONTRAST_REQUEST_PATH);
+        assert_eq!(data, "on");
+
+        app.handle_input(&Button::Down, &vfs);
+        app.handle_input(&Button::Confirm, &vfs);
+        let (path, data) = app.take_pending_request().expect("reduced motion posts");
+        assert_eq!(path, REDUCED_MOTION_REQUEST_PATH);
+        assert_eq!(data, "1");
+        assert!(app.reduced_motion);
+        assert!(
+            app.lines()
+                .iter()
+                .any(|l| l.contains("Reduced Motion: [ON]"))
+        );
+    }
+
+    #[test]
+    fn high_contrast_toggle_reflects_active_skin() {
+        let vfs = make_vfs();
+        let mut app = SettingsApp::new("/apps/settings", HIGH_CONTRAST_SKIN, 480, 272, "SDL3");
+        app.enter_category(Category::Accessibility);
+        assert!(
+            app.lines()
+                .iter()
+                .any(|l| l.contains("High Contrast: [ON]"))
+        );
+        app.item_cursor = A11Y_HIGH_CONTRAST;
+        app.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = app.take_pending_request().expect("posts");
+        assert_eq!(data, "off");
+    }
+
+    #[test]
+    fn windowed_draw_uses_widgets_and_theme_fonts() {
+        use oasis_test_backend::{DrawCommand, RecordingBackend};
+
+        let vfs = make_vfs();
+        let app = app_in(Category::Accessibility, &vfs);
+        let mut backend = RecordingBackend::new(CW, CH);
+        let mut at = ActiveTheme::default();
+        at.font_body = 15;
+        app.draw_windowed(0, 0, CW, CH, &mut backend, &at)
+            .expect("draw");
+        let cmds = backend.commands();
+        let texts: Vec<(&str, u16)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText {
+                    text, font_size, ..
+                } => Some((text.as_str(), *font_size)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|(t, size)| t.contains("Font Scale") && *size == 15),
+            "rows use the theme's (scaled) body font: {texts:?}"
+        );
+        // Toggle thumbs (circles, rasterized to rects by the default
+        // `fill_circle`) use the widget theme's thumb color.
+        let thumb = at.ui_theme.toggle_thumb;
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                DrawCommand::FillRect { color, .. } if *color == thumb
+            )),
+            "toggle widgets drawn"
+        );
+        // The metrics are cached for click hit-testing.
+        assert_eq!(app.metrics.get().font_body, 15);
     }
 
     // -- Cursor sync (no double-`>` markers) --

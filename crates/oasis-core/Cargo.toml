@@ -50,6 +50,7 @@ oasis-skin = { workspace = true }
 oasis-vector = { workspace = true }
 oasis-terminal = { workspace = true }
 oasis-browser = { workspace = true }
+oasis-i18n = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

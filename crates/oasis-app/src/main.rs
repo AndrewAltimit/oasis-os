@@ -28,6 +28,7 @@ mod sysinfo;
 mod terminal_input;
 mod tv_controller;
 mod ui_sfx;
+mod user_prefs;
 mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
@@ -90,12 +91,28 @@ fn main() -> Result<()> {
 
     let mut config = OasisConfig::default();
 
-    // Resolve skin from CLI arg, OASIS_SKIN env var, or config.
-    let skin_name = std::env::args()
+    // Persisted user preferences (skin, resolution, volume, locale,
+    // accessibility) from real storage; see `user_prefs`.
+    let settings_disk_path = user_prefs::disk_path();
+    let boot_settings = user_prefs::load_from_disk(settings_disk_path.as_ref());
+    let prefs = oasis_core::settings::UserPrefs::from_store(&boot_settings);
+    oasis_core::i18n::set_ui_locale(prefs.locale());
+
+    // Resolve skin from CLI arg, OASIS_SKIN env var, the persisted
+    // preference, or config.
+    let default_skin = config.skin_path.to_string_lossy().into_owned();
+    let explicit_skin = std::env::args()
         .nth(1)
-        .or_else(|| std::env::var("OASIS_SKIN").ok())
-        .unwrap_or_else(|| config.skin_path.to_string_lossy().into_owned());
-    let skin = resolve_skin(&skin_name)?;
+        .or_else(|| std::env::var("OASIS_SKIN").ok());
+    let mut skin = match (explicit_skin, prefs.skin.as_deref()) {
+        (Some(name), _) => resolve_skin(&name)?,
+        (None, Some(saved)) => resolve_skin(saved).or_else(|e| {
+            log::warn!("Persisted skin '{saved}' failed to load ({e}); using default");
+            resolve_skin(&default_skin)
+        })?,
+        (None, None) => resolve_skin(&default_skin)?,
+    };
+    prefs.patch_features(&mut skin.features);
     log::info!(
         "Loaded skin: {} v{}",
         skin.manifest.name,
@@ -115,6 +132,11 @@ fn main() -> Result<()> {
     } else if config.screen_width == 480 && config.screen_height == 272 {
         config.screen_width = 1280;
         config.screen_height = 720;
+    }
+    // A resolution picked in Settings wins over the skin's default.
+    if let Some((w, h)) = prefs.resolution {
+        config.screen_width = w;
+        config.screen_height = h;
     }
     log::info!(
         "Starting OASIS_OS ({}x{})",
@@ -239,6 +261,11 @@ fn main() -> Result<()> {
     oasis_core::terminal::populate_man_pages(&mut vfs);
     oasis_core::terminal::populate_motd(&mut vfs);
     oasis_core::terminal::populate_profile(&mut vfs);
+    // Seed /system/settings.toml with the persisted settings.
+    if boot_settings.keys().next().is_some() {
+        let mut seeded = boot_settings.clone();
+        seeded.save(&mut vfs);
+    }
     let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
     let (vfs_files, vfs_dirs, vfs_truncated) = sysinfo::count_vfs_entries(&vfs, "/");
     let (vfs_bytes, bytes_truncated) = sysinfo::total_vfs_bytes(&vfs, "/");
@@ -331,9 +358,10 @@ fn main() -> Result<()> {
     }
 
     // Derive runtime theme from the active skin, applying screen dimensions.
-    let active_theme = ActiveTheme::from_skin(&skin.theme)
+    let mut active_theme = ActiveTheme::from_skin(&skin.theme)
         .with_screen_size(config.screen_width, config.screen_height)
         .with_features(&skin.features);
+    prefs.apply_font_scale(&mut active_theme);
     let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.
@@ -500,6 +528,9 @@ fn main() -> Result<()> {
     // Load persisted settings and apply per-skin icon positions (free
     // icon layout). Missing files and grid-layout skins are no-ops.
     state.settings.load(&vfs);
+    if let Err(e) = state.audio_backend.set_volume(prefs.volume) {
+        log::warn!("Restoring volume failed: {e}");
+    }
     icon_drag::load_icon_positions(
         &state.settings,
         &state.skin.manifest.name,
@@ -683,6 +714,8 @@ fn main() -> Result<()> {
         .terminal
         .session
         .load_history(&state.terminal.cmd_reg, &vfs);
+    // Writes /system/settings.toml back to real storage when it changes.
+    let mut settings_mirror = user_prefs::DiskMirror::new(settings_disk_path, &vfs);
 
     'running: loop {
         let iter_start = std::time::Instant::now();
@@ -703,6 +736,7 @@ fn main() -> Result<()> {
                 .update_info(time.as_ref(), power.as_ref());
             state.ui.bottom_bar.update_info(time.as_ref());
             let _ = sysmon_probe.publish(&mut vfs, Some(&state.platform), Some(&state.platform));
+            settings_mirror.sync(&vfs);
         }
 
         let events = backend.poll_events();
@@ -1128,6 +1162,9 @@ fn main() -> Result<()> {
             stats.record_drawn(pc.finish());
         }
     }
+
+    // Persist any settings changed since the last periodic sync.
+    settings_mirror.sync(&vfs);
 
     // Clean up video player before shutting down backend.
     state.video_player.stop(&mut backend);

@@ -3,7 +3,14 @@
 //! Settings are stored as a TOML file at a configurable path (default
 //! `/system/settings.toml`). The store provides typed get/set access
 //! for strings, integers, floats, and booleans.
+//!
+//! [`UserPrefs`] is the typed view over the user preferences the Settings
+//! app manages (skin, resolution, volume, locale, font scale, reduced
+//! motion). Hosts restore it at boot and write it back whenever a Settings
+//! IPC request changes one of them.
 
+use oasis_skin::SkinFeatures;
+use oasis_skin::active_theme::ActiveTheme;
 use oasis_vfs::Vfs;
 use std::collections::BTreeMap;
 
@@ -49,9 +56,21 @@ impl SettingsStore {
         if let Ok(data) = vfs.read(&self.path)
             && let Ok(text) = std::str::from_utf8(&data)
         {
-            self.parse_toml(text);
-            self.dirty = false;
+            self.load_from_str(text);
         }
+    }
+
+    /// Replace the in-memory entries with the contents of a settings
+    /// document (the format written by [`Self::to_toml_string`]). Used by
+    /// hosts that mirror the settings file to real storage.
+    pub fn load_from_str(&mut self, text: &str) {
+        self.parse_toml(text);
+        self.dirty = false;
+    }
+
+    /// Serialize the settings to the on-disk document format.
+    pub fn to_toml_string(&self) -> String {
+        self.to_toml()
     }
 
     /// Save settings to the VFS.
@@ -222,6 +241,166 @@ impl Default for SettingsStore {
     }
 }
 
+/// Settings-store keys of the user preferences managed by the Settings app.
+pub mod pref_keys {
+    /// Active skin name (string).
+    pub const SKIN: &str = "prefs.skin";
+    /// Virtual resolution as `"WIDTHxHEIGHT"` (string).
+    pub const RESOLUTION: &str = "prefs.resolution";
+    /// Master volume 0-100 (int).
+    pub const VOLUME: &str = "prefs.volume";
+    /// Selected UI locale code, e.g. `"de"` (string).
+    pub const LOCALE: &str = "prefs.locale";
+    /// Font scale multiplier (float).
+    pub const FONT_SCALE: &str = "prefs.font_scale";
+    /// Reduced-motion accessibility switch (bool).
+    pub const REDUCED_MOTION: &str = "prefs.reduced_motion";
+    /// Skin to return to when the high-contrast shortcut is switched off.
+    pub const SKIN_BEFORE_HIGH_CONTRAST: &str = "prefs.skin_before_high_contrast";
+}
+
+/// Default master volume (0-100) when none is persisted.
+pub const DEFAULT_VOLUME: u8 = 80;
+
+/// Smallest user-selectable font scale.
+pub const FONT_SCALE_MIN: f32 = 0.75;
+
+/// Largest user-selectable font scale. Kept modest so fixed-height chrome
+/// (bars, title bars) still fits the scaled text.
+pub const FONT_SCALE_MAX: f32 = 1.5;
+
+/// Typed view over the user preferences persisted in a [`SettingsStore`].
+///
+/// Missing or malformed entries fall back to the defaults, so a fresh (or
+/// hand-edited) settings file never prevents boot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserPrefs {
+    /// Skin chosen by the user (`None` = host default / CLI).
+    pub skin: Option<String>,
+    /// Resolution chosen by the user (`None` = skin default).
+    pub resolution: Option<(u32, u32)>,
+    /// Master volume, 0-100.
+    pub volume: u8,
+    /// Selected locale code (`"en"`, `"de"`, ...).
+    pub locale: String,
+    /// Font scale multiplier, clamped to
+    /// [`FONT_SCALE_MIN`]..=[`FONT_SCALE_MAX`].
+    pub font_scale: f32,
+    /// Force reduced motion regardless of the skin's own setting.
+    pub reduced_motion: bool,
+}
+
+impl Default for UserPrefs {
+    fn default() -> Self {
+        Self {
+            skin: None,
+            resolution: None,
+            volume: DEFAULT_VOLUME,
+            locale: "en".to_string(),
+            font_scale: 1.0,
+            reduced_motion: false,
+        }
+    }
+}
+
+impl UserPrefs {
+    /// Read the preferences from a settings store.
+    pub fn from_store(store: &SettingsStore) -> Self {
+        let d = Self::default();
+        Self {
+            skin: store
+                .get_string(pref_keys::SKIN)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string),
+            resolution: store
+                .get_string(pref_keys::RESOLUTION)
+                .and_then(oasis_app_settings::parse_resolution)
+                .filter(|(w, h)| *w > 0 && *h > 0),
+            volume: store
+                .get_int(pref_keys::VOLUME)
+                .map_or(d.volume, |v| v.clamp(0, 100) as u8),
+            locale: store
+                .get_string(pref_keys::LOCALE)
+                .and_then(oasis_i18n::Locale::from_code)
+                .map_or(d.locale, |l| l.code().to_string()),
+            font_scale: store
+                .get_float(pref_keys::FONT_SCALE)
+                .map_or(d.font_scale, |f| clamp_font_scale(f as f32)),
+            reduced_motion: store
+                .get_bool(pref_keys::REDUCED_MOTION)
+                .unwrap_or(d.reduced_motion),
+        }
+    }
+
+    /// Write every preference into a settings store (leaving unrelated
+    /// keys such as icon positions untouched).
+    pub fn write_to(&self, store: &mut SettingsStore) {
+        match &self.skin {
+            Some(skin) => store.set_string(pref_keys::SKIN, skin.clone()),
+            None => {
+                store.remove(pref_keys::SKIN);
+            },
+        }
+        match self.resolution {
+            Some((w, h)) => store.set_string(pref_keys::RESOLUTION, format!("{w}x{h}")),
+            None => {
+                store.remove(pref_keys::RESOLUTION);
+            },
+        }
+        store.set_int(pref_keys::VOLUME, i64::from(self.volume.min(100)));
+        store.set_string(pref_keys::LOCALE, self.locale.clone());
+        store.set_float(
+            pref_keys::FONT_SCALE,
+            f64::from(clamp_font_scale(self.font_scale)),
+        );
+        store.set_bool(pref_keys::REDUCED_MOTION, self.reduced_motion);
+    }
+
+    /// The selected locale (English when the stored code is unknown).
+    pub fn locale(&self) -> oasis_i18n::Locale {
+        oasis_i18n::Locale::from_code(&self.locale).unwrap_or(oasis_i18n::Locale::English)
+    }
+
+    /// OR the user's reduced-motion preference into a skin's features so
+    /// [`ActiveTheme::with_features`] and the window manager honour it.
+    pub fn patch_features(&self, features: &mut SkinFeatures) {
+        if self.reduced_motion {
+            features.reduced_motion = true;
+        }
+    }
+
+    /// Apply the font scale to a freshly derived theme.
+    ///
+    /// Scales the content font sizes (`font_body`, `font_hint`,
+    /// `font_heading`) and the content line height, and records the factor
+    /// in `font_scale` / `ui_theme.font_scale` for widgets that scale
+    /// themselves. Chrome fonts (`font_small`) stay fixed so bars keep
+    /// fitting. Must be called on an unscaled theme (every host rebuild
+    /// starts from the skin), otherwise the factor compounds.
+    pub fn apply_font_scale(&self, at: &mut ActiveTheme) {
+        let s = clamp_font_scale(self.font_scale);
+        at.font_scale = s;
+        at.ui_theme.font_scale = s;
+        if (s - 1.0).abs() < f32::EPSILON {
+            return;
+        }
+        let scale = |v: u16| ((f32::from(v) * s).round() as u16).max(1);
+        at.font_body = scale(at.font_body);
+        at.font_hint = scale(at.font_hint);
+        at.font_heading = scale(at.font_heading);
+        at.terminal_line_height = ((at.terminal_line_height as f32 * s).round() as u32).max(1);
+    }
+}
+
+/// Clamp a font scale to the user-selectable range (NaN maps to 1.0).
+pub fn clamp_font_scale(f: f32) -> f32 {
+    if f.is_nan() {
+        1.0
+    } else {
+        f.clamp(FONT_SCALE_MIN, FONT_SCALE_MAX)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +534,94 @@ mod tests {
         assert_eq!(s2.get_string("cr"), Some("a\rb"));
         assert_eq!(s2.get_string("crlf"), Some("hello\r\nworld"));
         assert_eq!(s2.get_string("mixed"), Some("path\\with\nnewline"));
+    }
+
+    #[test]
+    fn user_prefs_defaults_from_empty_store() {
+        let prefs = UserPrefs::from_store(&SettingsStore::new());
+        assert_eq!(prefs, UserPrefs::default());
+        assert_eq!(prefs.locale(), oasis_i18n::Locale::English);
+    }
+
+    #[test]
+    fn user_prefs_persist_and_reload_through_vfs() {
+        let mut vfs = MemoryVfs::new();
+        let mut store = SettingsStore::new();
+        // Unrelated keys (icon positions) must survive a prefs write.
+        store.set_string("icon_positions.classic./apps/a", "1,2");
+        let prefs = UserPrefs {
+            skin: Some("paper".to_string()),
+            resolution: Some((1280, 720)),
+            volume: 35,
+            locale: "de".to_string(),
+            font_scale: 1.25,
+            reduced_motion: true,
+        };
+        prefs.write_to(&mut store);
+        store.save(&mut vfs);
+
+        let mut reloaded = SettingsStore::new();
+        reloaded.load(&vfs);
+        assert_eq!(UserPrefs::from_store(&reloaded), prefs);
+        assert_eq!(
+            reloaded.get_string("icon_positions.classic./apps/a"),
+            Some("1,2")
+        );
+    }
+
+    #[test]
+    fn user_prefs_sanitize_malformed_values() {
+        let mut store = SettingsStore::new();
+        store.load_from_str(
+            "prefs.volume = 400\nprefs.locale = \"xx\"\nprefs.font_scale = 9.0\n\
+             prefs.resolution = \"junk\"\nprefs.skin = \"\"\n",
+        );
+        let prefs = UserPrefs::from_store(&store);
+        assert_eq!(prefs.volume, 100);
+        assert_eq!(prefs.locale, "en");
+        assert_eq!(prefs.font_scale, FONT_SCALE_MAX);
+        assert_eq!(prefs.resolution, None);
+        assert_eq!(prefs.skin, None);
+    }
+
+    #[test]
+    fn user_prefs_font_scale_scales_content_fonts_only() {
+        let base = ActiveTheme::default();
+        let mut at = base.clone();
+        let prefs = UserPrefs {
+            font_scale: 1.5,
+            ..UserPrefs::default()
+        };
+        prefs.apply_font_scale(&mut at);
+        assert_eq!(at.font_scale, 1.5);
+        assert_eq!(at.ui_theme.font_scale, 1.5);
+        assert!(at.font_body > base.font_body);
+        assert!(at.terminal_line_height > base.terminal_line_height);
+        assert_eq!(at.font_small, base.font_small);
+    }
+
+    #[test]
+    fn user_prefs_reduced_motion_patches_features() {
+        let mut features = SkinFeatures::default();
+        UserPrefs::default().patch_features(&mut features);
+        assert!(!features.reduced_motion);
+        let prefs = UserPrefs {
+            reduced_motion: true,
+            ..UserPrefs::default()
+        };
+        prefs.patch_features(&mut features);
+        assert!(features.reduced_motion);
+    }
+
+    #[test]
+    fn toml_string_roundtrip() {
+        let mut s = SettingsStore::new();
+        s.set_int("prefs.volume", 55);
+        let text = s.to_toml_string();
+        let mut s2 = SettingsStore::new();
+        s2.load_from_str(&text);
+        assert_eq!(s2.get_int("prefs.volume"), Some(55));
+        assert!(!s2.is_dirty());
     }
 
     #[test]

@@ -1116,9 +1116,12 @@ name = "oasis-app-settings"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-i18n",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1283,6 +1286,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-i18n",
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
@@ -1318,6 +1322,8 @@ dependencies = [
 name = "oasis-i18n"
 version = "1.4.0"
 dependencies = [
+ "log",
+ "oasis-types",
  "serde",
  "toml",
 ]
