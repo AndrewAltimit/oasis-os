@@ -193,14 +193,52 @@ pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
     }
     sdi.set_visible("term_input_bg", visible);
     sdi.set_visible("term_prompt", visible);
+    if !visible {
+        // Shown again (when needed) by the next `setup_terminal_objects*`.
+        sdi.set_visible("term_cursor", false);
+    }
 }
 
 /// Create/update terminal-mode SDI objects with theme-driven colors and layout.
+///
+/// The text cursor is drawn at the end of `input_buf`; use
+/// [`setup_terminal_objects_with_cursor`] for a line editor whose cursor
+/// can sit mid-line.
 pub fn setup_terminal_objects(
     sdi: &mut SdiRegistry,
     output_lines: &[String],
     cwd: &str,
     input_buf: &str,
+    scroll_offset: usize,
+    at: &ActiveTheme,
+    cursor_visible: bool,
+) {
+    let cursor_col = input_buf.chars().count();
+    setup_terminal_objects_with_cursor(
+        sdi,
+        output_lines,
+        cwd,
+        input_buf,
+        cursor_col,
+        scroll_offset,
+        at,
+        cursor_visible,
+    );
+}
+
+/// [`setup_terminal_objects`] with an explicit cursor column.
+///
+/// `cursor_col` is a *character* index into `input_buf`. At the end of the
+/// line the cursor is the classic trailing `_` glyph; mid-line it is a
+/// `term_cursor` underline placed under the character at that column
+/// (measured with the shared bitmap-font metrics).
+#[allow(clippy::too_many_arguments)]
+pub fn setup_terminal_objects_with_cursor(
+    sdi: &mut SdiRegistry,
+    output_lines: &[String],
+    cwd: &str,
+    input_buf: &str,
+    cursor_col: usize,
     scroll_offset: usize,
     at: &ActiveTheme,
     cursor_visible: bool,
@@ -365,14 +403,148 @@ pub fn setup_terminal_objects(
         obj.w = 0;
         obj.h = 0;
     }
+    // Byte offset of the cursor, or `None` when it sits at end of line.
+    let mid_line = input_buf.char_indices().nth(cursor_col);
     if let Ok(obj) = sdi.get_mut("term_prompt") {
-        let cursor_char = if cursor_visible { '_' } else { ' ' };
         // Rebuild the prompt in the object's own String to reuse its
         // capacity instead of allocating a fresh one every frame.
         let text = obj.text.get_or_insert_default();
         text.clear();
-        let _ = write!(text, "{cwd}> {input_buf}{cursor_char}");
+        if mid_line.is_some() {
+            let _ = write!(text, "{cwd}> {input_buf}");
+        } else {
+            let cursor_char = if cursor_visible { '_' } else { ' ' };
+            let _ = write!(text, "{cwd}> {input_buf}{cursor_char}");
+        }
         obj.visible = true;
+    }
+
+    // Mid-line cursor: an underline below the character at the cursor.
+    match mid_line {
+        Some((byte, ch)) => {
+            let fs = at.font_body;
+            let prefix_w = crate::backend::bitmap_measure_text(cwd, fs)
+                + crate::backend::bitmap_measure_text("> ", fs)
+                + crate::backend::bitmap_measure_text(&input_buf[..byte], fs);
+            let glyph_w = oasis_types::bitmap_font::glyph_advance_scaled(ch, fs).max(2);
+            if !sdi.contains("term_cursor") {
+                sdi.create("term_cursor");
+            }
+            if let Ok(obj) = sdi.get_mut("term_cursor") {
+                obj.x = margin + 4 + prefix_w as i32;
+                obj.y = input_y + 2 + fs as i32;
+                obj.w = glyph_w;
+                obj.h = 2;
+                obj.color = colors.prompt;
+                obj.visible = cursor_visible;
+            }
+        },
+        None => {
+            sdi.set_visible("term_cursor", false);
+        },
+    }
+}
+
+fn fmt_color(c: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
+}
+
+/// Render the `sdi list` / `sdi get <name>` terminal output for `sdi`.
+///
+/// `None` lists every object name (z-ordered, hidden ones marked);
+/// `Some(name)` prints all of that object's fields.
+pub fn inspect_sdi(sdi: &SdiRegistry, name: Option<&str>) -> String {
+    use std::fmt::Write as _;
+    let Some(name) = name else {
+        let mut objs: Vec<_> = sdi.names().filter_map(|n| sdi.get(n).ok()).collect();
+        objs.sort_by(|a, b| a.z.cmp(&b.z).then_with(|| a.name.cmp(&b.name)));
+        let mut out = format!("{} SDI objects:", objs.len());
+        for o in objs {
+            let hidden = if o.visible { "" } else { "  (hidden)" };
+            let _ = write!(out, "\n  {:<28} z={}{hidden}", o.name, o.z);
+        }
+        return out;
+    };
+    let Ok(o) = sdi.get(name) else {
+        return format!("sdi: no object named '{name}'");
+    };
+    let mut out = format!("{}:", o.name);
+    let _ = write!(
+        out,
+        "\n  pos      {}, {}\n  size     {} x {}\n  z        {}\n  visible  {}\
+         \n  overlay  {}\n  alpha    {}\n  color    {}",
+        o.x,
+        o.y,
+        o.w,
+        o.h,
+        o.z,
+        o.visible,
+        o.overlay,
+        o.alpha,
+        fmt_color(o.color)
+    );
+    if let Some(ref text) = o.text {
+        let _ = write!(
+            out,
+            "\n  text     {text:?}\n  font     {}px\n  text_color {}",
+            o.font_size,
+            fmt_color(o.text_color)
+        );
+    }
+    if let Some(tex) = o.texture {
+        let _ = write!(out, "\n  texture  {}", tex.0);
+    }
+    if o.nine_patch.is_some() {
+        out.push_str("\n  nine_patch yes");
+    }
+    if let Some(r) = o.border_radius {
+        let _ = write!(out, "\n  radius   {r}");
+    }
+    if let (Some(top), Some(bottom)) = (o.gradient_top, o.gradient_bottom) {
+        let _ = write!(
+            out,
+            "\n  gradient {} -> {}",
+            fmt_color(top),
+            fmt_color(bottom)
+        );
+    }
+    if let Some(w) = o.stroke_width {
+        let color = o.stroke_color.map_or_else(|| "-".to_string(), fmt_color);
+        let _ = write!(out, "\n  stroke   {w}px {color}");
+    }
+    if let Some(level) = o.shadow_level {
+        let _ = write!(out, "\n  shadow   level {level}");
+    }
+    if let Some((dx, dy)) = o.text_shadow_offset {
+        let _ = write!(out, "\n  text_shadow {dx}, {dy}");
+    }
+    if let Some(ref label) = o.aria_label {
+        let _ = write!(out, "\n  aria     {label:?}");
+    }
+    out
+}
+
+/// Replace every [`CommandSignal::SdiInspect`] in a command result with
+/// the text [`inspect_sdi`] renders, so hosts can print it like any
+/// other output.
+///
+/// [`CommandSignal::SdiInspect`]: crate::terminal::CommandSignal::SdiInspect
+pub fn resolve_sdi_inspect(
+    output: crate::terminal::CommandOutput,
+    sdi: &SdiRegistry,
+) -> crate::terminal::CommandOutput {
+    use crate::terminal::{CommandOutput, CommandSignal};
+    match output {
+        CommandOutput::Signal(CommandSignal::SdiInspect { name }) => {
+            CommandOutput::Text(inspect_sdi(sdi, name.as_deref()))
+        },
+        CommandOutput::Multi(outputs) => CommandOutput::Multi(
+            outputs
+                .into_iter()
+                .map(|o| resolve_sdi_inspect(o, sdi))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -843,5 +1015,79 @@ mod tests {
         assert_eq!(sdi.get("term_prompt").unwrap().text_color, prompt);
         // Non-overridden slots keep the default color.
         assert_eq!(sdi.get("terminal_bg").unwrap().color, at.app.bg);
+    }
+
+    #[test]
+    fn mid_line_cursor_is_underline_at_column() {
+        let at = ActiveTheme::default();
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects_with_cursor(&mut sdi, &[], "/", "echo hi", 2, 0, &at, true);
+        // No trailing `_` glyph while the cursor is mid-line.
+        assert_eq!(
+            sdi.get("term_prompt").unwrap().text.as_deref(),
+            Some("/> echo hi")
+        );
+        let cursor = sdi.get("term_cursor").unwrap();
+        assert!(cursor.visible);
+        let prompt_x = sdi.get("term_prompt").unwrap().x;
+        let expected = crate::backend::bitmap_measure_text("/> ec", at.font_body) as i32;
+        assert_eq!(cursor.x - prompt_x, expected);
+        assert_eq!(
+            cursor.w,
+            oasis_types::bitmap_font::glyph_advance_scaled('h', at.font_body).max(2)
+        );
+
+        // Moving the cursor to the end hides the underline again.
+        setup_terminal_objects_with_cursor(&mut sdi, &[], "/", "echo hi", 7, 0, &at, true);
+        assert!(!sdi.get("term_cursor").unwrap().visible);
+        assert_eq!(
+            sdi.get("term_prompt").unwrap().text.as_deref(),
+            Some("/> echo hi_")
+        );
+        // Hiding the terminal hides the cursor object too.
+        setup_terminal_objects_with_cursor(&mut sdi, &[], "/", "echo hi", 0, 0, &at, true);
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.get("term_cursor").unwrap().visible);
+    }
+
+    #[test]
+    fn inspect_sdi_lists_and_describes_objects() {
+        let mut sdi = SdiRegistry::new();
+        {
+            let obj = sdi.create("label");
+            obj.x = 10;
+            obj.y = 20;
+            obj.w = 30;
+            obj.h = 40;
+            obj.text = Some("hello".to_string());
+            obj.color = Color::rgb(255, 0, 0);
+        }
+        sdi.create("hidden_box").visible = false;
+
+        let list = inspect_sdi(&sdi, None);
+        assert!(list.starts_with("2 SDI objects:"), "{list}");
+        assert!(list.contains("hidden_box"));
+        assert!(list.contains("(hidden)"));
+
+        let desc = inspect_sdi(&sdi, Some("label"));
+        assert!(desc.starts_with("label:"), "{desc}");
+        assert!(desc.contains("pos      10, 20"), "{desc}");
+        assert!(desc.contains("size     30 x 40"), "{desc}");
+        assert!(desc.contains("color    #ff0000ff"), "{desc}");
+        assert!(desc.contains("text     \"hello\""), "{desc}");
+
+        assert!(inspect_sdi(&sdi, Some("nope")).contains("no object named 'nope'"));
+
+        use crate::terminal::{CommandOutput, CommandSignal};
+        let resolved = resolve_sdi_inspect(
+            CommandOutput::Multi(vec![CommandOutput::Signal(CommandSignal::SdiInspect {
+                name: Some("label".to_string()),
+            })]),
+            &sdi,
+        );
+        let CommandOutput::Multi(inner) = resolved else {
+            panic!("expected Multi");
+        };
+        assert!(matches!(&inner[0], CommandOutput::Text(t) if t.starts_with("label:")));
     }
 }

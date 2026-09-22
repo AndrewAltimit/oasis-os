@@ -137,6 +137,35 @@ pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
     Ok(segments)
 }
 
+/// If `input` ends with an unquoted, unescaped single `&` (background
+/// operator, not `&&` or a `>&` redirect), return the command before it.
+pub(crate) fn strip_background(input: &str) -> Option<&str> {
+    let trimmed = input.trim_end();
+    let body = trimmed.strip_suffix('&')?;
+    if body.ends_with(['&', '>', '<', '\\']) {
+        return None;
+    }
+    // The `&` must be outside quotes.
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !in_single => {
+                chars.next();
+            },
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            _ => {},
+        }
+    }
+    if in_single || in_double {
+        return None;
+    }
+    let cmd = body.trim_end();
+    (!cmd.is_empty()).then_some(cmd)
+}
+
 // ---------------------------------------------------------------------------
 // Pipe splitting
 // ---------------------------------------------------------------------------

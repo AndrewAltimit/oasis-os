@@ -452,7 +452,11 @@ pub fn handle_desktop_input(
                                 stdin: None,
                                 stderr: String::new(),
                             };
-                            let result = state.terminal.cmd_reg.execute(&line, &mut env);
+                            let result = state
+                                .terminal
+                                .cmd_reg
+                                .execute(&line, &mut env)
+                                .map(|out| terminal_sdi::resolve_sdi_inspect(out, sdi));
                             state.terminal.cwd = env.cwd;
                             pending_skin_swap = commands::process_command_output(result, state);
                         }
@@ -1002,7 +1006,11 @@ pub fn handle_default_input(
                         stdin: None,
                         stderr: String::new(),
                     };
-                    let result = state.terminal.cmd_reg.execute(&line, &mut env);
+                    let result = state
+                        .terminal
+                        .cmd_reg
+                        .execute(&line, &mut env)
+                        .map(|out| terminal_sdi::resolve_sdi_inspect(out, sdi));
                     state.terminal.cwd = env.cwd;
                     pending_skin_swap = commands::process_command_output(result, state);
                 }

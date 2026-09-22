@@ -1,11 +1,11 @@
 //! Scripting engine for command automation.
 //!
-//! Reads script files from the VFS and executes them line-by-line through
-//! the command registry. Script format: one command per line, `#` comments,
-//! blank lines skipped. Provides `run`, `cron`, and `startup` commands.
+//! Reads script files from the VFS and runs them through the terminal's
+//! shared script engine (`#` comments, blank lines skipped, full control
+//! flow). Provides `run`, `cron`, and `startup` commands.
 
 use crate::error::{OasisError, Result};
-use crate::terminal::{Command, CommandOutput, CommandRegistry, CommandSignal, Environment};
+use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
 
 /// VFS paths for scripting configuration.
 pub const STARTUP_SCRIPT_PATH: &str = "/etc/startup.sh";
@@ -24,6 +24,10 @@ pub fn parse_script(source: &str) -> Vec<String> {
 }
 
 /// Execute a script from VFS, returning collected output.
+///
+/// Runs through the terminal's shared script engine
+/// ([`CommandRegistry::run_script_source`]), so startup and cron scripts
+/// support the same control flow (`if`/`elif`, loops, `case`) as `run`.
 pub fn run_script(
     path: &str,
     registry: &CommandRegistry,
@@ -31,68 +35,7 @@ pub fn run_script(
 ) -> Result<Vec<String>> {
     let data = env.vfs.read(path)?;
     let source = String::from_utf8_lossy(&data);
-    let lines = parse_script(&source);
-    let mut output = Vec::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        match registry.execute(line, env) {
-            Ok(CommandOutput::Text(text)) => {
-                for l in text.lines() {
-                    output.push(l.to_string());
-                }
-            },
-            Ok(CommandOutput::Table { headers, rows }) => {
-                output.push(headers.join(" | "));
-                for row in &rows {
-                    output.push(row.join(" | "));
-                }
-            },
-            Ok(CommandOutput::Clear) => output.push("(clear)".to_string()),
-            Ok(CommandOutput::None) => {},
-            Ok(CommandOutput::Signal(
-                CommandSignal::ListenToggle { .. }
-                | CommandSignal::RemoteConnect { .. }
-                | CommandSignal::FtpToggle { .. }
-                | CommandSignal::McpToggle { .. },
-            )) => {
-                output.push("(network command skipped in script)".to_string());
-            },
-            Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
-                let state = if enable { "on" } else { "off" };
-                output.push(format!("(browser sandbox set to {state})"));
-            },
-            Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
-                output.push(format!("(skin swap to '{name}' skipped in script)"));
-            },
-            Ok(CommandOutput::Multi(outputs)) => {
-                for sub in outputs {
-                    match sub {
-                        CommandOutput::Text(text) => {
-                            for l in text.lines() {
-                                output.push(l.to_string());
-                            }
-                        },
-                        CommandOutput::Table { headers, rows } => {
-                            output.push(headers.join(" | "));
-                            for row in &rows {
-                                output.push(row.join(" | "));
-                            }
-                        },
-                        CommandOutput::Clear => output.push("(clear)".to_string()),
-                        CommandOutput::None | CommandOutput::Multi(_) => {},
-                        _ => {
-                            output.push("(signal command skipped in script)".to_string());
-                        },
-                    }
-                }
-            },
-            Err(e) => {
-                output.push(format!("error at line {}: {e}", i + 1));
-            },
-        }
-    }
-
-    Ok(output)
+    registry.run_script_source(&source, env)
 }
 
 /// Execute the startup script if it exists.

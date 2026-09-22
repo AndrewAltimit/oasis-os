@@ -1621,6 +1621,10 @@ impl OasisWasm {
                     CommandSignal::SkinSwap { name } => {
                         return Some(name.clone());
                     },
+                    CommandSignal::SdiInspect { name } => {
+                        let text = terminal_sdi::inspect_sdi(&self.sdi, name.as_deref());
+                        self.output_lines.extend(text.lines().map(str::to_string));
+                    },
                     CommandSignal::ListenToggle { .. }
                     | CommandSignal::RemoteConnect { .. }
                     | CommandSignal::FtpToggle { .. }
