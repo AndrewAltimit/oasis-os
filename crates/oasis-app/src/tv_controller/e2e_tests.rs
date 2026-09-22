@@ -1014,6 +1014,30 @@ mod player {
     }
 
     #[test]
+    fn audio_only_episode_delivers_all_audio() {
+        // No video track: the decode thread runs in audio-only mode. The
+        // player must hand over every sample (the audio backend paces
+        // playback), not drop what doesn't fit the channel.
+        with_timeout(60, || {
+            let data = fixture("streaming/audio_only_30s.mp4");
+            let server = TestServer::start(HashMap::from([("ep.mp4", data)]), Behavior::default());
+            let mut player = VideoPlayer::new();
+            let mut sink = FrameSink::default();
+            let _session = tune(&mut player, &server.url("ep.mp4"), 0);
+            let s = run(&mut player, &mut sink, 60.0, Duration::from_millis(4));
+            assert!(s.finished, "{:?}", s.states);
+            assert!(s.shown.is_empty());
+            assert_eq!(s.audio_format, Some((22050, 1)));
+            let expected = 30.0 * 22050.0;
+            assert!(
+                (s.audio_frames as f64 - expected).abs() <= 3.0 * 1024.0,
+                "audio frames {} vs {expected}",
+                s.audio_frames
+            );
+        });
+    }
+
+    #[test]
     fn tune_mid_episode_starts_at_keyframe() {
         with_timeout(60, || {
             let data = pad_mdat(&fixture("streaming/bframes_4s.mp4"), 20 << 20);
