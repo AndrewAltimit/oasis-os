@@ -212,6 +212,24 @@ impl CommandRegistry {
         }
     }
 
+    /// Mark the current command as failed (exit status 1) without an error
+    /// message.
+    fn set_failed_status(&self) {
+        self.last_exit_code.set(1);
+        self.set_variable("?", "1");
+    }
+
+    /// Expand a raw redirect target: `$VAR` / `${VAR}` substitution, then
+    /// quote removal. Falls back to the trimmed raw text when it does not
+    /// tokenize to exactly one word.
+    fn redirect_target(&self, raw: &str, cwd: &str) -> String {
+        let expanded = self.expand_variables(raw.trim(), cwd);
+        match tokenize(&expanded) {
+            Ok(mut tokens) if tokens.len() == 1 => tokens.pop().unwrap_or(expanded),
+            _ => expanded.trim().to_string(),
+        }
+    }
+
     /// Execute a command, handling output redirection (`>`, `>>`,
     /// `2>`, `2>>`, `2>&1`).
     fn execute_with_redirect(
@@ -221,13 +239,26 @@ impl CommandRegistry {
     ) -> Result<CommandOutput> {
         let (cmd_part, redirections) = parse_redirect(cmd_str);
         let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
+        // Redirect targets get the same variable expansion and quote
+        // removal as arguments (`> $DIR/out.txt`, `> "my file"`).
+        let stdin_target = redirections
+            .stdin
+            .map(|p| self.redirect_target(p, &env.cwd));
+        let stdout_target = redirections
+            .stdout
+            .as_ref()
+            .map(|r| (self.redirect_target(r.path, &env.cwd), r.append));
+        let stderr_target = redirections
+            .stderr
+            .as_ref()
+            .map(|r| (self.redirect_target(r.path, &env.cwd), r.append));
 
         // Clear stderr before each command.
         env.stderr.clear();
 
         // Handle stdin redirect: read file contents into env.stdin.
-        if let Some(stdin_path) = redirections.stdin {
-            let resolved = resolve_path(&env.cwd, stdin_path);
+        if let Some(stdin_path) = stdin_target {
+            let resolved = resolve_path(&env.cwd, &stdin_path);
             match env.vfs.read(&resolved) {
                 Ok(data) => {
                     env.stdin = Some(String::from_utf8_lossy(&data).into_owned());
@@ -249,9 +280,9 @@ impl CommandRegistry {
         // If no stderr redirect/merge, propagate errors normally.
         if !has_stderr_handling {
             let result = result?;
-            if let Some(redir) = redirections.stdout {
+            if let Some((path, append)) = stdout_target {
                 let text = output_to_text(&result);
-                write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+                write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
                 return Ok(CommandOutput::None);
             }
             return Ok(result);
@@ -291,23 +322,17 @@ impl CommandRegistry {
         };
 
         // Handle stdout redirect.
-        let result = if let Some(redir) = redirections.stdout {
+        let result = if let Some((path, append)) = stdout_target {
             let text = output_to_text(&result);
-            write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+            write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
             CommandOutput::None
         } else {
             result
         };
 
         // Handle stderr redirect.
-        if let Some(redir) = redirections.stderr {
-            write_redirect(
-                &captured_stderr,
-                redir.path,
-                redir.append,
-                &env.cwd,
-                env.vfs,
-            )?;
+        if let Some((path, append)) = stderr_target {
+            write_redirect(&captured_stderr, &path, append, &env.cwd, env.vfs)?;
         }
 
         // Preserve exit code: if command errored, keep it as exit
