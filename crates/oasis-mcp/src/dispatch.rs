@@ -86,7 +86,11 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
             "invalid request: \"jsonrpc\" must be \"2.0\"",
         ));
     }
-    let Some(method) = obj.get("method").and_then(Value::as_str).map(str::to_string) else {
+    let Some(method) = obj
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
         return Handled::Response(error_response(
             err_id,
             -32600,
@@ -231,12 +235,23 @@ mod tests {
             (br#"{"jsonrpc":"1.0","id":"a","method":"ping"}"#, json!("a")),
             (br#"{"id":8,"method":"ping"}"#, json!(8)),
             (br#"{"jsonrpc":"2.0","id":9,"method":42}"#, json!(9)),
-            (br#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, Value::Null),
-            (br#"{"jsonrpc":"2.0","id":{"x":1},"method":"ping"}"#, Value::Null),
+            (
+                br#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+                Value::Null,
+            ),
+            (
+                br#"{"jsonrpc":"2.0","id":{"x":1},"method":"ping"}"#,
+                Value::Null,
+            ),
         ];
         for (body, id) in cases {
             let v = resp_json(handle_message(body, &mut StubDispatcher));
-            assert_eq!(v["error"]["code"], -32600, "{}", String::from_utf8_lossy(body));
+            assert_eq!(
+                v["error"]["code"],
+                -32600,
+                "{}",
+                String::from_utf8_lossy(body)
+            );
             assert_eq!(v["id"], id, "{}", String::from_utf8_lossy(body));
         }
     }

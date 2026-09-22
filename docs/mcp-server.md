@@ -22,7 +22,11 @@ OASIS is the long-running process that owns the UI and the framebuffer, so it
 
 The server implements the minimal conformant subset for a single local client:
 `POST /mcp` with a JSON-RPC request returns a single `application/json`
-response; notifications return `202`; `GET /mcp` returns `405` (there is no
+response; notifications (messages without an `id`) return `202` and are never
+answered — a request-only method such as `tools/call` sent without an `id` is
+ignored, not executed; invalid request objects (and batches) get JSON-RPC
+`-32600`; `Expect: 100-continue` gets an interim `100 Continue`; `GET /mcp`
+returns `405` (there is no
 server-initiated SSE stream); no session IDs are issued. It is driven by
 per-frame polling on the main thread — no async runtime, no background threads —
 mirroring the existing remote-terminal and FTP servers.

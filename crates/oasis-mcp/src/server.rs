@@ -6,7 +6,10 @@ use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::OasisError;
 
 use crate::dispatch::{Handled, handle_message};
-use crate::http::{Framing, HttpRequest, build_response, find_subsequence, try_frame};
+use crate::http::{
+    CONTINUE_RESPONSE, Framing, HttpRequest, build_response, expects_continue, find_subsequence,
+    try_frame,
+};
 use crate::tools::ToolDispatcher;
 
 const DEFAULT_MAX_CONNECTIONS: usize = 4;
@@ -58,6 +61,8 @@ struct HttpConn {
     /// Peer half-closed the connection (read returned 0).
     eof: bool,
     close_after_flush: bool,
+    /// A `100 Continue` was already sent for the request being received.
+    continue_sent: bool,
     /// Lingering-close state: `(started, last input seen)`.
     linger: Option<(Instant, Instant)>,
 }
@@ -73,6 +78,7 @@ impl HttpConn {
             request_started: Some(now),
             eof: false,
             close_after_flush: false,
+            continue_sent: false,
             linger: None,
         }
     }
@@ -260,7 +266,15 @@ impl McpServer {
 
                 while conn.write_buf.len() < MAX_WRITE_BUF && !conn.read_buf.is_empty() {
                     match try_frame(&mut conn.read_buf) {
-                        Framing::Pending => break,
+                        Framing::Pending => {
+                            // Headers are in but the body is not: a client
+                            // that sent `Expect: 100-continue` is waiting.
+                            if !conn.continue_sent && expects_continue(&conn.read_buf) {
+                                conn.queue_write(CONTINUE_RESPONSE);
+                                conn.continue_sent = true;
+                            }
+                            break;
+                        },
                         Framing::Error(code) => {
                             conn.read_buf.clear();
                             conn.queue_write(&build_response(code, false, &[], None, b""));
@@ -268,6 +282,7 @@ impl McpServer {
                             break;
                         },
                         Framing::Ready(req) => {
+                            conn.continue_sent = false;
                             let keep_alive = req.keep_alive;
                             conn.queue_write(&handle_http_request(&req, disp, token.as_deref()));
                             // The next request's clock starts when its first
@@ -699,7 +714,9 @@ mod tests {
         assert!(last_http_response(&pipe).starts_with("HTTP/1.1 413"));
         // More body arrives after the response: still lingering, input drained
         // without being buffered.
-        lock(&pipe).client_to_server.extend_from_slice(&[b' '; 5000]);
+        lock(&pipe)
+            .client_to_server
+            .extend_from_slice(&[b' '; 5000]);
         server.poll(&mut disp);
         assert_eq!(server.connection_count(), 1);
         assert!(lock(&pipe).client_to_server.is_empty());

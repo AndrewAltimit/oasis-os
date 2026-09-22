@@ -164,6 +164,26 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
     })
 }
 
+/// Whether `buf` starts with a complete header section carrying
+/// `Expect: 100-continue` (the client waits for an interim `100 Continue`
+/// before sending the body; curl does this for bodies over 1 KiB).
+pub fn expects_continue(buf: &[u8]) -> bool {
+    let Some(end) = find_subsequence(buf, b"\r\n\r\n") else {
+        return false;
+    };
+    let Ok(head) = std::str::from_utf8(&buf[..end]) else {
+        return false;
+    };
+    head.split("\r\n").skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(k, v)| {
+            k.trim().eq_ignore_ascii_case("expect") && v.trim().eq_ignore_ascii_case("100-continue")
+        })
+    })
+}
+
+/// The interim response sent for `Expect: 100-continue`.
+pub const CONTINUE_RESPONSE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
+
 fn reason_phrase(status: u16) -> &'static str {
     match status {
         200 => "OK",
@@ -313,6 +333,24 @@ mod tests {
             },
             _ => panic!("expected Ready"),
         }
+    }
+
+    #[test]
+    fn detects_expect_continue() {
+        assert!(expects_continue(
+            b"POST /mcp HTTP/1.1\r\nexpect: 100-Continue\r\nContent-Length: 9\r\n\r\n"
+        ));
+        // Headers not complete yet.
+        assert!(!expects_continue(
+            b"POST /mcp HTTP/1.1\r\nExpect: 100-continue\r\n"
+        ));
+        assert!(!expects_continue(
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 9\r\n\r\n"
+        ));
+        // Only a header line counts, not the request target.
+        assert!(!expects_continue(
+            b"POST /expect:100-continue HTTP/1.1\r\n\r\n"
+        ));
     }
 
     #[test]
