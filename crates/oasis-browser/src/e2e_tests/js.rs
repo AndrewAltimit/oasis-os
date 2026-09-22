@@ -3,7 +3,8 @@
 
 use std::time::{Duration, Instant};
 
-use super::harness::{Reply, Session, TestServer};
+use super::harness::{Reply, Session, TestServer, form_pairs};
+use crate::layout::box_model::ReplacedContent;
 
 fn html(body: &str) -> Reply {
     Reply::html(format!("<html><body>{body}</body></html>"))
@@ -215,4 +216,105 @@ fn runaway_scripts_are_interrupted_and_browser_stays_usable() {
     s.assert_shows("SecondScriptRan");
     s.open(&server.url("/after"));
     s.assert_shows("JsStillWorks");
+}
+
+// -- Form state shared between the user and scripts --------------------
+
+/// A page with a text field `q` in a POST form, plus buttons whose
+/// handlers read, overwrite, or merely touch unrelated DOM.
+fn form_script_server() -> TestServer {
+    TestServer::start(|req| match req.path() {
+        "/" => html(
+            "<form action=\"/post\" method=\"post\">\
+               <p><label for=\"q\">FieldLabel</label> \
+                  <input type=\"text\" id=\"q\" name=\"q\" style=\"width:200px\" \
+                   oninput=\"document.getElementById('echo').textContent = 'echo-' + this.value\">\
+                  <input type=\"hidden\" id=\"tok\" name=\"tok\" value=\"orig\"></p>\
+             </form>\
+             <p><button id=\"touch\" onclick=\"document.getElementById('log').textContent = \
+               'touched'\">Touch</button>\
+                <button id=\"read\" onclick=\"document.getElementById('log').textContent = \
+               'read-' + document.getElementById('q').value\">Read</button>\
+                <button id=\"set\" onclick=\"document.getElementById('q').value = 'preset'; \
+               document.getElementById('tok').value = 'jstoken'\">Set</button></p>\
+             <p id=\"log\">log-empty</p><p id=\"echo\">echo-none</p>",
+        ),
+        "/post" => {
+            let pairs = form_pairs(&String::from_utf8_lossy(&req.body));
+            let q = pairs
+                .iter()
+                .find(|(k, _)| k == "q")
+                .map(|(_, v)| v.as_str());
+            let tok = pairs
+                .iter()
+                .find(|(k, _)| k == "tok")
+                .map(|(_, v)| v.as_str());
+            html(&format!(
+                "<p>posted-q-{}</p><p>posted-tok-{}</p>",
+                q.unwrap_or("none"),
+                tok.unwrap_or("none")
+            ))
+        },
+        _ => Reply::not_found(),
+    })
+}
+
+fn text_value(s: &Session, id: &str) -> String {
+    match s.replaced(id) {
+        ReplacedContent::TextInput { value, .. } => value,
+        other => panic!("#{id} is not a text input: {other:?}"),
+    }
+}
+
+/// Typed text used to live only in the form manager and the rendered
+/// DOM, not in the script-side DOM. Any script mutation (here: a click
+/// handler touching an unrelated node) replaced the rendered DOM with
+/// the script-side copy and visually wiped the typed value.
+#[test]
+fn script_mutation_after_typing_keeps_the_typed_value() {
+    let server = form_script_server();
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_text("FieldLabel");
+    s.type_str("hello");
+    assert_eq!(text_value(&s, "q"), "hello");
+    s.click_element("touch");
+    s.assert_shows("touched");
+    assert_eq!(
+        text_value(&s, "q"),
+        "hello",
+        "typed value survives the mutation"
+    );
+}
+
+/// Scripts must read what the user typed (`input.value`), and `input`
+/// handlers run after the edit.
+#[test]
+fn scripts_read_the_typed_value() {
+    let server = form_script_server();
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_text("FieldLabel");
+    s.type_str("abc");
+    s.assert_shows("echo-abc");
+    s.click_element("read");
+    s.assert_shows("read-abc");
+}
+
+/// A value set by script (`input.value = ...`) is what the user then
+/// edits and what gets submitted; it used to be overwritten by the form
+/// manager's stale copy on the next keystroke and ignored on submit.
+#[test]
+fn script_set_values_are_edited_and_submitted() {
+    let server = form_script_server();
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_element("set");
+    assert_eq!(text_value(&s, "q"), "preset");
+    s.click_text("FieldLabel");
+    s.type_str("X");
+    assert_eq!(text_value(&s, "q"), "presetX");
+    s.press(oasis_types::input::Button::Confirm);
+    s.assert_shows("posted-q-presetX");
+    s.assert_shows("posted-tok-jstoken");
 }

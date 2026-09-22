@@ -464,27 +464,36 @@ impl BrowserWidget {
                 }
                 false
             },
-            // Dispatch keydown + keyup + input events to JS.
+            // keydown, the edit, then keyup + input (so `input`
+            // handlers read the new value), to the focused node or body.
             InputEvent::TextInput(ch) => {
+                // When a text input is focused, deliver the character
+                // to the form manager instead of treating it as a page
+                // shortcut — typing in Google's search box shouldn't
+                // trigger zoom because the user pressed `+`.
+                let typing = self.form_manager.focused_accepts_text();
                 #[cfg(feature = "javascript")]
-                if let Some(engine) = &self.js_engine {
-                    // Dispatch to focused node, or body as fallback.
-                    let target = self.focused_node.or(self.body_node_id);
-                    if let Some(nid) = target {
-                        Self::dispatch_js_key_event(engine, nid, *ch);
-                        Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
+                let target = self.focused_node.or(self.body_node_id);
+                #[cfg(feature = "javascript")]
+                if let (Some(engine), Some(nid)) = (&self.js_engine, target) {
+                    Self::dispatch_js_key_event(engine, nid, *ch);
+                }
+                #[cfg(feature = "javascript")]
+                self.apply_js_dom_mutations();
+                if typing {
+                    self.dispatch_form_key(crate::forms::FormKey::Char(*ch), vfs);
+                    self.layout_dirty = true;
+                }
+                #[cfg(feature = "javascript")]
+                if let (Some(engine), Some(nid)) = (&self.js_engine, target) {
+                    Self::dispatch_js_key_event_typed(engine, nid, *ch, "keyup");
+                    if typing {
                         Self::dispatch_js_event(engine, nid, "input");
                     }
                 }
                 #[cfg(feature = "javascript")]
                 self.apply_js_dom_mutations();
-                // When a text input is focused, deliver the character
-                // to the form manager instead of treating it as a page
-                // shortcut — typing in Google's search box shouldn't
-                // trigger zoom because the user pressed `+`.
-                if self.form_manager.focused_accepts_text() {
-                    self.dispatch_form_key(crate::forms::FormKey::Char(*ch), vfs);
-                    self.layout_dirty = true;
+                if typing {
                     return true;
                 }
                 // Zoom: + / - / 0 keys when not in URL bar.
@@ -910,9 +919,10 @@ impl BrowserWidget {
         };
 
         if let Some(fi) = fi_owning {
-            self.form_manager.focused_form = Some(fi);
-            if let Some(ref n) = name {
-                self.form_manager.focused_element = Some(n.clone());
+            match name {
+                // Caret at the end of the value, like a browser.
+                Some(ref n) => self.form_manager.focus_element(fi, n),
+                None => self.form_manager.focused_form = Some(fi),
             }
         }
 
@@ -1487,6 +1497,9 @@ impl BrowserWidget {
             self.nav.update_title(&title);
         }
         self.document = Some(new_doc);
+        // A script that wrote `input.value` now owns that value: it is
+        // what gets submitted and what the next keystroke edits.
+        self.adopt_form_values_from_dom();
 
         // Rebuild inline-style cache from the mutated DOM. JS may have
         // overwritten `style=""` attributes via `element.style.prop = ...`
@@ -1695,41 +1708,61 @@ impl BrowserWidget {
     /// `layout_dirty` tick). Without this sync the input content is
     /// invisible to the user because the layout pass keeps re-reading
     /// the original HTML attribute.
+    ///
+    /// The script-side document (`js_doc`) gets the same values, so
+    /// `input.value` read by a handler sees what the user typed, and a
+    /// later script DOM mutation (which replaces the rendered document
+    /// with a copy of the script-side one) doesn't wipe it.
     fn sync_form_values_to_dom(&mut self) {
-        use crate::forms::FormElement;
-        use crate::html::dom::{NodeKind, TagName};
         let Some(doc) = self.document.as_mut() else {
             return;
         };
-        // Build the list of `<form>` DOM node ids in document order.
-        // `populate_forms_from_dom` registers forms in this same order,
-        // so the N-th `<form>` node corresponds to
-        // `form_manager.forms[N]`. Scoping the name lookup to each
-        // form's subtree prevents two forms sharing a field name
-        // (e.g. both with `<input name="q">`) from overwriting each
-        // other's in-flight value.
-        let mut form_dom_ids: Vec<usize> = Vec::with_capacity(self.form_manager.forms.len());
-        for (nid, node) in doc.nodes.iter().enumerate() {
-            if let NodeKind::Element(e) = &node.kind
-                && e.tag == TagName::Form
-            {
-                form_dom_ids.push(nid);
-            }
+        Self::write_form_values(doc, &self.form_manager);
+        #[cfg(feature = "javascript")]
+        if let Some(js_doc) = &self.js_doc {
+            Self::write_form_values(&mut js_doc.borrow_mut(), &self.form_manager);
         }
-        for (idx, form) in self.form_manager.forms.iter().enumerate() {
+        self.layout_dirty = true;
+    }
+
+    /// `<form>` node ids in document order. `populate_forms_from_dom`
+    /// registers forms in this same order, so the N-th `<form>` node
+    /// corresponds to `form_manager.forms[N]`.
+    fn form_node_ids(doc: &html::dom::Document) -> Vec<NodeId> {
+        use crate::html::dom::{NodeKind, TagName};
+        doc.nodes
+            .iter()
+            .enumerate()
+            .filter(
+                |(_, node)| matches!(&node.kind, NodeKind::Element(e) if e.tag == TagName::Form),
+            )
+            .map(|(nid, _)| nid)
+            .collect()
+    }
+
+    /// Every descendant node id of `form_nid`. Scoping name lookups to
+    /// a form's subtree keeps two forms sharing a field name (e.g. both
+    /// with `<input name="q">`) from overwriting each other's values.
+    fn form_descendants(doc: &html::dom::Document, form_nid: NodeId) -> Vec<NodeId> {
+        let mut descendants: Vec<usize> = Vec::new();
+        let mut stack: Vec<usize> = doc.nodes[form_nid].children.clone();
+        while let Some(nid) = stack.pop() {
+            descendants.push(nid);
+            stack.extend(doc.nodes[nid].children.iter().copied());
+        }
+        descendants
+    }
+
+    /// Write every form-manager value onto `doc`'s form controls.
+    fn write_form_values(doc: &mut html::dom::Document, forms: &crate::forms::FormManager) {
+        use crate::forms::FormElement;
+        use crate::html::dom::{NodeKind, TagName};
+        let form_dom_ids = Self::form_node_ids(doc);
+        for (idx, form) in forms.forms.iter().enumerate() {
             let Some(&form_nid) = form_dom_ids.get(idx) else {
                 continue;
             };
-            // Collect every descendant node id of this <form> so we
-            // can gate the mutable pass on form ownership.
-            let mut descendants: Vec<usize> = Vec::new();
-            let mut stack: Vec<usize> = doc.nodes[form_nid].children.clone();
-            while let Some(nid) = stack.pop() {
-                descendants.push(nid);
-                for &c in &doc.nodes[nid].children {
-                    stack.push(c);
-                }
-            }
+            let descendants = Self::form_descendants(doc, form_nid);
             for elem in form.elements() {
                 match elem {
                     FormElement::TextInput { name, value, .. }
@@ -1819,7 +1852,63 @@ impl BrowserWidget {
                 }
             }
         }
-        self.layout_dirty = true;
+    }
+
+    /// Take text values a script wrote into the DOM (`input.value = ...`
+    /// on a text field, textarea or hidden input) into the form manager,
+    /// so they are what's submitted and what the next keystroke edits.
+    /// Returns `true` if any value changed.
+    ///
+    /// Typed values are mirrored into the DOM as they change
+    /// ([`Self::sync_form_values_to_dom`]), so a DOM value that differs
+    /// from the form manager's was set by script.
+    #[cfg(feature = "javascript")]
+    fn adopt_form_values_from_dom(&mut self) -> bool {
+        use crate::forms::FormElement;
+        use crate::html::dom::{NodeKind, TagName};
+        let Some(doc) = self.document.as_ref() else {
+            return false;
+        };
+        let form_dom_ids = Self::form_node_ids(doc);
+        let mut adopted: Vec<(usize, String, String)> = Vec::new();
+        for (idx, form) in self.form_manager.forms.iter().enumerate() {
+            let Some(&form_nid) = form_dom_ids.get(idx) else {
+                continue;
+            };
+            let descendants = Self::form_descendants(doc, form_nid);
+            for elem in form.elements() {
+                let (FormElement::TextInput { name, value, .. }
+                | FormElement::TextArea { name, value, .. }
+                | FormElement::HiddenInput { name, value }) = elem
+                else {
+                    continue;
+                };
+                if name.is_empty() {
+                    continue;
+                }
+                let dom_value = descendants
+                    .iter()
+                    .find_map(|&nid| match &doc.nodes[nid].kind {
+                        NodeKind::Element(e)
+                            if matches!(e.tag, TagName::Input | TagName::Textarea)
+                                && e.get_attribute("name") == Some(name.as_str()) =>
+                        {
+                            e.get_attribute("value")
+                        },
+                        _ => None,
+                    });
+                if let Some(v) = dom_value
+                    && v != value
+                {
+                    adopted.push((idx, name.clone(), v.to_string()));
+                }
+            }
+        }
+        let mut changed = false;
+        for (idx, name, value) in adopted {
+            changed |= self.form_manager.adopt_value(idx, &name, &value);
+        }
+        changed
     }
 
     /// Handle a form submission.

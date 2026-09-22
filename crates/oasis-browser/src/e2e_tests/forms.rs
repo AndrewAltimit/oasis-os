@@ -169,3 +169,23 @@ fn post_form_enter_and_button_submit_encoded_body() {
     assert_eq!(field(&pairs, "msg"), Some("zz"), "{pairs:?}");
     assert_eq!(field(&pairs, "act"), Some("Send"), "{pairs:?}");
 }
+
+/// Clicking into a pre-filled field put the caret at the start (the
+/// form's caret was never reset on click focus), so typing prepended.
+#[test]
+fn typing_into_a_prefilled_field_appends() {
+    let server = TestServer::start(|_| {
+        Reply::html(
+            "<html><body><form action=\"/x\"><p><input type=\"text\" id=\"p\" \
+             name=\"p\" value=\"pre\" style=\"width:200px\"></p></form></body></html>",
+        )
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_element("p");
+    s.type_str("X");
+    match s.replaced("p") {
+        ReplacedContent::TextInput { value, .. } => assert_eq!(value, "preX"),
+        other => panic!("not a text input: {other:?}"),
+    }
+}
