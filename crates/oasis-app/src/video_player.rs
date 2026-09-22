@@ -34,7 +34,7 @@ struct VideoFrame {
 
 /// Player lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlayerState {
+pub(crate) enum PlayerState {
     Idle,
     Starting,
     Playing,
@@ -114,6 +114,9 @@ pub struct VideoPlayer {
     /// the UI thread) -- see [`stall_rebased_start`].
     #[cfg(feature = "_video")]
     video_starved: bool,
+    /// `(display time, pts)` of every frame shown (tests only).
+    #[cfg(all(test, feature = "video-decode"))]
+    display_log: Vec<(Instant, f64)>,
 }
 
 impl VideoPlayer {
@@ -140,6 +143,8 @@ impl VideoPlayer {
             pending_frame: None,
             #[cfg(feature = "_video")]
             video_starved: false,
+            #[cfg(all(test, feature = "video-decode"))]
+            display_log: Vec::new(),
         }
     }
 
@@ -717,6 +722,16 @@ impl VideoPlayer {
     /// Returns `(current_texture, audio_output)`. The caller should feed
     /// audio to the audio backend and assign the texture to the guide.
     pub fn tick(&mut self, backend: &mut impl SdiBackend) -> (Option<TextureId>, AudioOutput) {
+        self.tick_at(backend, Instant::now())
+    }
+
+    /// [`tick`](Self::tick) with an explicit current time, so frame pacing
+    /// can be driven by a virtual clock in tests.
+    pub(crate) fn tick_at(
+        &mut self,
+        backend: &mut impl SdiBackend,
+        now: Instant,
+    ) -> (Option<TextureId>, AudioOutput) {
         if self.state != PlayerState::Starting && self.state != PlayerState::Playing {
             return (self.current_texture, AudioOutput::None);
         }
@@ -735,7 +750,7 @@ impl VideoPlayer {
                 // Fixed framerate pacing for ffmpeg (no timestamps).
                 let should_take = self
                     .last_frame_time
-                    .is_none_or(|t| t.elapsed() >= self.frame_interval);
+                    .is_none_or(|t| now.saturating_duration_since(t) >= self.frame_interval);
                 if should_take {
                     match video_rx.try_recv() {
                         Ok(frame) => latest_frame = Some(frame),
@@ -766,7 +781,7 @@ impl VideoPlayer {
                                     start,
                                     self.base_pts,
                                     frame.timestamp_secs,
-                                    Instant::now(),
+                                    now,
                                 )
                             {
                                 log::info!(
@@ -787,7 +802,7 @@ impl VideoPlayer {
                 if let Some(ref pending) = self.pending_frame {
                     let should_display = match self.playback_start {
                         Some(start) => {
-                            let wall_elapsed = start.elapsed().as_secs_f64();
+                            let wall_elapsed = now.saturating_duration_since(start).as_secs_f64();
                             let frame_pts = pending.timestamp_secs - self.base_pts;
                             frame_pts <= wall_elapsed
                         },
@@ -804,7 +819,8 @@ impl VideoPlayer {
                             match video_rx.try_recv() {
                                 Ok(next) => {
                                     if let Some(start) = self.playback_start {
-                                        let wall_elapsed = start.elapsed().as_secs_f64();
+                                        let wall_elapsed =
+                                            now.saturating_duration_since(start).as_secs_f64();
                                         let next_pts = next.timestamp_secs - self.base_pts;
                                         if next_pts <= wall_elapsed {
                                             // This frame is also due — skip to it.
@@ -857,31 +873,33 @@ impl VideoPlayer {
             match backend.load_texture(fw, fh, &frame.data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
-                    self.last_frame_time = Some(Instant::now());
+                    self.last_frame_time = Some(now);
                     self.displayed_frames += 1;
+                    #[cfg(all(test, feature = "video-decode"))]
+                    self.display_log.push((now, frame_ts));
                     if self.state == PlayerState::Starting {
                         self.state = PlayerState::Playing;
                         #[cfg(feature = "_video")]
                         {
-                            self.playback_start = Some(Instant::now());
+                            self.playback_start = Some(now);
                             self.base_pts = frame_ts;
                         }
-                        self.last_display_report = Some(Instant::now());
+                        self.last_display_report = Some(now);
                         log::info!("VideoPlayer: first frame received, now playing");
                     }
                     if let Some(ref mut t) = self.last_display_report
-                        && t.elapsed().as_millis() >= 500
+                        && now.saturating_duration_since(*t).as_millis() >= 500
                     {
                         let elapsed = self
                             .playback_start
-                            .map(|s| s.elapsed().as_secs_f64())
+                            .map(|s| now.saturating_duration_since(s).as_secs_f64())
                             .unwrap_or(0.0);
                         let fps = self.displayed_frames as f64 / elapsed.max(0.001);
                         log::info!(
                             "VideoPlayer: displayed {} frames in {elapsed:.1}s ({fps:.1} display fps)",
                             self.displayed_frames,
                         );
-                        *t = Instant::now();
+                        *t = now;
                     }
                 },
                 Err(e) => {
@@ -950,6 +968,18 @@ impl VideoPlayer {
         self.stop_internal();
     }
 
+    /// `(display time, pts)` of every frame shown this session (tests).
+    #[cfg(all(test, feature = "video-decode"))]
+    pub(crate) fn display_log(&self) -> &[(Instant, f64)] {
+        &self.display_log
+    }
+
+    /// Current lifecycle state (for tests).
+    #[cfg(all(test, feature = "video-decode"))]
+    pub(crate) fn state(&self) -> PlayerState {
+        self.state
+    }
+
     /// Whether the player is actively starting or playing.
     pub fn is_active(&self) -> bool {
         self.state == PlayerState::Starting || self.state == PlayerState::Playing
@@ -1007,6 +1037,8 @@ impl VideoPlayer {
             self.pending_frame = None;
             self.video_starved = false;
         }
+        #[cfg(all(test, feature = "video-decode"))]
+        self.display_log.clear();
         self.state = PlayerState::Idle;
         self.error_msg = None;
     }

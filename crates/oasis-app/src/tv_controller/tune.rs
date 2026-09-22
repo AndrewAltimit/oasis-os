@@ -103,10 +103,6 @@ fn setup_streaming_audio(state: &mut AppState) {
 /// starts immediately. No "Downloading..." wait state.
 #[cfg(feature = "_video")]
 fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
-    use std::sync::Arc;
-
-    use super::streaming_buffer::{StreamingBuffer, StreamingInner};
-
     // Check cache: if URL exists and file is on disk with valid size, play from file.
     if let Some(pos) = state.tv_video_cache.iter().position(|(u, _)| u == url) {
         let (_, ref path) = state.tv_video_cache[pos];
@@ -124,17 +120,43 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
         state.tv_video_cache.remove(pos);
     }
 
+    let tls = state.net.tls_provider.clone();
+    let session = start_stream_session(&mut state.video_player, url, tls, seek_secs, width, height);
+
+    // Store session for cancellation on re-tune, and URL for dedup.
+    state.tv_stream_session = Some(session);
+    state.tv_current_url = Some(url.to_string());
+    setup_streaming_audio(state);
+
+    // Clear download-related state (no longer used for streaming).
+    state.pending_video_download = None;
+    state.tv_download_progress = None;
+    state.pending_video_params = None;
+}
+
+/// Start a streaming session: a download thread feeding a
+/// [`StreamingInner`](super::streaming_buffer::StreamingInner) and the
+/// player's decoder reading from it.  Returns the shared buffer (the
+/// session handle, cancelled on re-tune).
+#[cfg(feature = "_video")]
+pub(super) fn start_stream_session(
+    player: &mut crate::video_player::VideoPlayer,
+    url: &str,
+    tls: oasis_core::net::RustlsTlsProvider,
+    seek_secs: u64,
+    width: u32,
+    height: u32,
+) -> std::sync::Arc<super::streaming_buffer::StreamingInner> {
+    use std::sync::Arc;
+
+    use super::streaming_buffer::{StreamingBuffer, StreamingInner};
+
     // Create a streaming buffer shared between the download thread and decoder.
     let buffer = Arc::new(StreamingInner::new());
     let reader = StreamingBuffer::new(Arc::clone(&buffer));
     let eviction_buffer = Arc::clone(&buffer);
 
-    // Store session for cancellation on re-tune, and URL for dedup.
-    state.tv_stream_session = Some(Arc::clone(&buffer));
-    state.tv_current_url = Some(url.to_string());
-
     let url_owned = url.to_string();
-    let tls = state.net.tls_provider.clone();
 
     // Clone for the decoder thread to wait on moov data.
     let moov_buffer = Arc::clone(&buffer);
@@ -162,7 +184,7 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
     // Start the decoder -- it will block-read from the streaming buffer as
     // data arrives from the HTTP download.  Moov data is fetched from the
     // shared buffer on the decoder thread (not the UI thread).
-    state.video_player.start_software_source(
+    player.start_software_source(
         Box::new(reader),
         seek_secs,
         width,
@@ -170,10 +192,5 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
         Some(on_init),
         moov_buffer,
     );
-    setup_streaming_audio(state);
-
-    // Clear download-related state (no longer used for streaming).
-    state.pending_video_download = None;
-    state.tv_download_progress = None;
-    state.pending_video_params = None;
+    buffer
 }
