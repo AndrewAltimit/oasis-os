@@ -6,7 +6,6 @@
 //! support so the UE5 host can handle actual audio output.
 
 pub mod audio;
-mod font;
 mod input;
 mod renderer;
 

@@ -7,7 +7,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use oasis_rasterize::SoftwareBuffer;
 use oasis_types::backend::Color;
-use oasis_types::bitmap_font;
 use std::hint::black_box;
 
 /// Deterministic RGBA texture. `opaque` forces every alpha byte to 255.
@@ -65,14 +64,14 @@ fn bench_shapes(c: &mut Criterion) {
 
     group.bench_function("bitmap_text_16px", |b| {
         b.iter(|| {
-            buf.draw_bitmap_text(
+            buf.draw_text(
                 black_box(text),
                 4,
                 40,
                 16,
                 Color::rgba(255, 255, 255, 255),
-                bitmap_font::glyph,
-                bitmap_font::glyph_metrics,
+                false,
+                false,
             )
         });
     });

@@ -22,8 +22,6 @@ use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::PixelSink;
 use std::collections::HashMap;
 
-use crate::font;
-
 /// A stored texture for later blitting.
 struct Texture {
     width: u32,
@@ -159,18 +157,7 @@ impl SdiCore for Ue5Backend {
         font_size: u16,
         color: Color,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        self.fb.draw_bitmap_text(
-            text,
-            tx,
-            ty,
-            font_size,
-            color,
-            font::glyph,
-            font::glyph_metrics,
-        );
-        self.dirty = true;
-        Ok(())
+        self.draw_text_styled(text, x, y, font_size, color, false, false)
     }
 
     fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -387,22 +374,32 @@ impl SdiAlpha for Ue5Backend {
 // -------------------------------------------------------------------
 
 impl SdiText for Ue5Backend {
+    /// Bitmap text scaled to `font_size` with faux bold / italic -- the
+    /// same glyph pixels the SDL backend uploads (`oasis_rasterize::glyph_mask`),
+    /// each blended once (bold is baked into the mask, not drawn twice).
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        let (tx, ty) = self.translate(x, y);
+        self.fb
+            .draw_text(text, tx, ty, font_size, color, bold, italic);
+        self.dirty = true;
+        Ok(())
+    }
+
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        8 * scale
+        oasis_rasterize::bitmap_line_height(font_size)
     }
 
     fn font_ascent(&self, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        8 * scale
+        oasis_rasterize::bitmap_ascent(font_size)
     }
 }
 
@@ -1094,13 +1091,64 @@ mod tests {
 
     #[test]
     fn text_measurement() {
+        // Same line metrics as the SDL and WASM backends:
+        // ceil(max(fs, 8) * 1.2) and ceil(max(fs, 8) * 0.85).
         let backend = Ue5Backend::new(10, 10);
-        assert_eq!(backend.measure_text_height(8), 8);
-        assert_eq!(backend.measure_text_height(16), 16);
-        assert_eq!(backend.font_ascent(8), 8);
+        assert_eq!(backend.measure_text_height(8), 10);
+        assert_eq!(backend.measure_text_height(16), 20);
+        assert_eq!(backend.measure_text_height(12), 15);
+        assert_eq!(backend.font_ascent(8), 7);
+        assert_eq!(backend.font_ascent(16), 14);
         let (w, h) = backend.measure_text_extents("AB", 8);
         assert_eq!(w, 14); // proportional: A(7)+B(7) = 14
-        assert_eq!(h, 8);
+        assert_eq!(h, 10);
+    }
+
+    /// Regression: text at sizes that are not a multiple of 8 was drawn
+    /// with the 8x8 glyphs scaled by `font_size / 8` rounded down (12 px
+    /// text came out 8 px tall and 8/12 as wide as `measure_text`), so
+    /// every label measured with `measure_text` was laid out for text
+    /// wider than what got drawn. Glyphs now scale to the exact size.
+    #[test]
+    fn fractional_font_size_draws_measured_width_and_height() {
+        let mut backend = Ue5Backend::new(200, 40);
+        backend.clear(Color::BLACK).unwrap();
+        backend.draw_text("HHHH", 0, 0, 12, Color::WHITE).unwrap();
+        let (mut max_x, mut max_y) = (0, 0);
+        for (i, px) in backend.buffer().as_chunks::<4>().0.iter().enumerate() {
+            if px[0] == 255 {
+                max_x = max_x.max(i % 200);
+                max_y = max_y.max(i / 200);
+            }
+        }
+        let measured = backend.measure_text("HHHH", 12) as usize;
+        assert!(
+            max_x + 1 > measured - 3 && max_x < measured,
+            "ink ends at {max_x}, measured {measured}"
+        );
+        assert!(max_y >= 8, "12 px glyphs only {} px tall", max_y + 1);
+    }
+
+    /// Regression: bold text was drawn twice (shifted 1 px), so every
+    /// overlapping pixel of translucent bold text was blended twice.
+    #[test]
+    fn translucent_bold_text_blends_once() {
+        let mut backend = Ue5Backend::new(60, 20);
+        backend.clear(Color::BLACK).unwrap();
+        backend
+            .draw_text_styled("Hi", 0, 0, 16, Color::rgba(255, 255, 255, 128), true, false)
+            .unwrap();
+        let mut values: Vec<u8> = backend
+            .buffer()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .filter(|&v| v != 0)
+            .collect();
+        values.sort_unstable();
+        values.dedup();
+        assert_eq!(values, vec![128]);
     }
 
     // ---------------------------------------------------------------

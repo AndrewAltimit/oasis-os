@@ -94,6 +94,8 @@ pub struct SoftwareBuffer {
     clip: Option<ClipRect>,
     /// Reused per-blit source column map (avoids a per-call allocation).
     col_map: Vec<usize>,
+    /// Reused glyph coverage mask for [`Self::draw_text`].
+    glyph_scratch: Vec<bool>,
 }
 
 impl SoftwareBuffer {
@@ -107,6 +109,7 @@ impl SoftwareBuffer {
             buffer: vec![0; size],
             clip: None,
             col_map: Vec::new(),
+            glyph_scratch: Vec::new(),
         }
     }
 
@@ -643,61 +646,34 @@ impl SoftwareBuffer {
     // Text rendering
     // -----------------------------------------------------------------------
 
-    /// Render bitmap font text into the buffer.
-    ///
-    /// Uses the shared `oasis_types::bitmap_font` glyph data. The `glyph_fn`
-    /// and `metrics_fn` parameters allow callers to provide their own glyph
-    /// lookup (typically `font::glyph` and `font::glyph_metrics`).
+    /// Render text in the built-in bitmap font, scaled to `font_size`
+    /// pixels, optionally faux-bold / faux-italic ([`glyph_mask`]). Glyphs
+    /// advance by `glyph_advance_scaled`, so the drawn width equals
+    /// `bitmap_measure_text`. Every ink pixel is blended once.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_bitmap_text<F, M>(
+    pub fn draw_text(
         &mut self,
         text: &str,
         x: i32,
         y: i32,
         font_size: u16,
         color: Color,
-        glyph_fn: F,
-        metrics_fn: M,
-    ) where
-        F: Fn(char) -> &'static [u8; 8],
-        M: Fn(char) -> (u8, u8),
-    {
+        bold: bool,
+        italic: bool,
+    ) {
         if text.is_empty() || color.a == 0 || font_size == 0 {
             return;
         }
-        let scale = if font_size >= 8 {
-            (font_size / 8) as i32
-        } else {
-            1
-        };
-
+        let mut mask = std::mem::take(&mut self.glyph_scratch);
         let mut cx = x;
         for ch in text.chars() {
-            let glyph_data: &[u8; 8] = glyph_fn(ch);
-            let (left_pad, advance) = metrics_fn(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph_data[row as usize];
-                // Emit each run of set bits as one scaled span per sub-row.
-                let mut col = 0i32;
-                while col < 8 {
-                    if bits & (0x80 >> col) == 0 {
-                        col += 1;
-                        continue;
-                    }
-                    let start = col;
-                    while col < 8 && bits & (0x80 >> col) != 0 {
-                        col += 1;
-                    }
-                    let xs = cx + (start - left_pad) * scale;
-                    let xe = cx + (col - left_pad) * scale;
-                    for sy in 0..scale {
-                        self.fill_span(y + row * scale + sy, xs, xe, color);
-                    }
-                }
-            }
-            cx += advance as i32 * scale;
+            let (gw, _) = glyph_mask(ch, font_size, bold, italic, &mut mask);
+            mask_runs(&mask, gw, |gy, x0, x1| {
+                self.fill_span(y + gy, cx + x0, cx + x1, color);
+            });
+            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         }
+        self.glyph_scratch = mask;
     }
 
     // -----------------------------------------------------------------------
@@ -1525,31 +1501,31 @@ mod tests {
             }
         }
 
-        pub fn text(buf: &mut SoftwareBuffer, text: &str, x: i32, y: i32, fs: u16, c: Color) {
-            let scale = if fs >= 8 { (fs / 8) as i32 } else { 1 };
+        /// Per-pixel reference for `draw_text`: every ink pixel of every
+        /// glyph mask set individually.
+        #[allow(clippy::too_many_arguments)]
+        pub fn text(
+            buf: &mut SoftwareBuffer,
+            text: &str,
+            x: i32,
+            y: i32,
+            fs: u16,
+            c: Color,
+            bold: bool,
+            italic: bool,
+        ) {
             let mut cx = x;
+            let mut mask = Vec::new();
             for ch in text.chars() {
-                let glyph_data = oasis_types::bitmap_font::glyph(ch);
-                let (left_pad, advance) = oasis_types::bitmap_font::glyph_metrics(ch);
-                let left_pad = left_pad as i32;
-                for row in 0..8i32 {
-                    let bits = glyph_data[row as usize];
-                    for col in 0..8i32 {
-                        if bits & (0x80 >> col) != 0 {
-                            for sy in 0..scale {
-                                for sx in 0..scale {
-                                    set_pixel(
-                                        buf,
-                                        cx + (col - left_pad) * scale + sx,
-                                        y + row * scale + sy,
-                                        c,
-                                    );
-                                }
-                            }
+                let (gw, gh) = glyph_mask(ch, fs, bold, italic, &mut mask);
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        if mask[(gy * gw + gx) as usize] {
+                            set_pixel(buf, cx + gx as i32, y + gy as i32, c);
                         }
                     }
                 }
-                cx += advance as i32 * scale;
+                cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, fs) as i32;
             }
         }
 
@@ -1777,18 +1753,11 @@ mod tests {
                 },
                 _ => {
                     let fs = rng.range(0, 33) as u16;
-                    let text = "Hi! gjpq {Oasis} 0123 _|~";
-                    fast.draw_bitmap_text(
-                        text,
-                        x,
-                        y,
-                        fs,
-                        c[0],
-                        oasis_types::bitmap_font::glyph,
-                        oasis_types::bitmap_font::glyph_metrics,
-                    );
+                    let (bold, italic) = (rng.one_in(3), rng.one_in(3));
+                    let text = "Hi! gjpq {Oasis} 0123 _|~ \u{25B2}";
+                    fast.draw_text(text, x, y, fs, c[0], bold, italic);
                     if fs != 0 {
-                        reference::text(&mut slow, text, x, y, fs, c[0]);
+                        reference::text(&mut slow, text, x, y, fs, c[0], bold, italic);
                     }
                 },
             }
