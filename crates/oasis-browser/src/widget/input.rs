@@ -130,6 +130,7 @@ pub(crate) fn styles_geometry_equal(a: &ComputedStyle, b: &ComputedStyle) -> boo
         && a.object_fit == b.object_fit
         // Grid extensions
         && a.grid_auto_flow_column == b.grid_auto_flow_column
+        && a.grid_auto_flow_dense == b.grid_auto_flow_dense
         && a.grid_template_areas == b.grid_template_areas
         && a.grid_area == b.grid_area
         && a.grid_auto_rows == b.grid_auto_rows
