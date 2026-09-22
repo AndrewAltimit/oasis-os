@@ -969,6 +969,14 @@ impl BrowserWidget {
             Self::populate_forms_from_dom(doc, &mut self.form_manager);
         }
         self.scroll.reset();
+        // Seed the scrollable extent from the fresh layout right away:
+        // history restores (`go_back`) and fragment scrolls position the
+        // viewport before the first paint records the display list, and
+        // `ScrollState` clamps against this height.
+        if let Some(layout) = &self.layout_root {
+            self.scroll
+                .set_content_height(layout.dimensions.margin_box().height as i32);
+        }
         self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
         self.layout_dirty = false;

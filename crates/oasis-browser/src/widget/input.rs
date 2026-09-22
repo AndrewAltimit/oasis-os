@@ -1440,6 +1440,10 @@ impl BrowserWidget {
 
         // Track this URL as visited for :visited pseudo-class.
         self.visited_urls.insert(resolved.clone());
+
+        // Remember where the user was on the page being left, so Back
+        // returns to the same spot.
+        self.nav.update_scroll(self.scroll.scroll_y);
         self.navigate_vfs(&resolved, vfs);
     }
 
@@ -1573,6 +1577,7 @@ impl BrowserWidget {
     /// For POST forms, the encoded data is sent as the request body.
     pub fn handle_form_submit(&mut self, data: &crate::forms::FormData, vfs: &dyn Vfs) {
         let encoded = data.encode();
+        self.nav.update_scroll(self.scroll.scroll_y);
         let action = &data.action;
 
         // Resolve the action URL against the current page.
