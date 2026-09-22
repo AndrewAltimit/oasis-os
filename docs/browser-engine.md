@@ -36,7 +36,11 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
   breakpoints no longer collapse to the 480x272 default.
-- `var()` custom properties, `calc()`.
+- `var()` custom properties, `calc()`. `var()` is substituted at
+  computed-value time anywhere in a value (`calc(var(--gap) * 2)`,
+  `rgb(var(--r), 0, 0)`, gradients, shorthands) and re-parsed; names
+  are case-sensitive, cycles and missing references without fallback
+  are invalid at computed-value time (`unset` semantics).
 - `html { font-size: 62.5% }` resolution — the html element only uses
   the CSS "medium" 16 px baseline; `rem` units track html's computed
   font-size via a thread-local cell.
@@ -74,6 +78,13 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `content.x`, so a float inside a padded parent lands at the parent's
   content edge instead of overhanging at x=0 (the old.reddit
   `.midcol` vote-column bug).
+- **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
+  `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
+  `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
+  from the container width (auto-fit collapses empty tracks), line
+  placement with `span`, negative lines and `a / b` syntax, named
+  areas, and row/column auto-flow including `dense`. Subgrid is not
+  supported. See `crates/oasis-browser/docs/layout.md`.
 - **Inter-element whitespace.** A text node containing only whitespace
   between two inline siblings (`<a>x</a>\n<a>y</a>`) now emits a
   single `space_width` fragment into the line flow, per CSS 2.1 §16.6.

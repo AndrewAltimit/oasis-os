@@ -269,7 +269,7 @@ fn find_bounding_stops(stops: &[(f32, Vec<(String, String)>)], pct: f32) -> (usi
 fn declaration_value_to_string(value: &super::parser::CssValue) -> String {
     use super::parser::CssValue;
     match value {
-        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        CssValue::Keyword(s) | CssValue::String(s) | CssValue::Unresolved(s) => s.clone(),
         CssValue::Number(n) => format!("{n}"),
         CssValue::Length(n, unit) => {
             let u = match unit {

@@ -10,13 +10,13 @@ use super::types::{
     BorderCollapse, BorderRadius, BorderStyle, BoxShadow, BoxSizing, Clear, ClipPath, ColorScheme,
     ContainerType, ContentVisibility, Cursor, Dimension, Display, FieldSizing, FilterFunction,
     FlexDirection, FlexWrap, Float, FontFamily, FontKerning, FontStretch, FontStyle, FontVariant,
-    FontWeight, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, JustifySelf,
-    ListStylePosition, ListStyleType, ObjectFit, ObjectPosition, Overflow, OverflowWrap,
-    OverscrollBehavior, PerspectiveOrigin, PointerEvents, Position, ROOT_FONT_SIZE, Resize,
-    ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign, TextAlignLast, TextDecoration,
-    TextDirection, TextJustify, TextOverflow, TextRendering, TextShadow, TextTransform,
-    TextUnderlinePosition, TextWrap, TouchAction, TransformOrigin, TransformStyle, Transition,
-    UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    FontWeight, GridLine, GridTemplate, GridTrackSize, Hyphens, ImageRendering, Isolation,
+    JustifyContent, JustifySelf, ListStylePosition, ListStyleType, ObjectFit, ObjectPosition,
+    Overflow, OverflowWrap, OverscrollBehavior, PerspectiveOrigin, PointerEvents, Position,
+    ROOT_FONT_SIZE, Resize, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop, TextAlign,
+    TextAlignLast, TextDecoration, TextDirection, TextJustify, TextOverflow, TextRendering,
+    TextShadow, TextTransform, TextUnderlinePosition, TextWrap, TouchAction, TransformOrigin,
+    TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -193,12 +193,12 @@ pub struct ComputedStyle {
     pub flex_basis: Dimension,
     pub gap: f32,
 
-    pub grid_template_columns: Vec<GridTrackSize>,
-    pub grid_template_rows: Vec<GridTrackSize>,
-    pub grid_column_start: Option<i32>,
-    pub grid_column_end: Option<i32>,
-    pub grid_row_start: Option<i32>,
-    pub grid_row_end: Option<i32>,
+    pub grid_template_columns: GridTemplate,
+    pub grid_template_rows: GridTemplate,
+    pub grid_column_start: GridLine,
+    pub grid_column_end: GridLine,
+    pub grid_row_start: GridLine,
+    pub grid_row_end: GridLine,
     pub column_gap: f32,
     pub row_gap: f32,
 
@@ -241,6 +241,8 @@ pub struct ComputedStyle {
 
     // -- Grid extensions ------------------------------------------------
     pub grid_auto_flow_column: bool,
+    /// `grid-auto-flow: dense` — backfill holes during auto-placement.
+    pub grid_auto_flow_dense: bool,
     pub grid_template_areas: Vec<Vec<String>>,
     pub grid_area: Option<String>,
     pub grid_auto_rows: Vec<GridTrackSize>,
@@ -527,12 +529,12 @@ impl Default for ComputedStyle {
             flex_basis: Dimension::Auto,
             gap: 0.0,
 
-            grid_template_columns: Vec::new(),
-            grid_template_rows: Vec::new(),
-            grid_column_start: None,
-            grid_column_end: None,
-            grid_row_start: None,
-            grid_row_end: None,
+            grid_template_columns: GridTemplate::default(),
+            grid_template_rows: GridTemplate::default(),
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
             column_gap: 0.0,
             row_gap: 0.0,
 
@@ -561,6 +563,7 @@ impl Default for ComputedStyle {
             column_width: 0.0,
 
             grid_auto_flow_column: false,
+            grid_auto_flow_dense: false,
             grid_template_areas: Vec::new(),
             grid_area: None,
             grid_auto_rows: Vec::new(),
@@ -859,6 +862,64 @@ impl ComputedStyle {
             // Non-inherited properties keep CSS initial values.
             ..ComputedStyle::default()
         }
+    }
+
+    /// Copy one *inherited* property's value from `parent` (the CSS-wide
+    /// `inherit` / `unset` keywords). Returns `false` — and changes
+    /// nothing — for properties that are not inherited; mirrors the field
+    /// list of [`ComputedStyle::inherit`].
+    pub(crate) fn inherit_property_from(&mut self, property: &str, parent: &ComputedStyle) -> bool {
+        match property {
+            "color" => self.color = parent.color,
+            "font-size" => self.font_size = parent.font_size,
+            "font-weight" => self.font_weight = parent.font_weight,
+            "font-style" => self.font_style = parent.font_style,
+            "font-family" => {
+                self.font_family = parent.font_family.clone();
+                #[cfg(feature = "web-fonts")]
+                {
+                    self.web_font_id = parent.web_font_id;
+                }
+            },
+            "text-align" => self.text_align = parent.text_align,
+            "direction" => self.direction = parent.direction,
+            "text-decoration" => self.text_decoration = parent.text_decoration,
+            "text-indent" => self.text_indent = parent.text_indent,
+            "text-transform" => self.text_transform = parent.text_transform,
+            "line-height" => {
+                self.line_height = parent.line_height;
+                self.line_height_factor = parent.line_height_factor;
+            },
+            "letter-spacing" => self.letter_spacing = parent.letter_spacing,
+            "word-spacing" => self.word_spacing = parent.word_spacing,
+            "white-space" => self.white_space = parent.white_space,
+            "text-wrap" => self.text_wrap = parent.text_wrap,
+            "text-shadow" => self.text_shadow = parent.text_shadow,
+            "visibility" => self.visibility = parent.visibility,
+            "list-style-type" => self.list_style_type = parent.list_style_type.clone(),
+            "list-style-position" => self.list_style_position = parent.list_style_position,
+            "border-collapse" => self.border_collapse = parent.border_collapse,
+            "border-spacing" => self.border_spacing = parent.border_spacing,
+            "cursor" => self.cursor = parent.cursor,
+            "pointer-events" => self.pointer_events = parent.pointer_events,
+            "user-select" => self.user_select = parent.user_select,
+            "font-variant" => self.font_variant = parent.font_variant,
+            "font-stretch" => self.font_stretch = parent.font_stretch,
+            "font-kerning" => self.font_kerning = parent.font_kerning,
+            "font-feature-settings" => {
+                self.font_feature_settings = parent.font_feature_settings.clone();
+            },
+            "hyphens" => self.hyphens = parent.hyphens,
+            "text-align-last" => self.text_align_last = parent.text_align_last,
+            "text-justify" => self.text_justify = parent.text_justify,
+            "text-underline-position" => {
+                self.text_underline_position = parent.text_underline_position;
+            },
+            "text-rendering" => self.text_rendering = parent.text_rendering,
+            "image-rendering" => self.image_rendering = parent.image_rendering,
+            _ => return false,
+        }
+        true
     }
 }
 

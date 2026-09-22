@@ -796,9 +796,14 @@ fn trailing_garbage_after_rules() {
 
 #[test]
 fn var_function_parsed() {
+    // Values referencing var() are kept as raw text until computed-value
+    // time (see `CssValue::Unresolved`).
     let decls = first_decls("p { color: var(--my-color); }");
     assert_eq!(decls[0].property, "color");
-    assert_eq!(decls[0].value, CssValue::Var("--my-color".into(), None));
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("var(--my-color)".into())
+    );
 }
 
 #[test]
@@ -806,7 +811,7 @@ fn var_function_with_fallback() {
     let decls = first_decls("p { color: var(--my-color, blue); }");
     assert_eq!(
         decls[0].value,
-        CssValue::Var("--my-color".into(), Some("blue".into()))
+        CssValue::Unresolved("var(--my-color, blue)".into())
     );
 }
 
@@ -815,7 +820,7 @@ fn var_function_with_hex_fallback() {
     let decls = first_decls("p { color: var(--my-color, #202122); }");
     assert_eq!(
         decls[0].value,
-        CssValue::Var("--my-color".into(), Some("#202122".into()))
+        CssValue::Unresolved("var(--my-color, #202122)".into())
     );
 }
 
@@ -824,6 +829,13 @@ fn custom_property_stored_as_raw_text() {
     let decls = first_decls(":root { --color: #202122; }");
     assert_eq!(decls[0].property, "--color");
     assert_eq!(decls[0].value, CssValue::String("#202122".into()));
+}
+
+#[test]
+fn custom_property_names_keep_case() {
+    let decls = first_decls(":root { --Brand-Color: red; COLOR: blue; }");
+    assert_eq!(decls[0].property, "--Brand-Color");
+    assert_eq!(decls[1].property, "color");
 }
 
 #[test]
@@ -836,13 +848,13 @@ fn custom_property_complex_value() {
 #[test]
 fn var_in_multiple_value_property() {
     let decls = first_decls("p { border: 1px solid var(--color); }");
-    // The border shorthand should expand, and var() should end up
-    // in border-color.
-    let bc = decls.iter().find(|d| d.property == "border-color");
-    assert!(bc.is_some(), "border-color should exist");
-    assert!(
-        matches!(&bc.unwrap().value, CssValue::Var(name, None) if name == "--color"),
-        "border-color should be var(--color)"
+    // A shorthand containing var() can't be split before substitution:
+    // it stays whole and the cascade expands the substituted value.
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property, "border");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("1px solid var(--color)".into())
     );
 }
 

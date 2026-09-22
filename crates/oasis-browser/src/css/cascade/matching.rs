@@ -307,7 +307,18 @@ pub(super) fn resolve_pseudo_style(
         .find(|d| d.property == "content")
         .and_then(|d| match &d.value {
             CssValue::String(s) => Some(s.clone()),
-            CssValue::Keyword(kw) if kw == "none" || kw == "normal" => None,
+            // `content: var(--icon)` — substitute against the originating
+            // element's custom properties.
+            CssValue::Unresolved(text) => {
+                let text =
+                    super::var_resolve::substitute_vars(text, &element_style.custom_properties)?;
+                crate::css::parser::parse_substituted_declaration("content", &text)
+                    .into_iter()
+                    .find_map(|d| match d.value {
+                        CssValue::String(s) => Some(s),
+                        _ => None,
+                    })
+            },
             _ => None,
         });
 
@@ -324,7 +335,13 @@ pub(super) fn resolve_pseudo_style(
     // Apply font-size first (for em-unit resolution in other properties).
     for entry in &matched {
         if entry.property == "font-size" {
-            style.apply_declaration("font-size", &entry.value, parent_font_size);
+            super::apply_cascaded(
+                &mut style,
+                Some(element_style),
+                "font-size",
+                &entry.value,
+                parent_font_size,
+            );
         }
     }
     let pseudo_font_size = style.font_size;
@@ -334,7 +351,13 @@ pub(super) fn resolve_pseudo_style(
         if entry.property == "font-size" || entry.property == "content" {
             continue;
         }
-        style.apply_declaration(&entry.property, &entry.value, pseudo_font_size);
+        super::apply_cascaded(
+            &mut style,
+            Some(element_style),
+            &entry.property,
+            &entry.value,
+            pseudo_font_size,
+        );
     }
 
     style.content = Some(content_text);

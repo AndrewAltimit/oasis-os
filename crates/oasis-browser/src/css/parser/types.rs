@@ -522,6 +522,11 @@ pub enum CssValue {
     /// A deferred `light-dark(light, dark)` color — resolved at
     /// computed-value time based on the element's `color-scheme`.
     LightDark(CssColor, CssColor),
+    /// A declaration value containing `var()` anywhere (including inside
+    /// `calc()`, `rgb()`, gradients, ...), kept as raw CSS text. The
+    /// cascade substitutes custom properties at computed-value time and
+    /// re-parses the result with the property's normal parser.
+    Unresolved(String),
 }
 
 /// Supported CSS length units.

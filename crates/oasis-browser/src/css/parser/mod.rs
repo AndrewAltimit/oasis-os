@@ -13,7 +13,7 @@ mod supports;
 mod types;
 
 pub use super::helpers::MediaViewport;
-pub(crate) use declarations::parse_value_list;
+pub(crate) use declarations::{parse_substituted_declaration, parse_value_list};
 #[allow(unused_imports)]
 pub use types::{
     AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CounterStyleRule,
