@@ -139,8 +139,9 @@ pub struct SkinFeatures {
     /// Whether the clock is shown in the status bar.
     #[serde(default = "yes")]
     pub show_clock: bool,
-    /// Whether the version label is shown in the status bar.
-    #[serde(default = "yes")]
+    /// Whether the version label is shown in the status bar. Defaults to
+    /// off — opt in per-skin alongside a branded `version_text`.
+    #[serde(default)]
     pub show_version: bool,
     /// Whether top tabs are shown in the status bar.
     #[serde(default)]
@@ -216,7 +217,7 @@ impl Default for SkinFeatures {
             corrupted: false,
             show_battery: true,
             show_clock: true,
-            show_version: true,
+            show_version: false,
             show_tabs: false,
             show_media_tabs: false,
             show_page_dots: true,

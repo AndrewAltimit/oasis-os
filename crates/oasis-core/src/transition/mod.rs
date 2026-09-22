@@ -526,7 +526,10 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let bar = crate::statusbar::StatusBar::new();
         let bottom = crate::bottombar::BottomBar::new();
-        let feat = crate::skin::SkinFeatures::default();
+        let feat = crate::skin::SkinFeatures {
+            show_version: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         bottom.update_sdi(&mut sdi, &at, &feat);
 

@@ -784,6 +784,7 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
         let mut feat = crate::skin::SkinFeatures::default();
         feat.show_tabs = true;
+        feat.show_version = true;
         feat.clock_in_bottombar = false;
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_top"));
@@ -965,6 +966,7 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
         let mut feat = crate::skin::SkinFeatures::default();
         feat.clock_in_bottombar = false;
+        feat.show_version = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         StatusBar::hide_sdi(&mut sdi);
@@ -1002,6 +1004,7 @@ mod tests {
 
         // First enable to create objects.
         let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_version = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -1037,6 +1040,7 @@ mod tests {
 
         // First enable to create objects.
         let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_version = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
