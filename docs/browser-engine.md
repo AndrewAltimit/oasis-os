@@ -189,8 +189,11 @@ to page scripts include:
   `querySelector`, `querySelectorAll`.
 - `textContent`, attributes, `innerHTML`, `classList`, `style`
   property.
-- `fetch()`, `setTimeout` / `setInterval`.
-- `localStorage` (persistent across navigations) / `sessionStorage`.
+- `fetch()` (Promise-based, same-origin / private-network policy — see
+  [`oasis-js.md`](oasis-js.md#storage-and-fetch)), `setTimeout` /
+  `setInterval`.
+- `localStorage` (persistent across navigations) / `sessionStorage`,
+  partitioned per origin with a 5 MiB quota.
 - `document.cookie` getter/setter, `history.pushState` /
   `replaceState`, `window.location` with assign/replace/reload.
 - Event dispatch with three-phase capture/target/bubble via
