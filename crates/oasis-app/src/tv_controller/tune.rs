@@ -4,12 +4,76 @@ use crate::app_state::AppState;
 use oasis_core::backend::SdiBackend;
 use oasis_core::vfs::Vfs;
 
+/// Resolve a `tune_ch:<number>` request at [`TV_REQUEST_PATH`] (written by
+/// the `tv tune` terminal command and the MCP `tune` tool) against the open
+/// TV Guide: select that channel and tune it exactly like pressing Confirm
+/// in the guide, which queues the guide's own `tune_url` request for
+/// [`handle_tune_requests`]. Nothing consumed these requests before, so
+/// both entry points silently did nothing.
+///
+/// [`TV_REQUEST_PATH`]: oasis_core::apps::tv_guide::TV_REQUEST_PATH
+fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
+    use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
+    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+
+    let Ok(data) = vfs.read(TV_REQUEST_PATH) else {
+        return;
+    };
+    let Some(number) = std::str::from_utf8(&data)
+        .ok()
+        .and_then(|s| s.trim().strip_prefix("tune_ch:"))
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let _ = vfs.write(TV_REQUEST_PATH, b"");
+    let Ok(number) = number.parse::<u32>() else {
+        log::warn!("TV: bad channel in tune request: {number:?}");
+        return;
+    };
+    let Some(runner) = super::find_tv_guide_runner(
+        &mut state.content.app_runner,
+        &mut state.content.open_runners,
+    ) else {
+        log::warn!("TV: tune_ch:{number} ignored, the TV Guide is not open");
+        return;
+    };
+    let Some(guide) = runner.tv_guide_state() else {
+        return;
+    };
+    let Some(index) = guide.channels.iter().position(|c| c.number == number) else {
+        log::warn!("TV: tune_ch:{number}: no such channel");
+        return;
+    };
+    // Move the selection like the arrow keys do (keeps the scroll window
+    // consistent), then tune.
+    while guide.selected_channel > index {
+        guide.select_up();
+    }
+    while guide.selected_channel < index {
+        guide.select_down();
+    }
+    let Some(req) = guide.tune() else {
+        log::info!("TV: tune_ch:{number}: already tuned or no schedule yet");
+        runner.refresh_tv_text();
+        return;
+    };
+    let url = ChannelCatalog::download_url(&req.episode);
+    runner.set_pending_request(
+        TV_REQUEST_PATH.to_string(),
+        format!("tune_url {url} {}", req.seek_secs),
+    );
+    runner.refresh_tv_text();
+}
+
 /// Handle TV Guide tune requests -- start in-app video player.
 pub(super) fn handle_tune_requests(
     state: &mut AppState,
     backend: &mut impl SdiBackend,
     vfs: &mut dyn Vfs,
 ) {
+    tune_channel_from_vfs(state, vfs);
+
     let runner = super::find_tv_guide_runner(
         &mut state.content.app_runner,
         &mut state.content.open_runners,

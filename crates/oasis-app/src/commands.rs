@@ -4,7 +4,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
-use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
+use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener, StdNetworkBackend};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, SkinTheme, resolve_skin, resolve_skin_request};
 use oasis_core::startmenu::StartMenuState;
@@ -16,7 +16,7 @@ use oasis_core::wallpaper;
 
 #[cfg(test)]
 use crate::app_state::UiLayer;
-use crate::app_state::{AppState, ContentLayer, NetworkLayer, TerminalLayer};
+use crate::app_state::{AppState, NetworkLayer, TerminalLayer};
 
 /// Process a local terminal command result. Returns a pending skin swap name
 /// if the command was `SkinSwap`.
@@ -43,6 +43,9 @@ pub fn process_command_output(
                 if let Some(ref mut l) = state.net.listener {
                     l.stop();
                     state.net.listener = None;
+                    // Close the listening socket too (`stop` only drops the
+                    // connections), so the port is free for a new `listen`.
+                    state.net.listener_backend = StdNetworkBackend::new();
                     state
                         .terminal
                         .output_lines
@@ -70,7 +73,7 @@ pub fn process_command_output(
                     ..ListenerConfig::default()
                 };
                 let mut l = RemoteListener::new(cfg);
-                match l.start(&mut state.net.backend) {
+                match l.start(&mut state.net.listener_backend) {
                     Ok(()) => {
                         state
                             .terminal
@@ -131,6 +134,7 @@ pub fn process_command_output(
                 if let Some(ref mut f) = state.net.ftp_server {
                     f.stop();
                     state.net.ftp_server = None;
+                    state.net.ftp_backend = StdNetworkBackend::new();
                     state
                         .terminal
                         .output_lines
@@ -151,7 +155,7 @@ pub fn process_command_output(
                 if let Some(pass) = password {
                     server = server.with_password(pass);
                 }
-                match server.start(&mut state.net.backend) {
+                match server.start(&mut state.net.ftp_backend) {
                     Ok(()) => {
                         state
                             .terminal
@@ -936,15 +940,19 @@ fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
 }
 
 /// Format a remote command result as a response string, applying side effects
-/// (browser sandbox, skin swap) as needed.
+/// that only need the browser (sandbox toggle).
+///
+/// A skin swap is *resolved* here (so a bad name is reported to the remote
+/// caller) but not applied: the resolved skin is stored in `pending_skin`
+/// and the caller applies it with [`apply_skin_object`] once it holds the
+/// whole [`AppState`]. Applying it here with only the theme/WM borrows
+/// left the dashboard, clear color, wallpaper and SFX on the old skin.
 pub(crate) fn format_remote_response(
     result: oasis_core::error::Result<CommandOutput>,
     browser: &mut Option<oasis_core::browser::BrowserWidget>,
-    skin: &mut Skin,
-    active_theme: &mut ActiveTheme,
-    browser_config: &mut BrowserConfig,
-    wm: &mut oasis_core::wm::manager::WindowManager,
-    sdi: &mut SdiRegistry,
+    skin: &Skin,
+    sdi: &SdiRegistry,
+    pending_skin: &mut Option<Skin>,
 ) -> String {
     match result {
         Ok(CommandOutput::Text(text)) => text,
@@ -979,18 +987,13 @@ pub(crate) fn format_remote_response(
             format!("Browser sandbox: {st}")
         },
         Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
-            match resolve_skin_request(&name, skin) {
+            // Variant requests derive from the skin that will be active
+            // by then (an earlier swap in the same batch counts).
+            let base = pending_skin.as_ref().unwrap_or(skin);
+            match resolve_skin_request(&name, base) {
                 Ok(new_skin) => {
-                    let sw = active_theme.screen_w;
-                    let sh = active_theme.screen_h;
-                    let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
-                    *active_theme = ActiveTheme::from_skin(&swapped.theme)
-                        .with_screen_size(sw, sh)
-                        .with_features(&swapped.features);
-                    *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-                    wm.set_theme(swapped.theme.build_wm_theme());
-                    let msg = format!("Switched to skin: {}", swapped.manifest.name);
-                    *skin = swapped;
+                    let msg = format!("Switched to skin: {}", new_skin.manifest.name);
+                    *pending_skin = Some(new_skin);
                     msg
                 },
                 Err(e) => format!("Skin error: {e}"),
@@ -999,15 +1002,7 @@ pub(crate) fn format_remote_response(
         Ok(CommandOutput::Multi(outputs)) => {
             let mut parts = Vec::new();
             for output in outputs {
-                let resp = format_remote_response(
-                    Ok(output),
-                    browser,
-                    skin,
-                    active_theme,
-                    browser_config,
-                    wm,
-                    sdi,
-                );
+                let resp = format_remote_response(Ok(output), browser, skin, sdi, pending_skin);
                 if !resp.is_empty() {
                     parts.push(resp);
                 }
@@ -1020,57 +1015,55 @@ pub(crate) fn format_remote_response(
 
 /// Poll the remote listener for incoming commands and execute them.
 pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
-    // Destructure to allow field-level borrow splitting.
-    let AppState {
-        ref mut net,
-        ref mut terminal,
-        ref mut content,
-        ref platform,
-        ref mut skin,
-        ref mut active_theme,
-        ref mut browser_config,
-        ref mut wm,
-        ..
-    } = *state;
+    let remote_cmds = {
+        let NetworkLayer {
+            ref mut listener,
+            listener_backend: ref mut backend,
+            ..
+        } = state.net;
+        let Some(l) = listener else { return };
+        l.poll(backend)
+    };
 
-    let NetworkLayer {
-        ref mut listener,
-        ref mut backend,
-        ref tls_provider,
-        ..
-    } = *net;
-
-    let TerminalLayer {
-        ref mut cmd_reg,
-        ref mut cwd,
-        ..
-    } = *terminal;
-
-    let ContentLayer {
-        ref mut browser, ..
-    } = *content;
-
-    let Some(l) = listener else { return };
-
-    let remote_cmds = l.poll(backend);
     for (cmd_line, conn_idx) in remote_cmds {
         log::info!("Remote command from #{conn_idx}: {cmd_line}");
-        let mut env = Environment {
-            cwd: cwd.clone(),
-            vfs,
-            power: Some(platform),
-            time: Some(platform),
-            usb: Some(platform),
-            network: None,
-            tls: Some(tls_provider),
-            stdin: None,
-            stderr: String::new(),
+        let mut pending_skin = None;
+        let response = {
+            // Destructure to allow field-level borrow splitting.
+            let AppState {
+                ref net,
+                ref mut terminal,
+                ref mut content,
+                ref platform,
+                ref skin,
+                ..
+            } = *state;
+            let TerminalLayer {
+                ref mut cmd_reg,
+                ref mut cwd,
+                ..
+            } = *terminal;
+            let mut env = Environment {
+                cwd: cwd.clone(),
+                vfs: &mut *vfs,
+                power: Some(platform),
+                time: Some(platform),
+                usb: Some(platform),
+                network: None,
+                tls: Some(&net.tls_provider),
+                stdin: None,
+                stderr: String::new(),
+            };
+            let result = cmd_reg.execute(&cmd_line, &mut env);
+            *cwd = env.cwd;
+            format_remote_response(result, &mut content.browser, skin, sdi, &mut pending_skin)
         };
-        let result = cmd_reg.execute(&cmd_line, &mut env);
-        *cwd = env.cwd;
-        let response =
-            format_remote_response(result, browser, skin, active_theme, browser_config, wm, sdi);
-        let _ = l.send_response(conn_idx, &response);
+        if let Some(new_skin) = pending_skin {
+            apply_skin_object(new_skin, state, sdi, vfs);
+        }
+        if let Some(l) = state.net.listener.as_mut() {
+            let _ = l.send_response(conn_idx, &response);
+        }
     }
 }
 
@@ -1090,8 +1083,8 @@ pub fn poll_mcp_server(
         ref mut wm,
         ref mut content,
         ref mut terminal,
-        ref mut skin,
-        ref mut active_theme,
+        ref skin,
+        ref active_theme,
         ref mut browser_config,
         ref platform,
         ref net,
@@ -1103,7 +1096,7 @@ pub fn poll_mcp_server(
 
     let Some(server) = mcp else { return };
 
-    let ContentLayer {
+    let crate::app_state::ContentLayer {
         ref mut browser,
         ref mut open_runners,
         ..
@@ -1114,8 +1107,11 @@ pub fn poll_mcp_server(
         ..
     } = *terminal;
 
-    let screen_w = skin.manifest.screen_width;
-    let screen_h = skin.manifest.screen_height;
+    // The live framebuffer size: skins are scaled to the configured
+    // resolution, so the manifest's native size can be smaller than the
+    // screen (the screenshot then only captured the top-left corner).
+    let screen_w = active_theme.screen_w;
+    let screen_h = active_theme.screen_h;
 
     let mut disp = crate::mcp_tools::AppDispatcher {
         wm,
@@ -1126,7 +1122,6 @@ pub fn poll_mcp_server(
         cmd_reg,
         cwd,
         skin,
-        active_theme,
         browser_config,
         platform,
         tls_provider: &net.tls_provider,
@@ -1136,8 +1131,20 @@ pub fn poll_mcp_server(
         screen_w,
         screen_h,
         activity: agent_activity,
+        pending_skin: None,
+        closed_windows: Vec::new(),
     };
     server.poll(&mut disp);
+    let pending_skin = disp.pending_skin.take();
+    let closed = std::mem::take(&mut disp.closed_windows);
+    for id in closed {
+        finish_window_close(state, &id);
+    }
+    // Apply a skin swap requested by `run_command` now that the whole
+    // state is available again (see `format_remote_response`).
+    if let Some(new_skin) = pending_skin {
+        apply_skin_object(new_skin, state, sdi, vfs);
+    }
 }
 
 /// Start the MCP server from environment variables at boot (`OASIS_MCP=1`,
@@ -1192,7 +1199,7 @@ fn start_mcp_server(state: &mut AppState, port: u16, token: Option<String>) {
 pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
     let NetworkLayer {
         ref mut ftp_server,
-        ref mut backend,
+        ftp_backend: ref mut backend,
         ..
     } = state.net;
 
@@ -1200,6 +1207,117 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
 
     if let Err(e) = server.poll(backend, vfs) {
         log::warn!("FTP server poll error: {e}");
+    }
+}
+
+/// VFS IPC path the `wm` terminal command writes requests to.
+pub const WM_REQUEST_PATH: &str = "/var/wm/request";
+/// VFS IPC path the `wm list` terminal command reads window state from.
+pub const WM_STATUS_PATH: &str = "/var/wm/status";
+
+/// Service the `wm` terminal command's VFS IPC (local, remote terminal and
+/// MCP `run_command` alike): publish the window list to
+/// [`WM_STATUS_PATH`] and apply `close|focus|minimize|maximize <id>`
+/// requests from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
+/// in the desktop shell (and failed outright: `/var/wm` did not exist).
+pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    if !vfs.exists("/var/wm") && vfs.mkdir("/var/wm").is_err() {
+        return;
+    }
+    if let Ok(data) = vfs.read(WM_REQUEST_PATH)
+        && !data.is_empty()
+    {
+        let _ = vfs.write(WM_REQUEST_PATH, b"");
+        let request = String::from_utf8_lossy(&data).into_owned();
+        apply_wm_request(request.trim(), state, sdi);
+    }
+    let status = wm_status_text(&state.wm);
+    if vfs.read(WM_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
+        let _ = vfs.write(WM_STATUS_PATH, status.as_bytes());
+    }
+}
+
+fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry) {
+    let Some((op, id)) = request.split_once(' ') else {
+        log::warn!("wm request without a window id: {request:?}");
+        return;
+    };
+    let id = id.trim();
+    if state.wm.get_window(id).is_none() {
+        log::warn!("wm request for unknown window {id:?}");
+        return;
+    }
+    let result = match op {
+        "close" => {
+            if state.content.fullscreen_app.as_deref() == Some(id) {
+                let _ = state.wm.exit_fullscreen(id, sdi);
+            }
+            let r = state.wm.close_window(id, sdi);
+            if r.is_ok() {
+                finish_window_close(state, id);
+            }
+            r
+        },
+        "focus" => state.wm.focus_window(id, sdi),
+        "minimize" => state.wm.minimize_window(id, sdi),
+        "maximize" => state.wm.maximize_window(id, sdi),
+        other => {
+            log::warn!("unknown wm request {other:?}");
+            return;
+        },
+    };
+    if let Err(e) = result {
+        log::warn!("wm {op} {id}: {e}");
+    }
+}
+
+/// One line per window: `id | title | state | x,y wxh`, the focused
+/// window marked with `*`.
+fn wm_status_text(wm: &oasis_core::wm::manager::WindowManager) -> String {
+    if wm.window_count() == 0 {
+        return "(no windows)".to_string();
+    }
+    let active = wm.active_window();
+    wm.windows()
+        .iter()
+        .map(|w| {
+            let mark = if active == Some(w.id.as_str()) {
+                "*"
+            } else {
+                " "
+            };
+            format!(
+                "{mark}{} | {} | {:?} | {},{} {}x{}",
+                w.id.as_str(),
+                w.title,
+                w.state,
+                w.x,
+                w.y,
+                w.outer_w,
+                w.outer_h
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Shell-side cleanup after window `id` was closed through the window
+/// manager directly (MCP `close_window`, `wm close`), mirroring the
+/// titlebar close button: stop the radio / music the app owned, drop its
+/// runner (or the browser widget) and fall back to the dashboard when no
+/// window is left. Without this the app kept running invisibly.
+pub(crate) fn finish_window_close(state: &mut AppState, id: &str) {
+    if state.content.fullscreen_app.as_deref() == Some(id) {
+        state.content.fullscreen_app = None;
+    }
+    crate::input::stop_radio_if_radio_runner(state, id);
+    crate::input::stop_music_if_music_runner(state, id);
+    state.content.open_runners.retain(|(rid, _)| rid != id);
+    if id == "browser" {
+        state.content.browser = None;
+    }
+    if state.wm.window_count() == 0 && state.mode == crate::app_state::Mode::Desktop {
+        state.mode = crate::app_state::Mode::Dashboard;
     }
 }
 
@@ -1230,6 +1348,7 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_state::ContentLayer;
     use oasis_core::terminal::{CommandOutput, CommandSignal};
 
     // -- trim_output --
@@ -1321,6 +1440,8 @@ mod tests {
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
+                listener_backend: StdNetworkBackend::new(),
+                ftp_backend: StdNetworkBackend::new(),
                 listener: None,
                 ftp_server: None,
                 remote_client: None,

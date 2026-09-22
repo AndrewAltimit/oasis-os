@@ -101,7 +101,7 @@ fn stop_radio(state: &mut AppState) {
 /// Stop the radio if the closing runner is the Internet Radio app.
 /// Closing the app window should also stop playback — otherwise audio
 /// keeps playing with no UI to control it.
-fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
+pub(crate) fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
     let is_radio = state
         .content
         .open_runners
@@ -116,7 +116,7 @@ fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
 /// track. The app itself emits a `stop` VFS IPC on Cancel, but the
 /// window-manager close button bypasses that path — the runner is
 /// dropped before `tick()` gets another chance to read the IPC.
-fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
+pub(crate) fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
     const MUSIC_APP_TITLE: &str = "Music Player";
     let is_music = state
         .content
@@ -1195,6 +1195,8 @@ mod tests {
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
+                listener_backend: StdNetworkBackend::new(),
+                ftp_backend: StdNetworkBackend::new(),
                 listener: None,
                 ftp_server: None,
                 remote_client: None,

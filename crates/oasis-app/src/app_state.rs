@@ -85,9 +85,19 @@ pub struct TerminalLayer {
     pub sdi_signature: Option<u64>,
 }
 
-/// Networking: TCP backend, remote listener/client, FTP, TLS.
+/// Networking: TCP backends, remote listener/client, FTP, TLS.
+///
+/// A `StdNetworkBackend` holds at most one listening socket, so every
+/// server gets its own backend: sharing one made `ftp start` replace the
+/// remote terminal's socket (both servers then accepted each other's
+/// clients).
 pub struct NetworkLayer {
+    /// Outbound connections (`remote` client).
     pub backend: StdNetworkBackend,
+    /// Listening socket of the remote terminal (`listen`).
+    pub listener_backend: StdNetworkBackend,
+    /// Listening socket of the FTP server (`ftp start`).
+    pub ftp_backend: StdNetworkBackend,
     pub listener: Option<RemoteListener>,
     pub ftp_server: Option<FtpServer>,
     pub remote_client: Option<RemoteClient>,
@@ -319,6 +329,8 @@ mod tests {
 
         let _net = NetworkLayer {
             backend: StdNetworkBackend::new(),
+            listener_backend: StdNetworkBackend::new(),
+            ftp_backend: StdNetworkBackend::new(),
             listener: None,
             ftp_server: None,
             remote_client: None,

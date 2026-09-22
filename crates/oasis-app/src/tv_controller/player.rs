@@ -26,6 +26,8 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
     // Feed audio to the streaming track.
     if let Some(track) = state.tv_audio_track {
         let mut audio_chunks_fed = 0u32;
+        // Only the PCM path counts samples (MP3 chunks are opaque bytes).
+        #[cfg_attr(not(feature = "_video"), allow(unused_mut))]
         let mut audio_samples_fed = 0u64;
         match &mut audio_output {
             #[cfg(not(feature = "_video"))]
