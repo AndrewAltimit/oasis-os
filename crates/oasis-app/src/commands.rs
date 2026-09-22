@@ -4,7 +4,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
-use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
+use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener, StdNetworkBackend};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, SkinTheme, resolve_skin, resolve_skin_request};
 use oasis_core::startmenu::StartMenuState;
@@ -43,6 +43,9 @@ pub fn process_command_output(
                 if let Some(ref mut l) = state.net.listener {
                     l.stop();
                     state.net.listener = None;
+                    // Close the listening socket too (`stop` only drops the
+                    // connections), so the port is free for a new `listen`.
+                    state.net.listener_backend = StdNetworkBackend::new();
                     state
                         .terminal
                         .output_lines
@@ -70,7 +73,7 @@ pub fn process_command_output(
                     ..ListenerConfig::default()
                 };
                 let mut l = RemoteListener::new(cfg);
-                match l.start(&mut state.net.backend) {
+                match l.start(&mut state.net.listener_backend) {
                     Ok(()) => {
                         state
                             .terminal
@@ -131,6 +134,7 @@ pub fn process_command_output(
                 if let Some(ref mut f) = state.net.ftp_server {
                     f.stop();
                     state.net.ftp_server = None;
+                    state.net.ftp_backend = StdNetworkBackend::new();
                     state
                         .terminal
                         .output_lines
@@ -151,7 +155,7 @@ pub fn process_command_output(
                 if let Some(pass) = password {
                     server = server.with_password(pass);
                 }
-                match server.start(&mut state.net.backend) {
+                match server.start(&mut state.net.ftp_backend) {
                     Ok(()) => {
                         state
                             .terminal
@@ -1035,7 +1039,7 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
 
     let NetworkLayer {
         ref mut listener,
-        ref mut backend,
+        listener_backend: ref mut backend,
         ref tls_provider,
         ..
     } = *net;
@@ -1192,7 +1196,7 @@ fn start_mcp_server(state: &mut AppState, port: u16, token: Option<String>) {
 pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
     let NetworkLayer {
         ref mut ftp_server,
-        ref mut backend,
+        ftp_backend: ref mut backend,
         ..
     } = state.net;
 
@@ -1321,6 +1325,8 @@ mod tests {
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
+                listener_backend: StdNetworkBackend::new(),
+                ftp_backend: StdNetworkBackend::new(),
                 listener: None,
                 ftp_server: None,
                 remote_client: None,

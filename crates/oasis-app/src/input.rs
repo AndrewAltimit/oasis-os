@@ -1197,6 +1197,8 @@ mod tests {
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
+                listener_backend: StdNetworkBackend::new(),
+                ftp_backend: StdNetworkBackend::new(),
                 listener: None,
                 ftp_server: None,
                 remote_client: None,
