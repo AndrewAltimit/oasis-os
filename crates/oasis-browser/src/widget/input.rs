@@ -537,9 +537,12 @@ impl BrowserWidget {
 
         let ua_sheet = css::default::default_stylesheet();
         let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
-        for sheet in &self.cached_author_sheets {
-            all_sheets.push(sheet);
-        }
+        all_sheets.extend(Self::merge_author_sheets(
+            &self.cached_author_sheets,
+            &self.cached_author_sheet_positions,
+            &self.external_stylesheets,
+            &self.external_stylesheet_positions,
+        ));
 
         // Reuse cached selector index if available, otherwise build fresh.
         let fresh_index;
@@ -1246,9 +1249,12 @@ impl BrowserWidget {
         // Build sheet references from cache (no re-parsing).
         let ua_sheet = css::default::default_stylesheet();
         let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
-        for sheet in &self.cached_author_sheets {
-            all_sheets.push(sheet);
-        }
+        all_sheets.extend(Self::merge_author_sheets(
+            &self.cached_author_sheets,
+            &self.cached_author_sheet_positions,
+            &self.external_stylesheets,
+            &self.external_stylesheet_positions,
+        ));
 
         // Reuse cached selector index if available, otherwise build fresh.
         let fresh_index;
@@ -1429,9 +1435,12 @@ impl BrowserWidget {
         // Build sheet references from cache (no re-parsing).
         let ua_sheet = css::default::default_stylesheet();
         let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![ua_sheet];
-        for sheet in &self.cached_author_sheets {
-            all_sheets.push(sheet);
-        }
+        all_sheets.extend(Self::merge_author_sheets(
+            &self.cached_author_sheets,
+            &self.cached_author_sheet_positions,
+            &self.external_stylesheets,
+            &self.external_stylesheet_positions,
+        ));
         let ctx = css::cascade::CascadeContext {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),

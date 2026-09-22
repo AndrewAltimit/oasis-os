@@ -1625,29 +1625,41 @@ impl BrowserWidget {
     /// sheets (or vice-versa) would flip the winner for any rule of
     /// equal specificity.
     fn author_sheets_in_dom_order(&self) -> Vec<&css::parser::Stylesheet> {
-        let inline_n = self.cached_author_sheets.len();
-        let external_n = self.external_stylesheets.len();
+        Self::merge_author_sheets(
+            &self.cached_author_sheets,
+            &self.cached_author_sheet_positions,
+            &self.external_stylesheets,
+            &self.external_stylesheet_positions,
+        )
+    }
+
+    /// Field-level form of [`Self::author_sheets_in_dom_order`], for
+    /// callers that need to mutate other fields (e.g. `styles`) while
+    /// the returned sheet references are alive. Every re-cascade must
+    /// use the full inline + linked list: the cached selector index is
+    /// built over it, so a shorter list both drops `<link>` rules and
+    /// indexes out of bounds.
+    pub(crate) fn merge_author_sheets<'a>(
+        inline: &'a [css::parser::Stylesheet],
+        inline_positions: &[NodeId],
+        external: &'a [Option<css::parser::Stylesheet>],
+        external_positions: &[NodeId],
+    ) -> Vec<&'a css::parser::Stylesheet> {
+        let inline_n = inline.len();
+        let external_n = external.len();
         let mut out: Vec<&css::parser::Stylesheet> = Vec::with_capacity(inline_n + external_n);
         let mut i = 0; // inline cursor
         let mut e = 0; // external cursor
         while i < inline_n || e < external_n {
-            let inline_pos = self
-                .cached_author_sheet_positions
-                .get(i)
-                .copied()
-                .unwrap_or(usize::MAX);
-            let external_pos = self
-                .external_stylesheet_positions
-                .get(e)
-                .copied()
-                .unwrap_or(usize::MAX);
+            let inline_pos = inline_positions.get(i).copied().unwrap_or(usize::MAX);
+            let external_pos = external_positions.get(e).copied().unwrap_or(usize::MAX);
             if inline_pos <= external_pos {
                 if i < inline_n {
-                    out.push(&self.cached_author_sheets[i]);
+                    out.push(&inline[i]);
                 }
                 i += 1;
             } else {
-                if let Some(Some(sheet)) = self.external_stylesheets.get(e) {
+                if let Some(Some(sheet)) = external.get(e) {
                     out.push(sheet);
                 }
                 e += 1;
