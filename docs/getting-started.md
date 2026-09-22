@@ -175,11 +175,11 @@ feature are covered in [wasm-backend.md](wasm-backend.md).
 `oasis-backend-ue5` renderer (an RGBA framebuffer; no GPU, window or SDL):
 
 ```bash
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 # video API (oasis_video_*): add --features video-decode (or video-decode-ffmpeg)
 ```
 
-Output: `target/release/liboasis_ffi.so` (Linux), `liboasis_ffi.dylib` (macOS),
+Output: `target/release-ffi/liboasis_ffi.so` (Linux), `liboasis_ffi.dylib` (macOS),
 or `oasis_ffi.dll` (Windows). The C API reference and a UE5 integration outline
 are in [ffi-integration.md](ffi-integration.md); a runnable C host is
 [`examples/ffi_demo.c`](../examples/ffi_demo.c).

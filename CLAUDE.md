@@ -54,7 +54,7 @@ cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Build UE5 FFI shared library
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 
 # Build WASM backend (requires wasm-pack)
 ./scripts/build-wasm.sh          # debug build

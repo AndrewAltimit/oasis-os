@@ -30,15 +30,15 @@ Build the shared library, then compile the demo against it from the repo root
 (the demo reads `skins/classic/*.toml` relative to the working directory):
 
 ```bash
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 
 # Linux
-gcc -o ffi_demo examples/ffi_demo.c -L target/release -loasis_ffi -Wl,-rpath,target/release
+gcc -o ffi_demo examples/ffi_demo.c -L target/release-ffi -loasis_ffi -Wl,-rpath,target/release-ffi
 # macOS
-clang -o ffi_demo examples/ffi_demo.c -L target/release -loasis_ffi \
-  -Wl,-rpath,@loader_path/target/release
+clang -o ffi_demo examples/ffi_demo.c -L target/release-ffi -loasis_ffi \
+  -Wl,-rpath,@loader_path/target/release-ffi
 # Windows (MinGW gcc can link the DLL directly; keep oasis_ffi.dll next to the exe)
-gcc -o ffi_demo.exe examples/ffi_demo.c target/release/oasis_ffi.dll
+gcc -o ffi_demo.exe examples/ffi_demo.c target/release-ffi/oasis_ffi.dll
 
 ./ffi_demo
 ```

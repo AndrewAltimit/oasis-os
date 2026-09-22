@@ -207,7 +207,7 @@ RUST_PSP_BUILD_STD=1 cargo psp --release
 ### UE5 (FFI Library)
 
 ```bash
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 ```
 
 ### Screenshots

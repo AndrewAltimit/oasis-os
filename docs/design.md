@@ -250,7 +250,7 @@ oasis-video = { path = "../oasis-video", default-features = false, features = ["
 |--------|--------------|----------------|---------------|-------------|--------|
 | Desktop (dev) | `cargo build --release -p oasis-app` | SDL3 | Keyboard/mouse | Real Linux FS | Implemented |
 | PSP / PPSSPP | `cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release` | sceGu hardware (Sprites) | PSP controller | ms0:/ real FS | Implemented |
-| UE5 (in-game) | `cargo build --release -p oasis-ffi` (cdylib) | UE5 render target | UE5 interaction | Game asset VFS | Implemented (FFI ready) |
+| UE5 (in-game) | `cargo build --profile release-ffi -p oasis-ffi` (cdylib) | UE5 render target | UE5 interaction | Game asset VFS | Implemented (FFI ready) |
 | Raspberry Pi (briefcase) | `cargo build --release -p oasis-app --target aarch64-unknown-linux-gnu` | SDL3 | Keyboard/gamepad | Real Linux FS | Planned (SDL3 backend works, cross-compile not yet tested) |
 
 Note: The PSP backend is a standalone crate excluded from the workspace. It depends on `oasis-core` directly and re-exports shared types (`Color`, `Button`, `Trigger`, `TextureId`, `InputEvent`). Std support on the PSP target is provided by the rust-psp SDK's `main` branch with `RUST_PSP_BUILD_STD=1`, which builds a custom sysroot with PSP-specific PAL implementations. A `ColorExt` extension trait provides PSP-specific ABGR conversion without modifying oasis-core. The PSP backend uses sceGu hardware-accelerated 2D rendering with `Sprites` primitives and renders a PSIX-style UI (document icons, tabbed bars, chrome bezels, wave arc wallpaper) matching the desktop layout.
@@ -1122,7 +1122,7 @@ This also works for outbound connections -- the `remote` command from the contai
 
 ### 12.3 UE5 Development Workflow
 
-1. Build OASIS_OS as a cdylib (`cargo build --release -p oasis-ffi`)
+1. Build OASIS_OS as a cdylib (`cargo build --profile release-ffi -p oasis-ffi`)
 2. Copy `.dll`/`.so` to UE5 project's `Binaries/ThirdParty/` directory
 3. UE5 Build.cs references the library; C++ actor component calls FFI functions
 4. Place `AComputerTerminalActor` in level, assign skin and VFS root via editor properties

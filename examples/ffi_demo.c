@@ -7,13 +7,13 @@
  * and the audio callback. See docs/ffi-integration.md for the full reference.
  *
  * Build the shared library first (from the repo root):
- *   cargo build --release -p oasis-ffi
+ *   cargo build --profile release-ffi -p oasis-ffi
  *
  * Then compile and run this demo from the repo root (it reads skins/classic):
  *   Linux:  gcc -o ffi_demo examples/ffi_demo.c \
- *               -L target/release -loasis_ffi -Wl,-rpath,target/release
+ *               -L target/release-ffi -loasis_ffi -Wl,-rpath,target/release-ffi
  *   macOS:  clang -o ffi_demo examples/ffi_demo.c \
- *               -L target/release -loasis_ffi -Wl,-rpath,@loader_path/target/release
+ *               -L target/release-ffi -loasis_ffi -Wl,-rpath,@loader_path/target/release-ffi
  *   ./ffi_demo
  *
  * The video functions are only exported when oasis-ffi is built with
