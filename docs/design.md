@@ -367,7 +367,7 @@ The window manager (WM) enables skins that present multiple movable, resizable, 
 
 SDI has no concept of grouping, containment, or parent-child relationships. Every object is independent. The WM introduces the illusion of hierarchy by adopting a naming convention: a window named `"editor_01"` owns SDI objects `"editor_01.frame"`, `"editor_01.titlebar"`, `"editor_01.title_text"`, `"editor_01.btn_close"`, `"editor_01.btn_minimize"`, and `"editor_01.content"`. When the WM moves a window, it updates the position of every object sharing that prefix by the same delta. When it brings a window to front, it calls `sdi.move_to_top()` for every object in the group.
 
-This design preserves SDI's simplicity and portability. The PSP target (which has no use for overlapping windows on a 480x272 screen) never instantiates a WM. Skins that don't need windows (Classic, Corrupted) skip it entirely. The WM only exists when a skin's `features.toml` enables it.
+This design preserves SDI's simplicity and portability. The WM is only active when a skin's `features.toml` sets `window_manager = true`; skins that don't need windows (Corrupted, Paper, Retro-CGA, Vaporwave, High Contrast) skip it entirely. The PSP backend drives the same WM with a PSP-tuned theme.
 
 #### 4.5.2 Window Anatomy
 
@@ -440,7 +440,7 @@ Not every platform needs or benefits from the window manager. The skin's feature
 
 | Platform | WM Enabled | Rationale |
 |----------|-----------|-----------|
-| PSP | No | 480x272 at 30-60fps. Screen too small for overlapping windows. Classic skin uses fixed-position SDI objects for its icon grid. |
+| PSP | Yes (compact) | 480x272. The EBOOT runs the same WM with a PSP-tuned `WmTheme` (`psp_wm_theme()`); apps open as windows over the icon-grid dashboard and can go fullscreen. |
 | Raspberry Pi (briefcase) | Optional | Depends on display. Pi 5 with HDMI to a monitor inside or attached to the briefcase lid can run the Desktop or Modern skin with windowing. Headless operation uses the Classic skin via remote terminal. |
 | Desktop (dev) | Yes | Full resolution display. Desktop skin uses windowed interface. Also useful for debugging -- inspect multiple OS subsystems simultaneously. |
 | UE5 (in-game) | Yes | In-game computers with Desktop skin present windowed interfaces on the virtual monitor. The WM resolution matches the virtual screen texture (e.g., 1024x768 for a high-res in-game monitor, 480x272 for a handheld prop). |
