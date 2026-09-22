@@ -450,8 +450,11 @@ impl FileManagerApp {
                 Key::Escape => self.cancel_dialog(),
                 Key::Char('y' | 'Y') if is_confirm => self.commit_dialog(),
                 Key::Char('n' | 'N') if is_confirm => self.cancel_dialog(),
-                // Plain typing reaches the name field via handle_text_input.
+                // Plain typing reaches the name field via handle_text_input,
+                // and Backspace via its handle_backspace twin -- swallowing
+                // it here made the field impossible to edit from a keyboard.
                 Key::Char(_) | Key::Space if !is_confirm && !mods.has_command() => return None,
+                Key::Backspace if !is_confirm => return None,
                 _ => {},
             }
             // Swallow everything else so the gamepad twin (e.g. an arrow's
