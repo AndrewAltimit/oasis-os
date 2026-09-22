@@ -225,7 +225,6 @@ impl AppDispatcher<'_> {
                 }
                 wm_result(res, format!("closed {id}"))
             },
-
             "minimize" => wm_result(
                 self.wm.minimize_window(&id, self.sdi),
                 format!("minimized {id}"),
@@ -369,6 +368,13 @@ impl AppDispatcher<'_> {
                 let Ok(n) = channel.parse::<u32>() else {
                     return ToolResult::error("tv channel must be a number");
                 };
+                // The guide owns the channel catalogs; the shell resolves
+                // the request against it (tv_controller::tune).
+                if !self.open_runners.iter().any(|(_, r)| r.title == "TV Guide") {
+                    return ToolResult::error(
+                        "the TV Guide is not open (open_app 'TV Guide' first)",
+                    );
+                }
                 (
                     oasis_core::apps::tv_guide::TV_REQUEST_PATH,
                     format!("tune_ch:{n}"),

@@ -106,7 +106,7 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 | `run_command` | `command` | Run a terminal command and return its output. |
 | `browser_navigate` | `url` | Open the Browser (if needed) and navigate. |
 | `play_media` | `path` | Play a media file by VFS path. |
-| `tune` | `source` (`radio`/`tv`), `channel` | Tune the radio or TV. |
+| `tune` | `source` (`radio`/`tv`), `channel` | Tune the radio (station index or name) or the TV (channel number; the TV Guide must be open, it owns the catalogs). |
 | `get_state` | — | Current mode, skin, focused window, open windows, browser URL. |
 | `screenshot` | — | Return the current screen as a PNG image. |
 
