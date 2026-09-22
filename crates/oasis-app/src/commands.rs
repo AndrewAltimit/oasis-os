@@ -1321,6 +1321,7 @@ mod tests {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager: oasis_core::plugin::PluginManager::new(),

@@ -680,6 +680,16 @@ impl App for BrowsingApp {
     fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
         hide_app_sdi(sdi);
     }
+    fn release_resources(&mut self, backend: &mut dyn oasis_types::backend::SdiBackend) {
+        // The photo texture (and any parked stale ones) would otherwise
+        // stay in the backend's texture table after the window closes.
+        if let Some(t) = self.cached_photo_texture.take() {
+            let _ = backend.destroy_texture(t);
+        }
+        for t in self.stale_photo_textures.get_mut().drain(..) {
+            let _ = backend.destroy_texture(t);
+        }
+    }
     fn take_pending_request(&mut self) -> Option<(String, String)> {
         self.content.pending_vfs_request.take()
     }

@@ -577,6 +577,7 @@ impl<B: ShellBackend> Shell<B> {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager,
@@ -924,6 +925,11 @@ impl<B: ShellBackend> Shell<B> {
         // Apps that decided to close outside an input handler (Text
         // Editor "Save & close" once the save above is written).
         input::apply_app_close_requests(state, sdi, vfs);
+        // Closed apps release their backend resources (textures) now that
+        // the backend is at hand, then drop.
+        for mut runner in state.content.retired_runners.drain(..) {
+            runner.release_resources(&mut self.backend);
+        }
 
         // Dispatch any Settings-app IPC requests (skin swap, resolution
         // change). Must run after the pending-VFS-request block above,
@@ -1280,6 +1286,9 @@ impl<B: ShellBackend> Shell<B> {
         // Persist any settings changed since the last periodic sync.
         self.settings_mirror.sync(&self.vfs);
 
+        for mut runner in self.state.content.retired_runners.drain(..) {
+            runner.release_resources(&mut self.backend);
+        }
         // Clean up video player before shutting down backend.
         self.state.video_player.stop(&mut self.backend);
         if let Some(track) = self.state.tv_audio_track.take() {

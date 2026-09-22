@@ -166,6 +166,14 @@ impl AppRunner {
             .is_some_and(|app| app.take_close_request())
     }
 
+    /// Destroy the app's backend resources before the runner is dropped
+    /// (see [`crate::apps::App::release_resources`]).
+    pub fn release_resources(&mut self, backend: &mut dyn SdiBackend) {
+        if let Some(ref mut app) = self.delegate {
+            app.release_resources(backend);
+        }
+    }
+
     /// Ask the app whether its window may close now (titlebar close
     /// button; see [`crate::apps::App::on_close_requested`]). Returns
     /// `AppAction::Exit` to close; any other action keeps it open.

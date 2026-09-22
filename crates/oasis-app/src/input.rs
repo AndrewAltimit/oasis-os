@@ -164,6 +164,23 @@ fn start_menu_focused(state: &AppState) -> bool {
     state.ui.start_menu.open && matches!(state.mode, Mode::Dashboard | Mode::Desktop)
 }
 
+/// Remove the windowed runner `id`, parking it until the shell releases
+/// its backend resources (see `ContentLayer::retired_runners`).
+fn retire_runner(state: &mut AppState, id: &str) {
+    let content = &mut state.content;
+    while let Some(idx) = content.open_runners.iter().position(|(rid, _)| rid == id) {
+        let (_, runner) = content.open_runners.remove(idx);
+        content.retired_runners.push(runner);
+    }
+}
+
+/// Remove the fullscreen (`Mode::App`) runner the same way.
+fn retire_fullscreen_runner(state: &mut AppState) {
+    if let Some(runner) = state.content.app_runner.take() {
+        state.content.retired_runners.push(runner);
+    }
+}
+
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputResult {
@@ -320,7 +337,7 @@ pub fn handle_desktop_input(
                     }
                     stop_radio_if_radio_runner(state, &id);
                     stop_music_if_music_runner(state, &id);
-                    state.content.open_runners.retain(|(rid, _)| *rid != id);
+                    retire_runner(state, &id);
                     if id == "browser" {
                         state.content.browser = None;
                     }
@@ -455,10 +472,7 @@ pub fn handle_desktop_input(
                 let _ = state.wm.close_window(&active_id, sdi);
                 stop_radio_if_radio_runner(state, &active_id);
                 stop_music_if_music_runner(state, &active_id);
-                state
-                    .content
-                    .open_runners
-                    .retain(|(rid, _)| *rid != active_id);
+                retire_runner(state, &active_id);
                 if active_id == "browser" {
                     state.content.browser = None;
                 }
@@ -645,7 +659,7 @@ fn apply_fullscreen_action(
         AppAction::Exit => {
             state.ui_sounds.push(UiSound::Close);
             AppRunner::hide_sdi(sdi);
-            state.content.app_runner = None;
+            retire_fullscreen_runner(state);
             state.mode = Mode::Dashboard;
             if is_radio {
                 stop_radio(state);
@@ -656,7 +670,7 @@ fn apply_fullscreen_action(
         },
         AppAction::SwitchToTerminal => {
             AppRunner::hide_sdi(sdi);
-            state.content.app_runner = None;
+            retire_fullscreen_runner(state);
             state.mode = Mode::Terminal;
         },
         AppAction::LaunchAppWithFile {
@@ -672,6 +686,7 @@ fn apply_fullscreen_action(
                 icon_png: Vec::new(),
                 color: oasis_core::backend::Color::rgb(100, 100, 100),
             };
+            retire_fullscreen_runner(state);
             state.content.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
         },
         AppAction::RequestFullscreen | AppAction::None => {},
@@ -696,10 +711,7 @@ fn apply_window_action(
             let _ = state.wm.close_window(&active_id, sdi);
             stop_radio_if_radio_runner(state, &active_id);
             stop_music_if_music_runner(state, &active_id);
-            state
-                .content
-                .open_runners
-                .retain(|(rid, _)| *rid != active_id);
+            retire_runner(state, &active_id);
             if state.wm.window_count() == 0 {
                 state.mode = Mode::Dashboard;
             }
@@ -1302,6 +1314,7 @@ mod tests {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager: oasis_core::plugin::PluginManager::new(),

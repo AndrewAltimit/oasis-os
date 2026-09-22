@@ -100,6 +100,10 @@ pub struct ContentLayer {
     pub open_runners: Vec<(String, AppRunner)>,
     pub browser: Option<BrowserWidget>,
     pub fullscreen_app: Option<String>,
+    /// Runners of apps closed this frame, waiting for the shell to release
+    /// their backend resources (`AppRunner::release_resources`) before
+    /// they are dropped. Input handlers have no backend access.
+    pub retired_runners: Vec<AppRunner>,
 }
 
 /// All mutable application state except `backend`, `sdi`, and `vfs`
@@ -330,6 +334,7 @@ mod tests {
             open_runners: Vec::new(),
             browser: None,
             fullscreen_app: None,
+            retired_runners: Vec::new(),
         };
     }
 }

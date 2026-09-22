@@ -98,6 +98,12 @@ pub trait App: std::fmt::Debug + Send {
     /// Hide all SDI objects created by this app.
     fn hide_sdi(&self, sdi: &mut SdiRegistry);
 
+    /// The app is closing: destroy every backend resource it created
+    /// (textures, render targets). Hosts call this exactly once, after
+    /// the window is gone and before the app is dropped -- the only point
+    /// where a closing app still has backend access. Default: no-op.
+    fn release_resources(&mut self, _backend: &mut dyn SdiBackend) {}
+
     /// Take any pending VFS IPC request (path, data).
     fn take_pending_request(&mut self) -> Option<(String, String)> {
         None
