@@ -522,6 +522,23 @@ The WM handles behavior uniformly; the skin defines every visual detail. Two ski
 
 The corrupted skin demonstrates that the WM's behavioral hooks (position update, resize calculation, animation tick) can be intercepted by skin-defined modifiers. The WM exposes optional callback points where the skin can inject visual distortion, and the skin's `features.toml` declares which modifiers to apply.
 
+Titlebar layout is skin-driven too: `button_side = "left"` gives macOS order (close, minimize, maximize from the corner inward), `"right"` gives minimize, maximize, close. `Window::title_layout` reserves the button group on its side (mirrored on the other side for `title_align = "center"`), centers titles on their measured glyph width, and truncates titles that do not fit with `...`.
+
+#### 4.5.9 Snapping, Keyboard Management and Animation
+
+- **Drag-to-edge snapping.** While a titlebar drag is in a screen-edge zone (16 px edges, 64 px corners) the WM publishes `WindowManager::snap_preview()`, which the desktop host draws as a translucent rectangle tinted with the titlebar color. Releasing snaps the window to the left/right half, a corner quarter, or maximizes it (top edge), all within the work area (screen minus `maximize_top_inset` / `maximize_bottom_inset`). Dragging a snapped window away restores its pre-snap size; resizing by hand clears the snap.
+- **Keyboard shortcuts** (desktop mode, handled before keys reach the focused app; every combo includes Ctrl, Alt or Super, so plain Tab/arrows still reach text-entry windows):
+
+| Shortcut | Action |
+|----------|--------|
+| Alt+Tab / Alt+Shift+Tab | Cycle focus forward / backward, skipping minimized windows (disabled while a modal is open) |
+| Super+Left/Right or Ctrl+Alt+Left/Right | Snap the active window to that half; the opposite direction unsnaps |
+| Super+Up or Ctrl+Alt+Up | Maximize |
+| Super+Down or Ctrl+Alt+Down | Restore a maximized/snapped window, otherwise minimize |
+| Super+T or Ctrl+Alt+T | Cycle tiling: master/stack, grid, columns, rows, monocle, then back to floating (pre-tiling geometry restored) |
+
+- **Animations.** `WindowManager::set_motion_enabled(true)` + a per-frame `tick_animations(sdi)` animate open (grow + fade in), close (shrink + fade out; SDI objects are destroyed only when it ends), minimize (shrink toward the bottom edge) and restore-from-minimized. Motion is off by default so headless hosts and the screenshot tool stay instant; the desktop app enables it unless the skin sets `features.reduced_motion`. Animations are visual only — logical geometry and state change immediately.
+
 ---
 
 ## 5. Backend Abstraction Layer
