@@ -113,6 +113,18 @@ pub trait App: std::fmt::Debug + Send {
     /// Default implementation is a no-op.
     fn refresh(&mut self, _vfs: &dyn Vfs) {}
 
+    /// Apply VFS mutations the app has queued (deletes, renames, copies,
+    /// binary saves, ...).
+    ///
+    /// Every other hook only sees a shared `&dyn Vfs`, so apps that need to
+    /// change the file system queue the work from input handlers and the
+    /// host drains it here with mutable access, once per frame for every
+    /// open app. Returns `true` when anything was applied so the host can
+    /// re-sync cached state. Default is a no-op returning `false`.
+    fn apply_vfs_ops(&mut self, _vfs: &mut dyn Vfs) -> bool {
+        false
+    }
+
     /// Content lines for the app (used by generic scroll/render logic).
     fn lines(&self) -> &[String];
 

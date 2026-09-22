@@ -415,6 +415,10 @@ For each key-down the SDL and WASM backends emit, in order: `Key`, then its game
 
 Gamepad events that do not immediately follow a matching `Key` are never filtered. Apps should type from `handle_text_input`, keep every feature reachable through `handle_input` (PSP has no raw keys), and use `handle_key` for keyboard-only accelerators (Ctrl+S/Z/C/V, Delete, Home/End, PageUp/PageDown). FFI hosts send raw keys as `OASIS_EVENT_KEY` (see [`ffi-integration.md`](ffi-integration.md)).
 
+#### 4.3.2 App VFS Access
+
+Every input / render hook on `App` sees at most a shared `&dyn Vfs`, and `handle_click` sees none. Apps that need to change the file system queue the work and implement `App::apply_vfs_ops(&mut dyn Vfs) -> bool` (default no-op), which the SDL and WASM hosts call once per frame for every open app runner (`AppRunner::apply_vfs_ops`). The File Manager drains its delete / mkdir / rename / copy / move queue there, and Paint writes its binary BMP saves there (the older `take_pending_request` path only carries UTF-8 strings). Read-only follow-ups to a click (navigation, listing a folder) still go through `App::refresh(&dyn Vfs)`, which the host calls right after forwarding a click or a consumed key. Hosts forward only discrete clicks to apps — there are no drag / pointer-move events at the app level — so pointer-driven tools (e.g. Paint strokes) work click-by-click.
+
 ### 4.4 Remote Terminal
 
 On platforms with networking (PSP via infrastructure WiFi, Linux, desktop), the framework runs a TCP listener that accepts remote terminal connections. The remote terminal feeds keystrokes into the same command interpreter as local input. This is functional on real hardware and in PPSSPP (1.19+ maps `sceNetInet` to host sockets). In UE5, the terminal is available for debugging -- connect to `localhost:9000` while the game is running to interact with any in-game computer's OS instance directly.
