@@ -1122,9 +1122,12 @@ name = "oasis-app-system-monitor"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-platform",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
