@@ -68,8 +68,13 @@ impl BrowserWidget {
     pub fn navigate_cached_or_fetch(&mut self, url: &str, vfs: &dyn Vfs) {
         use crate::loader::ContentType;
 
-        // Check if we have a cached response for this URL.
-        if let Some(entry) = self.cache.get(url) {
+        // Check if we have a cached response for this URL. The fragment
+        // is not part of the resource's identity.
+        let key = match url.split_once('#') {
+            Some((base, _)) if self.cache.get(url).is_none() => base,
+            _ => url,
+        };
+        if let Some(entry) = self.cache.get(key) {
             let body = entry.response.body.clone();
             let ct = entry.response.content_type;
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
@@ -989,6 +994,12 @@ impl BrowserWidget {
             self.nav.navigate(url, &title);
         }
         self.skip_nav_push = false;
+
+        // 9. `page#fragment` loads land on the fragment target.
+        if let Some((_, fragment)) = url.split_once('#') {
+            let fragment = fragment.to_string();
+            self.scroll_to_fragment(&fragment);
+        }
         self.diag("[BR] load_html done");
     }
 
