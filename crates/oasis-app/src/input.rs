@@ -258,6 +258,7 @@ pub fn handle_desktop_input(
                 {
                     // Minimized -- restore and focus.
                     let _ = state.wm.restore_window(&win_id, sdi);
+                    let _ = state.wm.focus_window(&win_id, sdi);
                 } else {
                     // Inactive, visible -- bring to front.
                     let _ = state.wm.focus_window(&win_id, sdi);
