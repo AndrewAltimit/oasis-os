@@ -4,7 +4,7 @@
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use oasis_core::backend::{ArcParams, Color, DashStyle, SdiCore, StrokeStyle};
+use oasis_core::backend::{ArcParams, Color, SdiCore, StrokeStyle};
 use oasis_core::error::Result;
 use sdl3::render::FRect;
 
@@ -109,20 +109,17 @@ impl SdlBackend {
         if width <= 1 {
             let _ = self.canvas.draw_line(fpoint(tx1, ty1), fpoint(tx2, ty2));
         } else {
-            // Draw multiple parallel lines for thickness.
-            let half = width as i32 / 2;
-            let dx = (tx2 - tx1) as f32;
-            let dy = (ty2 - ty1) as f32;
-            let len = (dx * dx + dy * dy).sqrt().max(1.0);
-            let nx = (-dy / len) as i32;
-            let ny = (dx / len) as i32;
-            for i in -half..=(width as i32 - half - 1) {
-                let ox = nx * i;
-                let oy = ny * i;
-                let _ = self
-                    .canvas
-                    .draw_line(fpoint(tx1 + ox, ty1 + oy), fpoint(tx2 + ox, ty2 + oy));
-            }
+            // Square brush stamped along the Bresenham path, one span per
+            // row (shared with the software rasterizer). The previous
+            // "parallel lines along the normal" truncated the unit normal
+            // to integers, so every non-axis-aligned thick line collapsed
+            // to a 1 px line drawn `width` times.
+            self.rect_batch.clear();
+            let batch = &mut self.rect_batch;
+            oasis_rasterize::thick_line_rows(tx1, ty1, tx2, ty2, width, |y, xs, xe| {
+                push_row_span(batch, xs, xe - 1, y);
+            });
+            self.flush_rect_batch();
         }
         Ok(())
     }
@@ -151,47 +148,16 @@ impl SdlBackend {
     ) -> Result<()> {
         let (tcx, tcy) = self.translate(cx, cy);
         self.set_color(stroke.color);
-        let sw = (stroke.width as i32).max(1);
-
-        // Collect concentric circle outlines for the requested stroke
-        // width, then submit all perimeter points in one draw_points call
-        // (one FFI call instead of ~8 * 0.7r * width).
-        self.point_batch.clear();
-        for offset in 0..sw {
-            let r = radius as i32 - offset;
-            if r <= 0 {
-                break;
-            }
-
-            let mut x = 0i32;
-            let mut y = r;
-            let mut d = 1 - r;
-            while x <= y {
-                // Plot 8 symmetric points on the perimeter.
-                for &(px, py) in &[
-                    (tcx + x, tcy + y),
-                    (tcx - x, tcy + y),
-                    (tcx + x, tcy - y),
-                    (tcx - x, tcy - y),
-                    (tcx + y, tcy + x),
-                    (tcx - y, tcy + x),
-                    (tcx + y, tcy - x),
-                    (tcx - y, tcy - x),
-                ] {
-                    self.point_batch.push(fpoint(px, py));
-                }
-                x += 1;
-                if d < 0 {
-                    d += 2 * x + 1;
-                } else {
-                    y -= 1;
-                    d += 2 * (x - y) + 1;
-                }
-            }
-        }
-        if !self.point_batch.is_empty() {
-            let _ = self.canvas.draw_points(self.point_batch.as_slice());
-        }
+        // The annulus between `radius` and `radius - width`, one or two
+        // spans per row (shared with the software rasterizer). Concentric
+        // 1 px midpoint rings, the previous approach, left moire gaps
+        // between the rings of a thick stroke.
+        self.rect_batch.clear();
+        let batch = &mut self.rect_batch;
+        oasis_rasterize::stroke_circle_rows(radius, stroke.width, |dy, x0, x1| {
+            push_row_span(batch, tcx + x0, tcx + x1 - 1, tcy + dy);
+        });
+        self.flush_rect_batch();
         Ok(())
     }
 
@@ -231,86 +197,19 @@ impl SdlBackend {
         let (tx, ty) = self.translate(x, y);
         let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
         self.set_color(stroke.color);
-
-        let sw = (stroke.width as i32).max(1);
-        // Corner arc points are collected across all stroke rings and
-        // submitted in one draw_points call; the four straight edges stay
-        // as draw_line (4 calls per ring — already cheap).
-        self.point_batch.clear();
-        for t in 0..sw {
-            // Top edge.
-            let _ = self.canvas.draw_line(
-                fpoint(tx + r, ty + t),
-                fpoint(tx + w as i32 - 1 - r, ty + t),
-            );
-            // Bottom edge.
-            let _ = self.canvas.draw_line(
-                fpoint(tx + r, ty + h as i32 - 1 - t),
-                fpoint(tx + w as i32 - 1 - r, ty + h as i32 - 1 - t),
-            );
-            // Left edge.
-            let _ = self.canvas.draw_line(
-                fpoint(tx + t, ty + r),
-                fpoint(tx + t, ty + h as i32 - 1 - r),
-            );
-            // Right edge.
-            let _ = self.canvas.draw_line(
-                fpoint(tx + w as i32 - 1 - t, ty + r),
-                fpoint(tx + w as i32 - 1 - t, ty + h as i32 - 1 - r),
-            );
-
-            // Rounded corners via midpoint circle arc.
-            let cr = r - t;
-            if cr <= 0 {
-                continue;
-            }
-            let mut cx = 0i32;
-            let mut cy = cr;
-            let mut d = 1 - cr;
-            while cx <= cy {
-                // Top-left corner.
-                self.point_batch.push(fpoint(tx + r - cy, ty + r - cx));
-                if cx != cy {
-                    self.point_batch.push(fpoint(tx + r - cx, ty + r - cy));
-                }
-                // Top-right corner.
-                self.point_batch
-                    .push(fpoint(tx + w as i32 - 1 - r + cy, ty + r - cx));
-                if cx != cy {
-                    self.point_batch
-                        .push(fpoint(tx + w as i32 - 1 - r + cx, ty + r - cy));
-                }
-                // Bottom-left corner.
-                if cx != 0 {
-                    self.point_batch
-                        .push(fpoint(tx + r - cy, ty + h as i32 - 1 - r + cx));
-                }
-                self.point_batch
-                    .push(fpoint(tx + r - cx, ty + h as i32 - 1 - r + cy));
-                // Bottom-right corner.
-                if cx != 0 {
-                    self.point_batch.push(fpoint(
-                        tx + w as i32 - 1 - r + cy,
-                        ty + h as i32 - 1 - r + cx,
-                    ));
-                }
-                self.point_batch.push(fpoint(
-                    tx + w as i32 - 1 - r + cx,
-                    ty + h as i32 - 1 - r + cy,
-                ));
-
-                cx += 1;
-                if d < 0 {
-                    d += 2 * cx + 1;
-                } else {
-                    cy -= 1;
-                    d += 2 * (cx - cy) + 1;
-                }
-            }
-        }
-        if !self.point_batch.is_empty() {
-            let _ = self.canvas.draw_points(self.point_batch.as_slice());
-        }
+        // Filled rounded rect minus the inset inner one (shared with the
+        // software rasterizer): corners have the same shape as
+        // `fill_rounded_rect` and thick strokes have no gaps.
+        self.rect_batch.clear();
+        let batch = &mut self.rect_batch;
+        oasis_rasterize::stroke_rounded_rect_rows(
+            w as i32,
+            h as i32,
+            r,
+            stroke.width,
+            |dy, x0, x1| push_row_span(batch, tx + x0, tx + x1 - 1, ty + dy),
+        );
+        self.flush_rect_batch();
         Ok(())
     }
 
@@ -321,7 +220,7 @@ impl SdlBackend {
         self.set_color(color);
 
         // Collect translated vertices into the persistent scratch
-        // buffer (`point_batch` pattern) instead of allocating a fresh
+        // buffer (`rect_batch` pattern) instead of allocating a fresh
         // Vec on every call. Translation is a pure offset, so applying
         // it once to (0, 0) covers every vertex.
         let (ox, oy) = self.translate(0, 0);
@@ -329,27 +228,11 @@ impl SdlBackend {
         self.poly_points
             .extend(points.iter().map(|&(x, y)| (x + ox, y + oy)));
 
-        let y_min = self.poly_points.iter().map(|v| v.1).min().unwrap_or(0);
-        let y_max = self.poly_points.iter().map(|v| v.1).max().unwrap_or(0);
-
-        let n = self.poly_points.len();
         self.rect_batch.clear();
-        for y in y_min..=y_max {
-            self.poly_xs.clear();
-            for i in 0..n {
-                let j = (i + 1) % n;
-                let (x0, y0) = self.poly_points[i];
-                let (x1, y1) = self.poly_points[j];
-                if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) {
-                    let t = (y - y0) as f32 / (y1 - y0) as f32;
-                    self.poly_xs.push(x0 + (t * (x1 - x0) as f32) as i32);
-                }
-            }
-            self.poly_xs.sort_unstable();
-            for pair in self.poly_xs.as_chunks::<2>().0.iter() {
-                push_row_span(&mut self.rect_batch, pair[0], pair[1], y);
-            }
-        }
+        let batch = &mut self.rect_batch;
+        oasis_rasterize::polygon_rows(&self.poly_points, &mut self.poly_xs, |y, x0, x1| {
+            push_row_span(batch, x0, x1 - 1, y);
+        });
         self.flush_rect_batch();
         Ok(())
     }
@@ -376,80 +259,6 @@ impl SdlBackend {
             prev_y = ny;
         }
         self.flush_rect_batch();
-        Ok(())
-    }
-
-    pub(crate) fn shape_stroke_arc(&mut self, arc: ArcParams, stroke: StrokeStyle) -> Result<()> {
-        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(arc.cx, arc.cy);
-        self.set_color(stroke.color);
-        let segments = arc_segments(arc.radius, arc.start_angle, arc.end_angle);
-        let r = arc.radius as f32;
-        let step = (arc.end_angle - arc.start_angle) / segments as f32;
-
-        let half = stroke.width as i32 / 2;
-        let mut prev_x = tcx + (r * cos_approx_f32(arc.start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(arc.start_angle)) as i32;
-        for i in 1..=segments {
-            let angle = arc.start_angle + step * i as f32;
-            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
-            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
-            // Thicken: draw parallel lines.
-            for offset in -half..=(stroke.width as i32 - half - 1) {
-                let dx = (nx - prev_x) as f32;
-                let dy = (ny - prev_y) as f32;
-                let len = (dx * dx + dy * dy).sqrt().max(1.0);
-                let ox = (-dy / len * offset as f32) as i32;
-                let oy = (dx / len * offset as f32) as i32;
-                let _ = self
-                    .canvas
-                    .draw_line(fpoint(prev_x + ox, prev_y + oy), fpoint(nx + ox, ny + oy));
-            }
-            prev_x = nx;
-            prev_y = ny;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn shape_stroke_line_dashed(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        stroke: StrokeStyle,
-        dash_style: DashStyle,
-    ) -> Result<()> {
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        self.set_color(stroke.color);
-
-        let dx = (tx2 - tx1) as f32;
-        let dy = (ty2 - ty1) as f32;
-        let total_len = (dx * dx + dy * dy).sqrt();
-        if total_len < 1.0 {
-            return Ok(());
-        }
-        let ux = dx / total_len;
-        let uy = dy / total_len;
-        let cycle = dash_style.dash as f32 + dash_style.gap as f32;
-        let half = stroke.width as i32 / 2;
-        let mut t = 0.0f32;
-        while t < total_len {
-            let seg_end = (t + dash_style.dash as f32).min(total_len);
-            let sx = tx1 + (ux * t) as i32;
-            let sy = ty1 + (uy * t) as i32;
-            let ex = tx1 + (ux * seg_end) as i32;
-            let ey = ty1 + (uy * seg_end) as i32;
-            for offset in -half..=(stroke.width as i32 - half - 1) {
-                let ox = (-uy * offset as f32) as i32;
-                let oy = (ux * offset as f32) as i32;
-                let _ = self
-                    .canvas
-                    .draw_line(fpoint(sx + ox, sy + oy), fpoint(ex + ox, ey + oy));
-            }
-            t += cycle;
-        }
         Ok(())
     }
 }

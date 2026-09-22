@@ -26,9 +26,9 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, DashStyle, RenderTargetId,
-    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, StrokeStyle, TextureId,
+    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiAlpha,
+    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
+    SdiVector, StrokeStyle, TextureId,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
@@ -116,16 +116,13 @@ pub struct SdlBackend {
     /// and blend-mode calls. All canvas draw-color/blend changes must go
     /// through `set_color` (or reset this to `None`) to stay coherent.
     pub(crate) last_draw_color: Option<Color>,
-    /// Reusable scratch buffer for batched `draw_points` submissions
-    /// (circle / rounded-corner outlines plot hundreds of points per
-    /// call; one `SDL_RenderPoints` beats one FFI call per point).
-    pub(crate) point_batch: Vec<FPoint>,
-    /// Reusable scratch buffer for batched ill_rects submissions: the
-    /// filled-shape scanline spans (rounded rects, circles, triangles,
-    /// polygons, arcs) go to SDL in one call instead of one per row.
+    /// Reusable scratch buffer for batched `fill_rects` submissions: the
+    /// scanline spans of filled and stroked shapes (rounded rects,
+    /// circles, rings, thick lines, triangles, polygons, arcs) go to SDL
+    /// in one call instead of one per row.
     pub(crate) rect_batch: Vec<FRect>,
     /// Reusable scratch buffer for polygon fills: translated vertices.
-    /// Same reuse-instead-of-allocate pattern as `point_batch` —
+    /// Same reuse-instead-of-allocate pattern as `rect_batch` --
     /// `fill_polygon` previously allocated a fresh `Vec` per call.
     pub(crate) poly_points: Vec<(i32, i32)>,
     /// Reusable scratch buffer for polygon fills: per-scanline edge
@@ -240,7 +237,6 @@ impl SdlBackend {
             viewport_w: width,
             viewport_h: height,
             last_draw_color: None,
-            point_batch: Vec::new(),
             rect_batch: Vec::new(),
             poly_points: Vec::new(),
             poly_xs: Vec::new(),
@@ -449,49 +445,11 @@ impl SdiVector for SdlBackend {
             color,
         )
     }
-
-    fn stroke_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        self.shape_stroke_arc(
-            ArcParams {
-                cx,
-                cy,
-                radius,
-                start_angle,
-                end_angle,
-            },
-            StrokeStyle { width, color },
-        )
-    }
-
-    fn stroke_line_dashed(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
-    ) -> Result<()> {
-        self.shape_stroke_line_dashed(
-            x1,
-            y1,
-            x2,
-            y2,
-            StrokeStyle { width, color },
-            DashStyle { dash, gap },
-        )
-    }
+    // `stroke_arc` and `stroke_line_dashed` use the trait defaults, which
+    // decompose into `draw_line` -- the same pixels the software
+    // rasterizer produces (the old overrides thickened with parallel
+    // lines along a truncated integer normal, i.e. not at all on
+    // diagonals).
 }
 
 // -------------------------------------------------------------------
