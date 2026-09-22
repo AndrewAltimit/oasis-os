@@ -276,12 +276,10 @@ pub fn handle_desktop_input(
                         // Apply any vfs work the click queued (e.g. file
                         // manager folder navigation).
                         runner.refresh_app(vfs);
-                        if action == AppAction::RequestFullscreen
-                            && state.content.fullscreen_app.is_none()
-                        {
-                            let _ = state.wm.enter_fullscreen(&id, sdi);
-                            state.content.fullscreen_app = Some(id.to_string());
-                        }
+                        // Clicks answer with the same actions as buttons: a
+                        // double-clicked file opens in its app, a
+                        // File > Close menu item closes the window.
+                        apply_window_action(action, id.to_string(), state, sdi, vfs);
                     }
                 },
                 WmEvent::DesktopClick(dx, dy) => {
