@@ -896,7 +896,9 @@ impl BrowserWidget {
             || self.image_decode_in_flight > 0
             || !self.pending_io_stylesheets.is_empty()
             || !self.pending_vfs_stylesheets.is_empty();
-        let animating = self.animation_engine.has_active() || self.transition_engine.has_active();
+        let animating = self.animation_engine.has_active()
+            || self.transition_engine.has_active()
+            || self.scroll.is_animating();
         #[cfg(feature = "javascript")]
         let animating = animating || !self.deferred_scripts.is_empty();
         repaint_pending || loading || animating

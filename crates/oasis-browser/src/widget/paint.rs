@@ -81,6 +81,9 @@ impl BrowserWidget {
         #[cfg(feature = "web-fonts")]
         self.load_web_fonts(vfs);
 
+        // Advance smooth scrolling (a no-op unless `smooth_scroll`).
+        self.scroll.tick();
+
         // Compute frame delta for animations/transitions.
         let now = web_time::Instant::now();
         let dt_ms = self

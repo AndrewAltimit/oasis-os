@@ -283,6 +283,14 @@ impl ScrollState {
         }
     }
 
+    /// Whether a smooth scroll is still moving (more [`Self::tick`]s
+    /// will change the offset).
+    pub fn is_animating(&self) -> bool {
+        self.smooth
+            && (self.scroll_velocity.abs() >= VELOCITY_EPSILON
+                || self.velocity_x.abs() >= VELOCITY_EPSILON)
+    }
+
     /// Is at top?
     pub fn at_top(&self) -> bool {
         self.scroll_y == 0

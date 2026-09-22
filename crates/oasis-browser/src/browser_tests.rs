@@ -3452,6 +3452,42 @@ fn vfs_linked_stylesheet_imports_are_followed() {
     );
 }
 
+/// With `smooth_scroll` on, scroll input only sets a velocity that
+/// `ScrollState::tick` turns into movement; the widget never ticked it,
+/// so smooth-scrolling configs could not scroll at all.
+#[test]
+fn smooth_scroll_moves_and_settles() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/long").unwrap();
+    let body: String = (0..200).map(|i| format!("<p>Line {i}</p>")).collect();
+    vfs.write(
+        "/sites/long/index.html",
+        format!("<html><body>{body}</body></html>").as_bytes(),
+    )
+    .unwrap();
+    let mut config = BrowserConfig::default();
+    config.smooth_scroll = true;
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/long/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.handle_input(&InputEvent::MouseWheel { delta: 2 }, &vfs);
+    assert!(
+        browser.wants_frame(),
+        "a smooth scroll in motion wants frames"
+    );
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn > 1, "the scroll animates over several frames");
+    assert!(
+        browser.scroll().scroll_y > 0,
+        "smooth scroll moved the page"
+    );
+    assert!(!browser.wants_frame(), "and settles");
+}
+
 /// Going back to a page that fell out of the resource cache refetches
 /// it; that load used to push a fresh history entry, wiping the forward
 /// stack (Forward did nothing after such a Back).
