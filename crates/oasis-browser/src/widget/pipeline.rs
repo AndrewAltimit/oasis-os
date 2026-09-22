@@ -364,13 +364,16 @@ impl BrowserWidget {
     /// [`BrowserWidget::set_tls_provider`] replaces `self.tls` meanwhile.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pub(crate) fn ensure_io_thread(&mut self) -> bool {
-        if self.io_thread.is_some() {
+        if let Some(io) = self.io_thread.as_mut() {
+            // Every submit comes through here: keep the limit current.
+            io.set_max_redirects(self.config.max_redirects);
             return true;
         }
         let tls = self.tls.clone();
         let cookie_jar = self.cookie_jar.clone();
         match IoThread::spawn(tls, cookie_jar) {
-            Ok(io) => {
+            Ok(mut io) => {
+                io.set_max_redirects(self.config.max_redirects);
                 self.io_thread = Some(io);
                 true
             },

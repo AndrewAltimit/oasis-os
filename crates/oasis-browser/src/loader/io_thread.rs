@@ -54,6 +54,8 @@ mod inner {
         pub cache_validators: Option<(Option<String>, Option<String>)>,
         /// The resolved image URL key (only for `Image` kind).
         pub image_key: Option<String>,
+        /// Redirects to follow before failing.
+        pub max_redirects: u8,
     }
 
     /// A completed response from the I/O thread.
@@ -87,6 +89,8 @@ mod inner {
         in_flight: usize,
         /// Set on drop: the worker stops before starting another request.
         cancelled: Arc<AtomicBool>,
+        /// Redirect limit stamped on each request sent from now on.
+        max_redirects: u8,
     }
 
     impl Drop for IoThread {
@@ -134,7 +138,13 @@ mod inner {
                 next_id: 1,
                 in_flight: 0,
                 cancelled,
+                max_redirects: loader::http::MAX_REDIRECTS,
             })
+        }
+
+        /// Follow at most `n` redirects for requests sent from now on.
+        pub fn set_max_redirects(&mut self, n: u8) {
+            self.max_redirects = n;
         }
 
         /// Submit a request to the I/O thread. Returns the request ID.
@@ -153,6 +163,7 @@ mod inner {
                 request,
                 cache_validators,
                 image_key,
+                max_redirects: self.max_redirects,
             };
             // If the channel is disconnected the thread has panicked.
             // In that case we just drop the request (the caller will
@@ -274,12 +285,13 @@ mod inner {
 
             match url.scheme.as_str() {
                 "http" | "https" => {
-                    match loader::http::http_request_full(
+                    match loader::http::http_request_full_limited(
                         method,
                         &url,
                         request.body.as_deref(),
                         &extra_refs,
                         tls,
+                        work.max_redirects,
                     ) {
                         Ok((resp, headers)) => {
                             // Collect cookie updates to replay on main thread.
