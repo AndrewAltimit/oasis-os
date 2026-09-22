@@ -178,8 +178,12 @@ impl AppRunner {
     /// Set a Terminal runner's text cursor column (characters) within the
     /// trailing prompt line; `None` hides it. No-op for other runners.
     pub fn set_terminal_cursor(&mut self, col: Option<usize>) {
-        if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>()
-            && simple.set_prompt_cursor(col)
+        // Downcast directly: `delegate_as_mut` would flag a redraw even when
+        // the cursor didn't move.
+        if let Some(simple) = self.delegate.as_mut().and_then(|app| {
+            app.as_any_mut()
+                .downcast_mut::<super::simple_app::SimpleApp>()
+        }) && simple.set_prompt_cursor(col)
         {
             // Cursor-only moves don't change the synced lines, so the
             // idle-frame check would otherwise skip them.
