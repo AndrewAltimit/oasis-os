@@ -949,7 +949,12 @@ impl BrowserWidget {
             Some(for_id) => doc.get_element_by_id(for_id),
             None => {
                 // Implicit association: first labelable descendant.
-                let mut stack: Vec<usize> = doc.nodes[label_nid].children.iter().rev().copied().collect();
+                let mut stack: Vec<usize> = doc.nodes[label_nid]
+                    .children
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect();
                 let mut found = None;
                 while let Some(id) = stack.pop() {
                     if let NodeKind::Element(ref e) = doc.nodes[id].kind
@@ -967,9 +972,7 @@ impl BrowserWidget {
         let Some(target_nid) = target else {
             return false;
         };
-        let is_labelable = doc
-            .element(target_nid)
-            .is_some_and(|e| is_control(&e.tag));
+        let is_labelable = doc.element(target_nid).is_some_and(|e| is_control(&e.tag));
         if !is_labelable {
             return false;
         }
@@ -1726,8 +1729,12 @@ impl BrowserWidget {
                         // <option>s in document order (possibly inside
                         // <optgroup>s), matching `populate_forms_from_dom`.
                         let mut options = Vec::new();
-                        let mut stack: Vec<usize> =
-                            doc.nodes[select_nid].children.iter().rev().copied().collect();
+                        let mut stack: Vec<usize> = doc.nodes[select_nid]
+                            .children
+                            .iter()
+                            .rev()
+                            .copied()
+                            .collect();
                         while let Some(nid) = stack.pop() {
                             if let NodeKind::Element(e) = &doc.nodes[nid].kind {
                                 if e.tag == TagName::Option {

@@ -1628,6 +1628,7 @@ impl BrowserWidget {
 
     /// Remember the source text of external sheet `idx` (for re-parsing
     /// on viewport changes) and note whether it is media-dependent.
+    #[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
     fn record_external_source(&mut self, idx: usize, css_text: String) {
         if css_uses_media_queries(&css_text) {
             self.media_dependent_css = true;
@@ -1670,7 +1671,9 @@ impl BrowserWidget {
             .zip(&self.external_stylesheet_sources)
         {
             if let Some(source) = source {
-                *slot = Some(css::parser::Stylesheet::parse_with_viewport(source, viewport));
+                *slot = Some(css::parser::Stylesheet::parse_with_viewport(
+                    source, viewport,
+                ));
             }
         }
         self.pending_external_css_apply = true;

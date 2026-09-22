@@ -133,8 +133,10 @@ impl FormManager {
         };
         self.forms.get(fi).is_some_and(|f| {
             f.elements().iter().any(|e| {
-                matches!(e, FormElement::TextInput { .. } | FormElement::TextArea { .. })
-                    && e.name() == Some(name)
+                matches!(
+                    e,
+                    FormElement::TextInput { .. } | FormElement::TextArea { .. }
+                ) && e.name() == Some(name)
             })
         })
     }
