@@ -754,6 +754,7 @@ impl BrowserWidget {
                             &nav,
                             &js_sty,
                             self.page_csp.as_ref(),
+                            self.tls.clone(),
                             Some(&ls),
                             Some(&dirty),
                         )

@@ -349,7 +349,8 @@ pub struct BrowserWidget {
     ///
     /// **Drop order**: Must be declared after `io_thread` so it outlives
     /// the I/O worker thread (see `SharedTlsProvider` safety invariant).
-    tls: Option<Box<dyn oasis_net::tls::TlsProvider>>,
+    /// Reference-counted so page `fetch()` handlers can share it.
+    tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -701,7 +702,7 @@ impl BrowserWidget {
             #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
-            js_local_storage: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            js_local_storage: std::rc::Rc::default(),
             #[cfg(feature = "javascript")]
             js_dom_dirty: std::rc::Rc::new(std::cell::Cell::new(false)),
             #[cfg(feature = "javascript")]
@@ -739,7 +740,7 @@ impl BrowserWidget {
 
     /// Attach a TLS provider for HTTPS and Gemini support.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
-        self.tls = Some(provider);
+        self.tls = Some(std::sync::Arc::from(provider));
     }
 
     /// Install a diagnostic log hook. The browser fires it at key

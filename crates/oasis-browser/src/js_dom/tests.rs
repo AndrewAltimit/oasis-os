@@ -957,3 +957,351 @@ fn window_location_assign_works() {
         JsNavAction::Navigate("https://via-window.com".into())
     );
 }
+
+// ------------------------------------------------------------------
+// fetch() + Web Storage (origin policy, promises, quota)
+// ------------------------------------------------------------------
+
+type RecordedCall = (String, String, Vec<(String, String)>, Option<String>);
+type CannedResponse = (u16, Vec<(String, String)>, String);
+
+/// Transport double: canned responses by URL, records every request.
+#[derive(Clone, Default)]
+struct MockTransport {
+    calls: Rc<RefCell<Vec<RecordedCall>>>,
+    responses: Rc<RefCell<std::collections::HashMap<String, CannedResponse>>>,
+}
+
+impl MockTransport {
+    fn respond(&self, url: &str, status: u16, headers: &[(&str, &str)], body: &str) {
+        let headers = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        self.responses
+            .borrow_mut()
+            .insert(url.to_string(), (status, headers, body.to_string()));
+    }
+
+    fn urls(&self) -> Vec<String> {
+        self.calls.borrow().iter().map(|c| c.1.clone()).collect()
+    }
+}
+
+impl fetch::FetchTransport for MockTransport {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        Vec::new()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        _redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        _addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        let url = req.url.to_string();
+        self.calls.borrow_mut().push((
+            req.method.to_string(),
+            url.clone(),
+            req.headers.to_vec(),
+            req.body.map(|b| String::from_utf8_lossy(b).into_owned()),
+        ));
+        let (status, headers, body) = self.responses.borrow().get(&url).cloned().unwrap_or((
+            404,
+            Vec::new(),
+            "Not Found".into(),
+        ));
+        Ok(fetch::RawResponse {
+            status,
+            headers,
+            body: body.into_bytes(),
+            url,
+        })
+    }
+}
+
+/// Install the full page bindings for `url`, optionally with a shared
+/// storage backend and a mock fetch transport.
+fn setup_page(
+    url: &str,
+    store: Option<&SharedLocalStorage>,
+    transport: Option<&MockTransport>,
+) -> JsEngine {
+    let engine = JsEngine::new(32 * 1024 * 1024).unwrap();
+    let shared: SharedDoc = Rc::new(RefCell::new(sample_doc()));
+    let nav: SharedNavActions = Rc::new(RefCell::new(Vec::new()));
+    engine
+        .with_context(|ctx| {
+            install_document_global_full(&ctx, &shared, url, &nav, None, None, None, store, None)?;
+            if let Some(t) = transport {
+                let handler = fetch::BrowserFetchHandler::new(url, None, Box::new(t.clone()));
+                oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    engine
+}
+
+fn js_str(engine: &JsEngine, expr: &str) -> String {
+    match engine.eval(expr).unwrap() {
+        oasis_js::JsValue::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
+#[test]
+fn fetch_then_then_chaining_yields_parsed_data() {
+    let t = MockTransport::default();
+    t.respond(
+        "https://example.com/api/data",
+        200,
+        &[("Content-Type", "application/json")],
+        r#"{"n":42}"#,
+    );
+    let engine = setup_page("https://example.com/app/index.html", None, Some(&t));
+    engine
+        .eval(
+            "globalThis.out = 'pending';\
+             fetch('/api/data')\
+               .then(function(r) { globalThis.meta = r.status + ' ' + r.ok + ' ' \
+                   + r.statusText + ' ' + r.headers.get('content-type'); return r.json(); })\
+               .then(function(d) { globalThis.out = d.n; })",
+        )
+        .unwrap();
+    assert_eq!(
+        engine.eval("out === 42").unwrap(),
+        oasis_js::JsValue::Bool(true)
+    );
+    assert_eq!(js_str(&engine, "meta"), "200 true OK application/json");
+    assert_eq!(
+        engine.eval("fetch('/x') instanceof Promise").unwrap(),
+        oasis_js::JsValue::Bool(true)
+    );
+}
+
+#[test]
+fn fetch_resolves_relative_urls_against_document() {
+    let t = MockTransport::default();
+    let engine = setup_page("https://example.com/app/page.html?q=1", None, Some(&t));
+    engine
+        .eval("fetch('data.json'); fetch('../up.txt'); fetch('/abs'); fetch('?x=2#frag')")
+        .unwrap();
+    assert_eq!(
+        t.urls(),
+        vec![
+            "https://example.com/app/data.json",
+            "https://example.com/up.txt",
+            "https://example.com/abs",
+            "https://example.com/app/page.html?x=2",
+        ]
+    );
+}
+
+#[test]
+fn fetch_reports_real_status_and_rejects_network_errors() {
+    let t = MockTransport::default();
+    let engine = setup_page("https://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "fetch('/missing').then(function(r) { \
+               globalThis.st = r.status + ':' + r.ok + ':' + r.statusText; })",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "st"), "404:false:Not Found");
+    engine
+        .eval("fetch('ftp://example.com/f').catch(function(e) { globalThis.err = e.name; })")
+        .unwrap();
+    assert_eq!(js_str(&engine, "err"), "TypeError");
+}
+
+#[test]
+fn fetch_blocks_loopback_and_private_targets_from_web_origin() {
+    let t = MockTransport::default();
+    let engine = setup_page("http://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "globalThis.errs = [];\
+             function rec(p) { return p.then(function() { errs.push('ok'); }, \
+               function(e) { errs.push(e.name); }); }\
+             rec(fetch('http://127.0.0.1:7345/mcp', { method: 'POST', body: '{}', \
+               headers: { 'Content-Type': 'application/json' } }));\
+             rec(fetch('http://localhost:7345/mcp'));\
+             rec(fetch('http://[::1]/'));\
+             rec(fetch('http://2130706433/'));\
+             rec(fetch('http://192.168.1.1/admin'));\
+             rec(fetch('http://10.0.0.5/'));\
+             rec(fetch('http://169.254.169.254/latest/meta-data'));\
+             rec(fetch('http://[fd00::1]/'));",
+        )
+        .unwrap();
+    assert_eq!(
+        js_str(&engine, "errs.join(',')"),
+        "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError"
+    );
+    assert!(t.calls.borrow().is_empty(), "no request may reach the wire");
+}
+
+#[test]
+fn fetch_loopback_page_may_reach_loopback() {
+    let t = MockTransport::default();
+    t.respond("http://127.0.0.1:8080/api", 200, &[], "local");
+    let engine = setup_page("http://127.0.0.1:8080/", None, Some(&t));
+    engine
+        .eval(
+            "fetch('/api', { method: 'POST', body: 'x' })\
+               .then(function(r) { return r.text(); })\
+               .then(function(t) { globalThis.out = t; })",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "out"), "local");
+    let calls = t.calls.borrow();
+    assert_eq!(calls[0].0, "POST");
+    assert_eq!(calls[0].3.as_deref(), Some("x"));
+}
+
+#[test]
+fn fetch_cross_origin_only_simple_get_with_cors() {
+    let t = MockTransport::default();
+    t.respond(
+        "https://api.other.com/open",
+        200,
+        &[("Access-Control-Allow-Origin", "*")],
+        "open",
+    );
+    t.respond("https://api.other.com/closed", 200, &[], "secret");
+    let engine = setup_page("https://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "globalThis.r = [];\
+             fetch('https://api.other.com/open').then(function(x) { return x.text(); })\
+               .then(function(s) { r.push(s); }, function(e) { r.push('E1'); });\
+             fetch('https://api.other.com/closed').then(function() { r.push('leak'); },\
+               function(e) { r.push('cors'); });\
+             fetch('https://api.other.com/open', { method: 'POST', body: 'x' })\
+               .then(function() { r.push('bad'); }, function(e) { r.push('post'); });\
+             fetch('https://api.other.com/open', { headers: { 'X-Token': 'a' } })\
+               .then(function() { r.push('bad'); }, function(e) { r.push('hdr'); });",
+        )
+        .unwrap();
+    let mut got: Vec<String> = js_str(&engine, "r.join(',')")
+        .split(',')
+        .map(String::from)
+        .collect();
+    got.sort();
+    assert_eq!(got, vec!["cors", "hdr", "open", "post"]);
+    // Only the two simple GETs went out, each carrying the page Origin.
+    let calls = t.calls.borrow();
+    assert_eq!(calls.len(), 2);
+    for c in calls.iter() {
+        assert_eq!(c.0, "GET");
+        assert!(
+            c.2.iter()
+                .any(|(k, v)| k == "origin" && v == "https://example.com")
+        );
+    }
+}
+
+#[test]
+fn fetch_same_origin_allows_any_method_and_drops_forbidden_headers() {
+    let t = MockTransport::default();
+    t.respond("https://example.com/api", 201, &[], "made");
+    let engine = setup_page("https://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "fetch('/api', { method: 'put', body: 'b', \
+               headers: { 'X-Custom': '1', 'Host': 'evil', 'Cookie': 'c=1' } })\
+             .then(function(r) { globalThis.st = r.status; })",
+        )
+        .unwrap();
+    assert_eq!(engine.eval("st").unwrap(), oasis_js::JsValue::Int(201));
+    let calls = t.calls.borrow();
+    assert_eq!(calls[0].0, "PUT");
+    let names: Vec<&str> = calls[0].2.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(names.contains(&"x-custom"));
+    assert!(!names.contains(&"host") && !names.contains(&"cookie"));
+}
+
+#[test]
+fn storage_is_isolated_per_origin_and_persists_per_origin() {
+    let store: SharedLocalStorage = Rc::default();
+    let a = setup_page("https://a.example/page", Some(&store), None);
+    a.eval("localStorage.setItem('k', 'from-a'); sessionStorage.setItem('s', 'sa')")
+        .unwrap();
+    let b = setup_page("https://b.example/", Some(&store), None);
+    assert_eq!(
+        b.eval("localStorage.getItem('k')").unwrap(),
+        oasis_js::JsValue::Null
+    );
+    assert_eq!(
+        b.eval("sessionStorage.getItem('s')").unwrap(),
+        oasis_js::JsValue::Null
+    );
+    assert_eq!(
+        b.eval("localStorage.length").unwrap(),
+        oasis_js::JsValue::Int(0)
+    );
+    b.eval("localStorage.setItem('k', 'from-b'); localStorage.clear()")
+        .unwrap();
+    // Same origin (default port spelled out) sees a's data after navigation.
+    let a2 = setup_page("https://A.example:443/other", Some(&store), None);
+    assert_eq!(js_str(&a2, "localStorage.getItem('k')"), "from-a");
+    assert_eq!(js_str(&a2, "sessionStorage.getItem('s')"), "sa");
+    assert_eq!(js_str(&a2, "localStorage.key(0)"), "k");
+    assert_eq!(
+        a2.eval("localStorage.key(5)").unwrap(),
+        oasis_js::JsValue::Null
+    );
+}
+
+#[test]
+fn storage_empty_string_value_is_not_null() {
+    let engine = setup_page("https://example.com/", None, None);
+    engine.eval("localStorage.setItem('e', '')").unwrap();
+    assert_eq!(
+        engine.eval("localStorage.getItem('e')").unwrap(),
+        oasis_js::JsValue::String(String::new())
+    );
+    assert_eq!(
+        engine.eval("localStorage.getItem('missing')").unwrap(),
+        oasis_js::JsValue::Null
+    );
+}
+
+#[test]
+fn storage_quota_exceeded_throws_dom_exception() {
+    let engine = setup_page("https://example.com/", None, None);
+    let r = js_str(
+        &engine,
+        "var big = 'x'.repeat(3 * 1024 * 1024); var r;\
+         localStorage.setItem('a', big);\
+         try { localStorage.setItem('b', big); r = 'stored'; }\
+         catch (e) { r = e.name + ':' + (e instanceof DOMException) + ':' + e.code; }\
+         r + ':' + (localStorage.getItem('b') === null) + ':' + localStorage.length",
+    );
+    assert_eq!(r, "QuotaExceededError:true:22:true:1");
+}
+
+#[test]
+fn net_class_and_ip_literal_parsing() {
+    use fetch::{NetClass, classify_ip, parse_ip_host};
+    let class = |h: &str| parse_ip_host(h).map(classify_ip);
+    assert_eq!(class("127.0.0.1"), Some(NetClass::Loopback));
+    assert_eq!(class("127.1"), Some(NetClass::Loopback));
+    assert_eq!(class("0x7f.0.0.1"), Some(NetClass::Loopback));
+    assert_eq!(class("0177.0.0.1"), Some(NetClass::Loopback));
+    assert_eq!(class("0.0.0.0"), Some(NetClass::Loopback));
+    assert_eq!(class("[::1]"), Some(NetClass::Loopback));
+    assert_eq!(class("[::ffff:192.168.0.1]"), Some(NetClass::Private));
+    assert_eq!(class("172.16.5.4"), Some(NetClass::Private));
+    assert_eq!(class("[fe80::1]"), Some(NetClass::Private));
+    assert_eq!(class("[fc00::1]"), Some(NetClass::Private));
+    assert_eq!(class("8.8.8.8"), Some(NetClass::Public));
+    assert_eq!(class("[2606:4700::1111]"), Some(NetClass::Public));
+    assert_eq!(class("example.com"), None);
+    assert_eq!(class("256.1.1.1"), None);
+}

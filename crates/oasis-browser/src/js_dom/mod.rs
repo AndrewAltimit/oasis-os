@@ -18,8 +18,11 @@
 //! ## Layout
 //!
 //! - [`bindings`] -- DOM node, navigation and computed-style bindings
-//! - [`fetch`] -- the synchronous `__oasis_fetch` binding (CSP-checked)
-//! - [`storage`] -- `localStorage` / `sessionStorage` / `document.cookie`
+//! - [`fetch`] -- origin-aware `FetchHandler` behind `oasis-js`'s
+//!   Promise-based `fetch()` (URL resolution, TLS, CSP `connect-src`,
+//!   same-origin / private-network policy)
+//! - [`storage`] -- per-origin, quota'd `localStorage` / `sessionStorage`
+//!   and `document.cookie`
 //! - [`serialize`] -- `innerHTML` serialization and fragment deep-copy
 //! - [`compat_shims`] -- site-compat helpers for inline `onclick` code
 //! - `canvas` -- `<canvas>` 2D context bindings (feature `canvas`)
@@ -40,12 +43,14 @@ mod tests;
 #[cfg(feature = "canvas")]
 pub use canvas::install_canvas_bindings;
 pub(crate) use compat_shims::install_site_compat_shims;
+pub use storage::WebStorage;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use oasis_js::rquickjs::{Ctx, Result as JsResult};
+use oasis_net::tls::TlsProvider;
 
 use crate::css::values::ComputedStyle;
 use crate::html::dom::{Document, NodeKind};
@@ -58,9 +63,10 @@ pub type SharedDoc = Rc<RefCell<Document>>;
 /// Shared, interior-mutable computed styles for `getComputedStyle()`.
 pub type SharedStyles = Rc<RefCell<Vec<Option<ComputedStyle>>>>;
 
-/// Shared, interior-mutable localStorage backing store that persists
-/// across page navigations within the same `BrowserWidget` lifetime.
-pub type SharedLocalStorage = Rc<RefCell<HashMap<String, String>>>;
+/// Shared, interior-mutable per-origin `localStorage` / `sessionStorage`
+/// backing store that persists across page navigations within the same
+/// `BrowserWidget` lifetime.
+pub type SharedLocalStorage = Rc<RefCell<WebStorage>>;
 
 /// Shared flag set by DOM-mutating JS bindings (setAttribute, classList,
 /// style, appendChild, innerHTML, etc.) so the widget can re-run the
@@ -109,7 +115,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav, None, None, None, None)
+    install_document_global_full(ctx, doc, "", &nav, None, None, None, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -117,7 +123,7 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav, None, None, None, None)
+    install_document_global_full(ctx, doc, url, &nav, None, None, None, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
@@ -130,12 +136,13 @@ pub fn install_document_global_with_nav(
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, None, None, None, None)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None, None, None, None)
 }
 
 /// Like [`install_document_global_with_nav`] but also accepts an
 /// optional CSP policy to enforce `connect-src` on `fetch()` calls,
-/// and an optional persistent localStorage backing store.
+/// the TLS provider `fetch()` uses for `https:` URLs, and an optional
+/// persistent per-origin storage backing store.
 #[allow(clippy::too_many_arguments)]
 pub fn install_document_global_with_csp(
     ctx: &Ctx<'_>,
@@ -144,6 +151,7 @@ pub fn install_document_global_with_csp(
     nav_actions: &SharedNavActions,
     styles: &SharedStyles,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    tls: Option<Arc<dyn TlsProvider>>,
     persistent_local_storage: Option<&SharedLocalStorage>,
     dom_dirty: Option<&SharedDirty>,
 ) -> JsResult<()> {
@@ -154,6 +162,7 @@ pub fn install_document_global_with_csp(
         nav_actions,
         Some(styles),
         csp,
+        tls,
         persistent_local_storage,
         dom_dirty,
     )
@@ -169,6 +178,7 @@ fn install_document_global_full(
     nav_actions: &SharedNavActions,
     styles: Option<&SharedStyles>,
     csp: Option<&crate::loader::csp::CspPolicy>,
+    tls: Option<Arc<dyn TlsProvider>>,
     persistent_local_storage: Option<&SharedLocalStorage>,
     dom_dirty: Option<&SharedDirty>,
 ) -> JsResult<()> {
@@ -178,11 +188,11 @@ fn install_document_global_full(
 
     bindings::install_dom_bindings(ctx, doc, &dirty)?;
     bindings::install_nav_bindings(ctx, nav_actions)?;
-    fetch::install_fetch_binding(ctx, url, csp)?;
+    fetch::install_fetch_binding(ctx, url, csp, tls)?;
     bindings::install_computed_style_binding(ctx, styles)?;
     bindings::install_location_bindings(ctx, url)?;
     storage::install_cookie_bindings(ctx)?;
-    storage::install_storage_bindings(ctx, persistent_local_storage)?;
+    storage::install_storage_bindings(ctx, url, persistent_local_storage)?;
 
     // -- JavaScript-side Element class + document global ---------------
     let _: () = ctx.eval(JS_DOM_BOOTSTRAP)?;
