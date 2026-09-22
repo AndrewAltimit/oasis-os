@@ -5,7 +5,7 @@
 //! `eval`. The engine ships the full browser-facing API that
 //! `oasis-browser` needs: `console`, `fetch`, `localStorage`, timers,
 //! retained event dispatch, and a raw `with_context` escape hatch that
-//! `oasis-browser`'s `js_dom.rs` uses to install DOM bindings.
+//! `oasis-browser`'s `js_dom` module uses to install DOM bindings.
 //!
 //! The same engine now runs on every supported target, including PSP.
 //! On `mipsel-sony-psp` the QuickJS C sources are compiled through

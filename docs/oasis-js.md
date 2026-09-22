@@ -134,7 +134,7 @@ and rehydrate on startup. There is no quota enforcement.
 
 The `oasis-browser` layer is what actually exposes `sessionStorage` to JS, and
 it does so with a **separate** backing map from `localStorage`
-(`crates/oasis-browser/src/js_dom.rs:843`–1998: `kind: 0` = localStorage,
+(`crates/oasis-browser/src/js_dom/storage.rs`: `kind: 0` = localStorage,
 `kind: 1` = sessionStorage). Persistence still differs from the spec —
 `sessionStorage` is page-scoped within an `oasis-browser` instance but is not
 automatically cleared on navigation events the way a real browser would clear
@@ -160,45 +160,56 @@ QuickJS runtime cannot migrate between threads.
 
 DOM globals are installed by `oasis-browser` via `JsEngine::with_context` —
 they are not part of `oasis-js` itself. The implementation lives in
-`crates/oasis-browser/src/js_dom.rs`. The shape is "thin Rust functions
-exposed as `__oasis_*` globals + JS shims that present the standard API
-on top".
+the `crates/oasis-browser/src/js_dom/` module. The shape is "thin Rust
+functions exposed as `__oasis_*` globals + JS shims that present the standard
+API on top":
+
+| File | Contents |
+| --- | --- |
+| `mod.rs` | Shared handle types, `install_document_global_*` entry points, inline `on*` handler registration. |
+| `bindings.rs` | Node / attribute / tree / selector / classList / inline-style / navigation / `getComputedStyle` bindings. |
+| `fetch.rs` | `__oasis_fetch` (CSP `connect-src` enforced). |
+| `storage.rs` | `localStorage` / `sessionStorage` / `document.cookie`. |
+| `serialize.rs` | `innerHTML` serialization + fragment deep-copy. |
+| `canvas.rs` | `__oasis_canvas_*` (feature `canvas`). |
+| `compat_shims.rs` | Site-compat helpers (reddit `togglecomment` & co.). |
+| `bootstrap.js` / `canvas.js` / `compat_shims.js` | The JS halves, embedded with `include_str!`. |
 
 ### Document
 
 | API | Source | Notes |
 | --- | --- | --- |
-| `document.getElementById(id)` | js_dom.rs:1840 | Returns `Element \| null`. |
-| `document.createElement(tag)` | js_dom.rs:1844 | Creates a detached element. |
-| `document.createTextNode(text)` | js_dom.rs:1847 | Returns a `#text` node. |
-| `document.querySelector(sel)` | js_dom.rs:1850 | First match in document order. |
-| `document.querySelectorAll(sel)` | js_dom.rs:1856 | Live `Element[]`. |
-| `document.body` | js_dom.rs:1867 | Getter only. |
-| `document.title` | js_dom.rs:1874 | Getter and setter. |
-| `document.cookie` | js_dom.rs:810 | Getter and setter; raw string. |
-| `document.addEventListener(type, fn, opts)` | js_dom.rs:1883 | |
-| `document.removeEventListener(type, fn, opts)` | js_dom.rs:1893 | |
-| `document.dispatchEvent(evt)` | js_dom.rs:1902 | |
+| `document.getElementById(id)` | bootstrap.js | Returns `Element \| null`. |
+| `document.createElement(tag)` | bootstrap.js | Creates a detached element. |
+| `document.createTextNode(text)` | bootstrap.js | Returns a `#text` node. |
+| `document.querySelector(sel)` | bootstrap.js | First match in document order. |
+| `document.querySelectorAll(sel)` | bootstrap.js | Live `Element[]`. |
+| `document.body` | bootstrap.js | Getter only. |
+| `document.title` | bootstrap.js | Getter and setter. |
+| `document.cookie` | storage.rs | Getter and setter; raw string. |
+| `document.addEventListener(type, fn, opts)` | bootstrap.js | |
+| `document.removeEventListener(type, fn, opts)` | bootstrap.js | |
+| `document.dispatchEvent(evt)` | bootstrap.js | |
 
 ### Element
 
 - Tree navigation: `parentElement`, `parentNode`, `firstChild`, `lastChild`,
   `childNodes`, `nextSibling`, `previousSibling`.
-- Content: `textContent`, `innerHTML` (getter/setter at js_dom.rs:1566).
+- Content: `textContent`, `innerHTML` (getter/setter in bootstrap.js).
 - Attributes: `getAttribute`, `setAttribute`, `removeAttribute`
-  (js_dom.rs:1641).
+  (bootstrap.js).
 - Mutation: `appendChild`, `removeChild`, `insertBefore`
-  (js_dom.rs:1651).
-- Selectors: `querySelector`, `querySelectorAll` (js_dom.rs:1670).
+  (bootstrap.js).
+- Selectors: `querySelector`, `querySelectorAll` (bootstrap.js).
 - Events: `addEventListener`, `removeEventListener`, `dispatchEvent`
-  (js_dom.rs:1696). Options accept `{capture, once, passive}` or a bare
+  (bootstrap.js). Options accept `{capture, once, passive}` or a bare
   boolean for capture.
-- `classList.add / remove / toggle / contains` (js_dom.rs:1575).
+- `classList.add / remove / toggle / contains` (bootstrap.js).
 - `style.<property>` proxy with camelCase ↔ kebab-case conversion plus
-  `getPropertyValue` / `setProperty` (js_dom.rs:1601).
+  `getPropertyValue` / `setProperty` (bootstrap.js).
 
 Click / keydown / keyup have a fast path
-(`__oasis_dispatch_*_fast`, js_dom.rs:494) used by the browser's input layer
+(`__oasis_dispatch_*_fast`, bootstrap.js) used by the browser's input layer
 to avoid a full event dispatch on hot paths.
 
 ### Window, location, history
@@ -223,11 +234,11 @@ the installed `FetchHandler` and yields a `Response` with `status`, `ok`,
 `beginPath`, `arc`, `moveTo`, `lineTo`, `bezierCurveTo`, `quadraticCurveTo`,
 `closePath`, `fill`, `stroke`, `fillText`, `save`, `restore`, plus the
 `fillStyle`, `strokeStyle`, `font`, `lineWidth` setters
-(js_dom.rs:2018–2432).
+(`js_dom/canvas.rs` + `js_dom/canvas.js`).
 
 ### Known gaps vs. browser baseline
 
-These are intentional — file an issue or extend `js_dom.rs` if you need them:
+These are intentional — file an issue or extend `js_dom/` if you need them:
 
 - `getComputedStyle()` — partially captured in `SharedStyles` but not exposed
   to JS.
@@ -238,11 +249,11 @@ These are intentional — file an issue or extend `js_dom.rs` if you need them:
 
 The pattern for new bindings is the one `oasis-browser` already follows.
 
-1. Add a Rust function in `js_dom.rs` named `__oasis_<verb>` that takes only
-   primitives (`i32`, `String`, `f64`, `Vec<i32>`) and returns a primitive or
-   small struct convertible via rquickjs.
+1. Add a Rust function in `js_dom/bindings.rs` (or the matching file) named
+   `__oasis_<verb>` that takes only primitives (`i32`, `String`, `f64`,
+   `Vec<i32>`) and returns a primitive or small struct convertible via rquickjs.
 2. Mark the DOM dirty via `mark_dirty(&dirty)` if the call mutates the tree
-   (js_dom.rs:44).
+   (`js_dom/mod.rs`).
 3. Clone shared `Rc` handles for any move-into-closure capture.
 4. Register the function during `with_context`:
 

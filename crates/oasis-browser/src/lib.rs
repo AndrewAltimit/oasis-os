@@ -18,7 +18,7 @@
 //!   `crates/oasis-backend-psp/.cargo/config.toml`), so `oasis-js` and
 //!   its full `JsEngine` API are available on `mipsel-sony-psp` too.
 //!   The `javascript` feature is still off on PSP by default while
-//!   `js_dom.rs` is audited for the mipsel target; once that's done
+//!   `js_dom/` is audited for the mipsel target; once that's done
 //!   the PSP browser will pick up inline `<script>` and DOM bindings
 //!   unchanged from desktop/WASM/UE5. Standalone evaluation is already
 //!   reachable via `cmd_server.rs`'s `js <code>` TCP command.

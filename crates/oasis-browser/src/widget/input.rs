@@ -1372,7 +1372,7 @@ impl BrowserWidget {
 
         // Rebuild inline-style cache from the mutated DOM. JS may have
         // overwritten `style=""` attributes via `element.style.prop = ...`
-        // (`__oasis_style_set` in js_dom.rs) or inserted new nodes with
+        // (`__oasis_style_set` in js_dom/bindings.rs) or inserted new nodes with
         // inline styles via `innerHTML`; the cached list was captured at
         // page load and is now stale.
         if let Some(doc) = &self.document {
