@@ -99,6 +99,13 @@ bool oasis_get_dirty(OasisInstance* handle);
 #define OASIS_EVENT_FOCUS_GAINED    9
 #define OASIS_EVENT_FOCUS_LOST     10
 #define OASIS_EVENT_QUIT           11
+#define OASIS_EVENT_BACKSPACE      12
+#define OASIS_EVENT_MOUSE_WHEEL    13  /* delta in y; positive = scroll down */
+#define OASIS_EVENT_TOGGLE_FULLSCREEN 14
+#define OASIS_EVENT_TAB            15
+#define OASIS_EVENT_SHIFT_TAB      16
+#define OASIS_EVENT_KEY            17  /* raw key: key=OASIS_KEY_*, x=OASIS_MOD_* bits,
+                                          character=codepoint for OASIS_KEY_CHAR */
 
 /* Button codes (PSP layout) */
 #define OASIS_BUTTON_UP       0
@@ -116,11 +123,38 @@ bool oasis_get_dirty(OasisInstance* handle);
 #define OASIS_TRIGGER_LEFT    0
 #define OASIS_TRIGGER_RIGHT   1
 
+/* Key codes (OASIS_EVENT_KEY) */
+#define OASIS_KEY_CHAR        0   /* printable key; character = codepoint */
+#define OASIS_KEY_SPACE       1
+#define OASIS_KEY_ENTER       2
+#define OASIS_KEY_ESCAPE      3
+#define OASIS_KEY_TAB         4
+#define OASIS_KEY_BACKSPACE   5
+#define OASIS_KEY_DELETE      6
+#define OASIS_KEY_INSERT      7
+#define OASIS_KEY_HOME        8
+#define OASIS_KEY_END         9
+#define OASIS_KEY_PAGE_UP    10
+#define OASIS_KEY_PAGE_DOWN  11
+#define OASIS_KEY_UP         12
+#define OASIS_KEY_DOWN       13
+#define OASIS_KEY_LEFT       14
+#define OASIS_KEY_RIGHT      15
+#define OASIS_KEY_F1        101  /* F2..F12 = 102..112 */
+#define OASIS_KEY_F12       112
+
+/* Modifier bits (OASIS_EVENT_KEY, carried in x) */
+#define OASIS_MOD_SHIFT  1
+#define OASIS_MOD_CTRL   2
+#define OASIS_MOD_ALT    4
+#define OASIS_MOD_SUPER  8
+
 typedef struct {
     uint32_t event_type;
-    int32_t x, y;         /* Cursor/pointer coordinates */
-    uint32_t key;         /* Button or trigger code */
-    uint32_t character;   /* Unicode codepoint (TEXT_INPUT only) */
+    int32_t x, y;         /* Cursor/pointer coordinates; x = modifier bits
+                             for KEY, y = delta for MOUSE_WHEEL */
+    uint32_t key;         /* Button/trigger code, or OASIS_KEY_* for KEY */
+    uint32_t character;   /* Unicode codepoint (TEXT_INPUT, KEY with OASIS_KEY_CHAR) */
 } OasisInputEvent;
 
 /* Deliver an input event to the instance. */

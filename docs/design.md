@@ -399,6 +399,21 @@ The input system translates platform-specific events into a platform-agnostic `I
 | `PointerClick(x, y)` | N/A | Mouse click | Line trace hit on monitor mesh |
 | `FocusGained` | N/A (always focused) | Window focus event | Player enters interaction range |
 | `FocusLost` | N/A | Window blur event | Player walks away from terminal |
+| `Key { key, mods }` | N/A (never emitted) | Every physical key-down + held modifiers | `OASIS_EVENT_KEY` via FFI |
+
+#### 4.3.1 Keyboard Model: Gamepad Events + Raw Keys
+
+Keyboard input is delivered in two layers so the PSP / gamepad path is untouched while desktop apps get real shortcuts:
+
+1. **Gamepad-style events** (`ButtonPress`, `TriggerPress`, `Backspace`, `Tab`, ...). Keyboard backends synthesize these from keys with one canonical table, `Key::legacy_press` / `Key::legacy_release` in `oasis-types/src/input.rs` (arrows -> d-pad, Enter -> Confirm, Esc -> Cancel, Space -> Triangle, F1/F2 -> Start/Select, Q/E -> L/R triggers, F11 -> fullscreen).
+2. **Raw keys**: `InputEvent::Key { key: Key, mods: Modifiers }`. `Key` covers `Char(c)` (letters lowercase), `Space`, `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, arrows and `F(1..=12)`. `Modifiers` is a bitflags-style set (`SHIFT`, `CTRL`, `ALT`, `SUPER`) with helpers such as `ctrl()`, `has_command()` and `only(Modifiers::CTRL)` for exact shortcut matching.
+
+For each key-down the SDL and WASM backends emit, in order: `Key`, then its gamepad-style twin (if any), then `TextInput` for printable characters. The host routes `Key` to the focused app's `App::handle_key(&Key, Modifiers, &dyn Vfs) -> Option<AppAction>` (default `None`). A `KeyTwinFilter` then drops the twin that immediately follows when either:
+
+- the app returned `Some(action)` (it consumed the key as a shortcut, so e.g. an app claiming `Key::Enter` does not also receive `Button::Confirm`), or
+- the focused target accepts text (`App::accepts_text()`, the terminal, or the browser URL bar / a focused form field) and the key merely types a character (`Key::produces_text`). This is what stops "q"/"e" from switching virtual desktops and Space from firing Triangle while typing in the text editor.
+
+Gamepad events that do not immediately follow a matching `Key` are never filtered. Apps should type from `handle_text_input`, keep every feature reachable through `handle_input` (PSP has no raw keys), and use `handle_key` for keyboard-only accelerators (Ctrl+S/Z/C/V, Delete, Home/End, PageUp/PageDown). FFI hosts send raw keys as `OASIS_EVENT_KEY` (see [`ffi-integration.md`](ffi-integration.md)).
 
 ### 4.4 Remote Terminal
 
