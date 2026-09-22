@@ -54,6 +54,9 @@ pub enum EditAction {
     SearchChar(char),
     /// Jump to the next (older) match (Ctrl+R again).
     SearchNext,
+    /// Remove the last character of the search query (Backspace while
+    /// searching) and re-run the search from the newest entry.
+    SearchBackspace,
     /// Accept the current search result (Enter / Right arrow).
     AcceptSearch,
     /// Cancel the search and restore the previous line (Escape).
@@ -66,6 +69,8 @@ pub enum EditAction {
     // -- Line operations --
     /// Swap the two characters before the cursor (Ctrl+T).
     SwapChars,
+    /// Paste the last killed text at the cursor (Ctrl+Y).
+    Yank,
     /// Signal the host to clear the screen (Ctrl+L).
     ClearScreen,
     /// Accept the current line (Enter).
@@ -190,6 +195,20 @@ impl LineEditor {
         self.reset_completion();
     }
 
+    /// Replace the buffer with `s` and put the cursor at byte offset
+    /// `cursor` (clamped to the buffer and moved back to a char boundary).
+    pub fn set_buffer_with_cursor(&mut self, s: &str, cursor: usize) {
+        self.set_buffer(s);
+        self.cursor = self
+            .buffer
+            .floor_char_boundary(cursor.min(self.buffer.len()));
+    }
+
+    /// The current reverse-search query (empty when not searching).
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
     /// Reset the editor to an empty state.
     pub fn clear(&mut self) {
         self.buffer.clear();
@@ -234,6 +253,17 @@ impl LineEditor {
                 },
                 EditAction::SearchNext => {
                     return self.search_next(history);
+                },
+                EditAction::SearchBackspace => {
+                    self.search_query.pop();
+                    self.search_match_index = None;
+                    if self.search_query.is_empty() {
+                        self.buffer = self.saved_line.clone();
+                        self.cursor = self.buffer.len();
+                    } else {
+                        self.find_search_match(history);
+                    }
+                    return EditResult::Continue;
                 },
                 EditAction::AcceptSearch => {
                     return self.accept_search();
@@ -288,6 +318,7 @@ impl LineEditor {
             },
 
             EditAction::SwapChars => self.swap_chars(),
+            EditAction::Yank => self.yank(),
             EditAction::ClearScreen => return EditResult::ClearScreen,
 
             EditAction::AcceptLine => {
@@ -300,6 +331,7 @@ impl LineEditor {
             // match is exhaustive.
             EditAction::SearchChar(_)
             | EditAction::SearchNext
+            | EditAction::SearchBackspace
             | EditAction::AcceptSearch
             | EditAction::CancelSearch => {},
         }

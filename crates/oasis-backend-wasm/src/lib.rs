@@ -39,7 +39,9 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::{StartMenuAction, StartMenuState};
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
+use oasis_core::terminal::{
+    CommandOutput, CommandRegistry, Environment, ShellSession, register_builtins,
+};
 use oasis_core::terminal_sdi;
 use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
@@ -130,7 +132,8 @@ pub struct OasisWasm {
     active_transition: Option<TransitionState>,
     mode: Mode,
     cwd: String,
-    input_buf: String,
+    /// Terminal line editor, tab completion and persistent history.
+    shell: ShellSession,
     output_lines: Vec<String>,
     terminal_scroll_offset: usize,
     frame_counter: u64,
@@ -338,6 +341,10 @@ impl OasisWasm {
             skin_ref
         );
 
+        // Terminal line editor; restores history persisted in the VFS.
+        let shell = ShellSession::new();
+        shell.load_history(&cmd_reg, &vfs);
+
         Ok(OasisWasm {
             backend,
             input: input_backend,
@@ -368,7 +375,7 @@ impl OasisWasm {
             active_transition,
             mode: Mode::Dashboard,
             cwd: "/".to_string(),
-            input_buf: String::new(),
+            shell,
             output_lines: vec![
                 "OASIS_OS v1.0.0 -- Type 'help' for commands".to_string(),
                 "F1=terminal  F2=on-screen keyboard".to_string(),
@@ -425,6 +432,9 @@ impl OasisWasm {
             self.mouse_cursor.handle_input(event);
             self.handle_event(event);
         }
+
+        // Run the next queued background terminal job (`cmd &`), if any.
+        self.poll_terminal_jobs();
 
         // Process pending VFS requests from app runners (e.g. radio tune).
         // Skip TV Guide tune requests — they're handled by the dedicated video
@@ -1288,11 +1298,13 @@ impl OasisWasm {
                 let cursor_visible = self.active_theme.terminal_cursor_blink_rate == 0
                     || (self.frame_counter / self.active_theme.terminal_cursor_blink_rate as u64)
                         .is_multiple_of(2);
-                terminal_sdi::setup_terminal_objects(
+                let (input_text, cursor_col) = self.shell.display();
+                terminal_sdi::setup_terminal_objects_with_cursor(
                     &mut self.sdi,
                     &self.output_lines,
                     &self.cwd,
-                    &self.input_buf,
+                    &input_text,
+                    cursor_col,
                     self.terminal_scroll_offset,
                     &self.active_theme,
                     cursor_visible,
@@ -1318,16 +1330,22 @@ impl OasisWasm {
                 AppRunner::hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
 
-                // Sync terminal output to the windowed terminal runner.
+                // Sync terminal output to the windowed terminal runner
+                // (incremental: only new scrollback lines are cloned).
+                let focused = self.wm.active_window() == Some("terminal");
                 if let Some((_, runner)) = self
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
                 {
-                    let mut lines = self.output_lines.clone();
-                    let prompt = format!("> {}", self.input_buf);
-                    lines.push(prompt);
-                    runner.set_lines(lines, self.terminal_scroll_offset);
+                    let (input_text, cursor_col) = self.shell.display();
+                    let prompt = format!("> {input_text}");
+                    runner.sync_terminal_lines(
+                        &self.output_lines,
+                        &prompt,
+                        self.terminal_scroll_offset,
+                    );
+                    runner.set_terminal_cursor(focused.then_some(2 + cursor_col));
                 }
 
                 // Keep dashboard icons visible behind windows.
@@ -1593,6 +1611,38 @@ impl OasisWasm {
         if let Some(name) = pending_skin_swap {
             self.apply_skin_swap(&name);
         }
+        if let Err(e) = self.shell.save_history(&self.cmd_reg, &mut self.vfs) {
+            log::warn!("terminal history not saved: {e}");
+        }
+    }
+
+    /// Run the next queued background terminal job (`cmd &`), if any.
+    fn poll_terminal_jobs(&mut self) {
+        if self.cmd_reg.pending_jobs() == 0 {
+            return;
+        }
+        let output = {
+            let mut env = Environment {
+                cwd: self.cwd.clone(),
+                vfs: &mut self.vfs,
+                power: Some(&self.platform),
+                time: Some(&self.platform),
+                usb: Some(&self.platform),
+                network: Some(&self.platform),
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            let output = self.cmd_reg.poll_jobs(&mut env);
+            self.cwd = env.cwd;
+            output
+        };
+        if let Some(output) = output {
+            if let Some(name) = self.process_command_output(Ok(output)) {
+                self.apply_skin_swap(&name);
+            }
+            vfs_content::trim_output(&mut self.output_lines);
+        }
     }
 
     /// Process a command result. Returns a pending skin swap name if applicable.
@@ -1631,6 +1681,10 @@ impl OasisWasm {
                     },
                     CommandSignal::SkinSwap { name } => {
                         return Some(name.clone());
+                    },
+                    CommandSignal::SdiInspect { name } => {
+                        let text = terminal_sdi::inspect_sdi(&self.sdi, name.as_deref());
+                        self.output_lines.extend(text.lines().map(str::to_string));
                     },
                     CommandSignal::ListenToggle { .. }
                     | CommandSignal::RemoteConnect { .. }

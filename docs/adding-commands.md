@@ -59,6 +59,8 @@ Commands return a `CommandOutput` enum:
 | `SkinSwap { name }` | Swap the active skin |
 | `FtpToggle { port, password }` | Start/stop FTP server (optional password auth) |
 | `BrowserSandbox { enable }` | Toggle browser sandbox mode |
+| `McpToggle { start, port, token }` | Start/stop the optional MCP control server |
+| `SdiInspect { name }` | Describe the host's SDI scene (`sdi list` / `sdi get`); hosts resolve it with `terminal_sdi::inspect_sdi` |
 
 Use `Text` for most commands. Convenience constructors like `CommandOutput::listen_toggle(port)` and `CommandOutput::skin_swap(name)` are provided for creating signal variants.
 
@@ -187,7 +189,8 @@ Commands are organized into modules by category:
 | `radio_commands.rs` | audio | radio |
 | `platform_commands.rs` | system | power, clock, memory, usb |
 | `remote_commands.rs` | network | listen, remote, hosts |
-| `control_flow.rs` | core | echo (control flow variant) |
+| `control_flow.rs` / `script.rs` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
+| `jobs.rs` | core | jobs, fg, bg, kill %N (executor builtins) |
 
 Additional commands (agent, browser, plugin, script, transfer, tv, update) are registered by `oasis-core`.
 

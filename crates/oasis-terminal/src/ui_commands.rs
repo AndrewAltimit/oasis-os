@@ -4,7 +4,7 @@ use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
 
-use crate::interpreter::CommandOutput;
+use crate::interpreter::{CommandOutput, CommandSignal};
 
 // ---------------------------------------------------------------------------
 // wm
@@ -62,30 +62,22 @@ define_command!(
     "Inspect SDI scene objects",
     "sdi [list|get <name>]",
     "ui",
-    |args, env| {
+    |args, _env| {
+        // The scene registry lives in the host, so both subcommands are
+        // signals the host resolves into text (`terminal_sdi::inspect_sdi`).
         let subcmd = args.first().copied().unwrap_or("list");
         match subcmd {
-            "list" => {
-                let status_path = "/var/sdi/status";
-                if env.vfs.exists(status_path) {
-                    let data = env.vfs.read(status_path)?;
-                    Ok(CommandOutput::Text(
-                        String::from_utf8_lossy(&data).into_owned(),
-                    ))
-                } else {
-                    Ok(CommandOutput::Text(
-                        "(SDI status not available -- enable debug output)".to_string(),
-                    ))
-                }
-            },
+            "list" => Ok(CommandOutput::Signal(CommandSignal::SdiInspect {
+                name: None,
+            })),
             "get" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
                     return Err(OasisError::Command("usage: sdi get <name>".into()));
                 }
-                Ok(CommandOutput::Text(format!(
-                    "SDI object '{name}': (query via VFS not yet implemented)"
-                )))
+                Ok(CommandOutput::Signal(CommandSignal::SdiInspect {
+                    name: Some(name.to_string()),
+                }))
             },
             _ => Err(OasisError::Command(
                 format!("unknown subcommand: {subcmd}").into(),
@@ -266,12 +258,28 @@ mod tests {
     }
 
     #[test]
-    fn sdi_list_no_status() {
+    fn sdi_list_signals_host() {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        let s = assert_text!(exec(&reg, &mut vfs, "sdi").unwrap());
-        assert!(s.contains("SDI status"));
+        let out = exec(&reg, &mut vfs, "sdi").unwrap();
+        assert!(matches!(
+            out,
+            CommandOutput::Signal(CommandSignal::SdiInspect { name: None })
+        ));
+    }
+
+    #[test]
+    fn sdi_get_signals_host_with_name() {
+        let mut reg = CommandRegistry::new();
+        register_ui_commands(&mut reg);
+        let mut vfs = MemoryVfs::new();
+        let out = exec(&reg, &mut vfs, "sdi get term_prompt").unwrap();
+        let CommandOutput::Signal(CommandSignal::SdiInspect { name }) = out else {
+            panic!("expected SdiInspect signal, got {out:?}");
+        };
+        assert_eq!(name.as_deref(), Some("term_prompt"));
+        assert!(exec(&reg, &mut vfs, "sdi get").is_err());
     }
 
     #[test]

@@ -17,7 +17,8 @@ use super::AppAction;
 use super::ContentState;
 use super::app_trait::App;
 use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    WINDOWED_FONT_SIZE, draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    windowed_line_origin,
 };
 
 /// Candidate front-trim offsets [`sync_lines`] tries before falling back
@@ -92,6 +93,9 @@ pub struct SimpleApp {
     /// Whether the last line of `content.lines` is the prompt appended by
     /// [`Self::sync_terminal_lines`] (stripped before the next sync).
     trailing_prompt: bool,
+    /// Text cursor column (in characters) within the trailing prompt line,
+    /// drawn as an underline by `draw_windowed`. `None` = no cursor.
+    prompt_cursor: Option<usize>,
 }
 
 impl SimpleApp {
@@ -103,7 +107,17 @@ impl SimpleApp {
             content,
             confirm_action: AppAction::None,
             trailing_prompt: false,
+            prompt_cursor: None,
         }
+    }
+
+    /// Set the text cursor column (characters) within the trailing prompt
+    /// line synced by [`Self::sync_terminal_lines`]; `None` hides it.
+    /// Returns `true` when the cursor actually moved.
+    pub fn set_prompt_cursor(&mut self, col: Option<usize>) -> bool {
+        let changed = self.prompt_cursor != col;
+        self.prompt_cursor = col;
+        changed
     }
 
     /// Create the Settings app.
@@ -230,7 +244,34 @@ impl App for SimpleApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
-        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)?;
+        // Line-editor cursor: an underline below the character at the
+        // cursor column of the trailing prompt line.
+        if let (true, Some(col)) = (self.trailing_prompt, self.prompt_cursor)
+            && let Some(prompt) = self.content.lines.last()
+            && let Some((x, y, prefix)) =
+                windowed_line_origin(&self.content, cx, cy, ch, at, self.content.lines.len() - 1)
+        {
+            let byte = prompt
+                .char_indices()
+                .nth(col)
+                .map_or(prompt.len(), |(b, _)| b);
+            let fs = WINDOWED_FONT_SIZE;
+            let prefix_w =
+                backend.measure_text(prefix, fs) + backend.measure_text(&prompt[..byte], fs);
+            let glyph = prompt[byte..].chars().next().unwrap_or(' ');
+            let glyph_w = backend
+                .measure_text(glyph.encode_utf8(&mut [0u8; 4]), fs)
+                .max(4);
+            backend.fill_rect(
+                x + prefix_w as i32,
+                y + fs as i32,
+                glyph_w,
+                2,
+                at.app.selected_text,
+            )?;
+        }
+        Ok(())
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {

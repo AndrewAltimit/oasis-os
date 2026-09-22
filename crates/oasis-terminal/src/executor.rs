@@ -13,6 +13,34 @@ use crate::types::{CommandOutput, Environment};
 
 use crate::registry::CommandRegistry;
 
+/// Flatten the outputs of several commands into one.
+///
+/// `None` entries are dropped. A single output is returned as-is. Multiple
+/// outputs have consecutive
+/// `Text` entries merged (newline-joined) and are wrapped in
+/// [`CommandOutput::Multi`] so signals survive alongside text.
+pub(crate) fn merge_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
+    let mut merged: Vec<CommandOutput> = Vec::new();
+    for output in outputs {
+        if matches!(output, CommandOutput::None) {
+            continue;
+        }
+        if let CommandOutput::Text(ref new_text) = output
+            && let Some(CommandOutput::Text(prev)) = merged.last_mut()
+        {
+            prev.push('\n');
+            prev.push_str(new_text);
+            continue;
+        }
+        merged.push(output);
+    }
+    match merged.len() {
+        0 => CommandOutput::None,
+        1 => merged.pop().unwrap_or(CommandOutput::None),
+        _ => CommandOutput::Multi(merged),
+    }
+}
+
 impl CommandRegistry {
     /// Parse and execute a command line.
     ///
@@ -20,6 +48,14 @@ impl CommandRegistry {
     /// (`$(...)`), aliases, command chaining (`;`, `&&`, `||`),
     /// pipes (`|`), input redirection (`<`), and output redirection
     /// (`>`, `>>`). Command names are case-insensitive.
+    ///
+    /// Lines containing compound commands (`if`, `while`, `until`, `for`,
+    /// `case`) run through the script engine. A trailing unquoted `&`
+    /// queues the line as a background job instead of running it (see
+    /// [`CommandRegistry::poll_jobs`]).
+    ///
+    /// Only top-level calls (not function bodies, `$(...)`, scripts or
+    /// jobs) are recorded in the history.
     pub fn execute(&self, line: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -34,15 +70,58 @@ impl CommandRegistry {
             trimmed.to_string()
         };
 
-        // Push to history (after history expansion, before execution).
-        self.push_history(&line);
+        let depth = self.exec_depth.get();
+        if depth == 0 {
+            // Push to history (after history expansion, before execution).
+            self.push_history(&line);
+        }
 
         // Update $CWD before variable expansion.
         self.set_variable("CWD", &env.cwd);
-        self.last_exit_code.set(self.last_exit_code.get());
 
+        if let Some(cmd) = crate::pipeline::strip_background(&line) {
+            return Ok(self.queue_job(cmd));
+        }
+
+        self.exec_depth.set(depth + 1);
+        let result = if crate::script::is_compound(&line) {
+            self.execute_compound(&line, env)
+        } else {
+            self.execute_chain(&line, env)
+        };
+        self.exec_depth.set(depth);
+        if depth == 0 {
+            // A stray `break` / `continue` outside any loop must not leak
+            // into the next command line.
+            self.break_flag.set(false);
+            self.continue_flag.set(false);
+        }
+        result
+    }
+
+    /// Execute a line without history or job handling, as a nested
+    /// (non-top-level) call.
+    pub(crate) fn execute_nested(
+        &self,
+        line: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let depth = self.exec_depth.get();
+        self.exec_depth.set(depth + 1);
+        let result = self.execute(line, env);
+        self.exec_depth.set(depth);
+        result
+    }
+
+    /// Execute a `;` / `&&` / `||` chain of pipelines (no compound
+    /// commands, no history).
+    pub(crate) fn execute_chain(
+        &self,
+        line: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
         // Split into chained segments (;, &&, ||).
-        let segments = split_chains(&line)?;
+        let segments = split_chains(line)?;
         let single_command = segments.len() == 1;
         let mut all_outputs: Vec<CommandOutput> = Vec::new();
 
@@ -86,35 +165,7 @@ impl CommandRegistry {
             }
         }
 
-        // Flatten: if only one output, return it directly. If
-        // multiple, merge consecutive text outputs and wrap in Multi
-        // so signals are preserved alongside text.
-        if all_outputs.is_empty() {
-            Ok(CommandOutput::None)
-        } else if all_outputs.len() == 1 {
-            Ok(all_outputs
-                .into_iter()
-                .next()
-                .unwrap_or(CommandOutput::None))
-        } else {
-            // Merge consecutive Text entries to reduce Multi size.
-            let mut merged: Vec<CommandOutput> = Vec::new();
-            for output in all_outputs {
-                if let CommandOutput::Text(ref new_text) = output
-                    && let Some(CommandOutput::Text(prev)) = merged.last_mut()
-                {
-                    prev.push('\n');
-                    prev.push_str(new_text);
-                    continue;
-                }
-                merged.push(output);
-            }
-            if merged.len() == 1 {
-                Ok(merged.into_iter().next().unwrap_or(CommandOutput::None))
-            } else {
-                Ok(CommandOutput::Multi(merged))
-            }
-        }
+        Ok(merge_outputs(all_outputs))
     }
 
     /// Execute a pipeline: `cmd1 | cmd2 | cmd3`.
@@ -281,12 +332,6 @@ impl CommandRegistry {
             return Ok(CommandOutput::None);
         }
 
-        // Intercept control flow structures (if/for/while) before
-        // expansion.
-        if let Some(result) = crate::control_flow::parse_and_execute(trimmed, self, env) {
-            return result;
-        }
-
         // Intercept `function` before variable expansion so the body
         // is stored literally (variables expand at call time).
         if trimmed.starts_with("function ")
@@ -341,6 +386,12 @@ impl CommandRegistry {
             "break" => return self.execute_break(),
             "continue" => return self.execute_continue(),
             "local" => return self.execute_local(&args),
+            "jobs" => return self.execute_jobs(),
+            "fg" => return self.execute_fg(&args, env),
+            "bg" => return self.execute_bg(&args),
+            "kill" if args.iter().any(|a| a.starts_with('%')) => {
+                return self.execute_kill(&args);
+            },
             _ => {},
         }
 

@@ -214,6 +214,45 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
 /// inset.
 pub const WINDOWED_TOP_PAD: u32 = 4;
 
+/// Font size [`draw_content_windowed`] draws content lines with.
+pub const WINDOWED_FONT_SIZE: u16 = 12;
+
+/// Where [`draw_content_windowed`] draws line `line_idx` of `content` in a
+/// window whose content area starts at `(cx, cy)` and is `ch` tall.
+///
+/// Returns `(x, y, prefix)`: the text origin of that line and the 2-char
+/// selection prefix (`"> "` or `"  "`) drawn in front of the line text, or
+/// `None` when the line is scrolled out of view. Used to overlay a text
+/// cursor on a line.
+pub fn windowed_line_origin(
+    content: &ContentState,
+    cx: i32,
+    cy: i32,
+    ch: u32,
+    at: &ActiveTheme,
+    line_idx: usize,
+) -> Option<(i32, i32, &'static str)> {
+    let has_context = content.viewing_file.is_some() || content.browse_dir.is_some();
+    let content_top = if has_context {
+        at.app.title_bar_height as i32
+    } else {
+        WINDOWED_TOP_PAD as i32
+    };
+    let line_h = at.terminal_line_height.max(12) as i32;
+    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
+    let visible = content
+        .lines
+        .len()
+        .saturating_sub(content.scroll)
+        .min(max_lines);
+    let i = line_idx.checked_sub(content.scroll)?;
+    if i >= visible {
+        return None;
+    }
+    let prefix = if i == content.cursor { "> " } else { "  " };
+    Some((cx + 4, cy + content_top + i as i32 * line_h, prefix))
+}
+
 /// Draw generic content to a windowed region.
 ///
 /// The app title is NOT drawn here — the WM titlebar already shows it. A
@@ -273,7 +312,7 @@ pub fn draw_content_windowed(
             at.app.text
         };
         let y = cy + content_top + i as i32 * line_h;
-        backend.draw_text(&text, cx + 4, y, 12, text_color)?;
+        backend.draw_text(&text, cx + 4, y, WINDOWED_FONT_SIZE, text_color)?;
     }
 
     // Scroll indicator.

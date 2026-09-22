@@ -30,6 +30,7 @@ mod registry;
 pub mod remote_commands;
 mod script;
 pub mod security_commands;
+pub mod session;
 pub mod skin_commands;
 pub mod system_commands;
 pub mod text_commands;
@@ -100,3 +101,5 @@ pub use jobs::JobState;
 pub use jobs::parse_job_spec;
 /// Readline-style line editing: actions, results, and the editor state machine.
 pub use line_edit::{EditAction, EditResult, LineEditor};
+/// Interactive shell session (line editor + history + completion) for hosts.
+pub use session::{SessionEvent, ShellSession};

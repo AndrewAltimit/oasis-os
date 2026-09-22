@@ -175,6 +175,18 @@ impl AppRunner {
         self.redraw_pending = true;
     }
 
+    /// Set a Terminal runner's text cursor column (characters) within the
+    /// trailing prompt line; `None` hides it. No-op for other runners.
+    pub fn set_terminal_cursor(&mut self, col: Option<usize>) {
+        if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>()
+            && simple.set_prompt_cursor(col)
+        {
+            // Cursor-only moves don't change the synced lines, so the
+            // idle-frame check would otherwise skip them.
+            self.redraw_pending = true;
+        }
+    }
+
     /// Sync terminal scrollback plus a trailing prompt line into a
     /// Terminal runner, incrementally (see
     /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)).
@@ -338,6 +350,18 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         assert!(runner.lines.iter().any(|l| l.contains("480")));
+    }
+
+    #[test]
+    fn terminal_cursor_move_requests_redraw() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        runner.set_terminal_cursor(Some(4));
+        runner.mark_drawn();
+        runner.set_terminal_cursor(Some(4));
+        assert!(!runner.wants_frame(), "unchanged cursor must stay idle");
+        runner.set_terminal_cursor(Some(3));
+        assert!(runner.wants_frame(), "cursor-only move must redraw");
     }
 
     #[test]

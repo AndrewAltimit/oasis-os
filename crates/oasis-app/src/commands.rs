@@ -199,6 +199,14 @@ pub fn process_command_output(
         Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
             return Some(name);
         },
+        Ok(CommandOutput::Signal(CommandSignal::SdiInspect { .. })) => {
+            // Callers with scene access resolve this first via
+            // `terminal_sdi::resolve_sdi_inspect`.
+            state
+                .terminal
+                .output_lines
+                .push("sdi: scene inspection not available here".to_string());
+        },
         Ok(CommandOutput::Multi(outputs)) => {
             let mut skin_swap = None;
             for output in outputs {
@@ -917,6 +925,9 @@ pub(crate) fn format_remote_response(
             | CommandSignal::FtpToggle { .. }
             | CommandSignal::McpToggle { .. },
         )) => "Not available via remote.".to_string(),
+        Ok(CommandOutput::Signal(CommandSignal::SdiInspect { name })) => {
+            oasis_core::terminal_sdi::inspect_sdi(sdi, name.as_deref())
+        },
         Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
             if let Some(bw) = browser {
                 bw.config.features.sandbox_only = enable;
@@ -1262,7 +1273,7 @@ mod tests {
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),
                 cwd: "/".to_string(),
-                input_buf: String::new(),
+                session: oasis_core::terminal::ShellSession::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,

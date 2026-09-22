@@ -17,6 +17,7 @@ use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::startmenu::StartMenuAction;
+use oasis_core::terminal::SessionEvent;
 use oasis_core::terminal_sdi;
 use oasis_core::transition;
 use oasis_core::wm::manager::WmEvent;
@@ -153,26 +154,13 @@ impl OasisWasm {
                 _ => {},
             },
 
-            // Terminal input.
-            InputEvent::TextInput(ch) if self.mode == Mode::Terminal => {
-                self.input_buf.push(*ch);
-            },
-            InputEvent::Backspace if self.mode == Mode::Terminal => {
-                self.input_buf.pop();
-            },
-            InputEvent::ButtonPress(Button::Confirm) if self.mode == Mode::Terminal => {
-                let line = self.input_buf.clone();
-                self.input_buf.clear();
-                self.terminal_scroll_offset = 0;
-                if !line.is_empty() {
-                    self.output_lines.push(format!("> {line}"));
-                    self.execute_terminal_command(&line);
-                    trim_output(&mut self.output_lines);
-                }
-            },
-            InputEvent::ButtonPress(Button::Square) if self.mode == Mode::Terminal => {
-                self.input_buf.pop();
-            },
+            // Terminal input: line editing (text, Backspace, Tab, d-pad,
+            // Confirm, Square) goes to the shell session.
+            InputEvent::TextInput(_)
+            | InputEvent::Backspace
+            | InputEvent::Tab
+            | InputEvent::ButtonPress(_)
+                if self.mode == Mode::Terminal && self.terminal_event(event) => {},
             InputEvent::ButtonPress(Button::Cancel) if self.mode == Mode::Terminal => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
                 self.mode = Mode::Dashboard;
@@ -382,15 +370,19 @@ impl OasisWasm {
             InputEvent::ButtonPress(Button::Start) if !self.skin.features.window_manager => {
                 self.mode = Mode::Terminal;
             },
+            // Windowed terminal: line editing goes to the shell session.
+            InputEvent::TextInput(_)
+            | InputEvent::Backspace
+            | InputEvent::Tab
+            | InputEvent::ButtonPress(_)
+                if self.wm.active_window() == Some("terminal") && self.terminal_event(event) => {},
             InputEvent::TextInput(ch) => match self.wm.active_window() {
                 Some("browser") => {
                     if let Some(ref mut bw) = self.browser {
                         bw.handle_input(&InputEvent::TextInput(*ch), &self.vfs);
                     }
                 },
-                Some("terminal") => {
-                    self.input_buf.push(*ch);
-                },
+                Some("terminal") => {},
                 Some(id) => {
                     if let Some((_, runner)) =
                         self.open_runners.iter_mut().find(|(rid, _)| rid == id)
@@ -406,9 +398,7 @@ impl OasisWasm {
                         bw.handle_input(&InputEvent::Backspace, &self.vfs);
                     }
                 },
-                Some("terminal") => {
-                    self.input_buf.pop();
-                },
+                Some("terminal") => {},
                 Some(id) => {
                     if let Some((_, runner)) =
                         self.open_runners.iter_mut().find(|(rid, _)| rid == id)
@@ -447,16 +437,6 @@ impl OasisWasm {
                     if active_id == "browser" {
                         if let Some(ref mut bw) = self.browser {
                             bw.handle_input(&InputEvent::ButtonPress(*btn), &self.vfs);
-                        }
-                    } else if active_id == "terminal" && *btn == Button::Confirm {
-                        // Execute command in windowed terminal.
-                        let line = self.input_buf.clone();
-                        self.input_buf.clear();
-                        self.terminal_scroll_offset = 0;
-                        if !line.is_empty() {
-                            self.output_lines.push(format!("> {line}"));
-                            self.execute_terminal_command(&line);
-                            trim_output(&mut self.output_lines);
                         }
                     } else if let Some((_, runner)) = self
                         .open_runners
@@ -621,6 +601,70 @@ impl OasisWasm {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Terminal line editing (shared ShellSession, same keys as desktop)
+    // -----------------------------------------------------------------------
+
+    /// Whether keyboard input currently belongs to the terminal.
+    fn terminal_focused(&self) -> bool {
+        match self.mode {
+            Mode::Terminal => true,
+            Mode::Desktop => self.wm.active_window() == Some("terminal"),
+            _ => false,
+        }
+    }
+
+    /// Offer a raw key to the line editor; `true` when it was a shortcut.
+    fn terminal_key(&mut self, key: Key, mods: Modifiers) -> bool {
+        let Some(ev) = self
+            .shell
+            .handle_key(key, mods, &self.cmd_reg, &self.cwd, &self.vfs)
+        else {
+            return false;
+        };
+        self.apply_shell_event(ev);
+        true
+    }
+
+    /// Offer a text / Backspace / Tab / button event to the line editor.
+    fn terminal_event(&mut self, event: &InputEvent) -> bool {
+        let Some(ev) = self
+            .shell
+            .handle_event(event, &self.cmd_reg, &self.cwd, &self.vfs)
+        else {
+            return false;
+        };
+        self.apply_shell_event(ev);
+        true
+    }
+
+    fn apply_shell_event(&mut self, ev: SessionEvent) {
+        match ev {
+            SessionEvent::Redraw => {},
+            SessionEvent::Submit(line) => {
+                self.terminal_scroll_offset = 0;
+                if !line.trim().is_empty() {
+                    self.output_lines.push(format!("> {line}"));
+                    self.execute_terminal_command(&line);
+                }
+            },
+            SessionEvent::Interrupted(line) => {
+                self.output_lines.push(format!("> {line}^C"));
+                self.terminal_scroll_offset = 0;
+            },
+            SessionEvent::ClearScreen => {
+                self.output_lines.clear();
+                self.terminal_scroll_offset = 0;
+            },
+            SessionEvent::Candidates(candidates) => {
+                self.output_lines.push(format!("> {}", self.shell.buffer()));
+                self.output_lines.push(candidates.join("  "));
+                self.terminal_scroll_offset = 0;
+            },
+        }
+        trim_output(&mut self.output_lines);
+    }
+
     /// Per-event entry point used by `tick()`.
     ///
     /// Routes [`InputEvent::Key`] to the focused app and arms
@@ -632,6 +676,12 @@ impl OasisWasm {
             return;
         }
         if let InputEvent::Key { key, mods } = event {
+            // Terminal line-editing shortcuts (Home/End/Delete, Ctrl+A/E/K/
+            // ..., Ctrl+R search); their twins are dropped.
+            if self.terminal_focused() && self.terminal_key(*key, *mods) {
+                self.key_filter.suppress_twin(*key, *mods);
+                return;
+            }
             let typing = key.produces_text(*mods) && self.text_focus();
             let consumed = self.route_key(key, *mods);
             if consumed || typing {
