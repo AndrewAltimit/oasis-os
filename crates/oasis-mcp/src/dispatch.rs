@@ -105,12 +105,21 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
     }
     let params = obj.remove("params").unwrap_or(Value::Null);
 
-    let is_notification = raw_id.as_ref().is_none_or(Value::is_null);
-    let id = raw_id.unwrap_or(Value::Null);
+    // A notification is a message with no `id` member at all. JSON-RPC 2.0
+    // forbids replying to one and MCP's Streamable HTTP answers it with a bare
+    // `202 Accepted`. Request-only methods sent as notifications are ignored
+    // rather than executed: in particular a `tools/call` notification would
+    // run a side-effecting tool whose result nobody can ever observe.
+    // (`"id": null` is a request, albeit a discouraged one, and gets a reply.)
+    let Some(id) = raw_id else {
+        if !method.starts_with("notifications/") {
+            log::debug!("mcp: ignoring request-only method {method:?} sent as a notification");
+        }
+        return Handled::Notification;
+    };
 
     match method.as_str() {
         "initialize" => Handled::Response(result_response(id, initialize_result())),
-        "notifications/initialized" => Handled::Notification,
         "ping" => Handled::Response(result_response(id, json!({}))),
         "tools/list" => {
             let tools = disp.list_tools();
@@ -133,18 +142,11 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
                 json!({ "content": result.content, "isError": result.is_error }),
             ))
         },
-        other => {
-            if is_notification {
-                // Unknown notification: ignore per JSON-RPC.
-                Handled::Notification
-            } else {
-                Handled::Response(error_response(
-                    id,
-                    -32601,
-                    &format!("method not found: {other}"),
-                ))
-            }
-        },
+        other => Handled::Response(error_response(
+            id,
+            -32601,
+            &format!("method not found: {other}"),
+        )),
     }
 }
 
@@ -237,6 +239,50 @@ mod tests {
             assert_eq!(v["error"]["code"], -32600, "{}", String::from_utf8_lossy(body));
             assert_eq!(v["id"], id, "{}", String::from_utf8_lossy(body));
         }
+    }
+
+    /// Records whether a tool ran.
+    #[derive(Default)]
+    struct CountingDispatcher {
+        calls: usize,
+    }
+    impl ToolDispatcher for CountingDispatcher {
+        fn list_tools(&self) -> Vec<ToolSpec> {
+            Vec::new()
+        }
+        fn call_tool(&mut self, _name: &str, _args: Value) -> ToolResult {
+            self.calls += 1;
+            ToolResult::text("ran")
+        }
+    }
+
+    #[test]
+    fn notifications_never_get_a_reply_or_run_tools() {
+        let mut disp = CountingDispatcher::default();
+        for body in [
+            &br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#[..],
+            br#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{}}"#,
+            br#"{"jsonrpc":"2.0","method":"ping"}"#,
+            br#"{"jsonrpc":"2.0","method":"initialize","params":{}}"#,
+            br#"{"jsonrpc":"2.0","method":"tools/list"}"#,
+            br#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"x"}}"#,
+            br#"{"jsonrpc":"2.0","method":"frobnicate"}"#,
+        ] {
+            assert!(
+                matches!(handle_message(body, &mut disp), Handled::Notification),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        assert_eq!(disp.calls, 0);
+    }
+
+    #[test]
+    fn null_id_is_a_request() {
+        let body = br#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#;
+        let v = resp_json(handle_message(body, &mut StubDispatcher));
+        assert!(v["id"].is_null());
+        assert_eq!(v["result"], json!({}));
     }
 
     #[test]
