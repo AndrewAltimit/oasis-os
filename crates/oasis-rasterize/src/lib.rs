@@ -412,12 +412,19 @@ impl SoftwareBuffer {
         );
     }
 
-    /// Draw a line using Bresenham's algorithm.
+    /// Draw a line using Bresenham's algorithm. Widths above 1 stamp a
+    /// square brush at every step ([`thick_line_rows`]); every covered
+    /// pixel is blended exactly once.
     pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, width: u16, color: Color) {
         if color.a == 0 {
             return;
         }
-        let w = width as i32;
+        if width > 1 {
+            thick_line_rows(x1, y1, x2, y2, width, |y, xs, xe| {
+                self.fill_span(y, xs, xe, color);
+            });
+            return;
+        }
         let dx = (x2 - x1).abs();
         let dy = -(y2 - y1).abs();
         let sx = if x1 < x2 { 1 } else { -1 };
@@ -427,17 +434,7 @@ impl SoftwareBuffer {
         let mut cy = y1;
 
         loop {
-            if w <= 1 {
-                self.set_pixel(cx, cy, color);
-            } else {
-                let half = w / 2;
-                for wy in -half..=(w - half - 1) {
-                    for wx in -half..=(w - half - 1) {
-                        self.set_pixel(cx + wx, cy + wy, color);
-                    }
-                }
-            }
-
+            self.set_pixel(cx, cy, color);
             if cx == x2 && cy == y2 {
                 break;
             }
@@ -468,7 +465,7 @@ impl SoftwareBuffer {
         });
     }
 
-    /// Stroke a circle outline.
+    /// Stroke a circle outline ([`stroke_circle_rows`]).
     pub fn stroke_circle(
         &mut self,
         cx: i32,
@@ -477,31 +474,48 @@ impl SoftwareBuffer {
         stroke_width: u16,
         color: Color,
     ) {
-        if color.a == 0 || radius == 0 {
+        if color.a == 0 {
             return;
         }
-        let r_outer = radius as i32;
-        let r_inner = (radius as i32 - stroke_width as i32).max(0);
+        stroke_circle_rows(radius, stroke_width, |dy, x0, x1| {
+            self.fill_span(cy + dy, cx + x0, cx + x1, color);
+        });
+    }
 
-        for dy in -r_outer..=r_outer {
-            let y = cy + dy;
-            let outer_sq = r_outer * r_outer - dy * dy;
-            if outer_sq < 0 {
-                continue;
-            }
-            let outer_x = rasterize::isqrt(outer_sq as u32) as i32;
-
-            if r_inner > 0 {
-                let inner_sq = r_inner * r_inner - dy * dy;
-                if inner_sq > 0 {
-                    let inner_x = rasterize::isqrt(inner_sq as u32) as i32;
-                    self.hline(cx - outer_x, cx - inner_x, y, color);
-                    self.hline(cx + inner_x, cx + outer_x, y, color);
-                    continue;
-                }
-            }
-            self.hline(cx - outer_x, cx + outer_x, y, color);
+    /// Stroke a rounded-rect outline ([`stroke_rounded_rect_rows`]). A zero
+    /// radius strokes a plain rect.
+    pub fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) {
+        if w == 0 || h == 0 || color.a == 0 {
+            return;
         }
+        if radius == 0 {
+            self.stroke_rect(x, y, w, h, stroke_width, color);
+            return;
+        }
+        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        stroke_rounded_rect_rows(w as i32, h as i32, r, stroke_width, |dy, x0, x1| {
+            self.fill_span(y + dy, x + x0, x + x1, color);
+        });
+    }
+
+    /// Fill a polygon with the even-odd rule ([`polygon_rows`]).
+    pub fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) {
+        if color.a == 0 {
+            return;
+        }
+        let mut xs = Vec::new();
+        polygon_rows(points, &mut xs, |y, x0, x1| {
+            self.fill_span(y, x0, x1, color)
+        });
     }
 
     /// Fill a triangle using the shared scanline rasterizer.
@@ -640,6 +654,56 @@ impl SoftwareBuffer {
                 );
             },
         }
+    }
+
+    /// Fill a rounded rect with a gradient. Covers exactly the pixels of
+    /// [`fill_rounded_rect`](Self::fill_rounded_rect) with the same radius;
+    /// each pixel gets the color [`fill_rect_gradient`](Self::fill_rect_gradient)
+    /// would give it. A zero radius fills a plain gradient rect.
+    pub fn fill_rounded_rect_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        gradient: &GradientStyle,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        if radius == 0 {
+            self.fill_rect_gradient(x, y, w, h, gradient);
+            return;
+        }
+        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
+        let h_max = h.saturating_sub(1).max(1);
+        let w_max = w.saturating_sub(1).max(1);
+        rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                let c = lerp_color_ratio(top, bottom, dy as u32, h_max);
+                self.fill_span(y + dy, x + x0, x + x1, c);
+            },
+            GradientStyle::Horizontal { left, right } => {
+                for dx in x0..x1 {
+                    let c = lerp_color_ratio(left, right, dx as u32, w_max);
+                    self.set_pixel(x + dx, y + dy, c);
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                let l = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
+                let rt = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
+                for dx in x0..x1 {
+                    let c = lerp_color_ratio(l, rt, dx as u32, w_max);
+                    self.set_pixel(x + dx, y + dy, c);
+                }
+            },
+        });
     }
 
     // -----------------------------------------------------------------------

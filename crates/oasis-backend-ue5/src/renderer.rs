@@ -283,6 +283,23 @@ impl SdiShapes for Ue5Backend {
         Ok(())
     }
 
+    fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) -> Result<()> {
+        let (tx, ty) = self.translate(x, y);
+        self.fb
+            .stroke_rounded_rect(tx, ty, w, h, radius, stroke_width, color);
+        self.dirty = true;
+        Ok(())
+    }
+
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
         let (tcx, tcy) = self.translate(cx, cy);
         self.fb.fill_circle(tcx, tcy, radius, color);
@@ -324,10 +341,23 @@ impl SdiShapes for Ue5Backend {
 }
 
 // -------------------------------------------------------------------
-// SdiVector: defaults (no overrides needed)
+// SdiVector: even-odd polygon fill (arcs, dashes and polylines use the
+// defaults, which decompose into the shapes above)
 // -------------------------------------------------------------------
 
-impl SdiVector for Ue5Backend {}
+impl SdiVector for Ue5Backend {
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        let (dx, dy) = self.translate_stack.current();
+        if (dx, dy) == (0, 0) {
+            self.fb.fill_polygon(points, color);
+        } else {
+            let moved: Vec<(i32, i32)> = points.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+            self.fb.fill_polygon(&moved, color);
+        }
+        self.dirty = true;
+        Ok(())
+    }
+}
 
 // -------------------------------------------------------------------
 // SdiGradients: Gradient fills
@@ -344,6 +374,22 @@ impl SdiGradients for Ue5Backend {
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         self.fb.fill_rect_gradient(tx, ty, w, h, gradient);
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn fill_rounded_rect_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        gradient: &GradientStyle,
+    ) -> Result<()> {
+        let (tx, ty) = self.translate(x, y);
+        self.fb
+            .fill_rounded_rect_gradient(tx, ty, w, h, radius, gradient);
         self.dirty = true;
         Ok(())
     }
