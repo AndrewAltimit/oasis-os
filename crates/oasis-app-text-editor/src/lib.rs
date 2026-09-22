@@ -208,6 +208,7 @@ impl TextEditorApp {
             Err(e) => {
                 let mut editor = Self::new("/apps/editor");
                 editor.status_message = Some(format!("Could not read {path}: {e}"));
+                editor.rebuild_display_lines();
                 editor
             },
         }
