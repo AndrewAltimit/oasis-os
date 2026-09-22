@@ -1007,7 +1007,7 @@ impl<B: ShellBackend> Shell<B> {
         state
             .wm
             .set_motion_enabled(!state.skin.features.reduced_motion);
-        state.wm.tick_animations(sdi);
+        state.wm.tick_animations_at(now, sdi);
 
         // Assemble entrance: slide the bars in and hide bar content while
         // the transition runs (no-op for fade/none entrances).
