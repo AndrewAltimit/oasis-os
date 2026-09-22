@@ -88,6 +88,8 @@ pub struct SoftwareBuffer {
     height: u32,
     buffer: Vec<u8>,
     clip: Option<ClipRect>,
+    /// Reused per-blit source column map (avoids a per-call allocation).
+    col_map: Vec<usize>,
 }
 
 impl SoftwareBuffer {
@@ -100,6 +102,7 @@ impl SoftwareBuffer {
             height,
             buffer: vec![0; size],
             clip: None,
+            col_map: Vec::new(),
         }
     }
 
@@ -150,24 +153,44 @@ impl SoftwareBuffer {
     /// Performs bounds and clip checking. Out-of-bounds writes are silently
     /// ignored.
     pub fn set_pixel(&mut self, x: i32, y: i32, color: Color) {
-        if x < 0 || y < 0 {
+        let b = self.visible_bounds();
+        if x < b.x0 || x >= b.x1 || y < b.y0 || y >= b.y1 {
             return;
         }
-        let (ux, uy) = (x as u32, y as u32);
-        if ux >= self.width || uy >= self.height {
-            return;
-        }
-        // Clip check.
-        if let Some(clip) = &self.clip
-            && (x < clip.x
-                || y < clip.y
-                || ux >= (clip.x as u32).saturating_add(clip.w)
-                || uy >= (clip.y as u32).saturating_add(clip.h))
-        {
-            return;
-        }
-        let offset = ((uy * self.width + ux) * 4) as usize;
+        let offset = (y as usize * self.width as usize + x as usize) * 4;
         blend_pixel(&mut self.buffer, offset, color);
+    }
+
+    /// The drawable region: the buffer bounds intersected with the active
+    /// clip rect, as half-open pixel ranges. Computed once per primitive so
+    /// the inner loops can run on plain row slices with no per-pixel checks.
+    #[inline]
+    fn visible_bounds(&self) -> Bounds {
+        let mut x0 = 0i64;
+        let mut y0 = 0i64;
+        let mut x1 = self.width as i64;
+        let mut y1 = self.height as i64;
+        if let Some(clip) = &self.clip {
+            x0 = x0.max(clip.x as i64);
+            y0 = y0.max(clip.y as i64);
+            x1 = x1.min(clip.x as i64 + clip.w as i64);
+            y1 = y1.min(clip.y as i64 + clip.h as i64);
+        }
+        // `x0`/`y0` are >= 0 and `x1`/`y1` <= width/height (clamped up to
+        // the start), so an empty region has `x0 == x1` or `y0 == y1`.
+        Bounds {
+            x0: x0 as i32,
+            y0: y0 as i32,
+            x1: x1.max(x0) as i32,
+            y1: y1.max(y0) as i32,
+        }
+    }
+
+    /// Mutable RGBA bytes of row `y`, columns `xs..xe` (already clipped).
+    #[inline]
+    fn row_mut(&mut self, y: i32, xs: i32, xe: i32) -> &mut [u8] {
+        let row = y as usize * self.width as usize * 4;
+        &mut self.buffer[row + xs as usize * 4..row + xe as usize * 4]
     }
 
     /// Fill a horizontal span of pixels with source-over alpha blending.
@@ -175,42 +198,37 @@ impl SoftwareBuffer {
     /// `x_start` is inclusive, `x_end` is exclusive. Clips to bounds and
     /// active clip rect.
     pub fn fill_span(&mut self, y: i32, x_start: i32, x_end: i32, color: Color) {
-        if y < 0 || y >= self.height as i32 {
+        if color.a == 0 {
             return;
         }
-        let mut xs = x_start.max(0);
-        let mut xe = x_end.min(self.width as i32);
-        if let Some(clip) = &self.clip {
-            xs = xs.max(clip.x);
-            xe = xe.min(clip.x + clip.w as i32);
-            if y < clip.y || y >= clip.y + clip.h as i32 {
-                return;
-            }
+        let b = self.visible_bounds();
+        if y < b.y0 || y >= b.y1 {
+            return;
         }
+        let xs = x_start.max(b.x0);
+        let xe = x_end.min(b.x1);
         if xs >= xe {
             return;
         }
-        let row_offset = (y as usize * self.width as usize) * 4;
+        let row = self.row_mut(y, xs, xe);
         if color.a == 255 {
-            for x in xs..xe {
-                let offset = row_offset + x as usize * 4;
-                self.buffer[offset] = color.r;
-                self.buffer[offset + 1] = color.g;
-                self.buffer[offset + 2] = color.b;
-                self.buffer[offset + 3] = 255;
+            let px = [color.r, color.g, color.b, 255];
+            for dst in row.as_chunks_mut::<4>().0 {
+                *dst = px;
             }
-        } else if color.a > 0 {
+        } else {
             let sa = color.a as u16;
             let da = 255 - sa;
-            for x in xs..xe {
-                let offset = row_offset + x as usize * 4;
-                self.buffer[offset] =
-                    ((color.r as u16 * sa + self.buffer[offset] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 1] =
-                    ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 2] =
-                    ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 3] = 255;
+            let (r, g, bl) = (
+                color.r as u16 * sa,
+                color.g as u16 * sa,
+                color.b as u16 * sa,
+            );
+            for dst in row.as_chunks_mut::<4>().0 {
+                dst[0] = ((r + dst[0] as u16 * da + 127) / 255) as u8;
+                dst[1] = ((g + dst[1] as u16 * da + 127) / 255) as u8;
+                dst[2] = ((bl + dst[2] as u16 * da + 127) / 255) as u8;
+                dst[3] = 255;
             }
         }
     }
@@ -361,51 +379,11 @@ impl SoftwareBuffer {
             return;
         }
         let r = (radius as u32).min(w / 2).min(h / 2) as i32;
-
-        // Center rect.
-        for dy in r..(h as i32 - r) {
-            self.hline(x, x + w as i32 - 1, y + dy, color);
-        }
-
-        // Corner arcs via midpoint circle.
-        let mut cx = 0i32;
-        let mut cy = r;
-        let mut d = 1 - r;
-        while cx <= cy {
-            self.hline(x + r - cy, x + w as i32 - 1 - r + cy, y + r - cx, color);
-            if cx != 0 {
-                self.hline(
-                    x + r - cy,
-                    x + w as i32 - 1 - r + cy,
-                    y + h as i32 - 1 - r + cx,
-                    color,
-                );
-            }
-            if cx != cy {
-                self.hline(x + r - cx, x + w as i32 - 1 - r + cx, y + r - cy, color);
-                self.hline(
-                    x + r - cx,
-                    x + w as i32 - 1 - r + cx,
-                    y + h as i32 - 1 - r + cy,
-                    color,
-                );
-            } else {
-                self.hline(
-                    x + r - cx,
-                    x + w as i32 - 1 - r + cx,
-                    y + h as i32 - 1 - r + cy,
-                    color,
-                );
-            }
-
-            cx += 1;
-            if d < 0 {
-                d += 2 * cx + 1;
-            } else {
-                cy -= 1;
-                d += 2 * (cx - cy) + 1;
-            }
-        }
+        // Every row is filled exactly once, so translucent colors blend
+        // uniformly (no darker bands where corner scanlines used to repeat).
+        rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| {
+            self.fill_span(y + dy, x + x0, x + x1, color);
+        });
     }
 
     /// Stroke a rectangle outline.
@@ -473,28 +451,14 @@ impl SoftwareBuffer {
         if color.a == 0 {
             return;
         }
-        let r = radius as i32;
-        let mut x = 0i32;
-        let mut y = r;
-        let mut d = 1 - r;
-
-        while x <= y {
-            self.hline(cx - y, cx + y, cy + x, color);
-            if x != 0 {
-                self.hline(cx - y, cx + y, cy - x, color);
+        // One span per row (the midpoint walk used to repeat rows near the
+        // poles, double-blending translucent circles).
+        midpoint_row_extents(radius as i32, |o, ext| {
+            self.hline(cx - ext, cx + ext, cy + o, color);
+            if o != 0 {
+                self.hline(cx - ext, cx + ext, cy - o, color);
             }
-            if x != y {
-                self.hline(cx - x, cx + x, cy + y, color);
-                self.hline(cx - x, cx + x, cy - y, color);
-            }
-            x += 1;
-            if d < 0 {
-                d += 2 * x + 1;
-            } else {
-                y -= 1;
-                d += 2 * (x - y) + 1;
-            }
-        }
+        });
     }
 
     /// Stroke a circle outline.
@@ -573,11 +537,27 @@ impl SoftwareBuffer {
         right: Color,
     ) {
         let w_max = w.saturating_sub(1).max(1);
-        for dx in 0..w as i32 {
-            let color = lerp_color_ratio(left, right, dx as u32, w_max);
-            for dy in 0..h as i32 {
-                self.set_pixel(x + dx, y + dy, color);
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(x, y, w, h) else {
+            return;
+        };
+        // Colors depend only on the column: interpolate a chunk of columns
+        // once, then blend that chunk into every visible row.
+        const CHUNK: usize = 64;
+        let mut colors = [Color::rgba(0, 0, 0, 0); CHUNK];
+        let mut cs = xs;
+        while cs < xe {
+            let ce = (cs + CHUNK as i32).min(xe);
+            let n = (ce - cs) as usize;
+            for (i, c) in colors[..n].iter_mut().enumerate() {
+                *c = lerp_color_ratio(left, right, (cs - x) as u32 + i as u32, w_max);
             }
+            for py in ys..ye {
+                let row = self.row_mut(py, cs, ce);
+                for (px, &c) in row.as_chunks_mut::<4>().0.iter_mut().zip(&colors[..n]) {
+                    blend_px(px, c);
+                }
+            }
+            cs = ce;
         }
     }
 
@@ -596,14 +576,31 @@ impl SoftwareBuffer {
     ) {
         let h_max = h.saturating_sub(1).max(1);
         let w_max = w.saturating_sub(1).max(1);
-        for dy in 0..h as i32 {
-            let left = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
-            let right = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
-            for dx in 0..w as i32 {
-                let color = lerp_color_ratio(left, right, dx as u32, w_max);
-                self.set_pixel(x + dx, y + dy, color);
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(x, y, w, h) else {
+            return;
+        };
+        for py in ys..ye {
+            let dy = (py - y) as u32;
+            let left = lerp_color_ratio(top_left, bottom_left, dy, h_max);
+            let right = lerp_color_ratio(top_right, bottom_right, dy, h_max);
+            let row = self.row_mut(py, xs, xe);
+            for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let dx = (xs - x) as u32 + i as u32;
+                blend_px(px, lerp_color_ratio(left, right, dx, w_max));
             }
         }
+    }
+
+    /// Intersect the rect `(x, y, w, h)` with the visible region, returning
+    /// half-open `(xs, xe, ys, ye)` or `None` when nothing is visible.
+    #[inline]
+    fn clip_rect_to_visible(&self, x: i32, y: i32, w: u32, h: u32) -> Option<(i32, i32, i32, i32)> {
+        let b = self.visible_bounds();
+        let xs = (x as i64).max(b.x0 as i64);
+        let ys = (y as i64).max(b.y0 as i64);
+        let xe = (x as i64 + w as i64).min(b.x1 as i64);
+        let ye = (y as i64 + h as i64).min(b.y1 as i64);
+        (xs < xe && ys < ye).then_some((xs as i32, xe as i32, ys as i32, ye as i32))
     }
 
     /// Fill a rectangle with a gradient, dispatching on [`GradientStyle`].
@@ -677,17 +674,21 @@ impl SoftwareBuffer {
             let left_pad = left_pad as i32;
             for row in 0..8i32 {
                 let bits = glyph_data[row as usize];
-                for col in 0..8i32 {
-                    if bits & (0x80 >> col) != 0 {
-                        for sy in 0..scale {
-                            for sx in 0..scale {
-                                self.set_pixel(
-                                    cx + (col - left_pad) * scale + sx,
-                                    y + row * scale + sy,
-                                    color,
-                                );
-                            }
-                        }
+                // Emit each run of set bits as one scaled span per sub-row.
+                let mut col = 0i32;
+                while col < 8 {
+                    if bits & (0x80 >> col) == 0 {
+                        col += 1;
+                        continue;
+                    }
+                    let start = col;
+                    while col < 8 && bits & (0x80 >> col) != 0 {
+                        col += 1;
+                    }
+                    let xs = cx + (start - left_pad) * scale;
+                    let xe = cx + (col - left_pad) * scale;
+                    for sy in 0..scale {
+                        self.fill_span(y + row * scale + sy, xs, xe, color);
                     }
                 }
             }
@@ -711,22 +712,15 @@ impl SoftwareBuffer {
         dst_w: u32,
         dst_h: u32,
     ) {
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let src_x = (dx * tex_w / dst_w) as usize;
-                let src_y = (dy * tex_h / dst_h) as usize;
-                let src_offset = (src_y * tex_w as usize + src_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(dst_x + dx as i32, dst_y + dy as i32, color);
-                }
-            }
-        }
+        self.blit_core(&BlitParams {
+            tex: tex_data,
+            tex_w,
+            src: (0, 0, tex_w, tex_h),
+            dst: (dst_x, dst_y, dst_w, dst_h),
+            flip_h: false,
+            flip_v: false,
+            tint: None,
+        });
     }
 
     /// Blit a sub-region of RGBA texture data with scaling and alpha blending.
@@ -744,22 +738,15 @@ impl SoftwareBuffer {
         dst_w: u32,
         dst_h: u32,
     ) {
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let sx = src_x + (dx * src_w / dst_w.max(1));
-                let sy = src_y + (dy * src_h / dst_h.max(1));
-                let src_offset = (sy as usize * tex_w as usize + sx as usize) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(dst_x + dx as i32, dst_y + dy as i32, color);
-                }
-            }
-        }
+        self.blit_core(&BlitParams {
+            tex: tex_data,
+            tex_w,
+            src: (src_x, src_y, src_w, src_h),
+            dst: (dst_x, dst_y, dst_w, dst_h),
+            flip_h: false,
+            flip_v: false,
+            tint: None,
+        });
     }
 
     /// Blit RGBA texture data with a tint color applied (multiply blend).
@@ -775,22 +762,15 @@ impl SoftwareBuffer {
         dst_h: u32,
         tint: Color,
     ) {
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let src_x = (dx * tex_w / dst_w) as usize;
-                let src_y = (dy * tex_h / dst_h) as usize;
-                let src_offset = (src_y * tex_w as usize + src_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        ((tex_data[src_offset] as u16 * tint.r as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 1] as u16 * tint.g as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 2] as u16 * tint.b as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 3] as u16 * tint.a as u16 + 127) / 255) as u8,
-                    );
-                    self.set_pixel(dst_x + dx as i32, dst_y + dy as i32, color);
-                }
-            }
-        }
+        self.blit_core(&BlitParams {
+            tex: tex_data,
+            tex_w,
+            src: (0, 0, tex_w, tex_h),
+            dst: (dst_x, dst_y, dst_w, dst_h),
+            flip_h: false,
+            flip_v: false,
+            tint: Some(tint),
+        });
     }
 
     /// Blit a sub-region of RGBA texture data with tint (multiply blend).
@@ -809,22 +789,15 @@ impl SoftwareBuffer {
         dst_h: u32,
         tint: Color,
     ) {
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let sx = src_x + (dx * src_w / dst_w.max(1));
-                let sy = src_y + (dy * src_h / dst_h.max(1));
-                let src_offset = (sy as usize * tex_w as usize + sx as usize) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        ((tex_data[src_offset] as u16 * tint.r as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 1] as u16 * tint.g as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 2] as u16 * tint.b as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 3] as u16 * tint.a as u16 + 127) / 255) as u8,
-                    );
-                    self.set_pixel(dst_x + dx as i32, dst_y + dy as i32, color);
-                }
-            }
-        }
+        self.blit_core(&BlitParams {
+            tex: tex_data,
+            tex_w,
+            src: (src_x, src_y, src_w, src_h),
+            dst: (dst_x, dst_y, dst_w, dst_h),
+            flip_h: false,
+            flip_v: false,
+            tint: Some(tint),
+        });
     }
 
     /// Blit RGBA texture data with horizontal and/or vertical flip.
@@ -841,30 +814,146 @@ impl SoftwareBuffer {
         flip_h: bool,
         flip_v: bool,
     ) {
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let sample_x = if flip_h {
-                    ((dst_w - 1 - dx) * tex_w / dst_w) as usize
-                } else {
-                    (dx * tex_w / dst_w) as usize
-                };
-                let sample_y = if flip_v {
-                    ((dst_h - 1 - dy) * tex_h / dst_h) as usize
-                } else {
-                    (dy * tex_h / dst_h) as usize
-                };
-                let src_offset = (sample_y * tex_w as usize + sample_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(dst_x + dx as i32, dst_y + dy as i32, color);
+        self.blit_core(&BlitParams {
+            tex: tex_data,
+            tex_w,
+            src: (0, 0, tex_w, tex_h),
+            dst: (dst_x, dst_y, dst_w, dst_h),
+            flip_h,
+            flip_v,
+            tint: None,
+        });
+    }
+
+    /// Shared nearest-neighbour blit.
+    ///
+    /// Destination column `k` (row `j`) samples source column
+    /// `src.x + m * src.w / dst.w` where `m` is `k`, or `dst.w - 1 - k` when
+    /// flipped -- exactly the per-pixel formula the blits have always used.
+    /// The destination rect is clipped once up front; each row then runs on
+    /// a plain slice. An unscaled, untinted row blends straight from the
+    /// contiguous source run (opaque runs become a single `copy_from_slice`).
+    /// Otherwise the source column of every destination column is computed
+    /// once per blit with an exact integer DDA (quotient + remainder, so no
+    /// per-pixel division), and a fully opaque row that repeats the previous
+    /// source row is duplicated with `copy_within`. Source pixels whose
+    /// offset falls outside `tex` are skipped, as before.
+    fn blit_core(&mut self, p: &BlitParams<'_>) {
+        let (sx0, _, sw, _) = p.src;
+        let (dst_x, dst_y, dw, dh) = p.dst;
+        if dw == 0 || dh == 0 {
+            return;
+        }
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(dst_x, dst_y, dw, dh) else {
+            return;
+        };
+        // Destination-local visible columns `[k0, k1)`.
+        let k0 = (xs as i64 - dst_x as i64) as u64;
+        let k1 = (xe as i64 - dst_x as i64) as u64;
+        let n = (k1 - k0) as usize;
+        let (dw64, sw64) = (dw as u64, sw as u64);
+        // First sample index `m` in ascending order. With a horizontal flip
+        // the ascending `m` walk fills the row right-to-left.
+        let m0 = if p.flip_h { dw64 - k1 } else { k0 };
+        let q0 = (m0 * sw64 / dw64) as usize;
+        let tex = p.tex;
+        let tex_stride = p.tex_w as usize * 4;
+
+        if !p.flip_h && p.tint.is_none() && sw == dw {
+            // Unscaled horizontally: each row is one contiguous source run.
+            for py in ys..ye {
+                let sy = Self::sample_row(p, py);
+                let off = sy * tex_stride + (sx0 as usize + q0) * 4;
+                let cnt = n.min(tex.len().saturating_sub(off) / 4);
+                if cnt > 0 {
+                    let dst = self.row_mut(py, xs, xe);
+                    blend_row(&mut dst[..cnt * 4], &tex[off..off + cnt * 4]);
                 }
             }
+            return;
         }
+
+        // Source texel column for every visible destination column, in
+        // destination order, via an exact integer DDA (no division per
+        // pixel). The map is computed once and reused for every row.
+        let mut cols = std::mem::take(&mut self.col_map);
+        cols.clear();
+        let (q_step, r_step) = ((sw64 / dw64) as usize, sw64 % dw64);
+        let (mut q, mut r) = (q0, m0 * sw64 % dw64);
+        for _ in 0..n {
+            cols.push(sx0 as usize + q);
+            q += q_step;
+            r += r_step;
+            if r >= dw64 {
+                r -= dw64;
+                q += 1;
+            }
+        }
+        if p.flip_h {
+            cols.reverse();
+        }
+
+        // `Some(sy)` of the previous row when every one of its samples was
+        // opaque: a repeated source row (vertical upscale) then produces
+        // identical pixels, so the destination row is simply duplicated.
+        let mut prev_opaque_row: Option<usize> = None;
+        for py in ys..ye {
+            let sy = Self::sample_row(p, py);
+            let row_off = xs as usize * 4;
+            let stride = self.width as usize * 4;
+            if prev_opaque_row == Some(sy) {
+                let cur = py as usize * stride + row_off;
+                let len = n * 4;
+                self.buffer
+                    .copy_within(cur - stride..cur - stride + len, cur);
+                continue;
+            }
+            let src_px = tex
+                .get(sy * tex_stride..)
+                .map_or(&[][..], |s| s.as_chunks::<4>().0);
+            let dst_px = self.row_mut(py, xs, xe).as_chunks_mut::<4>().0;
+            let mut opaque = true;
+            match p.tint {
+                None => {
+                    for (d, &c) in dst_px.iter_mut().zip(&cols) {
+                        match src_px.get(c) {
+                            Some(&s) if s[3] == 255 => *d = s,
+                            Some(&s) => {
+                                opaque = false;
+                                blend_px(d, Color::rgba(s[0], s[1], s[2], s[3]));
+                            },
+                            None => opaque = false,
+                        }
+                    }
+                },
+                Some(t) => {
+                    opaque = false;
+                    for (d, &c) in dst_px.iter_mut().zip(&cols) {
+                        if let Some(&s) = src_px.get(c) {
+                            let color = Color::rgba(
+                                ((s[0] as u16 * t.r as u16 + 127) / 255) as u8,
+                                ((s[1] as u16 * t.g as u16 + 127) / 255) as u8,
+                                ((s[2] as u16 * t.b as u16 + 127) / 255) as u8,
+                                ((s[3] as u16 * t.a as u16 + 127) / 255) as u8,
+                            );
+                            blend_px(d, color);
+                        }
+                    }
+                },
+            }
+            prev_opaque_row = opaque.then_some(sy);
+        }
+        self.col_map = cols;
+    }
+
+    /// Source texel row sampled by destination row `py` of a blit.
+    #[inline]
+    fn sample_row(p: &BlitParams<'_>, py: i32) -> usize {
+        let (_, sy0, _, sh) = p.src;
+        let (_, dst_y, _, dh) = p.dst;
+        let j = (py as i64 - dst_y as i64) as u64;
+        let my = if p.flip_v { dh as u64 - 1 - j } else { j };
+        (sy0 as u64 + my * sh as u64 / dh as u64) as usize
     }
 }
 
@@ -882,20 +971,173 @@ impl PixelSink for SoftwareBuffer {
 /// source-over compositing.
 #[inline]
 fn blend_pixel(buffer: &mut [u8], offset: usize, color: Color) {
+    if let Some(px) = buffer[offset..offset + 4]
+        .as_chunks_mut::<4>()
+        .0
+        .first_mut()
+    {
+        blend_px(px, color);
+    }
+}
+
+/// Source-over blend `color` into one RGBA pixel. The destination alpha is
+/// always forced to 255 (the buffers are treated as opaque surfaces).
+#[inline]
+fn blend_px(px: &mut [u8; 4], color: Color) {
     if color.a == 255 {
-        buffer[offset] = color.r;
-        buffer[offset + 1] = color.g;
-        buffer[offset + 2] = color.b;
-        buffer[offset + 3] = 255;
+        *px = [color.r, color.g, color.b, 255];
     } else if color.a > 0 {
         let sa = color.a as u16;
         let da = 255 - sa;
-        buffer[offset] = ((color.r as u16 * sa + buffer[offset] as u16 * da + 127) / 255) as u8;
-        buffer[offset + 1] =
-            ((color.g as u16 * sa + buffer[offset + 1] as u16 * da + 127) / 255) as u8;
-        buffer[offset + 2] =
-            ((color.b as u16 * sa + buffer[offset + 2] as u16 * da + 127) / 255) as u8;
-        buffer[offset + 3] = 255;
+        px[0] = ((color.r as u16 * sa + px[0] as u16 * da + 127) / 255) as u8;
+        px[1] = ((color.g as u16 * sa + px[1] as u16 * da + 127) / 255) as u8;
+        px[2] = ((color.b as u16 * sa + px[2] as u16 * da + 127) / 255) as u8;
+        px[3] = 255;
+    }
+}
+
+/// Blend an RGBA source row over an equally long destination row.
+///
+/// Runs of fully opaque source pixels are copied with one
+/// `copy_from_slice`; everything else goes through [`blend_px`], so the
+/// result is identical to blending pixel by pixel.
+#[inline]
+fn blend_row(dst: &mut [u8], src: &[u8]) {
+    let d = dst.as_chunks_mut::<4>().0;
+    let s = src.as_chunks::<4>().0;
+    let n = d.len().min(s.len());
+    let (d, s) = (&mut d[..n], &s[..n]);
+    // Fully opaque rows (the common case for images and icons) are one
+    // memcpy; the branch-free AND-reduction vectorizes well.
+    if s.iter()
+        .fold(u32::MAX, |acc, p| acc & u32::from_le_bytes(*p))
+        >> 24
+        == 255
+    {
+        d.copy_from_slice(s);
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        if s[i][3] == 255 {
+            let start = i;
+            i += 1;
+            while i < n && s[i][3] == 255 {
+                i += 1;
+            }
+            d[start..i].copy_from_slice(&s[start..i]);
+        } else {
+            let p = s[i];
+            blend_px(&mut d[i], Color::rgba(p[0], p[1], p[2], p[3]));
+            i += 1;
+        }
+    }
+}
+
+/// Half-open visible pixel region (`x0..x1`, `y0..y1`).
+#[derive(Clone, Copy)]
+struct Bounds {
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+}
+
+/// Arguments of the shared blit routine.
+struct BlitParams<'a> {
+    tex: &'a [u8],
+    tex_w: u32,
+    /// Source rect `(x, y, w, h)` in texels.
+    src: (u32, u32, u32, u32),
+    /// Destination rect `(x, y, w, h)` in pixels.
+    dst: (i32, i32, u32, u32),
+    flip_h: bool,
+    flip_v: bool,
+    tint: Option<Color>,
+}
+
+// ---------------------------------------------------------------------------
+// Scanline helpers
+// ---------------------------------------------------------------------------
+
+/// Walk the midpoint circle of radius `r` and report every row offset
+/// `o` in `0..=r` **exactly once** together with the half-width `ext` of
+/// the filled disc on that row (the span is `-ext..=ext`).
+///
+/// The classic midpoint fill emits the same row several times (the
+/// `(x, y)` octant pair revisits a row while `y` stays constant), which
+/// double-blends translucent fills. This walk emits the same union of
+/// pixels -- the widest extent seen for each row -- but only once.
+pub fn midpoint_row_extents(r: i32, mut f: impl FnMut(i32, i32)) {
+    if r < 0 {
+        return;
+    }
+    let mut cx = 0i32;
+    let mut cy = r;
+    let mut d = 1 - r;
+    while cx <= cy {
+        // Row `cx` is visited exactly once, with its final extent `cy`.
+        f(cx, cy);
+        let steps_down = d >= 0;
+        // Row `cy` is revisited while `cy` stays constant, with a growing
+        // `cx`; its widest extent is the `cx` of the step that leaves it.
+        // `cx < cy` guarantees row `cy` is never reached as a `cx` row.
+        if steps_down && cx < cy {
+            f(cy, cx);
+        }
+        cx += 1;
+        if steps_down {
+            cy -= 1;
+            d += 2 * (cx - cy) + 1;
+        } else {
+            d += 2 * cx + 1;
+        }
+    }
+}
+
+/// Enumerate the rows of a filled `w x h` rounded rect with corner radius
+/// `r` (already clamped to `w/2`, `h/2`). Calls `f(dy, x0, x1)` exactly
+/// once per covered row, where the row covers columns `x0..x1` (relative
+/// to the rect's left edge, half-open).
+///
+/// The covered pixels match the historical midpoint-based fill exactly;
+/// only the repeated rows are gone.
+pub fn rounded_rect_rows(w: i32, h: i32, r: i32, mut f: impl FnMut(i32, i32, i32)) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    if r <= 0 {
+        for dy in 0..h {
+            f(dy, 0, w);
+        }
+        return;
+    }
+    // Columns of a row inset by `r - ext`. When `w == 2r` the pole row
+    // (ext 0) keeps the two center pixels, as the inclusive-endpoint
+    // `hline` always drew it.
+    let span = |ext: i32| {
+        let inset = r - ext;
+        if w - 2 * inset > 0 {
+            (inset, w - inset)
+        } else {
+            (inset - 1, inset + 1)
+        }
+    };
+    midpoint_row_extents(r, |o, ext| {
+        let (x0, x1) = span(ext);
+        // Top arc: offset 0 is the first full-width row.
+        f(r - o, x0, x1);
+        // Bottom arc: offset 0 is covered by the body (or, when h == 2r,
+        // coincides with a top-arc row), so only o >= 1 rows below the
+        // top half are emitted.
+        let dy = h - 1 - r + o;
+        if o >= 1 && dy > r {
+            f(dy, x0, x1);
+        }
+    });
+    // Body rows strictly between the two arcs.
+    for dy in (r + 1)..(h - r) {
+        f(dy, 0, w);
     }
 }
 
@@ -1177,6 +1419,512 @@ mod tests {
         assert_eq!(buf.data()[0], 255); // R
         assert_eq!(buf.data()[1], 0); // G
         assert_eq!(buf.data()[2], 0); // B
+    }
+
+    // -----------------------------------------------------------------------
+    // Golden tests: fast paths vs. the original per-pixel algorithms
+    // -----------------------------------------------------------------------
+
+    /// Verbatim copies of the pre-optimization per-pixel implementations,
+    /// kept as the reference the span/row-based fast paths must match.
+    mod reference {
+        use super::*;
+
+        pub fn set_pixel(buf: &mut SoftwareBuffer, x: i32, y: i32, color: Color) {
+            if x < 0 || y < 0 {
+                return;
+            }
+            let (ux, uy) = (x as u32, y as u32);
+            if ux >= buf.width() || uy >= buf.height() {
+                return;
+            }
+            if let Some(clip) = buf.clip()
+                && (x < clip.x
+                    || y < clip.y
+                    || ux >= (clip.x as u32).saturating_add(clip.w)
+                    || uy >= (clip.y as u32).saturating_add(clip.h))
+            {
+                return;
+            }
+            let offset = ((uy * buf.width() + ux) * 4) as usize;
+            blend_pixel(buf.data_mut(), offset, color);
+        }
+
+        fn hline(buf: &mut SoftwareBuffer, x1: i32, x2: i32, y: i32, color: Color) {
+            for x in x1.min(x2)..=x1.max(x2) {
+                set_pixel(buf, x, y, color);
+            }
+        }
+
+        fn sample(tex: &[u8], off: usize) -> Option<Color> {
+            (off + 3 < tex.len())
+                .then(|| Color::rgba(tex[off], tex[off + 1], tex[off + 2], tex[off + 3]))
+        }
+
+        fn tinted(c: Color, t: Color) -> Color {
+            Color::rgba(
+                ((c.r as u16 * t.r as u16 + 127) / 255) as u8,
+                ((c.g as u16 * t.g as u16 + 127) / 255) as u8,
+                ((c.b as u16 * t.b as u16 + 127) / 255) as u8,
+                ((c.a as u16 * t.a as u16 + 127) / 255) as u8,
+            )
+        }
+
+        pub fn blit_sub(
+            buf: &mut SoftwareBuffer,
+            tex: &[u8],
+            tex_w: u32,
+            src: (u32, u32, u32, u32),
+            dst: (i32, i32, u32, u32),
+            flip: (bool, bool),
+            tint: Option<Color>,
+        ) {
+            let (src_x, src_y, src_w, src_h) = src;
+            let (dst_x, dst_y, dst_w, dst_h) = dst;
+            for dy in 0..dst_h {
+                for dx in 0..dst_w {
+                    let mx = if flip.0 { dst_w - 1 - dx } else { dx };
+                    let my = if flip.1 { dst_h - 1 - dy } else { dy };
+                    let sx = src_x + (mx * src_w / dst_w.max(1));
+                    let sy = src_y + (my * src_h / dst_h.max(1));
+                    let off = (sy as usize * tex_w as usize + sx as usize) * 4;
+                    if let Some(c) = sample(tex, off) {
+                        let c = tint.map_or(c, |t| tinted(c, t));
+                        set_pixel(buf, dst_x + dx as i32, dst_y + dy as i32, c);
+                    }
+                }
+            }
+        }
+
+        pub fn hgrad(buf: &mut SoftwareBuffer, r: (i32, i32, u32, u32), l: Color, rt: Color) {
+            let (x, y, w, h) = r;
+            let w_max = w.saturating_sub(1).max(1);
+            for dx in 0..w as i32 {
+                let color = lerp_color_ratio(l, rt, dx as u32, w_max);
+                for dy in 0..h as i32 {
+                    set_pixel(buf, x + dx, y + dy, color);
+                }
+            }
+        }
+
+        pub fn four_corner(buf: &mut SoftwareBuffer, r: (i32, i32, u32, u32), c: [Color; 4]) {
+            let (x, y, w, h) = r;
+            let h_max = h.saturating_sub(1).max(1);
+            let w_max = w.saturating_sub(1).max(1);
+            for dy in 0..h as i32 {
+                let left = lerp_color_ratio(c[0], c[2], dy as u32, h_max);
+                let right = lerp_color_ratio(c[1], c[3], dy as u32, h_max);
+                for dx in 0..w as i32 {
+                    let color = lerp_color_ratio(left, right, dx as u32, w_max);
+                    set_pixel(buf, x + dx, y + dy, color);
+                }
+            }
+        }
+
+        pub fn text(buf: &mut SoftwareBuffer, text: &str, x: i32, y: i32, fs: u16, c: Color) {
+            let scale = if fs >= 8 { (fs / 8) as i32 } else { 1 };
+            let mut cx = x;
+            for ch in text.chars() {
+                let glyph_data = oasis_types::bitmap_font::glyph(ch);
+                let (left_pad, advance) = oasis_types::bitmap_font::glyph_metrics(ch);
+                let left_pad = left_pad as i32;
+                for row in 0..8i32 {
+                    let bits = glyph_data[row as usize];
+                    for col in 0..8i32 {
+                        if bits & (0x80 >> col) != 0 {
+                            for sy in 0..scale {
+                                for sx in 0..scale {
+                                    set_pixel(
+                                        buf,
+                                        cx + (col - left_pad) * scale + sx,
+                                        y + row * scale + sy,
+                                        c,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                cx += advance as i32 * scale;
+            }
+        }
+
+        pub fn rounded_rect(
+            buf: &mut SoftwareBuffer,
+            rect: (i32, i32, u32, u32),
+            radius: u16,
+            c: Color,
+        ) {
+            let (x, y, w, h) = rect;
+            if w == 0 || h == 0 {
+                return;
+            }
+            let r = (radius as u32).min(w / 2).min(h / 2) as i32;
+            let (wi, hi) = (w as i32, h as i32);
+            for dy in r..(hi - r) {
+                hline(buf, x, x + wi - 1, y + dy, c);
+            }
+            let mut cx = 0i32;
+            let mut cy = r;
+            let mut d = 1 - r;
+            while cx <= cy {
+                hline(buf, x + r - cy, x + wi - 1 - r + cy, y + r - cx, c);
+                if cx != 0 {
+                    hline(buf, x + r - cy, x + wi - 1 - r + cy, y + hi - 1 - r + cx, c);
+                }
+                if cx != cy {
+                    hline(buf, x + r - cx, x + wi - 1 - r + cx, y + r - cy, c);
+                }
+                hline(buf, x + r - cx, x + wi - 1 - r + cx, y + hi - 1 - r + cy, c);
+                cx += 1;
+                if d < 0 {
+                    d += 2 * cx + 1;
+                } else {
+                    cy -= 1;
+                    d += 2 * (cx - cy) + 1;
+                }
+            }
+        }
+
+        pub fn circle(buf: &mut SoftwareBuffer, cx: i32, cy: i32, radius: u16, c: Color) {
+            let r = radius as i32;
+            let (mut x, mut y, mut d) = (0i32, r, 1 - r);
+            while x <= y {
+                hline(buf, cx - y, cx + y, cy + x, c);
+                if x != 0 {
+                    hline(buf, cx - y, cx + y, cy - x, c);
+                }
+                if x != y {
+                    hline(buf, cx - x, cx + x, cy + y, c);
+                    hline(buf, cx - x, cx + x, cy - y, c);
+                }
+                x += 1;
+                if d < 0 {
+                    d += 2 * x + 1;
+                } else {
+                    y -= 1;
+                    d += 2 * (x - y) + 1;
+                }
+            }
+        }
+    }
+
+    /// Tiny deterministic xorshift PRNG for reproducible randomized tests.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        /// Uniform-ish integer in `lo..hi`.
+        fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            lo + (self.next() % (hi - lo) as u64) as i64
+        }
+        /// True with probability `1/n`.
+        fn one_in(&mut self, n: u64) -> bool {
+            self.next().is_multiple_of(n)
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn color(&mut self, opaque: bool) -> Color {
+            let v = self.next().to_le_bytes();
+            Color::rgba(v[0], v[1], v[2], if opaque { 255 } else { v[3] })
+        }
+    }
+
+    /// Two identical buffers (random contents + clip): one for the fast
+    /// path, one for the reference. Clip origins are non-negative -- the
+    /// only domain where the old `set_pixel` clip test was well defined.
+    fn buffer_pair(rng: &mut Rng) -> (SoftwareBuffer, SoftwareBuffer) {
+        let (w, h) = (64u32, 48u32);
+        let pixels = rng.bytes((w * h * 4) as usize);
+        let clip = (!rng.one_in(3)).then(|| ClipRect {
+            x: rng.range(0, 70) as i32,
+            y: rng.range(0, 52) as i32,
+            w: rng.range(0, 70) as u32,
+            h: rng.range(0, 52) as u32,
+        });
+        let mut a = SoftwareBuffer::new(w, h);
+        let mut b = SoftwareBuffer::new(w, h);
+        for buf in [&mut a, &mut b] {
+            buf.data_mut().copy_from_slice(&pixels);
+            buf.set_clip(clip);
+        }
+        (a, b)
+    }
+
+    fn random_rect(rng: &mut Rng) -> (i32, i32, u32, u32) {
+        (
+            rng.range(-40, 70) as i32,
+            rng.range(-40, 55) as i32,
+            rng.range(0, 100) as u32,
+            rng.range(0, 80) as u32,
+        )
+    }
+
+    /// Random texture; alpha is opaque, translucent, or mixed; sometimes the
+    /// slice is truncated to exercise the out-of-range sample skip.
+    fn random_texture(rng: &mut Rng) -> (Vec<u8>, u32, u32) {
+        let tw = rng.range(1, 40) as u32;
+        let th = rng.range(1, 40) as u32;
+        let mut tex = rng.bytes((tw * th * 4) as usize);
+        match rng.next() % 3 {
+            0 => tex.iter_mut().skip(3).step_by(4).for_each(|a| *a = 255),
+            1 => tex
+                .iter_mut()
+                .skip(3)
+                .step_by(4)
+                .for_each(|a| *a = if *a < 128 { 255 } else { *a }),
+            _ => {},
+        }
+        if rng.one_in(5) {
+            let keep = rng.range(0, tex.len() as i64 + 1) as usize;
+            tex.truncate(keep);
+        }
+        (tex, tw, th)
+    }
+
+    #[test]
+    fn golden_blits_match_reference() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        for iter in 0..3000 {
+            let (mut fast, mut slow) = buffer_pair(&mut rng);
+            let (tex, tw, th) = random_texture(&mut rng);
+            let dst = random_rect(&mut rng);
+            let (dx, dy, dw, dh) = dst;
+            let opaque_tint = rng.one_in(2);
+            let tint = rng.color(opaque_tint);
+            let variant = iter % 5;
+            match variant {
+                0 => {
+                    // Bias toward the unscaled fast path.
+                    let (dw, dh) = if rng.one_in(2) {
+                        (tw, th)
+                    } else {
+                        (dw, dh)
+                    };
+                    fast.blit_texture(&tex, tw, th, dx, dy, dw, dh);
+                    let d = (dx, dy, dw, dh);
+                    reference::blit_sub(
+                        &mut slow,
+                        &tex,
+                        tw,
+                        (0, 0, tw, th),
+                        d,
+                        (false, false),
+                        None,
+                    );
+                },
+                1 | 3 => {
+                    let sx = rng.range(0, tw as i64) as u32;
+                    let sy = rng.range(0, th as i64) as u32;
+                    let sw = rng.range(0, (tw - sx) as i64 + 1) as u32;
+                    let sh = rng.range(0, (th - sy) as i64 + 1) as u32;
+                    let (dw, dh) = if rng.one_in(2) {
+                        (sw, sh)
+                    } else {
+                        (dw, dh)
+                    };
+                    let t = (variant == 3).then_some(tint);
+                    match t {
+                        None => fast.blit_texture_sub(&tex, tw, sx, sy, sw, sh, dx, dy, dw, dh),
+                        Some(t) => fast
+                            .blit_texture_sub_tinted(&tex, tw, sx, sy, sw, sh, dx, dy, dw, dh, t),
+                    }
+                    let (s, d) = ((sx, sy, sw, sh), (dx, dy, dw, dh));
+                    reference::blit_sub(&mut slow, &tex, tw, s, d, (false, false), t);
+                },
+                2 => {
+                    fast.blit_texture_tinted(&tex, tw, th, dx, dy, dw, dh, tint);
+                    let s = (0, 0, tw, th);
+                    reference::blit_sub(&mut slow, &tex, tw, s, dst, (false, false), Some(tint));
+                },
+                _ => {
+                    let flip = (rng.one_in(2), rng.one_in(2));
+                    fast.blit_texture_flipped(&tex, tw, th, dx, dy, dw, dh, flip.0, flip.1);
+                    reference::blit_sub(&mut slow, &tex, tw, (0, 0, tw, th), dst, flip, None);
+                },
+            }
+            assert!(
+                fast.data() == slow.data(),
+                "blit variant {variant} diverged at iter {iter}"
+            );
+        }
+    }
+
+    #[test]
+    fn golden_gradients_and_text_match_reference() {
+        let mut rng = Rng(0x0123_4567_89AB_CDEF);
+        for iter in 0..1500 {
+            let (mut fast, mut slow) = buffer_pair(&mut rng);
+            let rect = random_rect(&mut rng);
+            let (x, y, w, h) = rect;
+            let opaque = rng.one_in(2);
+            let c = [
+                rng.color(opaque),
+                rng.color(opaque),
+                rng.color(opaque),
+                rng.color(opaque),
+            ];
+            match iter % 3 {
+                0 => {
+                    fast.fill_rect_horizontal_gradient(x, y, w, h, c[0], c[1]);
+                    reference::hgrad(&mut slow, rect, c[0], c[1]);
+                },
+                1 => {
+                    fast.fill_rect_four_corner_gradient(x, y, w, h, c[0], c[1], c[2], c[3]);
+                    reference::four_corner(&mut slow, rect, c);
+                },
+                _ => {
+                    let fs = rng.range(0, 33) as u16;
+                    let text = "Hi! gjpq {Oasis} 0123 _|~";
+                    fast.draw_bitmap_text(
+                        text,
+                        x,
+                        y,
+                        fs,
+                        c[0],
+                        oasis_types::bitmap_font::glyph,
+                        oasis_types::bitmap_font::glyph_metrics,
+                    );
+                    if fs != 0 {
+                        reference::text(&mut slow, text, x, y, fs, c[0]);
+                    }
+                },
+            }
+            assert!(
+                fast.data() == slow.data(),
+                "variant {} diverged at iter {iter}",
+                iter % 3
+            );
+        }
+    }
+
+    #[test]
+    fn golden_opaque_rounded_rect_and_circle_match_reference() {
+        let mut rng = Rng(0xDEAD_BEEF_F00D_CAFE);
+        for iter in 0..2000u32 {
+            let (mut fast, mut slow) = buffer_pair(&mut rng);
+            let rect = random_rect(&mut rng);
+            let radius = rng.range(0, 50) as u16;
+            let c = rng.color(true);
+            if iter.is_multiple_of(2) {
+                fast.fill_rounded_rect(rect.0, rect.1, rect.2, rect.3, radius, c);
+                reference::rounded_rect(&mut slow, rect, radius, c);
+            } else {
+                fast.fill_circle(rect.0, rect.1, radius, c);
+                reference::circle(&mut slow, rect.0, rect.1, radius, c);
+            }
+            assert!(
+                fast.data() == slow.data(),
+                "shape diverged at iter {iter}: {rect:?} r={radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn rounded_rect_rows_visits_each_row_once() {
+        for w in 1..24 {
+            for h in 1..24 {
+                for r in 0..=(w.min(h) / 2) {
+                    let mut seen = vec![0u32; h as usize];
+                    rounded_rect_rows(w, h, r, |dy, x0, x1| {
+                        assert!((0..h).contains(&dy), "row {dy} outside 0..{h}");
+                        assert!(0 <= x0 && x0 < x1 && x1 <= w, "w={w} r={r}: {x0}..{x1}");
+                        seen[dy as usize] += 1;
+                    });
+                    assert!(seen.iter().all(|&n| n == 1), "w={w} h={h} r={r}: {seen:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn midpoint_row_extents_visits_each_offset_once() {
+        for r in 0..200 {
+            let mut ext_of = vec![-1i32; r as usize + 1];
+            midpoint_row_extents(r, |o, ext| {
+                assert!(ext >= 0 && ext <= r);
+                assert_eq!(ext_of[o as usize], -1, "r={r}: offset {o} visited twice");
+                ext_of[o as usize] = ext;
+            });
+            assert!(ext_of.iter().all(|&e| e >= 0), "r={r}: {ext_of:?}");
+            // The extent never grows with distance from the center.
+            assert!(ext_of.windows(2).all(|p| p[0] >= p[1]), "r={r}: {ext_of:?}");
+        }
+    }
+
+    /// Every covered pixel of a translucent shape must be blended exactly
+    /// once: over a uniform background they all end up the same value.
+    fn assert_uniform_single_blend(buf: &SoftwareBuffer, bg: Color, fill: Color) {
+        let mut once = SoftwareBuffer::new(1, 1);
+        once.clear(bg);
+        once.set_pixel(0, 0, fill);
+        let expected = [
+            once.data()[0],
+            once.data()[1],
+            once.data()[2],
+            once.data()[3],
+        ];
+        let bg_px = [bg.r, bg.g, bg.b, bg.a];
+        let mut covered = 0;
+        for px in buf.data().as_chunks::<4>().0 {
+            if *px != bg_px {
+                assert_eq!(*px, expected, "pixel blended more than once");
+                covered += 1;
+            }
+        }
+        assert!(covered > 0);
+    }
+
+    #[test]
+    fn translucent_rounded_rect_blends_each_pixel_once() {
+        let bg = Color::rgb(10, 20, 30);
+        let fill = Color::rgba(200, 100, 50, 128);
+        for (w, h, r) in [
+            (40, 30, 8),
+            (40, 30, 15),
+            (30, 30, 15),
+            (31, 17, 8),
+            (9, 40, 4),
+        ] {
+            let mut buf = SoftwareBuffer::new(50, 50);
+            buf.clear(bg);
+            buf.fill_rounded_rect(3, 4, w, h, r, fill);
+            assert_uniform_single_blend(&buf, bg, fill);
+        }
+    }
+
+    #[test]
+    fn translucent_circle_blends_each_pixel_once() {
+        let bg = Color::rgb(0, 0, 0);
+        let fill = Color::rgba(255, 255, 255, 100);
+        for r in [0, 1, 2, 5, 12, 20] {
+            let mut buf = SoftwareBuffer::new(50, 50);
+            buf.clear(bg);
+            buf.fill_circle(25, 25, r, fill);
+            assert_uniform_single_blend(&buf, bg, fill);
+        }
+    }
+
+    #[test]
+    fn negative_clip_origin_bounds_right_edge() {
+        // A clip rect hanging off the left edge still bounds the right side.
+        let mut buf = SoftwareBuffer::new(10, 1);
+        buf.set_clip(Some(ClipRect {
+            x: -5,
+            y: 0,
+            w: 8,
+            h: 1,
+        }));
+        buf.blit_texture(&[255u8; 40], 10, 1, 0, 0, 10, 1);
+        buf.set_pixel(5, 0, Color::WHITE);
+        assert_eq!(&buf.data()[..12], &[255u8; 12]);
+        assert!(buf.data()[12..].iter().all(|&b| b == 0));
     }
 
     #[test]

@@ -1352,6 +1352,7 @@ dependencies = [
 name = "oasis-rasterize"
 version = "1.4.0"
 dependencies = [
+ "criterion",
  "fontdue",
  "oasis-types",
 ]

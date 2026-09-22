@@ -17,5 +17,12 @@ ttf = ["dep:fontdue"]
 oasis-types.workspace = true
 fontdue = { workspace = true, optional = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "raster"
+harness = false
+
 [lints]
 workspace = true
