@@ -6,11 +6,10 @@
 //! [`status::STATUS_PATH`] (see [`probe::HostProbe`]); anything the host
 //! cannot measure renders as an explicit "N/A" gauge.
 //!
-//! The app re-reads the status file from its per-frame hooks
-//! ([`App::apply_vfs_ops`] / [`App::refresh`]) through
+//! The app re-reads the status file from [`App::tick`] through
 //! [`SystemMonitorApp::poll`], which throttles itself to one read every
-//! [`POLL_INTERVAL_FRAMES`] calls, so a future per-frame tick can drive
-//! it the same way.
+//! [`POLL_INTERVAL_MS`] of wall time (~2 Hz) and reports a change only
+//! when the file's bytes differ, so an idle monitor never forces redraws.
 
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
@@ -27,8 +26,8 @@ pub mod status;
 pub use render::SysmonColors;
 pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 
-/// Status file re-read interval, in poll calls (~0.5 s at 60 fps).
-pub const POLL_INTERVAL_FRAMES: u32 = 30;
+/// Status file re-read interval in milliseconds of wall time (2 Hz).
+pub const POLL_INTERVAL_MS: u32 = 500;
 
 /// Width of the text-mode gauge bars (full-screen SDI view).
 const TEXT_BAR_W: usize = 16;
@@ -45,8 +44,8 @@ pub struct SystemMonitorApp {
     status: SysStatus,
     /// Whether the host has published a status file.
     live: bool,
-    /// Poll calls left before the status file is read again.
-    poll_countdown: u32,
+    /// Wall time accumulated since the status file was last read.
+    since_poll_ms: u32,
     /// Raw bytes of the last status file read (skip re-parsing unchanged
     /// data).
     last_raw: Option<Vec<u8>>,
@@ -77,7 +76,8 @@ impl SystemMonitorApp {
             status: base.clone(),
             base,
             live: false,
-            poll_countdown: 0,
+            // Read on the first tick rather than waiting a full interval.
+            since_poll_ms: POLL_INTERVAL_MS,
             last_raw: None,
         };
         app.rebuild_lines();
@@ -94,14 +94,17 @@ impl SystemMonitorApp {
         self.live
     }
 
-    /// Re-read [`STATUS_PATH`] if the poll interval elapsed. Returns `true`
-    /// when the displayed data changed.
-    pub fn poll(&mut self, vfs: &dyn Vfs) -> bool {
-        if self.poll_countdown > 0 {
-            self.poll_countdown -= 1;
+    /// Advance the poll timer by `dt_ms` and re-read [`STATUS_PATH`] once
+    /// [`POLL_INTERVAL_MS`] has elapsed. Returns `true` when the displayed
+    /// data changed.
+    pub fn poll(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.since_poll_ms = self.since_poll_ms.saturating_add(dt_ms);
+        if self.since_poll_ms < POLL_INTERVAL_MS {
             return false;
         }
-        self.poll_countdown = POLL_INTERVAL_FRAMES - 1;
+        // Reset rather than subtract: after a long stall one read catches
+        // up, there is no backlog of reads to replay.
+        self.since_poll_ms = 0;
         self.reload(vfs)
     }
 
@@ -221,14 +224,8 @@ impl App for SystemMonitorApp {
         }
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        self.poll(vfs);
-    }
-
-    fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
-        // Read-only: this is simply the host's per-frame hook with VFS
-        // access.
-        self.poll(vfs)
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.poll(dt_ms, vfs)
     }
 
     fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
@@ -372,7 +369,7 @@ mod tests {
                 ..SysStatus::default()
             },
         );
-        assert!(app.apply_vfs_ops(&mut vfs));
+        assert!(app.tick(16, &vfs));
         assert!(app.is_live());
         // Names fall back to the constructor values.
         assert_eq!(app.status().platform.as_deref(), Some("Desktop (SDL3)"));
@@ -413,7 +410,8 @@ mod tests {
                 ..SysStatus::default()
             },
         );
-        assert!(app.poll(&vfs));
+        // The first tick reads immediately.
+        assert!(app.tick(16, &vfs));
         publish(
             &mut vfs,
             &SysStatus {
@@ -421,14 +419,41 @@ mod tests {
                 ..SysStatus::default()
             },
         );
-        // Not re-read until the interval elapses.
-        for _ in 0..POLL_INTERVAL_FRAMES - 1 {
-            assert!(!app.poll(&vfs));
+        // Not re-read until POLL_INTERVAL_MS of wall time has elapsed,
+        // regardless of how many frames that takes.
+        let mut elapsed = 0;
+        while elapsed + 16 < POLL_INTERVAL_MS {
+            assert!(!app.tick(16, &vfs));
+            elapsed += 16;
         }
-        assert!(app.poll(&vfs));
+        assert!(app.tick(16, &vfs));
         assert_eq!(app.status().uptime_secs, Some(2));
-        // Same bytes again: no change reported.
+        // Unchanged bytes on the next interval: no change reported, so an
+        // idle monitor does not force redraws.
+        assert!(!app.tick(POLL_INTERVAL_MS, &vfs));
         assert!(!app.reload(&vfs));
+    }
+
+    #[test]
+    fn tick_rate_is_independent_of_frame_rate() {
+        let mut vfs = MemoryVfs::new();
+        let mut app = app();
+        let mut changes = 0;
+        // 2 s of wall time in large (slow-host) frames: ~2 Hz of reads,
+        // each seeing new data.
+        for i in 0..8u64 {
+            publish(
+                &mut vfs,
+                &SysStatus {
+                    uptime_secs: Some(i + 1),
+                    ..SysStatus::default()
+                },
+            );
+            if app.tick(250, &vfs) {
+                changes += 1;
+            }
+        }
+        assert_eq!(changes, 4);
     }
 
     #[test]
@@ -453,7 +478,7 @@ mod tests {
     fn confirm_refreshes_immediately() {
         let mut vfs = MemoryVfs::new();
         let mut app = app();
-        app.poll(&vfs);
+        app.tick(0, &vfs);
         publish(
             &mut vfs,
             &SysStatus {

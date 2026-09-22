@@ -338,18 +338,15 @@ pub struct BrowserWidget {
     /// Background I/O thread for non-blocking HTTP requests.
     /// Lazily created on first network request.
     ///
-    /// **Drop order**: `io_thread` is declared before `tls` so it is
-    /// dropped first. `IoThread::drop()` closes the sender channel and
-    /// joins the worker thread, ensuring it has fully exited before the
-    /// `TlsProvider` is freed.
+    /// The worker owns an `Arc` clone of `tls`, so replacing or
+    /// dropping `tls` never frees a provider the worker still uses.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     io_thread: Option<loader::io_thread::IoThread>,
 
     /// Optional TLS provider for HTTPS and Gemini connections.
     ///
-    /// **Drop order**: Must be declared after `io_thread` so it outlives
-    /// the I/O worker thread (see `SharedTlsProvider` safety invariant).
-    /// Reference-counted so page `fetch()` handlers can share it.
+    /// Reference-counted so the I/O thread and page `fetch()` handlers
+    /// can share it safely.
     tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
@@ -739,8 +736,25 @@ impl BrowserWidget {
     }
 
     /// Attach a TLS provider for HTTPS and Gemini support.
+    ///
+    /// Safe to call at any time, including while the background I/O
+    /// thread is running: the thread holds its own `Arc` clone, so the
+    /// previous provider stays alive until the thread is done with it.
+    /// If the I/O thread is idle it is retired so the next network
+    /// request respawns it with the new provider; if requests are in
+    /// flight it keeps the old provider until it is next recreated.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
         self.tls = Some(std::sync::Arc::from(provider));
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        if self
+            .io_thread
+            .as_ref()
+            .is_some_and(|io| io.in_flight() == 0)
+        {
+            // Idle worker is parked in `recv()`; dropping closes its
+            // channel and the join returns promptly.
+            self.io_thread = None;
+        }
     }
 
     /// Install a diagnostic log hook. The browser fires it at key

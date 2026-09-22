@@ -106,6 +106,9 @@ pub struct TextEditorApp {
     pub(crate) pending_close: Option<PendingClose>,
     /// Set once "Save & close" finished; every input hook returns Exit.
     pub(crate) close_requested: bool,
+    /// Whether `close_requested` was already handed to the host via
+    /// `App::take_close_request`.
+    pub(crate) close_reported: bool,
     /// A printable key consumed by `handle_key`; its `TextInput` twin
     /// (which hosts still deliver) must not also type.
     pub(crate) swallow_text: Option<char>,
@@ -178,6 +181,7 @@ impl TextEditorApp {
             pending_save: None,
             pending_close: None,
             close_requested: false,
+            close_reported: false,
             swallow_text: None,
             viewport_lines: Cell::new(0),
             viewport_line_h: Cell::new(0),
@@ -452,6 +456,13 @@ impl App for TextEditorApp {
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
         self.flush_save(vfs)
+    }
+
+    fn take_close_request(&mut self) -> bool {
+        // "Save & close" completes in `apply_vfs_ops`; the host polls this
+        // right after, so the editor closes the same frame the file is
+        // written instead of waiting for the next input event.
+        self.close_requested && !std::mem::replace(&mut self.close_reported, true)
     }
 
     fn lines(&self) -> &[String] {

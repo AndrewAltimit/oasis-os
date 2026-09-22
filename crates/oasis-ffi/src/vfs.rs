@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 
 use oasis_core::vfs::GameAssetVfs;
 
-use crate::handle::{OasisInstance, c_str_to_str, with_instance};
+use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, with_instance};
 
 /// Change the VFS root by populating the game asset VFS with content.
 ///
@@ -19,17 +19,19 @@ use crate::handle::{OasisInstance, c_str_to_str, with_instance};
 /// `handle` must be valid. `path` must be a valid C string or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_set_vfs_root(handle: *mut OasisInstance, _path: *const c_char) {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            // Reset to clean VFS state.
-            instance.vfs = GameAssetVfs::new();
-            instance.vfs.add_base_dir("/home");
-            instance.vfs.add_base_dir("/etc");
-            instance.vfs.add_base_dir("/tmp");
-            instance.cwd = "/".to_string();
-        });
-    }
+    ffi_guard("oasis_set_vfs_root", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                // Reset to clean VFS state.
+                instance.vfs = GameAssetVfs::new();
+                instance.vfs.add_base_dir("/home");
+                instance.vfs.add_base_dir("/etc");
+                instance.vfs.add_base_dir("/tmp");
+                instance.cwd = "/".to_string();
+            });
+        }
+    })
 }
 
 /// Add a file to the instance's game asset VFS base layer.
@@ -48,20 +50,22 @@ pub unsafe extern "C" fn oasis_add_vfs_file(
     data: *const u8,
     data_len: u32,
 ) {
-    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
-    let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
-        return;
-    };
-    if data.is_null() {
-        return;
-    }
-    // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
-    let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
+    ffi_guard("oasis_add_vfs_file", (), || {
+        // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
+        let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
+            return;
+        };
+        if data.is_null() {
+            return;
+        }
+        // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
+        let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
 
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            instance.vfs.add_base_file(path_str, slice);
-        });
-    }
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                instance.vfs.add_base_file(path_str, slice);
+            });
+        }
+    })
 }

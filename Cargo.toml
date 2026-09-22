@@ -201,6 +201,14 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Release build for the oasis-ffi shared library embedded in a host process
+# (UE5, C/C++). Identical to `release` except that panics unwind, so the
+# `catch_unwind` guard on every `extern "C"` export can contain them instead of
+# aborting the host. Build with `cargo build --profile release-ffi -p oasis-ffi`.
+[profile.release-ffi]
+inherits = "release"
+panic = "unwind"
+
 [profile.dev]
 opt-level = 0
 debug = true

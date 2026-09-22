@@ -788,6 +788,9 @@ fn main() -> Result<()> {
                 runner.tick(dt_ms, &vfs);
             }
         }
+        // Apps that decided to close outside an input handler (Text
+        // Editor "Save & close" once the save above is written).
+        input::apply_app_close_requests(&mut state, &mut sdi, &vfs);
 
         // Dispatch any Settings-app IPC requests (skin swap, resolution
         // change). Must run after the pending-VFS-request block above,

@@ -950,8 +950,10 @@ impl TextEditorApp {
     }
 
     /// `true` once a "Save & close" finished writing: the host should close
-    /// the editor. Every input hook also returns `AppAction::Exit` from then
-    /// on, so the window closes on the next event even without a host poll.
+    /// the editor. Hosts learn this through `App::take_close_request`
+    /// (polled every frame after `apply_vfs_ops`); as a fallback for hosts
+    /// that do not poll, every input hook also returns `AppAction::Exit`
+    /// from then on.
     pub fn close_requested(&self) -> bool {
         self.close_requested
     }

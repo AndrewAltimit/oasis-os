@@ -288,10 +288,15 @@ impl Url {
         }
 
         // Query-only.
-        if let Some(query) = relative.strip_prefix('?') {
+        if let Some(rest) = relative.strip_prefix('?') {
+            // `?q=1#frag`: the fragment belongs in `fragment`, not the query.
+            let (query, fragment) = match rest.find('#') {
+                Some(i) => (&rest[..i], Some(rest[i + 1..].to_string())),
+                None => (rest, None),
+            };
             let mut resolved = self.clone();
             resolved.query = Some(query.to_string());
-            resolved.fragment = None;
+            resolved.fragment = fragment;
             return Some(resolved);
         }
 
@@ -925,6 +930,24 @@ mod tests {
         assert_eq!(resolved.path, "/search");
         assert_eq!(resolved.query, Some("q=new".to_string()));
         assert_eq!(resolved.fragment, None);
+    }
+
+    #[test]
+    fn resolve_query_only_with_fragment() {
+        let base = Url::parse("http://example.com/search?old=1#s").unwrap();
+        let resolved = base.resolve("?q=new#results").unwrap();
+        assert_eq!(resolved.path, "/search");
+        assert_eq!(resolved.query, Some("q=new".to_string()));
+        assert_eq!(resolved.fragment, Some("results".to_string()));
+        assert_eq!(
+            resolved.to_string(),
+            "http://example.com/search?q=new#results"
+        );
+
+        // Empty query with a fragment still splits correctly.
+        let resolved = base.resolve("?#top").unwrap();
+        assert_eq!(resolved.query, Some(String::new()));
+        assert_eq!(resolved.fragment, Some("top".to_string()));
     }
 
     #[test]

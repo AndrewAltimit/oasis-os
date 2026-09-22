@@ -3487,3 +3487,60 @@ fn image_finishing_loading_wants_a_frame() {
     settle(&mut browser, &vfs, &mut backend);
     assert!(!browser.wants_frame(), "loaded page must go idle");
 }
+
+// -------------------------------------------------------------------
+// TLS provider lifetime vs. the background I/O thread
+// -------------------------------------------------------------------
+
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+mod tls_lifetime {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use oasis_types::backend::NetworkStream;
+
+    use super::*;
+
+    struct DropFlagProvider(Arc<AtomicBool>);
+
+    impl Drop for DropFlagProvider {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl oasis_net::tls::TlsProvider for DropFlagProvider {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> oasis_types::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+    }
+
+    #[test]
+    fn io_thread_shares_tls_provider_by_arc() {
+        let mut browser = make_browser();
+        let a_dropped = Arc::new(AtomicBool::new(false));
+        browser.set_tls_provider(Box::new(DropFlagProvider(Arc::clone(&a_dropped))));
+        assert!(browser.ensure_io_thread());
+        // Widget + I/O worker each hold a strong reference (previously the
+        // worker held a raw pointer, which dangled after set_tls_provider).
+        assert_eq!(Arc::strong_count(browser.tls.as_ref().unwrap()), 2);
+
+        // Replacing the provider while the worker is idle retires the worker
+        // (so the next request picks up the new provider); the old provider is
+        // freed only once the worker has been joined.
+        let b_dropped = Arc::new(AtomicBool::new(false));
+        browser.set_tls_provider(Box::new(DropFlagProvider(Arc::clone(&b_dropped))));
+        assert!(browser.io_thread.is_none());
+        assert!(a_dropped.load(Ordering::SeqCst));
+        assert!(!b_dropped.load(Ordering::SeqCst));
+
+        assert!(browser.ensure_io_thread());
+        assert_eq!(Arc::strong_count(browser.tls.as_ref().unwrap()), 2);
+        drop(browser);
+        assert!(b_dropped.load(Ordering::SeqCst));
+    }
+}

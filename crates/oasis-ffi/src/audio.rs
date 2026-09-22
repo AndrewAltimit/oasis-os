@@ -2,7 +2,7 @@
 
 use oasis_core::backend::AudioBackend;
 
-use crate::handle::{OasisInstance, with_instance, with_instance_ref};
+use crate::handle::{OasisInstance, ffi_guard, with_instance, with_instance_ref};
 use crate::types::OasisAudioCallback;
 
 /// Register an audio event callback.
@@ -18,12 +18,14 @@ pub unsafe extern "C" fn oasis_set_audio_callback(
     handle: *mut OasisInstance,
     cb: OasisAudioCallback,
 ) {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            instance.audio.set_callback(cb);
-        });
-    }
+    ffi_guard("oasis_set_audio_callback", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                instance.audio.set_callback(cb);
+            });
+        }
+    })
 }
 
 /// Load audio data and return a track ID. Returns `u64::MAX` on failure.
@@ -37,21 +39,23 @@ pub unsafe extern "C" fn oasis_audio_load(
     data: *const u8,
     data_len: u32,
 ) -> u64 {
-    if data.is_null() || data_len == 0 {
-        return u64::MAX;
-    }
-    // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
-    let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
+    ffi_guard("oasis_audio_load", u64::MAX, || {
+        if data.is_null() || data_len == 0 {
+            return u64::MAX;
+        }
+        // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
+        let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
 
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, u64::MAX, |instance| {
-            match instance.audio.load_track(slice) {
-                Ok(id) => id.0,
-                Err(_) => u64::MAX,
-            }
-        })
-    }
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, u64::MAX, |instance| {
+                match instance.audio.load_track(slice) {
+                    Ok(id) => id.0,
+                    Err(_) => u64::MAX,
+                }
+            })
+        }
+    })
 }
 
 /// Start playing a loaded audio track. Returns true on success.
@@ -61,15 +65,17 @@ pub unsafe extern "C" fn oasis_audio_load(
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_play(handle: *mut OasisInstance, track_id: u64) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, false, |instance| {
-            instance
-                .audio
-                .play(oasis_core::backend::AudioTrackId(track_id))
-                .is_ok()
-        })
-    }
+    ffi_guard("oasis_audio_play", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, false, |instance| {
+                instance
+                    .audio
+                    .play(oasis_core::backend::AudioTrackId(track_id))
+                    .is_ok()
+            })
+        }
+    })
 }
 
 /// Pause audio playback. Returns true on success.
@@ -79,8 +85,10 @@ pub unsafe extern "C" fn oasis_audio_play(handle: *mut OasisInstance, track_id: 
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_pause(handle: *mut OasisInstance) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance(handle, false, |instance| instance.audio.pause().is_ok()) }
+    ffi_guard("oasis_audio_pause", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance(handle, false, |instance| instance.audio.pause().is_ok()) }
+    })
 }
 
 /// Resume audio playback. Returns true on success.
@@ -90,8 +98,10 @@ pub unsafe extern "C" fn oasis_audio_pause(handle: *mut OasisInstance) -> bool {
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_resume(handle: *mut OasisInstance) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance(handle, false, |instance| instance.audio.resume().is_ok()) }
+    ffi_guard("oasis_audio_resume", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance(handle, false, |instance| instance.audio.resume().is_ok()) }
+    })
 }
 
 /// Stop audio playback. Returns true on success.
@@ -101,8 +111,10 @@ pub unsafe extern "C" fn oasis_audio_resume(handle: *mut OasisInstance) -> bool 
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_stop(handle: *mut OasisInstance) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance(handle, false, |instance| instance.audio.stop().is_ok()) }
+    ffi_guard("oasis_audio_stop", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance(handle, false, |instance| instance.audio.stop().is_ok()) }
+    })
 }
 
 /// Set audio volume (0-100). Returns true on success.
@@ -112,12 +124,14 @@ pub unsafe extern "C" fn oasis_audio_stop(handle: *mut OasisInstance) -> bool {
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_set_volume(handle: *mut OasisInstance, volume: u8) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, false, |instance| {
-            instance.audio.set_volume(volume).is_ok()
-        })
-    }
+    ffi_guard("oasis_audio_set_volume", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, false, |instance| {
+                instance.audio.set_volume(volume).is_ok()
+            })
+        }
+    })
 }
 
 /// Get the current audio volume (0-100).
@@ -127,8 +141,10 @@ pub unsafe extern "C" fn oasis_audio_set_volume(handle: *mut OasisInstance, volu
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_get_volume(handle: *mut OasisInstance) -> u8 {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance_ref(handle, 0, |instance| instance.audio.get_volume()) }
+    ffi_guard("oasis_audio_get_volume", 0, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance_ref(handle, 0, |instance| instance.audio.get_volume()) }
+    })
 }
 
 /// Check if audio is currently playing.
@@ -138,6 +154,8 @@ pub unsafe extern "C" fn oasis_audio_get_volume(handle: *mut OasisInstance) -> u
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_is_playing(handle: *mut OasisInstance) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance_ref(handle, false, |instance| instance.audio.is_playing()) }
+    ffi_guard("oasis_audio_is_playing", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance_ref(handle, false, |instance| instance.audio.is_playing()) }
+    })
 }
