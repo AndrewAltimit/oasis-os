@@ -3,7 +3,6 @@ use std::sync::mpsc;
 use oasis_audio::RadioManager;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::source::RadioSource;
-use oasis_backend_sdl::SdlAudioBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
 use oasis_core::backend::AudioTrackId;
@@ -150,7 +149,13 @@ pub struct AppState {
     pub archive_catalog: Option<ArchiveCatalog>,
     pub pending_catalog_fetch: Option<mpsc::Receiver<Result<CatalogFetchResult, String>>>,
     pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
-    pub audio_backend: SdlAudioBackend,
+    /// Audio output: the SDL device in the desktop binary, a recording
+    /// fake in the headless e2e harness.
+    pub audio_backend: Box<dyn crate::audio_out::ShellAudio>,
+    /// Never start network fetches (TV catalogs / video downloads, radio
+    /// streams). Set by the headless harness so scenarios are hermetic
+    /// and deterministic; always `false` in the desktop binary.
+    pub offline: bool,
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.

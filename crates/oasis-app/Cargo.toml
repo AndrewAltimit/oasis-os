@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 documentation = "https://docs.rs/oasis-app"
 
+[lib]
+name = "oasis_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "oasis-app"
 path = "src/main.rs"

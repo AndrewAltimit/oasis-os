@@ -1,7 +1,6 @@
-use oasis_backend_sdl::SdlBackend;
+use crate::shell_backend::ShellBackend;
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{SdiCore, SdiText};
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
@@ -370,7 +369,7 @@ fn clear_component_sdi_objects(sdi: &mut SdiRegistry) {
 pub fn refresh_wallpaper_if_pending(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
-    backend: &mut SdlBackend,
+    backend: &mut impl ShellBackend,
 ) {
     if !state.pending_wallpaper_refresh {
         return;
@@ -411,7 +410,11 @@ pub fn refresh_wallpaper_if_pending(
 
 /// Rebuild backend-side skin assets: layout `texture =` uploads and image
 /// background layers. Destroys the previous skin's textures first.
-pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend: &mut SdlBackend) {
+pub fn refresh_skin_assets(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut impl ShellBackend,
+) {
     // Install the skin's `[typography] font` (or restore the bitmap font).
     // This also flushes the backend glyph cache, whose textures belong to
     // the outgoing font.
@@ -533,7 +536,7 @@ pub fn refresh_skin_assets(state: &mut AppState, sdi: &mut SdiRegistry, backend:
 fn upload_wm_patch(
     skin: &Skin,
     config: Option<&(String, [u16; 4])>,
-    backend: &mut SdlBackend,
+    backend: &mut impl ShellBackend,
     owned: &mut Vec<oasis_core::backend::TextureId>,
 ) -> Option<(
     oasis_core::backend::TextureId,
@@ -570,7 +573,7 @@ fn upload_wm_patch(
 fn upload_bar_texture(
     skin: &Skin,
     asset_key: Option<&str>,
-    backend: &mut SdlBackend,
+    backend: &mut impl ShellBackend,
     owned: &mut Vec<oasis_core::backend::TextureId>,
 ) -> Option<oasis_core::backend::TextureId> {
     let key = asset_key?;
@@ -605,7 +608,7 @@ pub fn apply_resolution_change(
     new_h: u32,
     state: &mut AppState,
     sdi: &mut SdiRegistry,
-    backend: &mut SdlBackend,
+    backend: &mut impl ShellBackend,
     shader_bridge: &mut Option<SdlShaderBridge>,
     vfs: &MemoryVfs,
 ) {
@@ -761,7 +764,6 @@ pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut Mem
     );
     // User preferences shown by the Settings Audio / Language /
     // Accessibility categories.
-    use oasis_core::backend::AudioBackend;
     let prefs = crate::user_prefs::current(state);
     let volume = state.audio_backend.get_volume().to_string();
     let _ = vfs.write(oasis_app_settings::VOLUME_STATE_PATH, volume.as_bytes());
@@ -783,7 +785,7 @@ pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut Mem
 pub fn poll_settings_ipc(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
-    backend: &mut SdlBackend,
+    backend: &mut impl ShellBackend,
     shader_bridge: &mut Option<SdlShaderBridge>,
     vfs: &mut MemoryVfs,
     backend_name: &str,
@@ -1350,7 +1352,8 @@ mod tests {
             archive_catalog: None,
             pending_catalog_fetch: None,
             pending_source_fetch: None,
-            audio_backend: SdlAudioBackend::new(),
+            audio_backend: Box::new(SdlAudioBackend::new()),
+            offline: true,
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
@@ -1716,7 +1719,6 @@ mod tests {
 
     #[test]
     fn volume_request_applies_persists_and_restores() {
-        use oasis_core::backend::AudioBackend;
         let mut state = make_test_state();
         let mut vfs = prefs_vfs(&state);
         assert!(post(
@@ -1745,7 +1747,6 @@ mod tests {
     #[test]
     fn settings_ui_volume_change_reaches_audio_backend() {
         use oasis_core::apps::App;
-        use oasis_core::backend::AudioBackend;
         use oasis_core::input::Button;
 
         let mut state = make_test_state();

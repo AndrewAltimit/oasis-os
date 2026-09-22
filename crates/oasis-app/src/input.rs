@@ -89,7 +89,7 @@ fn apply_page_change_fade(state: &mut AppState) {
 fn stop_radio(state: &mut AppState) {
     let _ = state
         .radio_manager
-        .process_request("stop", &mut state.audio_backend);
+        .process_request("stop", state.audio_backend.as_mut());
     state.archive_catalog = None;
     state.pending_catalog_fetch = None;
     state.pending_source_fetch = None;
@@ -1210,7 +1210,8 @@ mod tests {
             archive_catalog: None,
             pending_catalog_fetch: None,
             pending_source_fetch: None,
-            audio_backend: SdlAudioBackend::new(),
+            audio_backend: Box::new(SdlAudioBackend::new()),
+            offline: true,
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),

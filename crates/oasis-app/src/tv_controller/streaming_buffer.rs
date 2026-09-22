@@ -56,7 +56,7 @@ pub(crate) struct SlidingState {
 
 /// Shared inner state for the streaming buffer, fed by the download thread.
 #[cfg(feature = "_video")]
-pub(crate) struct StreamingInner {
+pub struct StreamingInner {
     pub(crate) state: std::sync::Mutex<SlidingState>,
     /// Total content length from HTTP Content-Length header.
     pub(crate) total_size: std::sync::atomic::AtomicU64,

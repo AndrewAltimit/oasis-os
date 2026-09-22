@@ -394,7 +394,7 @@ screenshot-regression fixture for CI.
 - **Expose hardcoded constants**: `success_bg`/`warning_bg` toast colors
   (`derive.rs:833/1101`), icon anatomy constants (`derive.rs:171`), wallpaper
   generator magic numbers (`wallpaper.rs`), the forced 1280×720 desktop
-  upscale (`oasis-app/src/main.rs:77` → make it a config/skin field).
+  upscale (`oasis-app/src/shell.rs` `resolve_screen_size` → make it a config/skin field).
 
 ---
 

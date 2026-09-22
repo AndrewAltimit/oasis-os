@@ -12,7 +12,6 @@
 //! radio_controller pattern.
 
 use oasis_app_media::{MEDIA_POSITION_PATH, MEDIA_REQUEST_PATH};
-use oasis_core::backend::AudioBackend;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
 use crate::app_state::AppState;
@@ -125,7 +124,7 @@ fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
     {
         let _ = state
             .radio_manager
-            .process_request("stop", &mut state.audio_backend);
+            .process_request("stop", state.audio_backend.as_mut());
         state.archive_catalog = None;
         state.pending_catalog_fetch = None;
         state.pending_source_fetch = None;

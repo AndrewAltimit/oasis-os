@@ -114,6 +114,10 @@ pub struct VideoPlayer {
     /// the UI thread) -- see [`stall_rebased_start`].
     #[cfg(feature = "_video")]
     video_starved: bool,
+    /// Sending ends of an injected decode session (see
+    /// [`VideoPlayer::start_injected`]); `None` for real decoders.
+    #[cfg(feature = "_video")]
+    injector: Option<(mpsc::Sender<VideoFrame>, mpsc::Sender<SoftwareAudio>)>,
 }
 
 impl VideoPlayer {
@@ -140,7 +144,72 @@ impl VideoPlayer {
             pending_frame: None,
             #[cfg(feature = "_video")]
             video_starved: false,
+            #[cfg(feature = "_video")]
+            injector: None,
         }
+    }
+
+    /// Start a decode session whose frames and audio are supplied by the
+    /// caller ([`Self::inject_frame`] / [`Self::inject_audio`]) instead of
+    /// a decoder thread.
+    ///
+    /// Used when the shell runs offline (the headless e2e harness): the
+    /// tune request goes through the real tune path, and everything
+    /// downstream of the decoder -- PTS pacing, texture upload, the audio
+    /// feed with the guide's volume gain -- runs unchanged.
+    #[cfg(feature = "_video")]
+    pub fn start_injected(&mut self, width: u32, height: u32) {
+        self.stop_internal();
+        self.frame_width = width;
+        self.frame_height = height;
+        let (video_tx, video_rx) = mpsc::channel::<VideoFrame>();
+        let (audio_tx, audio_rx) = mpsc::channel::<SoftwareAudio>();
+        let (stop_tx, _stop_rx) = mpsc::channel::<()>();
+        self.decode = Some(DecodeBackend::Software {
+            video_rx,
+            audio_rx,
+            stop_tx,
+        });
+        self.injector = Some((video_tx, audio_tx));
+        self.state = PlayerState::Starting;
+        log::info!("VideoPlayer: injected decode session started {width}x{height}");
+    }
+
+    /// Queue a decoded RGBA frame on an injected session. Returns `false`
+    /// when no injected session is active.
+    #[cfg(feature = "_video")]
+    pub fn inject_frame(
+        &self,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        timestamp_secs: f64,
+    ) -> bool {
+        self.injector.as_ref().is_some_and(|(video_tx, _)| {
+            video_tx
+                .send(VideoFrame {
+                    data: rgba,
+                    width,
+                    height,
+                    timestamp_secs,
+                })
+                .is_ok()
+        })
+    }
+
+    /// Queue decoded interleaved f32 PCM on an injected session. Returns
+    /// `false` when no injected session is active.
+    #[cfg(feature = "_video")]
+    pub fn inject_audio(&self, pcm_f32: Vec<f32>, channels: u16, sample_rate: u32) -> bool {
+        self.injector.as_ref().is_some_and(|(_, audio_tx)| {
+            audio_tx
+                .send(SoftwareAudio {
+                    pcm_f32,
+                    channels,
+                    sample_rate,
+                })
+                .is_ok()
+        })
     }
 
     /// Start playing a video from a URL using ffmpeg subprocesses.
@@ -1006,6 +1075,7 @@ impl VideoPlayer {
             self.base_pts = 0.0;
             self.pending_frame = None;
             self.video_starved = false;
+            self.injector = None;
         }
         self.state = PlayerState::Idle;
         self.error_msg = None;

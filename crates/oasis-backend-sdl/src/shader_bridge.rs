@@ -15,6 +15,43 @@
 use oasis_shader::ShaderParams;
 use oasis_shader::software::SoftwareShaderRenderer;
 use oasis_types::backend::{SdiCore, TextureId};
+use oasis_types::error::{OasisError, Result};
+
+/// A render backend the shader bridge can blit into.
+///
+/// Only [`SdiCore`] is needed, plus an optional in-place texture
+/// refresh. Backends without one keep the default, which reports the
+/// operation as unsupported: the bridge then falls back to destroy +
+/// re-create of its cached texture on every shade pass. Lets headless
+/// hosts (the `oasis-app` test harness's software framebuffer) drive the
+/// exact same bridge as the SDL window.
+pub trait ShaderBlitTarget: SdiCore {
+    /// Replace the pixels of an existing `width` x `height` texture.
+    fn update_texture_in_place(
+        &mut self,
+        tex: TextureId,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Result<()> {
+        let _ = (tex, width, height, rgba_data);
+        Err(OasisError::Backend(
+            "in-place texture update not supported".into(),
+        ))
+    }
+}
+
+impl ShaderBlitTarget for super::SdlBackend {
+    fn update_texture_in_place(
+        &mut self,
+        tex: TextureId,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) -> Result<()> {
+        self.update_texture(tex, width, height, rgba_data)
+    }
+}
 
 /// Minimum shader-time advance (seconds) between CPU shade passes.
 const SHADE_INTERVAL: f32 = 1.0 / 30.0;
@@ -179,9 +216,9 @@ impl SdlShaderBridge {
     /// seen, so neither the shade nor the blit is spent). Under
     /// [`Visibility::PartiallyCovered`] the shade rate drops to ~12 Hz
     /// while the per-frame blit continues.
-    pub fn render_and_blit(
+    pub fn render_and_blit<B: ShaderBlitTarget + ?Sized>(
         &mut self,
-        backend: &mut super::SdlBackend,
+        backend: &mut B,
         shader_name: &str,
         time: f32,
         params: &ShaderParams,
@@ -212,7 +249,8 @@ impl SdlShaderBridge {
             // Refresh the cached texture in place; on failure (e.g. a
             // dimension mismatch) fall back to destroy + re-create.
             if let Some((tex, _, _)) = self.cached_tex
-                && let Err(e) = backend.update_texture(tex, self.width, self.height, pixels)
+                && let Err(e) =
+                    backend.update_texture_in_place(tex, self.width, self.height, pixels)
             {
                 log::warn!("shader texture update failed ({e}); re-creating");
                 let _ = backend.destroy_texture(tex);
@@ -252,7 +290,7 @@ impl SdlShaderBridge {
     }
 
     /// Clean up the cached texture.
-    pub fn destroy(&mut self, backend: &mut super::SdlBackend) {
+    pub fn destroy<B: ShaderBlitTarget + ?Sized>(&mut self, backend: &mut B) {
         if let Some((tex, _, _)) = self.cached_tex.take() {
             let _ = backend.destroy_texture(tex);
         }

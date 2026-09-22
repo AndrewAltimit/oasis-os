@@ -234,6 +234,14 @@ impl DesktopPlatform {
         }
     }
 
+    /// Freeze [`TimeService::now`] at `time`, or restore the real clock
+    /// with `None`. Same effect as `OASIS_FIXED_TIME`, without touching
+    /// the process-global environment (which parallel tests cannot do
+    /// safely).
+    pub fn set_fixed_time(&mut self, time: Option<SystemTime>) {
+        self.fixed_time = time;
+    }
+
     /// Parse `"YYYY-MM-DD HH:MM:SS"` into a [`SystemTime`].
     fn parse_fixed_time(s: &str) -> Option<SystemTime> {
         // Accept "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS".

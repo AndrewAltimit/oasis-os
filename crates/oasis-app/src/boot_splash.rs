@@ -412,7 +412,13 @@ impl BootSplash {
 
     /// Render a single splash frame at the current elapsed time.
     fn render_frame(&self, backend: &mut impl SdiBackend) -> Result<()> {
-        let elapsed = self.elapsed();
+        self.render_at(backend, self.elapsed())
+    }
+
+    /// Render the splash frame for splash time `elapsed` (seconds) without
+    /// presenting it. Deterministic: lets tests inspect any point of the
+    /// animation regardless of wall-clock time.
+    pub fn render_at(&self, backend: &mut impl SdiBackend, elapsed: f32) -> Result<()> {
         backend.clear(Color::rgb(5, 5, 5))?;
 
         // Phase 1: BIOS screen (0.0 - 3.6s)
