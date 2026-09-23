@@ -368,6 +368,23 @@ impl Session {
         self.settle();
     }
 
+    /// Run the frame loop until `needle` is visible, failing after
+    /// [`DEADLINE`]. Prefer this over a fixed [`Session::run_for`] when
+    /// asserting on async work (timers, fetches): a loaded CI runner can
+    /// stretch wall-clock waits arbitrarily.
+    #[track_caller]
+    pub fn wait_for(&mut self, needle: &str) {
+        let start = Instant::now();
+        loop {
+            self.settle();
+            if self.shows(needle) || start.elapsed() >= DEADLINE {
+                break;
+            }
+            self.run_for(10);
+        }
+        self.assert_shows(needle);
+    }
+
     /// Paint one complete frame (forcing a full display-list replay)
     /// into `self.frame`.
     pub fn snapshot(&mut self) {

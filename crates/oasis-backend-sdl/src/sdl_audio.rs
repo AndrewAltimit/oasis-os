@@ -163,6 +163,10 @@ pub struct SdlAudioBackend {
     sfx_stream: Option<sdl3::audio::AudioStreamOwner>,
     /// Reusable staging buffer for volume-scaled SFX PCM.
     sfx_scratch: Vec<i16>,
+    /// Set once opening the SFX device fails (e.g. the audio subsystem
+    /// initialized but no playback device exists, as on CI runners), so
+    /// UI sounds degrade to silence instead of retrying every frame.
+    sfx_unavailable: bool,
     /// Loaded non-streaming tracks (raw MP3 data).
     tracks: HashMap<u64, Vec<u8>>,
     /// Next track ID to assign.
@@ -204,6 +208,7 @@ impl SdlAudioBackend {
             resampler: LinearResampler::new(OUTPUT_SAMPLE_RATE),
             sfx_stream: None,
             sfx_scratch: Vec::new(),
+            sfx_unavailable: false,
             tracks: HashMap::new(),
             next_id: 0,
             current_track: None,
@@ -287,15 +292,24 @@ impl SdlAudioBackend {
     /// Opens a dedicated SFX stream lazily; SDL mixes it with the music
     /// stream at the device level. The global volume (0-100) is applied
     /// here, matching the music paths, so a muted system stays silent.
-    /// No-op in headless environments (no audio subsystem).
+    /// No-op in headless environments (no audio subsystem, or no
+    /// playback device to open) — UI sounds are best-effort.
     pub fn queue_sfx(&mut self, pcm: &[i16]) -> Result<()> {
-        if pcm.is_empty() || self.audio_subsystem.is_none() {
+        if pcm.is_empty() || self.audio_subsystem.is_none() || self.sfx_unavailable {
             return Ok(());
         }
         if self.sfx_stream.is_none() {
-            let stream = self.create_stream(OUTPUT_SAMPLE_RATE as i32, 2)?;
-            log::info!("SDL3 SFX stream opened: {OUTPUT_SAMPLE_RATE}Hz, 2 channels");
-            self.sfx_stream = Some(stream);
+            match self.create_stream(OUTPUT_SAMPLE_RATE as i32, 2) {
+                Ok(stream) => {
+                    log::info!("SDL3 SFX stream opened: {OUTPUT_SAMPLE_RATE}Hz, 2 channels");
+                    self.sfx_stream = Some(stream);
+                },
+                Err(e) => {
+                    log::warn!("SDL3 SFX stream unavailable, UI sounds disabled: {e}");
+                    self.sfx_unavailable = true;
+                    return Ok(());
+                },
+            }
         }
         let vol = self.volume as i32;
         self.sfx_scratch.clear();
@@ -763,6 +777,7 @@ impl AudioBackend for SdlAudioBackend {
         self.stream_owner = None;
         self.sfx_stream = None;
         self.sfx_scratch.clear();
+        self.sfx_unavailable = false;
         self.audio_subsystem = None;
         self.tracks.clear();
         self.stream_track = None;
