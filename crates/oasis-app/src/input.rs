@@ -1362,6 +1362,7 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: Box::new(SdlAudioBackend::new()),
             offline: true,
+            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),

@@ -160,6 +160,10 @@ pub struct AppState {
     /// streams). Set by the headless harness so scenarios are hermetic
     /// and deterministic; always `false` in the desktop binary.
     pub offline: bool,
+    /// Directory "Save as custom skin" writes skins into (`skins/` next
+    /// to the binary's working directory; a temp dir in the headless
+    /// harness so tests never write into the repository).
+    pub custom_skin_root: std::path::PathBuf,
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.

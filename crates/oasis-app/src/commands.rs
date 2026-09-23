@@ -869,16 +869,17 @@ pub fn poll_settings_ipc(
         let mut custom = state.skin.clone();
         custom.theme = theme;
         custom.manifest.name.clone_from(&name);
-        let dir = std::path::Path::new("skins").join(&name);
+        let dir = state.custom_skin_root.join(&name);
         match custom.save_to_directory(&dir) {
             Ok(()) => {
                 state
                     .terminal
                     .output_lines
                     .push(format!("Saved custom skin to {}", dir.display()));
-                // Swap by name through the normal resolution path so the
-                // running session uses exactly what was written to disk.
-                apply_skin_swap(&name, state, sdi, vfs);
+                // Swap to the written directory through the normal
+                // resolution path so the running session uses exactly what
+                // was written to disk.
+                apply_skin_swap(&dir.to_string_lossy(), state, sdi, vfs);
                 if state.skin.manifest.name == name {
                     crate::user_prefs::update(state, vfs, |p| p.skin = Some(name));
                 }
@@ -1351,6 +1352,7 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: Box::new(SdlAudioBackend::new()),
             offline: true,
+            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),

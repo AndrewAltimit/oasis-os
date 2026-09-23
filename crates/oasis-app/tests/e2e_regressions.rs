@@ -207,3 +207,33 @@ fn escape_with_nothing_focused_keeps_open_windows_usable() {
     assert!(h.find_window("Calculator").is_none());
     assert_eq!(h.mode(), Mode::Dashboard);
 }
+
+/// "Save as custom skin" in a harness session used to write
+/// `skins/<name>/` into the working directory (the repository). Hermetic
+/// sessions now save under a temp dir, and the saved skin is applied.
+#[test]
+fn custom_skin_save_stays_out_of_the_working_directory() {
+    use oasis_core::vfs::Vfs;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let name = "e2e-hermetic-custom";
+    let theme = h.state().skin.theme.to_toml_string().unwrap();
+    h.vfs_mut()
+        .write(
+            oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH,
+            format!("{name}\n{theme}").as_bytes(),
+        )
+        .unwrap();
+    h.settle();
+    assert_eq!(
+        h.state().skin.manifest.name,
+        name,
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+    let root = h.state().custom_skin_root.clone();
+    assert!(root.starts_with(std::env::temp_dir()), "{root:?}");
+    assert!(root.join(name).join("skin.toml").is_file());
+    assert!(!std::path::Path::new("skins").join(name).exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
