@@ -288,6 +288,7 @@ fn cascade_progress(idx: u64, total: u64) {
     hook(idx, total);
 }
 
+#[cfg(not(feature = "parallel-style"))]
 fn cascade_yield_fn() {
     let raw = CASCADE_YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
     if raw == 0 {
@@ -348,7 +349,7 @@ pub fn style_tree(
             &par_styles,
             ctx,
         );
-        return par_styles.into_inner();
+        par_styles.into_inner()
     }
 
     // --- Sequential path (default) ---
