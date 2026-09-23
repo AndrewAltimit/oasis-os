@@ -22,6 +22,15 @@ cargo test -p oasis-app --no-default-features --features javascript,video-decode
 cargo test -p oasis-app --test e2e_shell -- start_menu
 ```
 
+CI runs the suite with [cargo-nextest](https://nexte.st/)
+(`cargo nextest run --workspace --profile ci`, then
+`cargo test --workspace --doc` for doc-tests, which nextest doesn't run).
+nextest runs every test in its own process and overlaps test binaries, so
+the slow e2e suites run in parallel instead of back to back. Its config,
+`.config/nextest.toml`, kills any single test still running after 5
+minutes. Because each test gets its own process, tests must not depend on
+process-global state set up by another test.
+
 ## The shell e2e harness
 
 `oasis-app` is a library plus thin binaries. The whole desktop shell lives
