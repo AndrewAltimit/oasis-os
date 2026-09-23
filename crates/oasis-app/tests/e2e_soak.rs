@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use oasis_app::Mode;
 use oasis_app::harness::{Harness, HarnessOptions, ResourceCounts};
+use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_core::skin::builtin::builtin_names;
 use oasis_core::vfs::Vfs;
@@ -78,9 +79,41 @@ fn cycle_every_app(h: &mut Harness, round: usize) {
     }
 }
 
+/// Backend resources, windows, runners and audio tracks must match the
+/// baseline exactly. The SDI object count may shrink (e.g. the fullscreen
+/// terminal's line objects follow its scrollback) but never grow.
 fn assert_counts(h: &Harness, base: ResourceCounts, what: &str) {
     let now = h.resource_counts();
-    assert_eq!(now, base, "{what}: resources drifted from the baseline");
+    assert_eq!(
+        ResourceCounts {
+            sdi_objects: 0,
+            ..now
+        },
+        ResourceCounts {
+            sdi_objects: 0,
+            ..base
+        },
+        "{what}: resources drifted from the baseline"
+    );
+    assert!(
+        now.sdi_objects <= base.sdi_objects,
+        "{what}: SDI objects grew {} -> {}",
+        base.sdi_objects,
+        now.sdi_objects
+    );
+}
+
+/// Warm up with two rounds and return the baseline (the larger SDI
+/// count of the two).
+fn warm_up(h: &mut Harness) -> ResourceCounts {
+    cycle_every_app(h, 0);
+    let a = h.resource_counts();
+    cycle_every_app(h, 1);
+    let b = h.resource_counts();
+    ResourceCounts {
+        sdi_objects: a.sdi_objects.max(b.sdi_objects),
+        ..b
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +126,11 @@ fn open_close_every_app_returns_to_baseline() {
         let mut h = boot_small(skin);
         // Warm-up round: first launches create lazily-built SDI objects
         // (hidden, not destroyed, on close) and caches.
-        cycle_every_app(&mut h, 0);
-        let base = h.resource_counts();
+        let base = warm_up(&mut h);
         assert_eq!(base.windows, 0, "{skin}");
         assert_eq!(base.runners, 0, "{skin}");
         assert_eq!(base.audio_tracks, 0, "{skin}");
-        for round in 1..=3 {
+        for round in 2..=3 {
             cycle_every_app(&mut h, round);
             assert_counts(&h, base, &format!("{skin} round {round}"));
         }
@@ -306,22 +338,26 @@ const FUZZ_BUTTONS: &[Button] = &[
 ];
 
 /// One random user gesture.
-fn fuzz_gesture(h: &mut Harness, rng: &mut Rng) {
+fn fuzz_gesture(h: &mut Harness, rng: &mut Rng) -> String {
     let (w, hh) = h.size();
     match rng.below(100) {
         0..=24 => {
             let (x, y) = (rng.coord(w), rng.coord(hh));
             h.click(x, y);
+            format!("click {x},{y}")
         },
         25..=34 => {
             let from = (rng.coord(w), rng.coord(hh));
             let to = (rng.coord(w), rng.coord(hh));
             h.drag(from, to, 1 + rng.below(4) as u32);
+            format!("drag {from:?} -> {to:?}")
         },
         35..=39 => {
             let (x, y) = (rng.coord(w), rng.coord(hh));
+            let delta = if rng.below(2) == 0 { -1 } else { 1 };
             h.move_to(x, y);
-            h.scroll(if rng.below(2) == 0 { -1 } else { 1 });
+            h.scroll(delta);
+            format!("wheel {delta} at {x},{y}")
         },
         40..=69 => {
             let key = FUZZ_KEYS[rng.below(FUZZ_KEYS.len() as u64) as usize];
@@ -334,6 +370,7 @@ fn fuzz_gesture(h: &mut Harness, rng: &mut Rng) {
                 _ => Modifiers::NONE,
             };
             h.key_with(key, mods);
+            format!("key {key:?} {mods:?}")
         },
         70..=79 => {
             let n = 1 + rng.below(4);
@@ -341,23 +378,30 @@ fn fuzz_gesture(h: &mut Harness, rng: &mut Rng) {
                 .map(|_| (b'a' + rng.below(26) as u8) as char)
                 .collect();
             h.type_text(&text);
+            format!("type {text:?}")
         },
         80..=89 => {
             let b = FUZZ_BUTTONS[rng.below(FUZZ_BUTTONS.len() as u64) as usize];
             h.button(b);
+            format!("button {b:?}")
         },
         90..=93 => {
-            h.trigger(if rng.below(2) == 0 {
+            let t = if rng.below(2) == 0 {
                 Trigger::Left
             } else {
                 Trigger::Right
-            });
+            };
+            h.trigger(t);
+            format!("trigger {t:?}")
         },
         94..=95 => {
             h.send(&[InputEvent::ToggleFullscreen]);
+            "toggle fullscreen".to_string()
         },
         _ => {
-            h.run_frames(1 + rng.below(30) as u32);
+            let n = 1 + rng.below(30) as u32;
+            h.run_frames(n);
+            format!("idle {n}")
         },
     }
 }
@@ -373,6 +417,7 @@ fn recover_to_dashboard(h: &mut Harness, what: &str) {
         let before = (h.mode(), h.windows().len());
         h.key(Key::Escape);
         h.run_frames(2);
+        check_focus_invariants(h, &format!("{what}: recovery after Escape from {before:?}"));
         if (h.mode(), h.windows().len()) == before {
             stuck += 1;
         } else {
@@ -383,6 +428,7 @@ fn recover_to_dashboard(h: &mut Harness, what: &str) {
             // 'd' discards.
             h.key(Key::Char('d'));
             h.run_frames(2);
+            check_focus_invariants(h, &format!("{what}: recovery after 'd'"));
             stuck = 0;
         }
     }
@@ -396,15 +442,87 @@ fn recover_to_dashboard(h: &mut Harness, what: &str) {
     );
 }
 
+/// Focus / mode consistency after every gesture:
+/// - the focused window (keyboard target) is never a minimized, invisible
+///   one (a click on the bare desktop may leave nothing focused);
+/// - the dashboard (no window manager input) never shows window chrome:
+///   any window left open there is minimized.
+fn check_focus_invariants(h: &Harness, what: &str) {
+    let wins = h.windows();
+    let visible: Vec<&str> = wins
+        .iter()
+        .filter(|w| !w.minimized)
+        .map(|w| w.id.as_str())
+        .collect();
+    // No window chrome outlives its window (closing animations aside).
+    if !h.state().wm.is_animating() {
+        const CHROME: &[&str] = &[".frame", ".titlebar", ".title_text", ".btn_close"];
+        let orphans: Vec<&str> = h
+            .shell
+            .sdi
+            .names()
+            .filter(|n| CHROME.iter().any(|c| n.ends_with(c)))
+            .filter(|n| {
+                let id = &n[..n.rfind('.').unwrap_or(0)];
+                !wins.iter().any(|w| w.id == id)
+            })
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "{what}: window objects without a window: {orphans:?}"
+        );
+    }
+    match h.mode() {
+        Mode::Desktop => {
+            if let Some(active) = h.active_window() {
+                assert!(
+                    visible.contains(&active.as_str()),
+                    "{what}: focus {active:?} is not a visible window {wins:?}"
+                );
+            }
+        },
+        Mode::Dashboard => {
+            assert!(
+                visible.is_empty(),
+                "{what}: dashboard mode with visible windows {wins:?} {}",
+                dump(h, "invariant_dashboard")
+            );
+        },
+        _ => {},
+    }
+}
+
 fn fuzz(skin: &str, seed: u64, gestures: u32) {
     let mut h = boot_small(skin);
     let mut rng = Rng(seed);
-    let what = format!("fuzz_{skin}_{seed}");
+    let what = format!("fuzz_{skin}_{seed:#x}");
+    eprintln!("{what}: {gestures} gestures");
+    let mut recent = std::collections::VecDeque::new();
     for i in 0..gestures {
-        fuzz_gesture(&mut h, &mut rng);
+        let g = fuzz_gesture(&mut h, &mut rng);
+        recent.push_back(format!(
+            "{i}: {g} -> {:?} focus {:?}",
+            h.mode(),
+            h.active_window()
+        ));
+        if recent.len() > 8 {
+            recent.pop_front();
+        }
+        check_focus_invariants(
+            &h,
+            &format!("{what} gesture {i}, last gestures {recent:#?}"),
+        );
         if i % 100 == 99 {
             h.render_now();
             let c = h.resource_counts();
+            if i % 500 == 499 {
+                eprintln!(
+                    "{what} @{i}: {c:?} pcm chunks {} scrollback {} frames {}",
+                    h.audio().pcm_chunks.len(),
+                    h.state().terminal.output_lines.len(),
+                    h.frames()
+                );
+            }
             assert!(c.windows <= 20, "{what}: {} windows", c.windows);
             assert!(
                 c.sdi_objects < 5000,
@@ -426,13 +544,25 @@ fn fuzz(skin: &str, seed: u64, gestures: u32) {
     );
     recover_to_dashboard(&mut h, &what);
     h.settle();
+    check_focus_invariants(&h, &format!("{what}: after recovery"));
     h.render_now();
     assert!(h.distinct_colors() > 1, "{what}: blank dashboard");
-    // The recovered shell is fully usable.
-    let app = h.dashboard_apps().first().cloned().unwrap();
-    assert!(h.open_app(&app), "{what}");
-    h.settle();
-    assert_eq!(h.mode(), Mode::Desktop, "{what}: launch after fuzz");
+    // The recovered shell is fully usable: an app still launches. (The
+    // fuzz can legitimately delete /apps entries through the File Manager
+    // or the terminal; the dashboard then has fewer, or no, icons.)
+    let installed = h.vfs().readdir("/apps").map(|e| e.len()).unwrap_or(0);
+    match h.dashboard_apps().first().cloned() {
+        Some(app) => {
+            assert!(h.open_app(&app), "{what}");
+            h.settle();
+            assert_eq!(h.mode(), Mode::Desktop, "{what}: launch after fuzz");
+        },
+        None => assert!(
+            installed == 0 || h.state().ui.bottom_bar.active_tab != MediaTab::None,
+            "{what}: {installed} apps installed but no dashboard icons {}",
+            dump(&h, &what)
+        ),
+    }
 }
 
 // One test per skin family so they run in parallel.
@@ -452,8 +582,12 @@ fn random_input_fuzz_psp_style_skin() {
     fuzz("vaporwave", 0x5EED_0003, 500);
 }
 
+/// Known issue: with the browser window focused after fullscreen /
+/// terminal toggling, some frames transiently allocate several GB (seen
+/// with `xp` seed 0x1234577c around gesture 2345; frames take seconds).
+/// Watch process memory when running this.
 #[test]
-#[ignore = "long fuzz run; use --release --ignored"]
+#[ignore = "long fuzz run (~30 min release); use --release --ignored"]
 fn random_input_fuzz_long() {
     for (i, skin) in builtin_names().iter().enumerate() {
         for seed in 0..3u64 {
@@ -467,9 +601,8 @@ fn random_input_fuzz_long() {
 fn open_close_soak_long() {
     for skin in builtin_names() {
         let mut h = boot_small(skin);
-        cycle_every_app(&mut h, 0);
-        let base = h.resource_counts();
-        for round in 1..=10 {
+        let base = warm_up(&mut h);
+        for round in 2..=10 {
             cycle_every_app(&mut h, round);
             assert_counts(&h, base, &format!("{skin} round {round}"));
         }
@@ -509,7 +642,8 @@ fn idle_open_windows_stop_presenting() {
         let drawn = idle_presents(&mut h);
         assert!(
             drawn <= dashboard + 8,
-            "{skin}: idle {apps:?} presented {drawn} of 240 frames              (idle dashboard: {dashboard})"
+            "{skin}: idle {apps:?} presented {drawn} of 240 frames \
+             (idle dashboard: {dashboard})"
         );
         if skin != "psix-tribute" {
             assert!(drawn <= 12, "{skin}: {drawn} of 240 frames");
