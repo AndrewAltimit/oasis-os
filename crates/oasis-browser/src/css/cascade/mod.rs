@@ -177,7 +177,7 @@ pub struct ContainerEntry {
     /// The container type — `InlineSize` rejects block-axis queries.
     pub container_type: crate::css::values::types::ContainerType,
     /// Custom properties on the container element, for `style()` queries.
-    pub custom_properties: FxHashMap<String, String>,
+    pub custom_properties: std::sync::Arc<FxHashMap<String, String>>,
 }
 
 /// Map of container `NodeId` → metadata. Built post-layout from a walk
@@ -223,7 +223,7 @@ pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> Con
                     width: b.dimensions.content.width,
                     height: b.dimensions.content.height,
                     container_type: b.style.container_type,
-                    custom_properties: b.style.custom_properties.clone(),
+                    custom_properties: std::sync::Arc::clone(&b.style.custom_properties),
                 },
             );
         }
@@ -640,15 +640,15 @@ pub fn compute_style(
                 }
             }
         }
+        // Only touch the shared map when something changes (copy-on-write).
         for (name, &inherits) in &last_inherits {
-            if !inherits {
-                style.custom_properties.remove(*name);
+            if !inherits && style.custom_properties.contains_key(*name) {
+                std::sync::Arc::make_mut(&mut style.custom_properties).remove(*name);
             }
         }
         for (name, initial) in last_initial {
             if !style.custom_properties.contains_key(name) {
-                style
-                    .custom_properties
+                std::sync::Arc::make_mut(&mut style.custom_properties)
                     .insert(name.to_string(), initial.to_string());
             }
         }
@@ -665,7 +665,13 @@ pub fn compute_style(
     }
     // Substitute var() inside this element's own custom properties so
     // descendants inherit computed (already substituted) values.
-    var_resolve::resolve_custom_properties(&mut style.custom_properties, &declared_custom);
+    // (Declaring any already made the map unique, so `make_mut` is free.)
+    if !declared_custom.is_empty() {
+        var_resolve::resolve_custom_properties(
+            std::sync::Arc::make_mut(&mut style.custom_properties),
+            &declared_custom,
+        );
+    }
 
     // Pass 2a: Apply `direction` before any other properties so that
     // inline-axis logical properties (margin-inline-start, etc.)
@@ -729,18 +735,36 @@ pub fn compute_style(
     }
 
     // Resolve ::before and ::after pseudo-element content and styles.
-    let before_ps =
-        matching::resolve_pseudo_style(doc, node_id, "before", &style, stylesheets, ctx);
-    if let Some(ref ps) = before_ps {
-        style.before_content = ps.content.clone();
-    }
-    style.before_style = before_ps.map(Box::new);
+    let pseudo_candidates = matching::pseudo_element_candidates(doc, node_id, index, tag_cache);
+    if !pseudo_candidates.is_empty() {
+        let before_ps = matching::resolve_pseudo_style_indexed(
+            doc,
+            node_id,
+            "before",
+            &style,
+            stylesheets,
+            &pseudo_candidates,
+            ctx,
+        );
+        if let Some(ref ps) = before_ps {
+            style.before_content = ps.content.clone();
+        }
+        style.before_style = before_ps.map(Box::new);
 
-    let after_ps = matching::resolve_pseudo_style(doc, node_id, "after", &style, stylesheets, ctx);
-    if let Some(ref ps) = after_ps {
-        style.after_content = ps.content.clone();
+        let after_ps = matching::resolve_pseudo_style_indexed(
+            doc,
+            node_id,
+            "after",
+            &style,
+            stylesheets,
+            &pseudo_candidates,
+            ctx,
+        );
+        if let Some(ref ps) = after_ps {
+            style.after_content = ps.content.clone();
+        }
+        style.after_style = after_ps.map(Box::new);
     }
-    style.after_style = after_ps.map(Box::new);
 
     style
 }

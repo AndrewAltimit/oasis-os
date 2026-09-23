@@ -1623,7 +1623,7 @@ impl BrowserWidget {
         let Some(rect) = target.and_then(|nid| Self::find_node_rect(layout, nid)) else {
             return false;
         };
-        let content_h = layout.dimensions.margin_box().height as i32;
+        let content_h = layout.scrollable_height() as i32;
         self.scroll.set_content_height(content_h);
         self.scroll.scroll_to(rect.y as i32);
         true

@@ -1190,6 +1190,28 @@ fn selector_index_reduces_comparisons() {
 }
 
 #[test]
+fn selector_index_buckets_pseudo_element_rules() {
+    // Only rules with a pseudo-element selector are pseudo candidates,
+    // bucketed by their subject like ordinary rules, in source order.
+    let sheet = Stylesheet::parse(
+        ".foo { color: red; } .foo::before { content: 'a'; }          p::after { content: 'b'; } ::before { content: 'c'; } .bar::after { content: 'd'; }",
+    );
+    let index = SelectorIndex::build(&[&sheet]);
+    let rules: Vec<usize> = index
+        .pseudo_element_candidates("p", "p", None, &["foo"])
+        .iter()
+        .map(|r| r.rule_idx)
+        .collect();
+    assert_eq!(rules, vec![1, 2, 3], ".foo::before, p::after, ::before");
+    let rules: Vec<usize> = index
+        .pseudo_element_candidates("div", "div", None, &[])
+        .iter()
+        .map(|r| r.rule_idx)
+        .collect();
+    assert_eq!(rules, vec![3], "only the universal ::before");
+}
+
+#[test]
 fn selector_index_universal_rules() {
     let sheet = Stylesheet::parse("* { margin: 0; } .cls { color: red; }");
     let index = SelectorIndex::build(&[&sheet]);
@@ -2993,7 +3015,7 @@ mod container_query_cascade_tests {
                 width: w,
                 height: h,
                 container_type: crate::css::values::types::ContainerType::Size,
-                custom_properties: rustc_hash::FxHashMap::default(),
+                custom_properties: Default::default(),
             },
         );
         l

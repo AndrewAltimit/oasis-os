@@ -1065,7 +1065,7 @@ impl BrowserWidget {
         // `ScrollState` clamps against this height.
         if let Some(layout) = &self.layout_root {
             self.scroll
-                .set_content_height(layout.dimensions.margin_box().height as i32);
+                .set_content_height(layout.scrollable_height() as i32);
         }
         self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;

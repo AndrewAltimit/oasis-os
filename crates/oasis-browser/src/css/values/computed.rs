@@ -1,5 +1,7 @@
 //! `ComputedStyle` struct definition, `Default` impl, and inheritance.
 
+use std::sync::Arc;
+
 use rustc_hash::FxHashMap;
 
 use oasis_types::backend::Color;
@@ -352,7 +354,12 @@ pub struct ComputedStyle {
     pub justify_items: JustifySelf,
 
     // -- CSS custom properties (--*) ------------------------------------
-    pub custom_properties: FxHashMap<String, String>,
+    /// Shared copy-on-write (`Arc::make_mut`): every element inherits
+    /// its parent's map, and design-system pages declare hundreds of
+    /// tokens on `:root` (Wikipedia: ~200), so a deep copy per inherited
+    /// style (and per layout box / text fragment cloning it) dominated
+    /// layout time.
+    pub custom_properties: Arc<FxHashMap<String, String>>,
 
     // -- Container queries ----------------------------------------------
     /// `container-type`. Default `Normal`. When set to `InlineSize` or
@@ -629,7 +636,7 @@ impl Default for ComputedStyle {
             justify_self: JustifySelf::Auto,
             justify_items: JustifySelf::Stretch,
 
-            custom_properties: FxHashMap::default(),
+            custom_properties: Arc::default(),
 
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
@@ -858,7 +865,7 @@ impl ComputedStyle {
             text_rendering: parent.text_rendering,
             image_rendering: parent.image_rendering,
             // CSS custom properties always inherit.
-            custom_properties: parent.custom_properties.clone(),
+            custom_properties: Arc::clone(&parent.custom_properties),
             // Non-inherited properties keep CSS initial values.
             ..ComputedStyle::default()
         }

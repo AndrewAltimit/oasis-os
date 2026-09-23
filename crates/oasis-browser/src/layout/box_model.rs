@@ -3,7 +3,7 @@
 //! Defines rectangles, edge sizes, dimensions, box types, and the layout
 //! tree data structures used by block and inline layout algorithms.
 
-use crate::css::values::ComputedStyle;
+use crate::css::values::{ComputedStyle, Overflow, Position};
 use crate::html::dom::NodeId;
 use crate::image::DecodedImage;
 use oasis_types::backend::TextureId;
@@ -325,6 +325,50 @@ impl LayoutBox {
         self.children.iter().any(|c| c.any_dirty())
     }
 
+    /// Whether this box clips its contents (`overflow` other than
+    /// `visible`), so no descendant can paint or be hit outside it.
+    ///
+    /// Otherwise descendants may overflow the box: a `height: 100%`
+    /// `<body>` holding a whole article, negative margins, positioned
+    /// children. Culling and hit testing must not stop at such a box's
+    /// own bounds.
+    pub fn clips_overflow(&self) -> bool {
+        self.style.overflow != Overflow::Visible
+    }
+
+    /// Height of the scrollable document laid out under this (root) box:
+    /// from the root's margin-box top down to the lowest margin-box edge
+    /// of the root or of any descendant that overflows visibly.
+    ///
+    /// The root's own height isn't enough: pages like Wikipedia set
+    /// `html, body { height: 100% }`, which pins the root box to the
+    /// viewport while the article overflows it, and the document must
+    /// still scroll to the end of that overflow. Like the viewport, the
+    /// root scrolls its overflow even when it clips it. Fixed-position
+    /// boxes are anchored to the viewport and never extend the document.
+    pub fn scrollable_height(&self) -> f32 {
+        fn overflow_bottom(b: &LayoutBox) -> f32 {
+            let mb = b.dimensions.margin_box();
+            let own = mb.y + mb.height;
+            if b.clips_overflow() {
+                return own;
+            }
+            b.children
+                .iter()
+                .filter(|c| c.style.position != Position::Fixed)
+                .map(overflow_bottom)
+                .fold(own, f32::max)
+        }
+        let mb = self.dimensions.margin_box();
+        let bottom = self
+            .children
+            .iter()
+            .filter(|c| c.style.position != Position::Fixed)
+            .map(overflow_bottom)
+            .fold(mb.y + mb.height, f32::max);
+        bottom - mb.y
+    }
+
     /// Find the deepest DOM node at the given point. Returns `None`
     /// if the point is outside the layout tree or no box with a DOM
     /// node ID contains it.
@@ -356,7 +400,10 @@ impl LayoutBox {
         let bh =
             d.content.height + d.padding.top + d.padding.bottom + d.border.top + d.border.bottom;
 
-        if test_x < bx || test_x >= bx + bw || test_y < by || test_y >= by + bh {
+        let inside = test_x >= bx && test_x < bx + bw && test_y >= by && test_y < by + bh;
+        // A point outside this box can still land on a descendant that
+        // overflows it, unless the box clips (or has nothing to overflow).
+        if !inside && (self.clips_overflow() || self.children.is_empty()) {
             return None;
         }
 
@@ -369,7 +416,7 @@ impl LayoutBox {
             }
         }
 
-        self.node
+        if inside { self.node } else { None }
     }
 
     /// Mark a specific node and its ancestors as dirty.

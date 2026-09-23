@@ -286,15 +286,15 @@ impl BrowserWidget {
                 self.display_list.compact();
                 self.display_list.optimize();
                 self.link_map = links;
-                self.scroll
-                    .set_content_height(layout.dimensions.margin_box().height as i32);
+                let doc_h = layout.scrollable_height();
+                self.scroll.set_content_height(doc_h as i32);
                 self.display_list_scroll_y = self.scroll.scroll_y;
                 self.display_list_scroll_x = self.scroll.scroll_x;
                 self.link_map_scroll_y = self.scroll.scroll_y;
                 self.link_map_scroll_x = self.scroll.scroll_x;
 
                 // Update tile grid on layout change.
-                let ch = layout.dimensions.margin_box().height as u32;
+                let ch = doc_h as u32;
                 match &mut self.tile_grid {
                     Some(grid) => grid.resize(self.window_w, ch),
                     None => {
