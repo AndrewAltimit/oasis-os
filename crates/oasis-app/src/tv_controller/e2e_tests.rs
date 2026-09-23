@@ -134,6 +134,9 @@ struct Behavior {
     ignore_range: bool,
     /// Throttle body bytes to about this rate.
     bytes_per_sec: Option<u64>,
+    /// Exempt `206` (Range) responses from `bytes_per_sec`, so a Range
+    /// fetch deterministically outruns the throttled linear stream.
+    unthrottled_ranges: bool,
     /// Which body connection (0 = first) the drop/stall applies to.
     faulty_conn: usize,
     /// Close the faulty body connection after this many body bytes.
@@ -370,7 +373,9 @@ impl ConnCtx {
             if sock.write_all(&body[sent..end]).is_err() {
                 return;
             }
-            if let Some(rate) = self.behavior.bytes_per_sec {
+            if let Some(rate) = self.behavior.bytes_per_sec
+                && !(status == 206 && self.behavior.unthrottled_ranges)
+            {
                 let secs = (end - sent) as f64 / rate as f64;
                 std::thread::sleep(Duration::from_secs_f64(secs));
             }
@@ -703,12 +708,16 @@ fn download_cancel_stops_promptly() {
 #[test]
 fn moov_at_end_large_file_found_by_tail_probe() {
     // > 10 MB with moov at the end: the deferred tail probe must fetch
-    // moov via Range long before the linear download gets there.
+    // moov via Range long before the linear download gets there.  The
+    // linear stream is throttled (~2 s to the 8 MB probe threshold, ~2 s
+    // more to moov) while the Range probe is not, so a loaded test pool
+    // cannot let the linear download win the race.
     with_timeout(60, || {
         let data = pad_mdat(&fixture("streaming/moov_end_4s.mp4"), 16 << 20);
         let (moov_off, _) = find_atom(&data, b"moov").unwrap();
         let behavior = Behavior {
-            bytes_per_sec: Some(8 << 20),
+            bytes_per_sec: Some(4 << 20),
+            unthrottled_ranges: true,
             ..Behavior::default()
         };
         let server = TestServer::start(HashMap::from([("v.mp4", data.clone())]), behavior);
