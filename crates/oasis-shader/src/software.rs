@@ -1318,6 +1318,7 @@ mod tests {
     }
 
     /// FNV-1a over an RGBA buffer, for pixel-exact golden comparisons.
+    #[cfg(target_arch = "x86_64")]
     fn fnv1a(bytes: &[u8]) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in bytes {
